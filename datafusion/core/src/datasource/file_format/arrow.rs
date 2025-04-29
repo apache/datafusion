@@ -144,6 +144,7 @@ impl FileFormat for ArrowFormat {
         for object in objects {
             let r = store.as_ref().get(&object.location).await?;
             let schema = match r.payload {
+                #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
                     let reader = FileReader::try_new(&mut file, None)?;
                     reader.schema()
@@ -442,7 +443,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -485,7 +486,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };

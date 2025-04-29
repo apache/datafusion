@@ -597,8 +597,12 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     let arr1 = first_array_for_list(arr1);
     let arr2 = first_array_for_list(arr2);
 
-    let lt_res = arrow::compute::kernels::cmp::lt(&arr1, &arr2).ok()?;
-    let eq_res = arrow::compute::kernels::cmp::eq(&arr1, &arr2).ok()?;
+    let min_length = arr1.len().min(arr2.len());
+    let arr1_trimmed = arr1.slice(0, min_length);
+    let arr2_trimmed = arr2.slice(0, min_length);
+
+    let lt_res = arrow::compute::kernels::cmp::lt(&arr1_trimmed, &arr2_trimmed).ok()?;
+    let eq_res = arrow::compute::kernels::cmp::eq(&arr1_trimmed, &arr2_trimmed).ok()?;
 
     for j in 0..lt_res.len() {
         if lt_res.is_valid(j) && lt_res.value(j) {
@@ -609,7 +613,7 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
         }
     }
 
-    Some(Ordering::Equal)
+    Some(arr1.len().cmp(&arr2.len()))
 }
 
 fn expand_struct_columns<'a>(array: &'a StructArray, columns: &mut Vec<&'a ArrayRef>) {
@@ -4823,6 +4827,57 @@ mod tests {
                 ])]),
             ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(2),
+                    Some(3),
+                    Some(4),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
     }
 
     #[test]

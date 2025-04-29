@@ -17,8 +17,9 @@
 
 use std::sync::Arc;
 
+use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, DatasetGeneratorConfig, QueryBuilder,
+    AggregationFuzzerBuilder, DatasetGeneratorConfig,
 };
 
 use arrow::array::{
@@ -85,6 +86,7 @@ async fn test_min() {
         .with_aggregate_function("min")
         // min works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -111,6 +113,34 @@ async fn test_first_val() {
         .with_table_name("fuzz_table")
         .with_aggregate_function("first_value")
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
+        .set_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_last_val() {
+    let mut data_gen_config = baseline_config();
+
+    for i in 0..data_gen_config.columns.len() {
+        if data_gen_config.columns[i].get_max_num_distinct().is_none() {
+            data_gen_config.columns[i] = data_gen_config.columns[i]
+                .clone()
+                // Minimize the chance of identical values in the order by columns to make the test more stable
+                .with_max_num_distinct(usize::MAX);
+        }
+    }
+
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("last_value")
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -130,6 +160,7 @@ async fn test_max() {
         .with_aggregate_function("max")
         // max works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -150,6 +181,7 @@ async fn test_sum() {
         .with_distinct_aggregate_function("sum")
         // sum only works on numeric columns
         .with_aggregate_arguments(data_gen_config.numeric_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -170,6 +202,7 @@ async fn test_count() {
         .with_distinct_aggregate_function("count")
         // count work for all arguments
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -190,6 +223,7 @@ async fn test_median() {
         .with_distinct_aggregate_function("median")
         // median only works on numeric columns
         .with_aggregate_arguments(data_gen_config.numeric_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)

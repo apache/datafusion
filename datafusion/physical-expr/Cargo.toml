@@ -57,6 +57,7 @@ petgraph = "0.7.1"
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
+insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 

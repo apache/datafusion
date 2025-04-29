@@ -31,7 +31,7 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
-    description = "Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.",
+    description = "Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.",
     syntax_example = "from_unixtime(expression[, timezone])",
     sql_example = r#"```sql
 > select from_unixtime(1599572549, 'America/New_York');

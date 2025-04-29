@@ -170,6 +170,13 @@ fn roundtrip_statement() -> Result<()> {
                 UNION ALL
                 SELECT j3_string AS col1, j3_id AS id FROM j3
             ) AS subquery GROUP BY col1, id ORDER BY col1 ASC, id ASC"#,
+            r#"SELECT col1, id FROM (
+                SELECT j1_string AS col1, j1_id AS id FROM j1
+                UNION
+                SELECT j2_string AS col1, j2_id AS id FROM j2
+                UNION
+                SELECT j3_string AS col1, j3_id AS id FROM j3
+            ) AS subquery ORDER BY col1 ASC, id ASC"#,
             "SELECT id, count(*) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             last_name, sum(id) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             first_name from person",
@@ -2341,4 +2348,171 @@ fn test_unparse_right_anti_join() -> Result<()> {
         @r#"SELECT "t2"."c", "t2"."d" FROM "t2" WHERE ("t2"."c" <= 1) AND NOT EXISTS (SELECT 1 FROM "t1" WHERE ("t1"."c" = "t2"."c"))"#
     );
     Ok(())
+}
+
+#[test]
+fn test_unparse_cross_join_with_table_scan_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    // Cross Join:
+    //   SubqueryAlias: t1
+    //     TableScan: test projection=[v]
+    //   SubqueryAlias: t2
+    //     TableScan: test projection=[v]
+    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
+        .cross_join(subquery_alias(table_scan2, "t2")?)?
+        .build()?;
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "t1"."v", "t2"."v" FROM "test" AS "t1" CROSS JOIN "test" AS "t2""#
+    );
+    Ok(())
+}
+
+#[test]
+fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    // Inner Join:
+    //   SubqueryAlias: t1
+    //     TableScan: test projection=[v]
+    //   SubqueryAlias: t2
+    //     TableScan: test projection=[v]
+    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
+        .join_on(
+            subquery_alias(table_scan2, "t2")?,
+            datafusion_expr::JoinType::Inner,
+            vec![col("t1.v").eq(col("t2.v"))],
+        )?
+        .build()?;
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "t1"."v", "t2"."v" FROM "test" AS "t1" INNER JOIN "test" AS "t2" ON ("t1"."v" = "t2"."v")"#
+    );
+    Ok(())
+}
+
+#[test]
+fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    // LeftSemi Join:
+    //   SubqueryAlias: t1
+    //     TableScan: test projection=[v]
+    //   SubqueryAlias: t2
+    //     TableScan: test projection=[v]
+    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
+        .join_on(
+            subquery_alias(table_scan2, "t2")?,
+            datafusion_expr::JoinType::LeftSemi,
+            vec![col("t1.v").eq(col("t2.v"))],
+        )?
+        .build()?;
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "t1"."v" FROM "test" AS "t1" WHERE EXISTS (SELECT 1 FROM "test" AS "t2" WHERE ("t1"."v" = "t2"."v"))"#
+    );
+    Ok(())
+}
+
+#[test]
+fn test_like_filter() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name LIKE '%John%'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name LIKE '%John%'"
+    );
+}
+
+#[test]
+fn test_ilike_filter() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name ILIKE '%john%'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name ILIKE '%john%'"
+    );
+}
+
+#[test]
+fn test_not_like_filter() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT LIKE 'A%'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT LIKE 'A%'"
+    );
+}
+
+#[test]
+fn test_not_ilike_filter() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT ILIKE 'a%'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT ILIKE 'a%'"
+    );
+}
+
+#[test]
+fn test_like_filter_with_escape() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name LIKE 'A!_%' ESCAPE '!'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name LIKE 'A!_%' ESCAPE '!'"
+    );
+}
+
+#[test]
+fn test_not_like_filter_with_escape() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT LIKE 'A!_%' ESCAPE '!'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT LIKE 'A!_%' ESCAPE '!'"
+    );
+}
+
+#[test]
+fn test_not_ilike_filter_with_escape() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT ILIKE 'A!_%' ESCAPE '!'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT ILIKE 'A!_%' ESCAPE '!'"
+    );
 }

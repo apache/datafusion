@@ -693,6 +693,11 @@ jobs:
           # If you encounter an error, run './dev/update_function_docs.sh' and commit
           ./dev/update_function_docs.sh
           git diff --exit-code
+      - name: Check if runtime_configs.md has been modified
+        run: |
+          # If you encounter an error, run './dev/update_runtime_config_docs.sh' and commit
+          ./dev/update_runtime_config_docs.sh
+          git diff --exit-code
 
   # Verify MSRV for the crates which are directly used by other projects:
   # - datafusion
