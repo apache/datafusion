@@ -18,7 +18,7 @@
 //! [`CsvFormat`], Comma Separated Value (CSV) [`FileFormat`] abstractions
 
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
@@ -28,7 +28,7 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::error::ArrowError;
-use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
+use datafusion_common::config::{ConfigFileType, CsvOptions, FormatOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
     exec_err, not_impl_err, DataFusionError, GetExt, Result, Statistics,
@@ -93,27 +93,19 @@ impl Debug for CsvFormatFactory {
 }
 
 impl FileFormatFactory for CsvFormatFactory {
-    fn create(
-        &self,
-        state: &dyn Session,
-        format_options: &HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let csv_options = match &self.options {
-            None => {
-                let mut csv_options = state.file_table_options(ConfigFileType::CSV);
-                csv_options.alter_with_string_hash_map(format_options)?;
-                csv_options.csv_options_or_default()
-            }
+    fn options(&self) -> (Option<FormatOptions>, ConfigFileType) {
+        match self.options.clone() {
+            None => (None, ConfigFileType::CSV),
             Some(csv_options) => {
-                let mut csv_options = csv_options.clone();
-                for (k, v) in format_options {
-                    csv_options.set(k, v)?;
-                }
-                csv_options
+                (Some(FormatOptions::CSV(csv_options)), ConfigFileType::CSV)
             }
-        };
-
-        Ok(Arc::new(CsvFormat::default().with_options(csv_options)))
+        }
+    }
+    fn default_from_options(&self, options: FormatOptions) -> Arc<dyn FileFormat> {
+        Arc::new(match options {
+            FormatOptions::CSV(options) => CsvFormat::default().with_options(options),
+            _ => CsvFormat::default(),
+        })
     }
 
     fn default(&self) -> Arc<dyn FileFormat> {

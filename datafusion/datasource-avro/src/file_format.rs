@@ -27,6 +27,7 @@ use crate::source::AvroSource;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::config::{ConfigFileType, FormatOptions};
 use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::GetExt;
@@ -56,6 +57,14 @@ impl AvroFormatFactory {
 }
 
 impl FileFormatFactory for AvroFormatFactory {
+    fn options(&self) -> (Option<FormatOptions>, ConfigFileType) {
+        todo!()
+    }
+
+    fn default_from_options(&self, _options: FormatOptions) -> Arc<dyn FileFormat> {
+        Arc::new(AvroFormat)
+    }
+
     fn create(
         &self,
         _state: &dyn Session,

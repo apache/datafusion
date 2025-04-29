@@ -1556,6 +1556,7 @@ impl TableOptions {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum FileSpecificTableOptions {
     Csv {
         options: CsvOptions,
@@ -1680,6 +1681,42 @@ impl FileSpecificTableOptions {
         match self {
             FileSpecificTableOptions::Json { options, .. } => options.clone(),
             _ => JsonOptions::default(),
+        }
+    }
+
+    pub fn format_options(&self) -> FormatOptions {
+        match self {
+            FileSpecificTableOptions::Json { options, .. } => {
+                FormatOptions::JSON(options.clone())
+            }
+            FileSpecificTableOptions::Csv { options, .. } => {
+                FormatOptions::CSV(options.clone())
+            }
+            #[cfg(feature = "parquet")]
+            FileSpecificTableOptions::Parquet { options, .. } => {
+                FormatOptions::PARQUET(options.clone())
+            }
+        }
+    }
+
+    pub fn from_format_options(options: FormatOptions) -> Self {
+        match options {
+            FormatOptions::JSON(options) => FileSpecificTableOptions::Json {
+                options,
+                extensions: Default::default(),
+            },
+            FormatOptions::CSV(options) => FileSpecificTableOptions::Csv {
+                options,
+                extensions: Default::default(),
+            },
+            #[cfg(feature = "parquet")]
+            FormatOptions::PARQUET(options) => FileSpecificTableOptions::Parquet {
+                options,
+                extensions: Default::default(),
+            },
+            _ => {
+                todo!()
+            }
         }
     }
 
