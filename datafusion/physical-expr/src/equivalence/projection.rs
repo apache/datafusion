@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::expressions::Column;
@@ -42,19 +42,17 @@ impl ProjectionTargets {
         // Since the vector is non-empty, we can safely unwrap:
         self.exprs_indices.first().unwrap()
     }
-}
 
-impl Deref for ProjectionTargets {
-    type Target = Vec<(Arc<dyn PhysicalExpr>, usize)>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.exprs_indices
+    pub fn push(&mut self, target: (Arc<dyn PhysicalExpr>, usize)) {
+        self.exprs_indices.push(target);
     }
 }
 
-impl DerefMut for ProjectionTargets {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.exprs_indices
+impl Deref for ProjectionTargets {
+    type Target = [(Arc<dyn PhysicalExpr>, usize)];
+
+    fn deref(&self) -> &Self::Target {
+        &self.exprs_indices
     }
 }
 
