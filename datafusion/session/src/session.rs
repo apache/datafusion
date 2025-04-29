@@ -143,6 +143,7 @@ pub trait Session: Send + Sync {
                 options: session_table_options.csv,
                 extensions: session_table_options.extensions,
             },
+            #[cfg(feature = "parquet")]
             ConfigFileType::PARQUET => FileSpecificTableOptions::Parquet {
                 options: session_table_options.parquet,
                 extensions: session_table_options.extensions,
