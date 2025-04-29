@@ -26,11 +26,7 @@
 //! Spark Expression packages for [DataFusion].
 //!
 //! This crate contains a collection of various Spark expression packages for DataFusion,
-//! implemented using the extension API. Users may wish to control which functions
-//! are available to control the binary size of their application.
-//!
-//! Each package is implemented as a separate
-//! module, activated by a feature flag.
+//! implemented using the extension API. 
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
 //!
