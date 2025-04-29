@@ -17,12 +17,11 @@
 
 mod kernels;
 
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
-
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
