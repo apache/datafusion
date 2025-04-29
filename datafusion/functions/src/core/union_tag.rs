@@ -140,7 +140,7 @@ impl ScalarUDFImpl for UnionTagFunc {
                         )
                     }),
                 None => Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
-                    args.return_type,
+                    args.return_field.data_type(),
                 )?)),
             },
             v => exec_err!("union_tag only support unions, got {:?}", v.data_type()),
@@ -173,14 +173,15 @@ mod tests {
             UnionMode::Dense,
         );
 
+        let return_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+
         let result = UnionTagFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(scalar)],
                 number_rows: 1,
-                return_type: &DataType::Dictionary(
-                    Box::new(DataType::Int8),
-                    Box::new(DataType::Utf8),
-                ),
+                return_field: &Field::new("res", return_type, true),
+                arg_fields: vec![],
             })
             .unwrap();
 
@@ -194,14 +195,15 @@ mod tests {
     fn union_scalar_empty() {
         let scalar = ScalarValue::Union(None, UnionFields::empty(), UnionMode::Dense);
 
+        let return_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+
         let result = UnionTagFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(scalar)],
                 number_rows: 1,
-                return_type: &DataType::Dictionary(
-                    Box::new(DataType::Int8),
-                    Box::new(DataType::Utf8),
-                ),
+                return_field: &Field::new("res", return_type, true),
+                arg_fields: vec![],
             })
             .unwrap();
 
