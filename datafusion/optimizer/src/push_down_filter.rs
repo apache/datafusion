@@ -1865,15 +1865,6 @@ mod tests {
             .filter(col("b").eq(lit(1i64)))?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "\
-            Filter: b = Int64(1)\
-            \n  Projection: test.a * Int32(2) + test.c AS b, test.c\
-            \n    TableScan: test"
-        );
-
         // filter is before projection
         assert_optimized_plan_equal!(
             plan,
@@ -1897,16 +1888,6 @@ mod tests {
             .project(vec![multiply(col("b"), lit(3)).alias("a"), col("c")])?
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "\
-            Filter: a = Int64(1)\
-            \n  Projection: b * Int32(3) AS a, test.c\
-            \n    Projection: test.a * Int32(2) + test.c AS b, test.c\
-            \n      TableScan: test"
-        );
 
         // filter is before the projections
         assert_optimized_plan_equal!(
@@ -2074,17 +2055,6 @@ mod tests {
             .filter(col("sum(test.c)").gt(lit(10i64)))?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "\
-            Filter: sum(test.c) > Int64(10)\
-            \n  Filter: b > Int64(10)\
-            \n    Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
-            \n      Projection: test.a AS b, test.c\
-            \n        TableScan: test"
-        );
-
         // filter is before the projections
         assert_optimized_plan_equal!(
             plan,
@@ -2111,16 +2081,6 @@ mod tests {
                 and(col("b").gt(lit(10i64)), col("sum(test.c)").lt(lit(20i64))),
             ))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "\
-            Filter: sum(test.c) > Int64(10) AND b > Int64(10) AND sum(test.c) < Int64(20)\
-            \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
-            \n    Projection: test.a AS b, test.c\
-            \n      TableScan: test"
-        );
 
         // filter is before the projections
         assert_optimized_plan_equal!(
@@ -2282,18 +2242,6 @@ mod tests {
             .filter(col("a").gt_eq(lit(1i64)))?
             .build()?;
         // Should be able to move both filters below the projections
-
-        // not part of the test
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test.a >= Int64(1)\
-             \n  Projection: test.a\
-             \n    Limit: skip=0, fetch=1\
-             \n      Filter: test.a <= Int64(1)\
-             \n        Projection: test.a\
-             \n          TableScan: test"
-        );
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -2317,16 +2265,6 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
 
-        // not part of the test
-        assert_eq!(
-            format!("{plan}"),
-            "Projection: test.a\
-            \n  Filter: test.a >= Int64(1)\
-            \n    Filter: test.a <= Int64(1)\
-            \n      Limit: skip=0, fetch=1\
-            \n        TableScan: test"
-        );
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -2348,14 +2286,6 @@ mod tests {
             .build()?;
 
         let plan = user_defined::new(plan);
-
-        let expected = "\
-            TestUserDefined\
-             \n  Filter: test.a <= Int64(1)\
-             \n    TableScan: test";
-
-        // not part of the test
-        assert_eq!(format!("{plan}"), expected);
 
         assert_optimized_plan_equal!(
             plan,
@@ -2384,16 +2314,6 @@ mod tests {
             )?
             .filter(col("test.a").lt_eq(lit(1i64)))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test.a <= Int64(1)\
-            \n  Inner Join: test.a = test2.a\
-            \n    TableScan: test\
-            \n    Projection: test2.a\
-            \n      TableScan: test2"
-        );
 
         // filter sent to side before the join
         assert_optimized_plan_equal!(
@@ -2424,16 +2344,6 @@ mod tests {
             )?
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test.a <= Int64(1)\
-            \n  Inner Join: Using test.a = test2.a\
-            \n    TableScan: test\
-            \n    Projection: test2.a\
-            \n      TableScan: test2"
-        );
 
         // filter sent to side before the join
         assert_optimized_plan_equal!(
@@ -2467,17 +2377,6 @@ mod tests {
             )?
             .filter(col("c").lt_eq(col("b")))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test.c <= test2.b\
-            \n  Inner Join: test.a = test2.a\
-            \n    Projection: test.a, test.c\
-            \n      TableScan: test\
-            \n    Projection: test2.a, test2.b\
-            \n      TableScan: test2"
-        );
 
         // Filter is converted to Join Filter
         assert_optimized_plan_equal!(
@@ -2514,17 +2413,6 @@ mod tests {
             .filter(col("b").lt_eq(lit(1i64)))?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test.b <= Int64(1)\
-            \n  Inner Join: test.a = test2.a\
-            \n    Projection: test.a, test.b\
-            \n      TableScan: test\
-            \n    Projection: test2.a, test2.c\
-            \n      TableScan: test2"
-        );
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -2556,16 +2444,6 @@ mod tests {
             .filter(col("test2.a").lt_eq(lit(1i64)))?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test2.a <= Int64(1)\
-            \n  Left Join: Using test.a = test2.a\
-            \n    TableScan: test\
-            \n    Projection: test2.a\
-            \n      TableScan: test2"
-        );
-
         // filter not duplicated nor pushed down - i.e. noop
         assert_optimized_plan_equal!(
             plan,
@@ -2596,16 +2474,6 @@ mod tests {
             )?
             .filter(col("test.a").lt_eq(lit(1i64)))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test.a <= Int64(1)\
-            \n  Right Join: Using test.a = test2.a\
-            \n    TableScan: test\
-            \n    Projection: test2.a\
-            \n      TableScan: test2"
-        );
 
         // filter not duplicated nor pushed down - i.e. noop
         assert_optimized_plan_equal!(
@@ -2639,16 +2507,6 @@ mod tests {
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test.a <= Int64(1)\
-            \n  Left Join: Using test.a = test2.a\
-            \n    TableScan: test\
-            \n    Projection: test2.a\
-            \n      TableScan: test2"
-        );
-
         // filter sent to left side of the join, not the right
         assert_optimized_plan_equal!(
             plan,
@@ -2679,16 +2537,6 @@ mod tests {
             )?
             .filter(col("test2.a").lt_eq(lit(1i64)))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test2.a <= Int64(1)\
-            \n  Right Join: Using test.a = test2.a\
-            \n    TableScan: test\
-            \n    Projection: test2.a\
-            \n      TableScan: test2"
-        );
 
         // filter sent to right side of join, not duplicated to the left
         assert_optimized_plan_equal!(
@@ -2726,16 +2574,6 @@ mod tests {
             )?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Inner Join: test.a = test2.a Filter: test.c > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
-            \n  Projection: test.a, test.b, test.c\
-            \n    TableScan: test\
-            \n  Projection: test2.a, test2.b, test2.c\
-            \n    TableScan: test2"
-        );
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -2771,16 +2609,6 @@ mod tests {
             )?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Inner Join: test.a = test2.a Filter: test.b > UInt32(1) AND test2.c > UInt32(4)\
-            \n  Projection: test.a, test.b, test.c\
-            \n    TableScan: test\
-            \n  Projection: test2.a, test2.b, test2.c\
-            \n    TableScan: test2"
-        );
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -2813,16 +2641,6 @@ mod tests {
                 Some(filter),
             )?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Inner Join: test.a = test2.b Filter: test.a > UInt32(1)\
-            \n  Projection: test.a\
-            \n    TableScan: test\
-            \n  Projection: test2.b\
-            \n    TableScan: test2"
-        );
 
         assert_optimized_plan_equal!(
             plan,
@@ -2860,16 +2678,6 @@ mod tests {
             )?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Left Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
-            \n  Projection: test.a, test.b, test.c\
-            \n    TableScan: test\
-            \n  Projection: test2.a, test2.b, test2.c\
-            \n    TableScan: test2"
-        );
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -2906,16 +2714,6 @@ mod tests {
             )?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Right Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
-            \n  Projection: test.a, test.b, test.c\
-            \n    TableScan: test\
-            \n  Projection: test2.a, test2.b, test2.c\
-            \n    TableScan: test2"
-        );
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -2951,16 +2749,6 @@ mod tests {
                 Some(filter),
             )?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Full Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
-            \n  Projection: test.a, test.b, test.c\
-            \n    TableScan: test\
-            \n  Projection: test2.a, test2.b, test2.c\
-            \n    TableScan: test2"
-        );
 
         assert_optimized_plan_equal!(
             plan,
@@ -3145,14 +2933,6 @@ mod tests {
             .filter(and(col("b").gt(lit(10i64)), col("c").gt(lit(10i64))))?
             .build()?;
 
-        // filter on col b
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: b > Int64(10) AND test.c > Int64(10)\
-            \n  Projection: test.a AS b, test.c\
-            \n    TableScan: test"
-        );
-
         // rewrite filter col b to test.a
         assert_optimized_plan_equal!(
             plan,
@@ -3175,16 +2955,6 @@ mod tests {
             .filter(and(col("b").gt(lit(10i64)), col("c").gt(lit(10i64))))?
             .build()?;
 
-        // filter on col b
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: b > Int64(10) AND test.c > Int64(10)\
-            \n  Projection: b, test.c\
-            \n    Projection: test.a AS b, test.c\
-            \n      TableScan: test\
-            "
-        );
-
         // rewrite filter col b to test.a
         assert_optimized_plan_equal!(
             plan,
@@ -3203,15 +2973,6 @@ mod tests {
             .project(vec![col("a").alias("b"), col("c").alias("d")])?
             .filter(and(col("b").gt(lit(10i64)), col("d").gt(lit(10i64))))?
             .build()?;
-
-        // filter on col b and d
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: b > Int64(10) AND d > Int64(10)\
-            \n  Projection: test.a AS b, test.c AS d\
-            \n    TableScan: test\
-            "
-        );
 
         // rewrite filter col b to test.a, col d to test.c
         assert_optimized_plan_equal!(
@@ -3244,15 +3005,6 @@ mod tests {
             )?
             .build()?;
 
-        assert_eq!(
-            format!("{plan}"),
-            "Inner Join: c = d Filter: c > UInt32(1)\
-            \n  Projection: test.a AS c\
-            \n    TableScan: test\
-            \n  Projection: test2.b AS d\
-            \n    TableScan: test2"
-        );
-
         // Change filter on col `c`, 'd' to `test.a`, 'test.b'
         assert_optimized_plan_equal!(
             plan,
@@ -3278,15 +3030,6 @@ mod tests {
             .filter(in_list(col("b"), filter_value, false))?
             .build()?;
 
-        // filter on col b
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
-            \n  Projection: test.a AS b, test.c\
-            \n    TableScan: test\
-            "
-        );
-
         // rewrite filter col b to test.a
         assert_optimized_plan_equal!(
             plan,
@@ -3309,16 +3052,6 @@ mod tests {
             .project(vec![col("b"), col("c")])?
             .filter(in_list(col("b"), filter_value, false))?
             .build()?;
-
-        // filter on col b
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
-            \n  Projection: b, test.c\
-            \n    Projection: test.a AS b, test.c\
-            \n      TableScan: test\
-            "
-        );
 
         // rewrite filter col b to test.a
         assert_optimized_plan_equal!(
@@ -3347,16 +3080,6 @@ mod tests {
             .filter(in_subquery(col("b"), subplan))?
             .build()?;
 
-        // filter on col b in subquery
-        let expected_before = "\
-        Filter: b IN (<subquery>)\
-        \n  Subquery:\
-        \n    Projection: sq.c\
-        \n      TableScan: sq\
-        \n  Projection: test.a AS b, test.c\
-        \n    TableScan: test";
-        assert_eq!(format!("{plan}"), expected_before);
-
         // rewrite filter col b to test.a
         assert_optimized_plan_equal!(
             plan,
@@ -3381,15 +3104,6 @@ mod tests {
             .filter(col("b.a").eq(lit(1i64)))?
             .project(vec![col("b.a")])?
             .build()?;
-
-        let expected_before = "Projection: b.a\
-        \n  Filter: b.a = Int64(1)\
-        \n    SubqueryAlias: b\
-        \n      Projection: b.a\
-        \n        SubqueryAlias: b\
-        \n          Projection: Int64(0) AS a\
-        \n            EmptyRelation";
-        assert_eq!(format!("{plan}"), expected_before);
 
         // Ensure that the predicate without any columns (0 = 1) is
         // still there.
@@ -3473,16 +3187,6 @@ mod tests {
             .filter(col("test2.a").lt_eq(lit(1i64)))?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test2.a <= Int64(1)\
-            \n  LeftSemi Join: test1.a = test2.a\
-            \n    TableScan: test1\
-            \n    Projection: test2.a, test2.b\
-            \n      TableScan: test2"
-        );
-
         // Inferred the predicate `test1.a <= Int64(1)` and push it down to the left side.
         assert_optimized_plan_equal!(
             plan,
@@ -3519,15 +3223,6 @@ mod tests {
             )?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "LeftSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
-            \n  TableScan: test1\
-            \n  Projection: test2.a, test2.b\
-            \n    TableScan: test2",
-        );
-
         // Both side will be pushed down.
         assert_optimized_plan_equal!(
             plan,
@@ -3559,16 +3254,6 @@ mod tests {
             )?
             .filter(col("test1.a").lt_eq(lit(1i64)))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test1.a <= Int64(1)\
-            \n  RightSemi Join: test1.a = test2.a\
-            \n    TableScan: test1\
-            \n    Projection: test2.a, test2.b\
-            \n      TableScan: test2",
-        );
 
         // Inferred the predicate `test2.a <= Int64(1)` and push it down to the right side.
         assert_optimized_plan_equal!(
@@ -3606,15 +3291,6 @@ mod tests {
             )?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "RightSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
-            \n  TableScan: test1\
-            \n  Projection: test2.a, test2.b\
-            \n    TableScan: test2",
-        );
-
         // Both side will be pushed down.
         assert_optimized_plan_equal!(
             plan,
@@ -3649,17 +3325,6 @@ mod tests {
             )?
             .filter(col("test2.a").gt(lit(2u32)))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test2.a > UInt32(2)\
-            \n  LeftAnti Join: test1.a = test2.a\
-            \n    Projection: test1.a, test1.b\
-            \n      TableScan: test1\
-            \n    Projection: test2.a, test2.b\
-            \n      TableScan: test2",
-        );
 
         // For left anti, filter of the right side filter can be pushed down.
         assert_optimized_plan_equal!(
@@ -3701,16 +3366,6 @@ mod tests {
             )?
             .build()?;
 
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
-            \n  Projection: test1.a, test1.b\
-            \n    TableScan: test1\
-            \n  Projection: test2.a, test2.b\
-            \n    TableScan: test2",
-        );
-
         // For left anti, filter of the right side filter can be pushed down.
         assert_optimized_plan_equal!(
             plan,
@@ -3746,17 +3401,6 @@ mod tests {
             )?
             .filter(col("test1.a").gt(lit(2u32)))?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "Filter: test1.a > UInt32(2)\
-             \n  RightAnti Join: test1.a = test2.a\
-             \n    Projection: test1.a, test1.b\
-             \n      TableScan: test1\
-             \n    Projection: test2.a, test2.b\
-             \n      TableScan: test2",
-        );
 
         // For right anti, filter of the left side can be pushed down.
         assert_optimized_plan_equal!(
@@ -3797,16 +3441,6 @@ mod tests {
                 ),
             )?
             .build()?;
-
-        // not part of the test, just good to know:
-        assert_eq!(
-            format!("{plan}"),
-            "RightAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
-            \n  Projection: test1.a, test1.b\
-            \n    TableScan: test1\
-            \n  Projection: test2.a, test2.b\
-            \n    TableScan: test2",
-        );
 
         // For right anti, filter of the left side can be pushed down.
         assert_optimized_plan_equal!(
@@ -3864,14 +3498,6 @@ mod tests {
             .project(vec![col("t.a"), col("t.r")])?
             .build()?;
 
-        let expected_before = "Projection: t.a, t.r\
-        \n  Filter: t.a > Int32(5) AND t.r > Float64(0.5)\
-        \n    SubqueryAlias: t\
-        \n      Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r\
-        \n        Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]\
-        \n          TableScan: test1";
-        assert_eq!(format!("{plan}"), expected_before);
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -3912,15 +3538,6 @@ mod tests {
             .project(vec![col("t.a"), col("t.r")])?
             .build()?;
 
-        let expected_before = "Projection: t.a, t.r\
-        \n  Filter: t.r > Float64(0.8)\
-        \n    SubqueryAlias: t\
-        \n      Projection: test1.a AS a, TestScalarUDF() AS r\
-        \n        Inner Join: test1.a = test2.a\
-        \n          TableScan: test1\
-        \n          TableScan: test2";
-        assert_eq!(format!("{plan}"), expected_before);
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -3948,11 +3565,6 @@ mod tests {
             .filter(expr.gt(lit(0.1)))?
             .build()?;
 
-        let expected_before = "Filter: TestScalarUDF() > Float64(0.1)\
-        \n  Projection: test.a, test.b\
-        \n    TableScan: test";
-        assert_eq!(format!("{plan}"), expected_before);
-
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -3979,11 +3591,6 @@ mod tests {
                     .and(col("t.b").gt(lit(10))),
             )?
             .build()?;
-
-        let expected_before = "Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)\
-        \n  Projection: test.a, test.b\
-        \n    TableScan: test";
-        assert_eq!(format!("{plan}"), expected_before);
 
         assert_optimized_plan_equal!(
             plan,
@@ -4014,11 +3621,6 @@ mod tests {
                 .and(col("t.b").gt(lit(10))),
         )?
         .build()?;
-
-        let expected_before = "Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)\
-        \n  Projection: a, b\
-        \n    TableScan: test";
-        assert_eq!(format!("{plan}"), expected_before);
 
         assert_optimized_plan_equal!(
             plan,
@@ -4098,11 +3700,6 @@ mod tests {
         });
 
         let plan = LogicalPlanBuilder::from(node).filter(lit(false))?.build()?;
-
-        // Check the original plan format (not part of the test assertions)
-        let expected_before = "Filter: Boolean(false)\
-        \n  TestUserNode";
-        assert_eq!(format!("{plan}"), expected_before);
 
         // Check that the filter is pushed down to the user-defined node
         assert_optimized_plan_equal!(
