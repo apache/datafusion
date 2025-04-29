@@ -16,6 +16,8 @@
 // under the License.
 
 use ahash::RandomState;
+use arrow::array::{ArrowNativeTypeOp, ListArray, UInt64Array};
+use datafusion_common::hash_utils::combine_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_expr::expr::WindowFunction;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
@@ -346,18 +348,22 @@ impl AggregateUDFImpl for Count {
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         // groups accumulator only supports `COUNT(c1)`, not
         // `COUNT(c1, c2)`, etc
-        if args.is_distinct {
-            return false;
-        }
+        // if args.is_distinct {
+        //     return false;
+        // }
         args.exprs.len() == 1
     }
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         // instantiate specialized accumulator
-        Ok(Box::new(CountGroupsAccumulator::new()))
+        if args.is_distinct {
+            Ok(Box::new(DistinctCountGroupsAccumulator::new()))
+        } else {
+            Ok(Box::new(CountGroupsAccumulator::new()))
+        }
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
@@ -620,6 +626,192 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<usize>()
+    }
+}
+
+/// An accumulator to compute the counts of [`PrimitiveArray<T>`].
+/// Stores values as native types, and does overflow checking
+///
+/// Unlike most other accumulators, COUNT never produces NULLs. If no
+/// non-null values are seen in any group the output is 0. Thus, this
+/// accumulator has no additional null or seen filter tracking.
+#[derive(Debug)]
+struct DistinctCountGroupsAccumulator {
+    /// Distinct count per group.
+    ///
+    /// Note this is an i64 and not a u64 (or usize) because the
+    /// output type of count is `DataType::Int64`. Thus by using `i64`
+    /// for the counts, the output [`Int64Array`] can be created
+    /// without copy.
+    counts: Vec<Option<Vec<Option<i64>>>>,
+    final_count: Vec<i64>,
+
+    map: hashbrown::HashTable<usize>,
+    values: Vec<i64>,
+    group_indices: Vec<usize>,
+    random_state: RandomState,
+}
+
+impl DistinctCountGroupsAccumulator {
+    pub fn new() -> Self {
+        Self {
+            counts: vec![],
+            final_count: vec![],
+            random_state: Default::default(),
+            map: hashbrown::HashTable::with_capacity(128),
+            values: Vec::with_capacity(128),
+            group_indices: Vec::with_capacity(128),
+        }
+    }
+}
+
+impl GroupsAccumulator for DistinctCountGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = &values[0];
+
+        // Add one to each group's counter for each non null, non
+        // filtered value
+        self.counts.resize(total_num_groups, None);
+
+        // println!("dt: {:?}", values.data_type());
+
+        // let mut rows: Vec<u64> = vec![];
+
+        let arr = values.as_primitive::<Int64Type>();
+        for (i, v) in arr.iter().enumerate() {
+            if let Some(key) = v {
+                let group_index = group_indices[i];
+                let state = &self.random_state;
+                let hash = state.hash_one(key);
+                let hash = combine_hashes(hash, state.hash_one(group_index));
+
+                let insert = self.map.entry(
+                    hash,
+                    |g| unsafe {
+                        self.group_indices.get_unchecked(*g) == &group_index
+                        && self.values.get_unchecked(*g) == &key
+                    },
+                    |g| unsafe {
+                        let v = self.values.get_unchecked(*g);
+                        let g = self.group_indices.get_unchecked(*g);
+                        combine_hashes(state.hash_one(v), state.hash_one(g))
+                    },
+                );
+
+                match insert {
+                    hashbrown::hash_table::Entry::Occupied(o) => {},
+                    hashbrown::hash_table::Entry::Vacant(v) => {
+                        let g = self.values.len();
+                        v.insert(g);
+                        self.values.push(key);
+                        self.group_indices.push(group_index);
+                        // rows.push(i as u64);
+
+                        if let Some(existing_keys) = &mut self.counts[group_index] {
+                            // If it's Some(Vec), just push the new key
+                            existing_keys.push(Some(key));
+                        } else {
+                            // If it's None, create a new Vec containing the key and assign it
+                            self.counts[group_index] = Some(vec![Some(key)])
+                        }
+                    }
+                }
+            }
+        }
+
+        // let indices = UInt64Array::from(rows);
+        // let final_array = compute::take(arr, &indices, None)?;
+
+        // combine group indices and value and insert into the hashset,
+        // iterate again with group indices only and count the value for the same group
+
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        debug_assert_eq!(values.len(), 1);
+
+        self.final_count.resize(total_num_groups, 0);
+
+        let list_arr = values[0].as_list::<i32>();
+        for (i, counts) in list_arr.iter().enumerate() {
+            let group_index = group_indices[i];
+            if let Some(counts) = counts {
+
+                let counts_in_row = counts.as_primitive::<Int64Type>();
+                for key in counts_in_row.iter().flatten() {
+
+                    let state = &self.random_state;
+                    let hash = state.hash_one(key);
+                    let hash = combine_hashes(hash, state.hash_one(group_index));
+
+                    let insert = self.map.entry(
+                        hash,
+                        |g| unsafe {
+                            self.group_indices.get_unchecked(*g) == &group_index
+                            && self.values.get_unchecked(*g) == &key
+                        },
+                        |g| unsafe {
+                            let v = self.values.get_unchecked(*g);
+                            let g = self.group_indices.get_unchecked(*g);
+                            combine_hashes(state.hash_one(v), state.hash_one(g))
+                        },
+                    );
+
+                    match insert {
+                        hashbrown::hash_table::Entry::Occupied(o) => {},
+                        hashbrown::hash_table::Entry::Vacant(v) => {
+                            let g = self.values.len();
+                            v.insert(g);
+                            self.values.push(key);
+                            self.group_indices.push(group_index);
+
+                            self.final_count[group_index] += 1;
+                        }
+                    }
+
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let counts = emit_to.take_needed(&mut self.final_count);
+
+        let nulls = None;
+        let array = PrimitiveArray::<Int64Type>::new(counts.into(), nulls);
+
+        Ok(Arc::new(array))
+
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let counts = emit_to.take_needed(&mut self.counts);
+        let list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(counts);
+        Ok(vec![Arc::new(list_array)])
+    }
+
+    fn size(&self) -> usize {
+        self.counts.capacity() * size_of::<usize>()
+            + self.final_count.capacity() * size_of::<usize>()
+            + self.map.capacity() * size_of::<usize>()
+            + self.values.capacity() * size_of::<usize>()
+            + self.group_indices.capacity() * size_of::<usize>()
     }
 }
 
