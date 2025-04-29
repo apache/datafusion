@@ -516,7 +516,7 @@ impl PhysicalExpr for BinaryExpr {
             }
         } else if self.op.eq(&Operator::Or) {
             if interval.eq(&Interval::CERTAINLY_FALSE) {
-                // A certainly false logical conjunction can only derive from certainly
+                // A certainly false logical disjunction can only derive from certainly
                 // false operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
                     && !right_interval.eq(&Interval::CERTAINLY_TRUE))
