@@ -45,7 +45,7 @@ use object_store::ObjectStore;
 /// * [`CsvSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html)
 /// * [`JsonSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.JsonSource.html)
 /// * [`ParquetSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ParquetSource.html)
-/// 
+///
 /// [`DataSource`]: crate::source::DataSource
 pub trait FileSource: Send + Sync {
     /// Creates a `dyn FileOpener` based on given parameters
