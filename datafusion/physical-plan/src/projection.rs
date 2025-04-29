@@ -244,8 +244,13 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        let input_stats = self.input.partition_statistics(partition)?;
         Ok(stats_projection(
-            self.input.statistics()?,
+            input_stats,
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
             Arc::clone(&self.schema),
         ))

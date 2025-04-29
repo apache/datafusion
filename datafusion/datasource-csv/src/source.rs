@@ -381,6 +381,10 @@ impl ExecutionPlan for CsvExec {
         self.inner.statistics()
     }
 
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.inner.partition_statistics(partition)
+    }
+
     fn metrics(&self) -> Option<MetricsSet> {
         self.inner.metrics()
     }
