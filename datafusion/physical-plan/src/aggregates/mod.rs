@@ -736,7 +736,7 @@ impl AggregateExec {
         &self.input_order_mode
     }
 
-    fn statistics(&self) -> Result<Statistics> {
+    fn statistics_inner(&self) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
@@ -994,13 +994,13 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.statistics()
+        self.statistics_inner()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if partition.is_none() {
             // If the partition is not specified, we can use the statistics of the input plan
-            self.statistics()
+            self.statistics_inner()
         } else {
             Ok(Statistics::new_unknown(&self.schema()))
         }

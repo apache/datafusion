@@ -170,14 +170,14 @@ impl ExecutionPlan for TestMemoryExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.statistics()
+        self.statistics_inner()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if partition.is_some() {
             Ok(Statistics::new_unknown(&self.schema))
         } else {
-            self.statistics()
+            self.statistics_inner()
         }
     }
 
@@ -222,7 +222,7 @@ impl TestMemoryExec {
         )
     }
 
-    fn statistics(&self) -> Result<Statistics> {
+    fn statistics_inner(&self) -> Result<Statistics> {
         Ok(common::compute_record_batch_statistics(
             &self.partitions,
             &self.schema,

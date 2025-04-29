@@ -274,7 +274,7 @@ impl ExecutionPlan for UnionExec {
                 remaining_idx -= input_partition_count;
             }
             // If we get here, the partition index is out of bounds
-            return Ok(Statistics::new_unknown(&self.schema()));
+            Ok(Statistics::new_unknown(&self.schema()))
         } else {
             // Collect statistics from all inputs
             let stats = self

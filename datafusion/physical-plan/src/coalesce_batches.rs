@@ -200,10 +200,12 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stats = self.input.partition_statistics(partition)?;
-        let fetched_stat =
-            Statistics::with_fetch(input_stats.clone(), self.schema(), self.fetch, 0, 1)?;
-        Ok(fetched_stat)
+        self.input.partition_statistics(partition)?.with_fetch(
+            self.schema(),
+            self.fetch,
+            0,
+            1,
+        )
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

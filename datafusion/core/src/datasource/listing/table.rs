@@ -1149,32 +1149,25 @@ impl ListingTable {
         let (file_group, inexact_stats) =
             get_files_with_limit(files, limit, self.options.collect_stat).await?;
 
-        let mut file_groups = file_group.split_files(self.options.target_partitions);
-        let (schema_mapper, _) = DefaultSchemaAdapterFactory::from_schema(self.schema())
-            .map_schema(self.file_schema.as_ref())?;
-        // Use schema_mapper to map each file-level column statistics to table-level column statistics
-        file_groups.iter_mut().try_for_each(|file_group| {
-            // Update each file's statistics's column statistics in file_group
-            for idx in 0..file_group.len() {
-                if let Some(stat) = file_group[idx].statistics.as_ref() {
-                    let column_statistics =
-                        schema_mapper.map_column_statistics(&stat.column_statistics)?;
-                    // Update the file's statistics with the mapped column statistics
-                    file_group[idx].statistics = Some(Arc::new(Statistics {
-                        num_rows: stat.num_rows.clone(),
-                        total_byte_size: stat.total_byte_size.clone(),
-                        column_statistics,
-                    }));
-                }
-            }
-            Ok::<_, DataFusionError>(())
-        })?;
-        compute_all_files_statistics(
+        let file_groups = file_group.split_files(self.options.target_partitions);
+        let (mut file_groups, mut stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),
             self.options.collect_stat,
             inexact_stats,
-        )
+        )?;
+        let (schema_mapper, _) = DefaultSchemaAdapterFactory::from_schema(self.schema())
+            .map_schema(self.file_schema.as_ref())?;
+        stats.column_statistics =
+            schema_mapper.map_column_statistics(&stats.column_statistics)?;
+        file_groups.iter_mut().try_for_each(|file_group| {
+            if let Some(stat) = file_group.statistics_mut() {
+                stat.column_statistics =
+                    schema_mapper.map_column_statistics(&stat.column_statistics)?;
+            }
+            Ok::<_, DataFusionError>(())
+        })?;
+        Ok((file_groups, stats))
     }
 
     /// Collects statistics for a given partitioned file.
