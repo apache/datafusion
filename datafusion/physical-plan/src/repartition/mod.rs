@@ -41,7 +41,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
 use arrow::array::{
-    PrimitiveArray, RecordBatch, RecordBatchOptions, Scalar, UInt64Array,
+    PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array,
 };
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
@@ -49,7 +49,7 @@ use arrow_schema::{DataType, Field};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
-use datafusion_common::{HashMap, ScalarValue};
+use datafusion_common::HashMap;
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
