@@ -1434,14 +1434,9 @@ impl TableOptions {
     /// A new `TableOptions` instance with updated settings from the session config.
     #[must_use = "this method returns a new instance"]
     pub fn combine_with_session_config(&self, config: &ConfigOptions) -> Self {
-        let mut updated_options = self.parquet.clone();
-        updated_options.global = config.execution.parquet.clone();
-        Self {
-            parquet: updated_options,
-            csv: self.csv.clone(),
-            json: self.json.clone(),
-            extensions: self.extensions.clone(),
-        }
+        let mut clone = self.clone();
+        clone.parquet.global = config.execution.parquet.clone();
+        clone
     }
 
     /// Sets the file format for the table.
@@ -1525,10 +1520,9 @@ impl TableOptions {
     /// # Returns
     ///
     /// A new `TableOptions` instance with the specified extensions applied.
-    pub fn with_extensions(self, extensions: Extensions) -> Self {
-        let mut clone = self.clone();
-        clone.extensions = extensions;
-        clone
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
     }
 
     /// Sets a specific configuration option.
