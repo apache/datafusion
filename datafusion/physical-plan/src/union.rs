@@ -262,16 +262,32 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let stats = self
-            .inputs
-            .iter()
-            .map(|input_exec| input_exec.partition_statistics(partition))
-            .collect::<Result<Vec<_>>>()?;
+        if let Some(partition_idx) = partition {
+            // For a specific partition, find which input it belongs to
+            let mut remaining_idx = partition_idx;
+            for input in &self.inputs {
+                let input_partition_count = input.output_partitioning().partition_count();
+                if remaining_idx < input_partition_count {
+                    // This partition belongs to this input
+                    return input.partition_statistics(Some(remaining_idx));
+                }
+                remaining_idx -= input_partition_count;
+            }
+            // If we get here, the partition index is out of bounds
+            return Ok(Statistics::new_unknown(&self.schema()));
+        } else {
+            // Collect statistics from all inputs
+            let stats = self
+                .inputs
+                .iter()
+                .map(|input_exec| input_exec.partition_statistics(None))
+                .collect::<Result<Vec<_>>>()?;
 
-        Ok(stats
-            .into_iter()
-            .reduce(stats_union)
-            .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+            Ok(stats
+                .into_iter()
+                .reduce(stats_union)
+                .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+        }
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

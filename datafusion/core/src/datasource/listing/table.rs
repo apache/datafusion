@@ -1154,9 +1154,18 @@ impl ListingTable {
             .map_schema(self.file_schema.as_ref())?;
         // Use schema_mapper to map each file-level column statistics to table-level column statistics
         file_groups.iter_mut().try_for_each(|file_group| {
-            if let Some(stat) = file_group.statistics_mut() {
-                stat.column_statistics =
-                    schema_mapper.map_column_statistics(&stat.column_statistics)?;
+            // Update each file's statistics's column statistics in file_group
+            for idx in 0..file_group.len() {
+                if let Some(stat) = file_group[idx].statistics.as_ref() {
+                    let column_statistics =
+                        schema_mapper.map_column_statistics(&stat.column_statistics)?;
+                    // Update the file's statistics with the mapped column statistics
+                    file_group[idx].statistics = Some(Arc::new(Statistics {
+                        num_rows: stat.num_rows.clone(),
+                        total_byte_size: stat.total_byte_size.clone(),
+                        column_statistics,
+                    }));
+                }
             }
             Ok::<_, DataFusionError>(())
         })?;

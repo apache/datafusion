@@ -476,14 +476,15 @@ mod test {
     #[tokio::test]
     async fn test_statistic_by_partition_of_global_limit_partitions() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        // Skip 2 rows
         let global_limit: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(scan.clone(), 0, Some(2)));
         let statistics = (0..global_limit.output_partitioning().partition_count())
             .map(|idx| global_limit.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 1);
-        let mut expected_statistic_partition = Statistics::new_unknown(&scan.schema());
-        expected_statistic_partition.num_rows = Precision::Exact(2);
+        let expected_statistic_partition =
+            create_partition_statistics(2, 110, 3, 4, true);
         assert_eq!(statistics[0], expected_statistic_partition);
         Ok(())
     }
