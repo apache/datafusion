@@ -104,7 +104,7 @@ details.
 [#15123]: https://github.com/apache/datafusion/pull/15123
 [#15027]: https://github.com/apache/datafusion/pull/15027
 
-## `FileScanConfig` --> `FileScanConfigBuilder`
+### `FileScanConfig` --> `FileScanConfigBuilder`
 
 Previously, `FileScanConfig::build()` directly created ExecutionPlans. In
 DataFusion 47.0.0 this has been changed to use `FileScanConfigBuilder`. See
