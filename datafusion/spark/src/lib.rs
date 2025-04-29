@@ -26,7 +26,7 @@
 //! Spark Expression packages for [DataFusion].
 //!
 //! This crate contains a collection of various Spark expression packages for DataFusion,
-//! implemented using the extension API. 
+//! implemented using the extension API.
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
 //!
@@ -51,6 +51,7 @@ use log::debug;
 use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
+#[allow(unused)]
 pub mod expr_fn {
     pub use super::function::aggregate::expr_fn::*;
     pub use super::function::array::expr_fn::*;

@@ -24,11 +24,10 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
-/// https://spark.apache.org/docs/latest/api/sql/index.html#expm1
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#expm1>
 #[derive(Debug)]
 pub struct SparkExpm1 {
     signature: Signature,

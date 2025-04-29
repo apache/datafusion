@@ -19,14 +19,13 @@ use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{internal_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
-use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
-/// https://spark.apache.org/docs/latest/api/sql/index.html#ascii
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#ascii>
 #[derive(Debug)]
 pub struct SparkAscii {
     signature: Signature,
@@ -82,10 +81,6 @@ impl ScalarUDFImpl for SparkAscii {
             );
         }
         Ok(vec![DataType::Utf8])
-    }
-
-    fn documentation(&self) -> Option<&Documentation> {
-        self.doc()
     }
 }
 
