@@ -949,6 +949,18 @@ impl Display for Interval {
     }
 }
 
+impl From<ScalarValue> for Interval {
+    fn from(value: ScalarValue) -> Self {
+        Self::new(value.clone(), value)
+    }
+}
+
+impl From<&ScalarValue> for Interval {
+    fn from(value: &ScalarValue) -> Self {
+        Self::new(value.to_owned(), value.to_owned())
+    }
+}
+
 /// Applies the given binary operator the `lhs` and `rhs` arguments.
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     match *op {

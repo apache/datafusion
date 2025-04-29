@@ -26,16 +26,27 @@ use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::Statistics;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_plan::filter_pushdown::{
+    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
+};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
 use object_store::ObjectStore;
 
-/// Common file format behaviors needs to implement.
+/// file format specific behaviors for elements in [`DataSource`]
 ///
-/// See implementation examples such as `ParquetSource`, `CsvSource`
+/// See more details on specific implementations:
+/// * [`ArrowSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowSource.html)
+/// * [`AvroSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.AvroSource.html)
+/// * [`CsvSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html)
+/// * [`JsonSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.JsonSource.html)
+/// * [`ParquetSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ParquetSource.html)
+///
+/// [`DataSource`]: crate::source::DataSource
 pub trait FileSource: Send + Sync {
     /// Creates a `dyn FileOpener` based on given parameters
     fn create_file_opener(
@@ -57,7 +68,7 @@ pub trait FileSource: Send + Sync {
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics
-    fn statistics(&self) -> datafusion_common::Result<Statistics>;
+    fn statistics(&self) -> Result<Statistics>;
     /// String representation of file source such as "csv", "json", "parquet"
     fn file_type(&self) -> &str;
     /// Format FileType specific information
@@ -65,17 +76,19 @@ pub trait FileSource: Send + Sync {
         Ok(())
     }
 
-    /// If supported by the [`FileSource`], redistribute files across partitions according to their size.
-    /// Allows custom file formats to implement their own repartitioning logic.
+    /// If supported by the [`FileSource`], redistribute files across partitions
+    /// according to their size. Allows custom file formats to implement their
+    /// own repartitioning logic.
     ///
-    /// Provides a default repartitioning behavior, see comments on [`FileGroupPartitioner`] for more detail.
+    /// The default implementation uses [`FileGroupPartitioner`]. See that
+    /// struct for more details.
     fn repartitioned(
         &self,
         target_partitions: usize,
         repartition_file_min_size: usize,
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
-    ) -> datafusion_common::Result<Option<FileScanConfig>> {
+    ) -> Result<Option<FileScanConfig>> {
         if config.file_compression_type.is_compressed() || config.new_lines_in_values {
             return Ok(None);
         }
@@ -92,5 +105,17 @@ pub trait FileSource: Send + Sync {
             return Ok(Some(source));
         }
         Ok(None)
+    }
+
+    /// Try to push down filters into this FileSource.
+    /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
+    ///
+    /// [`ExecutionPlan::try_pushdown_filters`]: datafusion_physical_plan::ExecutionPlan::try_pushdown_filters
+    fn try_pushdown_filters(
+        &self,
+        fd: FilterDescription,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
+        Ok(filter_pushdown_not_supported(fd))
     }
 }
