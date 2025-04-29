@@ -376,6 +376,7 @@ mod tests {
     use crate::utils::test::test_function;
     use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
+    use arrow::datatypes::Field;
     use DataType::*;
 
     #[test]
@@ -468,11 +469,19 @@ mod tests {
             None,
             Some("b"),
         ])));
+        let arg_fields = vec![
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8View, true),
+            Field::new("a", Utf8View, true),
+        ];
 
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2, c3, c4],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 3,
-            return_type: &Utf8,
+            return_field: &Field::new("f", Utf8, true),
         };
 
         let result = ConcatFunc::new().invoke_with_args(args)?;
