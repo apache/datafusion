@@ -213,3 +213,20 @@ used_underscore_binding = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+## Temporary arrow-rs patch to
+## https://github.com/apache/arrow-rs/pull/7428
+
+[patch.crates-io]
+arrow = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-array = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-buffer = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-cast = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-data = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-ipc = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-schema = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-select = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-string = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-ord = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+arrow-flight = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
+parquet = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "0c3aa9b3d4fa913029742f36b650f7b1e1ea2339" }
