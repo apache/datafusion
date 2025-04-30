@@ -16,6 +16,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Exit on error
+set -e
+
+
 # Collect benchmark results for different datafusion releases.
 #
 # Usage: collect_bench.sh <bench_name>
@@ -25,13 +29,16 @@
 # Example:
 # collect_bench.sh clickbench
 #
-# This script is designed for developers of DataFusion to track the performance
-# of DataFusion over time.
 #
-# Run this from the standard DataFusion development environment.
+# The script uses cargo to check out and run the benchmark binary for
+# from current main and last 5 major releases (based on tag name)
+# The results are stored in the `results` directory.
 #
-# The script uses cargo to check out and run run the benchmark binary to
-# collect benchmarks from current main and last 5 major releases (checks out tags)
+# By default the current datafusion checkout is used. If you want to use a different
+# checkout, set the DATAFUSION_DIR environment variable:
+#
+# Example:
+# DATAFUSION_DIR=/path/to/checkout collect_bench.sh clickbench
 
 BENCH_NAME=$1
 
@@ -40,9 +47,12 @@ if [ -z "$BENCH_NAME" ] ; then
     exit 1
 fi
 
-main(){
+DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
+echo "Running $BENCH_NAME"
+echo "Using DATAFUSION_DIR: $DATAFUSION_DIR"
 
-git fetch upstream main
+pushd $DATAFUSION_DIR
+
 git checkout main
 
 # get current major version 
@@ -52,16 +62,15 @@ major_version=$(echo "$output" | grep -oE '[0-9]+' | head -n1)
 # run for current main
 echo "current major version: $major_version"  
 export RESULTS_DIR="results/main"
-./bench.sh run $BENCH_NAME
+./benchmarks/bench.sh run $BENCH_NAME
 
 # run for last 5 major releases
 for i in {1..5}; do
     echo "running benchmark on  $((major_version-i)).0.0"
-    git fetch upstream $((major_version-i)).0.0
     git checkout $((major_version-i)).0.0
     export RESULTS_DIR="results/$((major_version-i)).0.0"
-    ./bench.sh run $BENCH_NAME
+    ./benchmarks/bench.sh run $BENCH_NAME
 done
-}
 
-main
+# restore working directory
+popd
