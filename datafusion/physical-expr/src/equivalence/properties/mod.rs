@@ -791,11 +791,11 @@ impl EquivalenceProperties {
         OrderingEquivalenceClass::new(new_orderings)
     }
 
-    /// Projects argument `expr` according to `projection_mapping`, taking
-    /// equivalences into account.
+    /// Projects argument `expr` according to the projection described by
+    /// `mapping`, taking equivalences into account.
     ///
     /// For example, assume that columns `a` and `c` are always equal, and that
-    /// `projection_mapping` encodes following mapping:
+    /// the projection described by `mapping` encodes the following:
     ///
     /// ```text
     /// a -> a1
@@ -807,9 +807,21 @@ impl EquivalenceProperties {
     pub fn project_expr(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
-        projection_mapping: &ProjectionMapping,
+        mapping: &ProjectionMapping,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        self.eq_group.project_expr(projection_mapping, expr)
+        self.eq_group.project_expr(mapping, expr)
+    }
+
+    /// Projects the given `expressions` according to the projection described
+    /// by `mapping`, taking equivalences into account. This function is similar
+    /// to [`Self::project_expr`], but projects multiple expressions at once
+    /// more efficiently than calling `project_expr` for each expression.
+    pub fn project_expressions<'a>(
+        &self,
+        expressions: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
+        mapping: &ProjectionMapping,
+    ) -> Vec<Option<Arc<dyn PhysicalExpr>>> {
+        self.eq_group.project_expressions(mapping, expressions)
     }
 
     /// Constructs a dependency map based on existing orderings referred to in

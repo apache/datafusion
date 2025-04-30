@@ -300,6 +300,11 @@ impl From<EquivalenceClass> for Vec<Arc<dyn PhysicalExpr>> {
     }
 }
 
+type AugmentedMapping<'a> = IndexMap<
+    &'a Arc<dyn PhysicalExpr>,
+    (&'a ProjectionTargets, Option<&'a EquivalenceClass>),
+>;
+
 /// A collection of distinct `EquivalenceClass`es
 #[derive(Clone, Debug, Default)]
 pub struct EquivalenceGroup {
@@ -515,10 +520,7 @@ impl EquivalenceGroup {
     /// Perform an indirect projection of `expr` by consulting the equivalence
     /// classes.
     fn project_expr_indirect(
-        aug_mapping: &IndexMap<
-            &Arc<dyn PhysicalExpr>,
-            (&ProjectionTargets, Option<&EquivalenceClass>),
-        >,
+        aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // The given expression is not inside the mapping, so we try to project
@@ -556,11 +558,21 @@ impl EquivalenceGroup {
             .map(|children| Arc::clone(expr).with_new_children(children).unwrap())
     }
 
+    fn augment_projection_mapping<'a>(
+        &'a self,
+        mapping: &'a ProjectionMapping,
+    ) -> AugmentedMapping<'a> {
+        mapping
+            .iter()
+            .map(|(k, v)| {
+                let eq_class = self.get_equivalence_class(k);
+                (k, (v, eq_class))
+            })
+            .collect()
+    }
+
     /// Projects `expr` according to the given projection mapping.
     /// If the resulting expression is invalid after projection, returns `None`.
-    ///
-    /// TODO: Write a multiple `expr` version to avoid searching for equivalence
-    ///       classes for every source expression in `mapping` multiple times.
     pub fn project_expr(
         &self,
         mapping: &ProjectionMapping,
@@ -571,24 +583,42 @@ impl EquivalenceGroup {
             let (target, _) = targets.first();
             Some(Arc::clone(target))
         } else {
-            let aug_mapping = mapping
-                .iter()
-                .map(|(k, v)| {
-                    let eq_class = self.get_equivalence_class(k);
-                    (k, (v, eq_class))
-                })
-                .collect();
+            let aug_mapping = self.augment_projection_mapping(mapping);
             Self::project_expr_indirect(&aug_mapping, expr)
         }
+    }
+
+    /// Projects `expressions` according to the given projection mapping.
+    /// This function is similar to [`Self::project_expr`], but projects multiple
+    /// expressions at once more efficiently than calling `project_expr` for each
+    /// expression.
+    pub fn project_expressions<'a>(
+        &self,
+        mapping: &ProjectionMapping,
+        expressions: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
+    ) -> Vec<Option<Arc<dyn PhysicalExpr>>> {
+        let mut aug_mapping = None;
+        expressions
+            .into_iter()
+            .map(|expr| {
+                if let Some(targets) = mapping.get(expr) {
+                    // If we match the source, we can project directly:
+                    let (target, _) = targets.first();
+                    Some(Arc::clone(target))
+                } else {
+                    let aug_mapping = aug_mapping
+                        .get_or_insert_with(|| self.augment_projection_mapping(mapping));
+                    Self::project_expr_indirect(aug_mapping, expr)
+                }
+            })
+            .collect()
     }
 
     /// Projects this equivalence group according to the given projection mapping.
     pub fn project(&self, mapping: &ProjectionMapping) -> Self {
         let projected_classes = self.iter().map(|cls| {
-            let new_exprs = cls
-                .iter()
-                .filter_map(|expr| self.project_expr(mapping, expr));
-            EquivalenceClass::new(new_exprs)
+            let new_exprs = self.project_expressions(mapping, cls.iter());
+            EquivalenceClass::new(new_exprs.into_iter().flatten())
         });
 
         // The key is the source expression, and the value is the equivalence

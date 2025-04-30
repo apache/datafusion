@@ -199,18 +199,18 @@ impl Partitioning {
     /// Calculate the output partitioning after applying the given projection.
     pub fn project(
         &self,
-        projection_mapping: &ProjectionMapping,
+        mapping: &ProjectionMapping,
         input_eq_properties: &EquivalenceProperties,
     ) -> Self {
         if let Partitioning::Hash(exprs, part) = self {
-            let normalized_exprs = exprs
-                .iter()
-                .map(|expr| {
-                    input_eq_properties
-                        .project_expr(expr, projection_mapping)
-                        .unwrap_or_else(|| {
-                            Arc::new(UnKnownColumn::new(&expr.to_string()))
-                        })
+            let proj_exprs = input_eq_properties.project_expressions(exprs, mapping);
+            let normalized_exprs = proj_exprs
+                .into_iter()
+                .zip(exprs)
+                .map(|(proj_expr, expr)| {
+                    proj_expr.unwrap_or_else(|| {
+                        Arc::new(UnKnownColumn::new(&expr.to_string()))
+                    })
                 })
                 .collect();
             Partitioning::Hash(normalized_exprs, *part)
