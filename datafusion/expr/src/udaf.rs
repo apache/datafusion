@@ -410,7 +410,7 @@ where
 ///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
 ///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
 ///        Ok(vec![
-///             Field::new("value", args.return_type.clone(), true),
+///             args.return_field.clone().with_name("value"),
 ///             Field::new("ordering", DataType::UInt32, true)
 ///        ])
 ///    }
@@ -745,11 +745,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        let fields = vec![Field::new(
-            format_state_name(args.name, "value"),
-            args.return_type.clone(),
-            true,
-        )];
+        let fields = vec![args
+            .return_field
+            .clone()
+            .with_name(format_state_name(args.name, "value"))];
 
         Ok(fields
             .into_iter()

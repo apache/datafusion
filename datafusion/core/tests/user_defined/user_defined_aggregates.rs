@@ -18,6 +18,8 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
+use std::any::Any;
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::sync::{
@@ -26,10 +28,10 @@ use std::sync::{
 };
 
 use arrow::array::{
-    types::UInt64Type, AsArray, Int32Array, PrimitiveArray, StringArray, StructArray,
+    types::UInt64Type, Array, AsArray, Int32Array, PrimitiveArray, StringArray,
+    StructArray, UInt64Array,
 };
 use arrow::datatypes::{Fields, Schema};
-
 use datafusion::common::test_util::batches_to_string;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
@@ -48,7 +50,7 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::assert_contains;
+use datafusion_common::{assert_contains, exec_datafusion_err};
 use datafusion_common::{cast::as_primitive_array, exec_err};
 use datafusion_expr::{
     col, create_udaf, function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator,
@@ -781,7 +783,7 @@ struct TestGroupsAccumulator {
 }
 
 impl AggregateUDFImpl for TestGroupsAccumulator {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -889,4 +891,135 @@ impl GroupsAccumulator for TestGroupsAccumulator {
     fn size(&self) -> usize {
         size_of::<u64>()
     }
+}
+
+#[derive(Debug)]
+struct MetadataBasedAggregateUdf {
+    name: String,
+    signature: Signature,
+    metadata: HashMap<String, String>,
+}
+
+impl MetadataBasedAggregateUdf {
+    fn new(metadata: HashMap<String, String>) -> Self {
+        // The name we return must be unique. Otherwise we will not call distinct
+        // instances of this UDF. This is a small hack for the unit tests to get unique
+        // names, but you could do something more elegant with the metadata.
+        let name = format!("metadata_based_udf_{}", metadata.len());
+        Self {
+            name,
+            signature: Signature::exact(vec![DataType::UInt64], Volatility::Immutable),
+            metadata,
+        }
+    }
+}
+
+impl AggregateUDFImpl for MetadataBasedAggregateUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        unimplemented!("this should never be called since return_field is implemented");
+    }
+
+    fn return_field(&self, _arg_fields: &[Field]) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::UInt64, true)
+            .with_metadata(self.metadata.clone()))
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let input_expr = acc_args
+            .exprs
+            .first()
+            .ok_or(exec_datafusion_err!("Expected one argument"))?;
+        let input_field = input_expr.return_field(acc_args.schema)?;
+
+        let double_output = input_field
+            .metadata()
+            .get("modify_values")
+            .map(|v| v == "double_output")
+            .unwrap_or(false);
+
+        Ok(Box::new(MetadataBasedAccumulator {
+            double_output,
+            curr_sum: 0,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct MetadataBasedAccumulator {
+    double_output: bool,
+    curr_sum: u64,
+}
+
+impl Accumulator for MetadataBasedAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = values[0]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or(exec_datafusion_err!("Expected UInt64Array"))?;
+
+        self.curr_sum = arr.iter().fold(self.curr_sum, |a, b| a + b.unwrap_or(0));
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let v = match self.double_output {
+            true => self.curr_sum * 2,
+            false => self.curr_sum,
+        };
+
+        Ok(ScalarValue::from(v))
+    }
+
+    fn size(&self) -> usize {
+        9
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![ScalarValue::from(self.curr_sum)])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+}
+
+#[tokio::test]
+async fn test_metadata_based_accumulator() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = UInt64Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    let udaf_no_metadata =
+        AggregateUDF::from(MetadataBasedAggregateUdf::new(HashMap::new()));
+    let udaf_with_metadata = AggregateUDF::from(MetadataBasedAggregateUdf::new(
+        HashMap::from_iter([("modify_values".to_string(), "double_output".to_string())]),
+    ));
+    ctx.register_udaf(udaf_no_metadata);
+    ctx.register_udaf(udaf_with_metadata);
+
+    let sql_df = ctx
+        .sql("SELECT metadata_based_udf_0(a) FROM t group by a")
+        .await?;
+    sql_df.show().await?;
+
+    let sql_df = ctx
+        .sql("SELECT metadata_based_udf_1(a) FROM t group by a")
+        .await?;
+    sql_df.show().await?;
+
+    Ok(())
 }

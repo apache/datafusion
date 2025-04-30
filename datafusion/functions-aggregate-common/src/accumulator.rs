@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{Field, Schema};
 use datafusion_common::Result;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -28,7 +28,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct AccumulatorArgs<'a> {
     /// The return type of the aggregate function.
-    pub return_type: &'a DataType,
+    pub return_field: &'a Field,
 
     /// The schema of the input arguments
     pub schema: &'a Schema,
@@ -81,11 +81,11 @@ pub struct StateFieldsArgs<'a> {
     /// The name of the aggregate function.
     pub name: &'a str,
 
-    /// The input types of the aggregate function.
-    pub input_types: &'a [DataType],
+    /// The input fields of the aggregate function.
+    pub input_fields: &'a [Field],
 
-    /// The return type of the aggregate function.
-    pub return_type: &'a DataType,
+    /// The return fields of the aggregate function.
+    pub return_field: &'a Field,
 
     /// The ordering fields of the aggregate function.
     pub ordering_fields: &'a [Field],
