@@ -41,8 +41,35 @@ use datafusion_common::{
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
-    NullTreatment, RenameSelectItem, ReplaceSelectElement,
+    RenameSelectItem, ReplaceSelectElement,
 };
+
+// This mirrors sqlparser::ast::NullTreatment but we need our own variant
+// for when the sql feature is disabled.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub enum NullTreatment {
+    IgnoreNulls,
+    RespectNulls,
+}
+
+impl Display for NullTreatment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            NullTreatment::IgnoreNulls => "IGNORE NULLS",
+            NullTreatment::RespectNulls => "RESPECT NULLS",
+        })
+    }
+}
+
+impl From<sqlparser::ast::NullTreatment> for NullTreatment {
+    fn from(value: sqlparser::ast::NullTreatment) -> Self {
+        match value {
+            sqlparser::ast::NullTreatment::IgnoreNulls => Self::IgnoreNulls,
+            sqlparser::ast::NullTreatment::RespectNulls => Self::RespectNulls,
+        }
+    }
+}
+
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
