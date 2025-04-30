@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod expr;
 mod plan;
 mod rel;
-mod rex;
 mod substrait_consumer;
 mod types;
 mod utils;
 
+pub use expr::*;
 pub use plan::*;
 pub use rel::*;
-pub use rex::*;
 pub use substrait_consumer::*;
 pub use types::*;
 pub use utils::*;
