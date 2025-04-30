@@ -20,6 +20,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
+use super::projection::ProjectionTargets;
 use super::{add_offset_to_expr, ProjectionMapping};
 use crate::expressions::{Column, Literal};
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
@@ -511,34 +512,25 @@ impl EquivalenceGroup {
         sort_requirement
     }
 
-    /// Projects `expr` according to the given projection mapping.
-    /// If the resulting expression is invalid after projection, returns `None`.
-    ///
-    /// TODO: Write a multiple `expr` version to avoid searching for equivalence
-    ///       classes for every source expression in `mapping` multiple times.
-    pub fn project_expr(
-        &self,
-        mapping: &ProjectionMapping,
+    /// Perform an indirect projection of `expr` by consulting the equivalence
+    /// classes.
+    fn project_expr_indirect(
+        aug_mapping: &IndexMap<
+            &Arc<dyn PhysicalExpr>,
+            (&ProjectionTargets, Option<&EquivalenceClass>),
+        >,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        // First, we try to project expressions with an exact match. If we are
-        // unable to do this, we consult equivalence classes.
-        if let Some(targets) = mapping.get(expr) {
-            // If we match the source, we can project directly:
-            let (target, _) = targets.first();
-            return Some(Arc::clone(target));
-        } else {
-            // If the given expression is not inside the mapping, try to project
-            // expressions considering the equivalence classes.
-            for (source, targets) in mapping.iter() {
-                // If we match an equivalent expression to `source`, then we can
-                // project. For example, if we have the mapping `(a as a1, a + c)`
-                // and the equivalence class `(a, b)`, expression `b` projects to `a1`.
-                let eq_class = self.get_equivalence_class(source);
-                if eq_class.is_some_and(|group| group.contains(expr)) {
-                    let (target, _) = targets.first();
-                    return Some(Arc::clone(target));
-                }
+        // The given expression is not inside the mapping, so we try to project
+        // indirectly using equivalence classes.
+        for (targets, eq_class) in aug_mapping.values() {
+            // If we match an equivalent expression to a source expression in
+            // the mapping, then we can project. For example, if we have the
+            // mapping `(a as a1, a + c)` and the equivalence `a == b`,
+            // expression `b` projects to `a1`.
+            if eq_class.as_ref().is_some_and(|group| group.contains(expr)) {
+                let (target, _) = targets.first();
+                return Some(Arc::clone(target));
             }
         }
         // Project a non-leaf expression by projecting its children.
@@ -549,9 +541,45 @@ impl EquivalenceGroup {
         }
         children
             .into_iter()
-            .map(|child| self.project_expr(mapping, child))
+            .map(|child| {
+                // First, we try to project children with an exact match. If
+                // we are unable to do this, we consult equivalence classes.
+                if let Some((targets, _)) = aug_mapping.get(child) {
+                    // If we match the source, we can project directly:
+                    let (target, _) = targets.first();
+                    Some(Arc::clone(target))
+                } else {
+                    Self::project_expr_indirect(aug_mapping, child)
+                }
+            })
             .collect::<Option<Vec<_>>>()
             .map(|children| Arc::clone(expr).with_new_children(children).unwrap())
+    }
+
+    /// Projects `expr` according to the given projection mapping.
+    /// If the resulting expression is invalid after projection, returns `None`.
+    ///
+    /// TODO: Write a multiple `expr` version to avoid searching for equivalence
+    ///       classes for every source expression in `mapping` multiple times.
+    pub fn project_expr(
+        &self,
+        mapping: &ProjectionMapping,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Option<Arc<dyn PhysicalExpr>> {
+        if let Some(targets) = mapping.get(expr) {
+            // If we match the source, we can project directly:
+            let (target, _) = targets.first();
+            Some(Arc::clone(target))
+        } else {
+            let aug_mapping = mapping
+                .iter()
+                .map(|(k, v)| {
+                    let eq_class = self.get_equivalence_class(k);
+                    (k, (v, eq_class))
+                })
+                .collect();
+            Self::project_expr_indirect(&aug_mapping, expr)
+        }
     }
 
     /// Projects this equivalence group according to the given projection mapping.
