@@ -33,11 +33,11 @@
 # The script uses cargo to check out and run run the benchmark binary to
 # collect benchmarks from current main and last 5 major releases (checks out tags)
 
-trap 'git checkout main' EXIT #checkout to main on exit
 BENCH_NAME=$1
 
 if [ -z "$BENCH_NAME" ] ; then
     echo "USAGE: collect_bench.sh <bench_name>"
+    exit 1
 fi
 
 main(){
@@ -62,5 +62,6 @@ for i in {1..5}; do
     export RESULTS_DIR="results/$((major_version-i)).0.0"
     ./bench.sh run $BENCH_NAME
 done
+}
 
 main
