@@ -64,31 +64,33 @@ Create / download a specific dataset (TPCH)
 ```shell
 ./bench.sh data tpch
 ```
+
 Data is placed in the `data` subdirectory.
 
-<<<<<<< HEAD
-## Select join algorithm
-
-=======
 ## Running benchmarks
 
 Run benchmark for TPC-H dataset
+
 ```shell
 ./bench.sh run tpch
 ```
+
 or for TPC-H dataset scale 10
+
 ```shell
 ./bench.sh run tpch10
 ```
 
 To run for specific query, for example Q21
+
 ```shell
 ./bench.sh run tpch10 21
 ```
 
 ## Benchmark with modified configurations
+
 ### Select join algorithm
->>>>>>> apache/main
+
 The benchmark runs with `prefer_hash_join == true` by default, which enforces HASH join algorithm.
 To run TPCH benchmarks with join other than HASH:
 
@@ -97,12 +99,15 @@ PREFER_HASH_JOIN=false ./bench.sh run tpch
 ```
 
 ### Configure with environment variables
-Any [datafusion options](https://datafusion.apache.org/user-guide/configs.html) that are provided  environment variables are
+
+Any [datafusion options](https://datafusion.apache.org/user-guide/configs.html) that are provided environment variables are
 also considered by the benchmarks.
-The following configuration runs the TPCH benchmark with datafusion configured to *not* repartition join keys.
+The following configuration runs the TPCH benchmark with datafusion configured to _not_ repartition join keys.
+
 ```shell
 DATAFUSION_OPTIMIZER_REPARTITION_JOINS=false ./bench.sh run tpch
 ```
+
 You might want to adjust the results location to avoid overwriting previous results.
 Environment configuration that was picked up by datafusion is logged at `info` level.
 To verify that datafusion picked up your configuration, run the benchmarks with `RUST_LOG=info` or higher.
@@ -493,17 +498,14 @@ See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
  cargo run --release --bin dfbench -- sort-tpch -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json' --query 2
 ```
 
-<<<<<<< HEAD
-3. Run all queries with `bench.sh` script:
-
-=======
 3. Run all queries as TopK queries on presorted data:
+
 ```bash
  cargo run --release --bin dfbench -- sort-tpch --sorted --limit 10 -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
 ```
 
 4. Run all queries with `bench.sh` script:
->>>>>>> apache/main
+
 ```bash
 ./bench.sh run sort_tpch
 ```
