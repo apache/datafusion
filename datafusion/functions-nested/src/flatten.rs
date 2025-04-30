@@ -145,10 +145,11 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     match array.data_type() {
         List(_) => {
-            let (field, offsets, values, nulls) =
+            let (_field, offsets, values, nulls) =
                 as_list_array(&array)?.clone().into_parts();
+            let values = cast_fsl_to_list(values)?;
 
-            match field.data_type() {
+            match values.data_type() {
                 List(_) => {
                     let (inner_field, inner_offsets, inner_values, _) =
                         as_list_array(&values)?.clone().into_parts();
@@ -169,10 +170,11 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         }
         LargeList(_) => {
-            let (field, offsets, values, nulls) =
+            let (_field, offsets, values, nulls) =
                 as_large_list_array(&array)?.clone().into_parts();
+            let values = cast_fsl_to_list(values)?;
 
-            match field.data_type() {
+            match values.data_type() {
                 List(_) => {
                     let (inner_field, inner_offsets, inner_values, _) =
                         as_list_array(&values)?.clone().into_parts();
@@ -233,4 +235,13 @@ fn get_large_offsets_for_flatten<O: OffsetSizeTrait, P: OffsetSizeTrait>(
         .map(|i| buffer[i.to_usize().unwrap()].to_i64().unwrap())
         .collect();
     OffsetBuffer::new(offsets.into())
+}
+
+fn cast_fsl_to_list(array: ArrayRef) -> Result<ArrayRef> {
+    match array.data_type() {
+        FixedSizeList(field, _) => {
+            Ok(arrow::compute::cast(&array, &List(Arc::clone(field)))?)
+        }
+        _ => Ok(array),
+    }
 }
