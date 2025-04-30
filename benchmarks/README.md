@@ -81,13 +81,13 @@ or for TPC-H dataset scale 10
 ./bench.sh run tpch10
 ```
 
-To run for specific query, for example Q21
+To run a specific query, for example Q21
 
 ```shell
 ./bench.sh run tpch10 21
 ```
 
-## Benchmark with modified configurations
+## Benchmarks with modified configurations
 
 ### Select join algorithm
 
@@ -100,17 +100,18 @@ PREFER_HASH_JOIN=false ./bench.sh run tpch
 
 ### Configure with environment variables
 
-Any [datafusion options](https://datafusion.apache.org/user-guide/configs.html) that are provided environment variables are
-also considered by the benchmarks.
-The following configuration runs the TPCH benchmark with datafusion configured to _not_ repartition join keys.
+DataFusion [configuration settings](https://datafusion.apache.org/user-guide/configs.html)
+can be provided as environment variables to the benchmarks.
+
+For exmaple, to run the TPCH benchmark with DataFusion configured to _not_ repartition join keys.
 
 ```shell
 DATAFUSION_OPTIMIZER_REPARTITION_JOINS=false ./bench.sh run tpch
 ```
 
 You might want to adjust the results location to avoid overwriting previous results.
-Environment configuration that was picked up by datafusion is logged at `info` level.
-To verify that datafusion picked up your configuration, run the benchmarks with `RUST_LOG=info` or higher.
+Environment configuration that was picked up by DataFusion is logged at `info` level.
+To verify that DataFusion picked up your configuration, run the benchmarks with `RUST_LOG=info` or higher.
 
 ## Comparing performance of main and a branch
 
@@ -205,7 +206,7 @@ cargo run --release --bin dfbench -- tpch --iterations 3 --path ./data --format 
 
 See the help for more details.
 
-### Different features
+### Benchmarking with different DataFusion crate features
 
 You can enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`. For example:
 
@@ -323,7 +324,7 @@ FLAGS:
 
 # Writing a new benchmark
 
-## Creating or downloading data outside of the benchmark
+## Creating or downloading data outside the benchmark
 
 If you want to create or download the data with Rust as part of running the benchmark, see the next
 section on adding a benchmark subcommand and add code to create or download data as part of its
@@ -375,7 +376,7 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 - When all cases are done, call the `BenchmarkRun`'s `maybe_write_json` method, giving it the value
   of the `--output` structopt field on `RunOpt`.
 
-# Benchmarks
+# Benchmark Descriptions
 
 The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience.
 
