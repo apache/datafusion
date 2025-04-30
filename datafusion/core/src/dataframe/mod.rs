@@ -50,10 +50,7 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
-use datafusion_common::{
-    exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
-};
+use datafusion_common::{exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError, TableReference, UnnestOptions};
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     case,
@@ -70,7 +67,6 @@ use datafusion_functions_aggregate::expr_fn::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_sql::TableReference;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -267,6 +263,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub fn parse_sql_expr(&self, sql: &str) -> Result<Expr> {
         let df_schema = self.schema();
 
@@ -333,6 +330,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "sql")]
     pub fn select_exprs(self, exprs: &[&str]) -> Result<DataFrame> {
         let expr_list = exprs
             .iter()

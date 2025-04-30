@@ -43,7 +43,7 @@ recursive_protection = ["dep:recursive"]
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }

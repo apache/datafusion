@@ -40,7 +40,7 @@ name = "datafusion_physical_expr"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }

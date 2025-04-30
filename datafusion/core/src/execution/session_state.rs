@@ -69,16 +69,22 @@ use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
-use datafusion_sql::parser::{DFParserBuilder, Statement};
-use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+#[cfg(feature = "sql")]
+use datafusion_sql::{
+    parser::{DFParserBuilder, Statement},
+    planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
-use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
-use sqlparser::dialect::dialect_from_str;
+#[cfg(feature = "sql")]
+use sqlparser::{
+    ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
+    dialect::dialect_from_str,
+};
 use url::Url;
 use uuid::Uuid;
 
@@ -358,6 +364,7 @@ impl SessionState {
     /// [`Statement`]. See [`SessionContext::sql`] for running queries.
     ///
     /// [`SessionContext::sql`]: crate::execution::context::SessionContext::sql
+    #[cfg(feature = "sql")]
     pub fn sql_to_statement(
         &self,
         sql: &str,
@@ -394,6 +401,7 @@ impl SessionState {
     /// parse a sql string into a sqlparser-rs AST [`SQLExpr`].
     ///
     /// See [`Self::create_logical_expr`] for parsing sql to [`Expr`].
+    #[cfg(feature = "sql")]
     pub fn sql_to_expr(
         &self,
         sql: &str,
@@ -405,6 +413,7 @@ impl SessionState {
     /// parse a sql string into a sqlparser-rs AST [`SQLExprWithAlias`].
     ///
     /// See [`Self::create_logical_expr`] for parsing sql to [`Expr`].
+    #[cfg(feature = "sql")]
     pub fn sql_to_expr_with_alias(
         &self,
         sql: &str,
@@ -433,6 +442,7 @@ impl SessionState {
     /// See [`datafusion_sql::resolve::resolve_table_references`] for more information.
     ///
     /// [`datafusion_sql::resolve::resolve_table_references`]: datafusion_sql::resolve::resolve_table_references
+    #[cfg(feature = "sql")]
     pub fn resolve_table_references(
         &self,
         statement: &Statement,
@@ -447,6 +457,7 @@ impl SessionState {
     }
 
     /// Convert an AST Statement into a LogicalPlan
+    #[cfg(feature = "sql")]
     pub async fn statement_to_plan(
         &self,
         statement: Statement,
@@ -474,6 +485,7 @@ impl SessionState {
         query.statement_to_plan(statement)
     }
 
+    #[cfg(feature = "sql")]
     fn get_parser_options(&self) -> ParserOptions {
         let sql_parser_options = &self.config.options().sql_parser;
 
@@ -504,6 +516,7 @@ impl SessionState {
     ///
     /// [`SessionContext::sql`]: crate::execution::context::SessionContext::sql
     /// [`SessionContext::sql_with_options`]: crate::execution::context::SessionContext::sql_with_options
+    #[cfg(feature = "sql")]
     pub async fn create_logical_plan(
         &self,
         sql: &str,
@@ -517,6 +530,7 @@ impl SessionState {
     /// Creates a datafusion style AST [`Expr`] from a SQL string.
     ///
     /// See example on  [SessionContext::parse_sql_expr](crate::execution::context::SessionContext::parse_sql_expr)
+    #[cfg(feature = "sql")]
     pub fn create_logical_expr(
         &self,
         sql: &str,
@@ -1639,6 +1653,7 @@ struct SessionContextProvider<'a> {
     tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
 }
 
+#[cfg(feature = "sql")]
 impl ContextProvider for SessionContextProvider<'_> {
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
         self.state.expr_planners()

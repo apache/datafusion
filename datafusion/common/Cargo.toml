@@ -49,6 +49,7 @@ pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
 parquet = ["dep:parquet"]
+sql = ["sqlparser"]
 
 [dependencies]
 ahash = { workspace = true }

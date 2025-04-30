@@ -25,12 +25,13 @@ use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
-use sqlparser::ast::{self, NullTreatment};
+use sqlparser::ast;
 
 use crate::{
     AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
 };
+use crate::expr::NullTreatment;
 
 /// Provides the `SQL` query planner meta-data about tables and
 /// functions referenced in SQL statements, without a direct dependency on the

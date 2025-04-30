@@ -50,7 +50,7 @@ recursive_protection = ["dep:recursive"]
 [dependencies]
 arrow = { workspace = true }
 bigdecimal = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
