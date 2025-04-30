@@ -373,7 +373,7 @@ impl AggregateFunctionExpr {
 
     /// the field of the final result of this aggregation.
     pub fn field(&self) -> Field {
-        self.return_field.clone()
+        self.return_field.clone().with_name(&self.name)
     }
 
     /// the accumulator used to accumulate values from the expressions.
