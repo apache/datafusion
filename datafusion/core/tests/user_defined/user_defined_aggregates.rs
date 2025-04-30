@@ -28,8 +28,8 @@ use std::sync::{
 };
 
 use arrow::array::{
-    types::UInt64Type, Array, AsArray, Int32Array, PrimitiveArray, StringArray,
-    StructArray, UInt64Array,
+    record_batch, types::UInt64Type, Array, AsArray, Int32Array, PrimitiveArray,
+    StringArray, StructArray, UInt64Array,
 };
 use arrow::datatypes::{Fields, Schema};
 use datafusion::common::test_util::batches_to_string;
@@ -998,28 +998,75 @@ impl Accumulator for MetadataBasedAccumulator {
 
 #[tokio::test]
 async fn test_metadata_based_accumulator() -> Result<()> {
+    let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("no_metadata", DataType::UInt64, true),
+        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
+            [("modify_values".to_string(), "double_output".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::clone(&data_array), Arc::clone(&data_array)],
+    )?;
+
     let ctx = SessionContext::new();
-    let arr = UInt64Array::from(vec![1]);
-    let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?;
 
-    let udaf_no_metadata =
+    let no_output_meta_udf =
         AggregateUDF::from(MetadataBasedAggregateUdf::new(HashMap::new()));
-    let udaf_with_metadata = AggregateUDF::from(MetadataBasedAggregateUdf::new(
-        HashMap::from_iter([("modify_values".to_string(), "double_output".to_string())]),
+    let with_output_meta_udf = AggregateUDF::from(MetadataBasedAggregateUdf::new(
+        [("output_metatype".to_string(), "custom_value".to_string())]
+            .into_iter()
+            .collect(),
     ));
-    ctx.register_udaf(udaf_no_metadata);
-    ctx.register_udaf(udaf_with_metadata);
 
-    let sql_df = ctx
-        .sql("SELECT metadata_based_udf_0(a) FROM t group by a")
-        .await?;
-    sql_df.show().await?;
+    let df = df.aggregate(
+        vec![],
+        vec![
+            no_output_meta_udf
+                .call(vec![col("no_metadata")])
+                .alias("meta_no_in_no_out"),
+            no_output_meta_udf
+                .call(vec![col("with_metadata")])
+                .alias("meta_with_in_no_out"),
+            with_output_meta_udf
+                .call(vec![col("no_metadata")])
+                .alias("meta_no_in_with_out"),
+            with_output_meta_udf
+                .call(vec![col("with_metadata")])
+                .alias("meta_with_in_with_out"),
+        ],
+    )?;
 
-    let sql_df = ctx
-        .sql("SELECT metadata_based_udf_1(a) FROM t group by a")
-        .await?;
-    sql_df.show().await?;
+    let actual = df.collect().await?;
+
+    // To test for output metadata handling, we set the expected values on the result
+    // To test for input metadata handling, we check the numbers returned
+    let mut output_meta = HashMap::new();
+    let _ = output_meta.insert("output_metatype".to_string(), "custom_value".to_string());
+    let expected_schema = Schema::new(vec![
+        Field::new("meta_no_in_no_out", DataType::UInt64, true),
+        Field::new("meta_with_in_no_out", DataType::UInt64, true),
+        Field::new("meta_no_in_with_out", DataType::UInt64, true)
+            .with_metadata(output_meta.clone()),
+        Field::new("meta_with_in_with_out", DataType::UInt64, true)
+            .with_metadata(output_meta.clone()),
+    ]);
+
+    let expected = record_batch!(
+        ("meta_no_in_no_out", UInt64, [50]),
+        ("meta_with_in_no_out", UInt64, [100]),
+        ("meta_no_in_with_out", UInt64, [50]),
+        ("meta_with_in_with_out", UInt64, [100])
+    )?
+    .with_schema(Arc::new(expected_schema))?;
+
+    assert_eq!(expected, actual[0]);
 
     Ok(())
 }
