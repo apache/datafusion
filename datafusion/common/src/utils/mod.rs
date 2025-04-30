@@ -31,9 +31,8 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field, SchemaRef};
-use sqlparser::ast::Ident;
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
+#[cfg(feature = "sql")]
+use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{min, Ordering};
 use std::collections::HashSet;
@@ -282,6 +281,7 @@ fn needs_quotes(s: &str) -> bool {
     !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+#[cfg(feature = "sql")]
 pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     let dialect = GenericDialect;
     let mut parser = Parser::new(&dialect).try_with_sql(s)?;
@@ -289,6 +289,7 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
+#[cfg(feature = "sql")]
 pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()

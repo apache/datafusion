@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{parse_identifiers_normalized, quote_identifier};
+#[cfg(feature = "sql")]
+use crate::utils::parse_identifiers_normalized;
+use crate::utils::quote_identifier;
 use std::sync::Arc;
 
 /// A fully resolved path to a table of the form "catalog.schema.table"
@@ -269,6 +271,7 @@ impl TableReference {
 
     /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
     /// identifier. See docs on [`TableReference`] for more details.
+    #[cfg(feature = "sql")]
     pub fn parse_str(s: &str) -> Self {
         let mut parts = parse_identifiers_normalized(s, false);
 
@@ -312,21 +315,45 @@ impl TableReference {
 /// Parse a string into a TableReference, normalizing where appropriate
 ///
 /// See full details on [`TableReference::parse_str`]
+#[cfg(feature = "sql")]
 impl<'a> From<&'a str> for TableReference {
     fn from(s: &'a str) -> Self {
         Self::parse_str(s)
     }
 }
 
+#[cfg(feature = "sql")]
 impl<'a> From<&'a String> for TableReference {
     fn from(s: &'a String) -> Self {
         Self::parse_str(s)
     }
 }
 
+#[cfg(feature = "sql")]
 impl From<String> for TableReference {
     fn from(s: String) -> Self {
         Self::parse_str(&s)
+    }
+}
+
+#[cfg(not(feature = "sql"))]
+impl<'a> From<&'a str> for TableReference {
+    fn from(s: &'a str) -> Self {
+        Self::Bare { table: s.into() }
+    }
+}
+
+#[cfg(not(feature = "sql"))]
+impl<'a> From<&'a String> for TableReference {
+    fn from(s: &'a String) -> Self {
+        Self::Bare { table: s.as_str().into() }
+    }
+}
+
+#[cfg(not(feature = "sql"))]
+impl From<String> for TableReference {
+    fn from(s: String) -> Self {
+        Self::Bare { table: s.into() }
     }
 }
 

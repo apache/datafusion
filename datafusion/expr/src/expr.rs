@@ -39,6 +39,7 @@ use datafusion_common::{
     Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+#[cfg(feature = "sql")]
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     RenameSelectItem, ReplaceSelectElement,
@@ -61,6 +62,7 @@ impl Display for NullTreatment {
     }
 }
 
+#[cfg(feature = "sql")]
 impl From<sqlparser::ast::NullTreatment> for NullTreatment {
     fn from(value: sqlparser::ast::NullTreatment) -> Self {
         match value {
