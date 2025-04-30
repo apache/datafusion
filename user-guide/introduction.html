@@ -635,9 +635,9 @@ Arrow</a>.</p>
 <h2>Features<a class="headerlink" href="#features" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Feature-rich <a class="reference external" href="https://datafusion.apache.org/user-guide/sql/index.html">SQL support</a> and <a class="reference external" href="https://datafusion.apache.org/user-guide/dataframe.html">DataFrame API</a></p></li>
-<li><p>Blazingly fast, vectorized, multi-threaded, streaming execution engine.</p></li>
+<li><p>Blazingly fast, vectorized, multithreaded, streaming execution engine.</p></li>
 <li><p>Native support for Parquet, CSV, JSON, and Avro file formats. Support
-for custom file formats and non file datasources via the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait.</p></li>
+for custom file formats and non-file datasources via the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait.</p></li>
 <li><p>Many extension points: user defined scalar/aggregate/window functions, DataSources, SQL,
 other query languages, custom plan and execution nodes, optimizer passes, and more.</p></li>
 <li><p>Streaming, asynchronous IO directly from popular object stores, including AWS S3,
@@ -663,7 +663,7 @@ easily pass plans across language and system boundaries.</p></li>
 <p>DataFusion can be used without modification as an embedded SQL
 engine or can be customized and used as a foundation for
 building new systems.</p>
-<p>While most current usecases are “analytic” or (throughput) some
+<p>While most current use cases are “analytic” or (throughput) some
 components of DataFusion such as the plan representations, are
 suitable for “streaming” and “transaction” style systems (low
 latency).</p>
@@ -693,7 +693,7 @@ parellelized streaming execution plans, file format support, etc.</p>
 <li><p><a class="reference external" href="https://github.com/kwai/blaze">Blaze</a> The Blaze accelerator for Apache Spark leverages native vectorized execution to accelerate query processing</p></li>
 <li><p><a class="reference external" href="https://github.com/cnosdb/cnosdb">CnosDB</a> Open Source Distributed Time Series Database</p></li>
 <li><p><a class="reference external" href="https://github.com/apache/datafusion-comet">Comet</a> Apache Spark native query execution plugin</p></li>
-<li><p><a class="reference external" href="https://github.com/cube-js/cube.js/tree/master/rust">Cube Store</a></p></li>
+<li><p><a class="reference external" href="https://github.com/cube-js/cube.js/tree/master/rust">Cube Store</a> Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics</p></li>
 <li><p><a class="reference external" href="https://github.com/dask-contrib/dask-sql">Dask SQL</a> Distributed SQL query engine in Python</p></li>
 <li><p><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-dft">datafusion-dft</a> Batteries included CLI, TUI, and server implementations for DataFusion.</p></li>
 <li><p><a class="reference external" href="https://github.com/delta-io/delta-rs">delta-rs</a> Native Rust implementation of Delta Lake</p></li>
@@ -713,11 +713,11 @@ parellelized streaming execution plans, file format support, etc.</p>
 <li><p><a class="reference external" href="https://polygon.io/">Polygon.io</a> Stock Market API</p></li>
 <li><p><a class="reference external" href="https://github.com/timvw/qv">qv</a> Quickly view your data</p></li>
 <li><p><a class="reference external" href="https://github.com/restatedev">Restate</a> Easily build resilient applications using distributed durable async/await</p></li>
-<li><p><a class="reference external" href="https://github.com/roapi/roapi">ROAPI</a></p></li>
-<li><p><a class="reference external" href="https://github.com/lakehq/sail">Sail</a> Unifying stream, batch, and AI workloads with Apache Spark compatibility</p></li>
+<li><p><a class="reference external" href="https://github.com/roapi/roapi">ROAPI</a> Create full-fledged APIs for slowly moving datasets without writing a single line of code</p></li>
+<li><p><a class="reference external" href="https://github.com/lakehq/sail">Sail</a> Unifying stream, batch and AI workloads with Apache Spark compatibility</p></li>
 <li><p><a class="reference external" href="https://github.com/splitgraph/seafowl">Seafowl</a> CDN-friendly analytical database</p></li>
 <li><p><a class="reference external" href="https://github.com/gchq/sleeper">Sleeper</a> Serverless, cloud-native, log-structured merge tree based, scalable key-value store</p></li>
-<li><p><a class="reference external" href="https://github.com/spiceai/spiceai">Spice.ai</a> Unified SQL query interface &amp; materialization engine</p></li>
+<li><p><a class="reference external" href="https://github.com/spiceai/spiceai">Spice.ai</a> Building blocks for data-driven AI applications</p></li>
 <li><p><a class="reference external" href="https://synnada.ai/">Synnada</a> Streaming-first framework for data products</p></li>
 <li><p><a class="reference external" href="https://vegafusion.io/">VegaFusion</a> Server-side acceleration for the <a class="reference external" href="https://vega.github.io/">Vega</a> visualization grammar</p></li>
 <li><p><a class="reference external" href="https://telemetry.sh/">Telemetry</a> Structured logging made easy</p></li>
@@ -756,7 +756,7 @@ provide integrations with other systems, some of which are described below:</p>
 <h2>Why DataFusion?<a class="headerlink" href="#why-datafusion" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><em>High Performance</em>: Leveraging Rust and Arrow’s memory model, DataFusion is very fast.</p></li>
-<li><p><em>Easy to Connect</em>: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem</p></li>
+<li><p><em>Easy to Connect</em>: Being part of the Apache Arrow ecosystem (Arrow, Parquet, and Flight), DataFusion works well with the rest of the big data ecosystem</p></li>
 <li><p><em>Easy to Embed</em>: Allowing extension at almost any point in its design, and published regularly as a crate on <a class="reference external" href="http://crates.io">crates.io</a>, DataFusion can be integrated and tailored for your specific usecase.</p></li>
 <li><p><em>High Quality</em>: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can and is used as the foundation for production systems.</p></li>
 </ul>
