@@ -22,8 +22,10 @@ use std::collections::{HashSet, VecDeque};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
-use arrow::array::{new_empty_array, Array, ArrayRef, AsArray, ListArray, StructArray};
-use arrow::compute::SortOptions;
+use arrow::array::{
+    new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray, StructArray,
+};
+use arrow::compute::{filter, SortOptions};
 use arrow::datatypes::{DataType, Field, Fields};
 
 use datafusion_common::cast::as_list_array;
@@ -137,6 +139,8 @@ impl AggregateUDFImpl for ArrayAgg {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
+        let ignore_nulls =
+            acc_args.ignore_nulls && acc_args.exprs[0].nullable(acc_args.schema)?;
 
         if acc_args.is_distinct {
             // Limitation similar to Postgres. The aggregation function can only mix
@@ -165,11 +169,15 @@ impl AggregateUDFImpl for ArrayAgg {
             return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
                 &data_type,
                 sort_option,
+                ignore_nulls,
             )?));
         }
 
         let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
-            return Ok(Box::new(ArrayAggAccumulator::try_new(&data_type)?));
+            return Ok(Box::new(ArrayAggAccumulator::try_new(
+                &data_type,
+                ignore_nulls,
+            )?));
         };
 
         let ordering_dtypes = ordering
@@ -182,6 +190,7 @@ impl AggregateUDFImpl for ArrayAgg {
             &ordering_dtypes,
             ordering,
             acc_args.is_reversed,
+            ignore_nulls,
         )
         .map(|acc| Box::new(acc) as _)
     }
@@ -199,18 +208,20 @@ impl AggregateUDFImpl for ArrayAgg {
 pub struct ArrayAggAccumulator {
     values: Vec<ArrayRef>,
     datatype: DataType,
+    ignore_nulls: bool,
 }
 
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new(datatype: &DataType, ignore_nulls: bool) -> Result<Self> {
         Ok(Self {
             values: vec![],
             datatype: datatype.clone(),
+            ignore_nulls,
         })
     }
 
-    /// This function will return the underlying list array values if all valid values are consecutive without gaps (i.e. no null value point to a non empty list)
+    /// This function will return the underlying list array values if all valid values are consecutive without gaps (i.e. no null value point to a non-empty list)
     /// If there are gaps but only in the end of the list array, the function will return the values without the null values in the end
     fn get_optional_values_to_merge_as_is(list_array: &ListArray) -> Option<ArrayRef> {
         let offsets = list_array.value_offsets();
@@ -234,7 +245,7 @@ impl ArrayAggAccumulator {
             return Some(list_array.values().slice(0, 0));
         }
 
-        // According to the Arrow spec, null values can point to non empty lists
+        // According to the Arrow spec, null values can point to non-empty lists
         // So this will check if all null values starting from the first valid value to the last one point to a 0 length list so we can just slice the underlying value
 
         // Unwrapping is safe as we just checked if there is a null value
@@ -242,7 +253,7 @@ impl ArrayAggAccumulator {
 
         let mut valid_slices_iter = nulls.valid_slices();
 
-        // This is safe as we validated that that are at least 1 valid value in the array
+        // This is safe as we validated that there is at least 1 valid value in the array
         let (start, end) = valid_slices_iter.next().unwrap();
 
         let start_offset = offsets[start];
@@ -252,7 +263,7 @@ impl ArrayAggAccumulator {
         let mut end_offset_of_last_valid_value = offsets[end];
 
         for (start, end) in valid_slices_iter {
-            // If there is a null value that point to a non empty list than the start offset of the valid value
+            // If there is a null value that point to a non-empty list than the start offset of the valid value
             // will be different that the end offset of the last valid value
             if offsets[start] != end_offset_of_last_valid_value {
                 return None;
@@ -283,10 +294,23 @@ impl Accumulator for ArrayAggAccumulator {
             return internal_err!("expects single batch");
         }
 
-        let val = Arc::clone(&values[0]);
+        let val = &values[0];
+        let nulls = if self.ignore_nulls {
+            val.logical_nulls()
+        } else {
+            None
+        };
+
+        let val = match nulls {
+            Some(nulls) if nulls.null_count() >= val.len() => return Ok(()),
+            Some(nulls) => filter(val, &BooleanArray::new(nulls.inner().clone(), None))?,
+            None => Arc::clone(val),
+        };
+
         if !val.is_empty() {
             self.values.push(val);
         }
+
         Ok(())
     }
 
@@ -355,17 +379,20 @@ struct DistinctArrayAggAccumulator {
     values: HashSet<ScalarValue>,
     datatype: DataType,
     sort_options: Option<SortOptions>,
+    ignore_nulls: bool,
 }
 
 impl DistinctArrayAggAccumulator {
     pub fn try_new(
         datatype: &DataType,
         sort_options: Option<SortOptions>,
+        ignore_nulls: bool,
     ) -> Result<Self> {
         Ok(Self {
             values: HashSet::new(),
             datatype: datatype.clone(),
             sort_options,
+            ignore_nulls,
         })
     }
 }
@@ -380,11 +407,20 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        let array = &values[0];
+        let val = &values[0];
+        let nulls = if self.ignore_nulls {
+            val.logical_nulls()
+        } else {
+            None
+        };
 
-        for i in 0..array.len() {
-            let scalar = ScalarValue::try_from_array(&array, i)?;
-            self.values.insert(scalar);
+        let nulls = nulls.as_ref();
+        if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
+            for i in 0..val.len() {
+                if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
+                    self.values.insert(ScalarValue::try_from_array(val, i)?);
+                }
+            }
         }
 
         Ok(())
@@ -466,6 +502,8 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
     ordering_req: LexOrdering,
     /// Whether the aggregation is running in reverse.
     reverse: bool,
+    /// Whether the aggregation should ignore null values.
+    ignore_nulls: bool,
 }
 
 impl OrderSensitiveArrayAggAccumulator {
@@ -476,6 +514,7 @@ impl OrderSensitiveArrayAggAccumulator {
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
         reverse: bool,
+        ignore_nulls: bool,
     ) -> Result<Self> {
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
@@ -485,6 +524,7 @@ impl OrderSensitiveArrayAggAccumulator {
             datatypes,
             ordering_req,
             reverse,
+            ignore_nulls,
         })
     }
 
@@ -520,11 +560,22 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             return Ok(());
         }
 
-        let n_row = values[0].len();
-        for index in 0..n_row {
-            let row = get_row_at_idx(values, index)?;
-            self.values.push(row[0].clone());
-            self.ordering_values.push(row[1..].to_vec());
+        let val = &values[0];
+        let ord = &values[1..];
+        let nulls = if self.ignore_nulls {
+            val.logical_nulls()
+        } else {
+            None
+        };
+
+        let nulls = nulls.as_ref();
+        if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
+            for i in 0..val.len() {
+                if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
+                    self.values.push(ScalarValue::try_from_array(val, i)?);
+                    self.ordering_values.push(get_row_at_idx(ord, i)?)
+                }
+            }
         }
 
         Ok(())
@@ -658,7 +709,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{FieldRef, Schema};
+    use arrow::datatypes::Schema;
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
     use datafusion_physical_expr::expressions::Column;
@@ -944,9 +995,7 @@ mod tests {
                 schema: Schema {
                     fields: Fields::from(vec![Field::new(
                         "col",
-                        DataType::List(FieldRef::new(Field::new(
-                            "item", data_type, true,
-                        ))),
+                        DataType::new_list(data_type, true),
                         true,
                     )]),
                     metadata: Default::default(),

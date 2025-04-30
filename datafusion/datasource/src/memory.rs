@@ -976,7 +976,7 @@ mod tests {
         )?;
 
         assert_eq!(
-            values.statistics()?,
+            values.partition_statistics(None)?,
             Statistics {
                 num_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important

@@ -42,6 +42,7 @@ use datafusion_common::{
 use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
 use datafusion_execution::cache::{
     cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
 };
@@ -734,7 +735,7 @@ impl ListingOptions {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
     /// `file_schema` contains only the columns physically stored in the data files themselves.
@@ -1129,12 +1130,24 @@ impl ListingTable {
             get_files_with_limit(files, limit, self.options.collect_stat).await?;
 
         let file_groups = file_group.split_files(self.options.target_partitions);
-        compute_all_files_statistics(
+        let (mut file_groups, mut stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),
             self.options.collect_stat,
             inexact_stats,
-        )
+        )?;
+        let (schema_mapper, _) = DefaultSchemaAdapterFactory::from_schema(self.schema())
+            .map_schema(self.file_schema.as_ref())?;
+        stats.column_statistics =
+            schema_mapper.map_column_statistics(&stats.column_statistics)?;
+        file_groups.iter_mut().try_for_each(|file_group| {
+            if let Some(stat) = file_group.statistics_mut() {
+                stat.column_statistics =
+                    schema_mapper.map_column_statistics(&stat.column_statistics)?;
+            }
+            Ok::<_, DataFusionError>(())
+        })?;
+        Ok((file_groups, stats))
     }
 
     /// Collects statistics for a given partitioned file.
@@ -1294,8 +1307,14 @@ mod tests {
         assert_eq!(exec.output_partitioning().partition_count(), 1);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
         Ok(())
     }
@@ -1320,9 +1339,15 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
         Ok(())
     }
@@ -1348,8 +1373,11 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
+        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
 
         Ok(())
     }
