@@ -1592,7 +1592,10 @@ pub fn from_cast(
     let Cast { expr, data_type } = cast;
     // since substrait Null must be typed, so if we see a cast(null, dt), we make it a typed null
     if let Expr::Literal(lit) = expr.as_ref() {
-        if lit.is_null() {
+        // only the untyped(a null scalar value) null literal need this special handling
+        // since all other kind of nulls are already typed and can be handled by substrait
+        // e.g. null::<Int32Type> or null::<Utf8Type>
+        if matches!(lit, ScalarValue::Null) {
             let lit = Literal {
                 nullable: true,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
@@ -2955,6 +2958,39 @@ mod test {
             };
             let expected = Expression {
                 rex_type: Some(RexType::Literal(lit)),
+            };
+            assert_eq!(*expr, expected);
+        } else {
+            panic!("Expected expression type");
+        }
+
+        // a typed null should not be folded
+        let expr = Expr::Literal(ScalarValue::Int64(None))
+            .cast_to(&DataType::Int32, &empty_schema)
+            .unwrap();
+
+        let typed_null =
+            to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &state)
+                .unwrap();
+
+        if let ExprType::Expression(expr) =
+            typed_null.referred_expr[0].expr_type.as_ref().unwrap()
+        {
+            let cast_expr = substrait::proto::expression::Cast {
+                r#type: Some(to_substrait_type(&DataType::Int32, true).unwrap()),
+                input: Some(Box::new(Expression {
+                    rex_type: Some(RexType::Literal(Literal {
+                        nullable: true,
+                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                        literal_type: Some(LiteralType::Null(
+                            to_substrait_type(&DataType::Int64, true).unwrap(),
+                        )),
+                    })),
+                })),
+                failure_behavior: FailureBehavior::ThrowException as i32,
+            };
+            let expected = Expression {
+                rex_type: Some(RexType::Cast(Box::new(cast_expr))),
             };
             assert_eq!(*expr, expected);
         } else {
