@@ -260,7 +260,7 @@ fn test_expression_serialization_roundtrip() {
     for function in string::functions() {
         // default to 4 args (though some exprs like substr have error checking)
         let num_args = 4;
-        let args: Vec<_> = std::iter::repeat(&lit).take(num_args).cloned().collect();
+        let args: Vec<_> = std::iter::repeat_n(&lit, num_args).cloned().collect();
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(function, args));
 
         let extension_codec = DefaultLogicalExtensionCodec {};

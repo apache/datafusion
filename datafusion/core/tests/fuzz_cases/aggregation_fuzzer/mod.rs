@@ -43,8 +43,10 @@ use datafusion_common::error::Result;
 mod context_generator;
 mod data_generator;
 mod fuzzer;
+pub mod query_builder;
 
-pub use data_generator::{ColumnDescr, DatasetGeneratorConfig};
+pub use crate::fuzz_cases::record_batch_generator::ColumnDescr;
+pub use data_generator::DatasetGeneratorConfig;
 pub use fuzzer::*;
 
 #[derive(Debug)]

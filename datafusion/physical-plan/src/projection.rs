@@ -26,14 +26,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::{CastExpr, Column, Literal};
+use super::expressions::{Column, Literal};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::CardinalityEffect;
-use crate::joins::utils::{ColumnIndex, JoinFilter};
+use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -48,6 +48,7 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalExprRef;
 
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use itertools::Itertools;
 use log::trace;
@@ -78,14 +79,14 @@ impl ProjectionExec {
         let fields: Result<Vec<Field>> = expr
             .iter()
             .map(|(e, name)| {
-                let mut field = Field::new(
+                let metadata = e.return_field(&input_schema)?.metadata().clone();
+
+                let field = Field::new(
                     name,
                     e.data_type(&input_schema)?,
                     e.nullable(&input_schema)?,
-                );
-                field.set_metadata(
-                    get_field_metadata(e, &input_schema).unwrap_or_default(),
-                );
+                )
+                .with_metadata(metadata);
 
                 Ok(field)
             })
@@ -169,13 +170,14 @@ impl DisplayAs for ProjectionExec {
             }
             DisplayFormatType::TreeRender => {
                 for (i, (e, alias)) in self.expr().iter().enumerate() {
-                    let e = e.to_string();
-                    if &e == alias {
-                        writeln!(f, "expr{i}={e}")?;
+                    let expr_sql = fmt_sql(e.as_ref());
+                    if &e.to_string() == alias {
+                        writeln!(f, "expr{i}={expr_sql}")?;
                     } else {
-                        writeln!(f, "{alias}={e}")?;
+                        writeln!(f, "{alias}={expr_sql}")?;
                     }
                 }
+
                 Ok(())
             }
         }
@@ -196,21 +198,9 @@ impl ExecutionPlan for ProjectionExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         // Tell optimizer this operator doesn't reorder its input
         vec![true]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        ProjectionExec::try_new(self.expr.clone(), children.swap_remove(0))
-            .map(|p| Arc::new(p) as _)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -221,6 +211,18 @@ impl ExecutionPlan for ProjectionExec {
         // If expressions are all either column_expr or Literal, then all computations in this projection are reorder or rename,
         // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
         vec![!all_simple_exprs]
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        ProjectionExec::try_new(self.expr.clone(), children.swap_remove(0))
+            .map(|p| Arc::new(p) as _)
     }
 
     fn execute(
@@ -242,8 +244,13 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        let input_stats = self.input.partition_statistics(partition)?;
         Ok(stats_projection(
-            self.input.statistics()?,
+            input_stats,
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
             Arc::clone(&self.schema),
         ))
@@ -269,24 +276,6 @@ impl ExecutionPlan for ProjectionExec {
             Ok(Some(Arc::new(projection.clone())))
         }
     }
-}
-
-/// If 'e' is a direct column reference, returns the field level
-/// metadata for that field, if any. Otherwise returns None
-pub(crate) fn get_field_metadata(
-    e: &Arc<dyn PhysicalExpr>,
-    input_schema: &Schema,
-) -> Option<HashMap<String, String>> {
-    if let Some(cast) = e.as_any().downcast_ref::<CastExpr>() {
-        return get_field_metadata(cast.expr(), input_schema);
-    }
-
-    // Look up field by index in schema (not NAME as there can be more than one
-    // column with the same name)
-    e.as_any()
-        .downcast_ref::<Column>()
-        .map(|column| input_schema.field(column.index()).metadata())
-        .cloned()
 }
 
 fn stats_projection(
@@ -443,11 +432,6 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
         Ok(Some(new_projection))
     }
 }
-
-/// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
-/// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
 pub struct JoinData {
     pub projected_left_child: ProjectionExec,
@@ -1096,13 +1080,11 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
 
         let exec = test::scan_partitioned(1);
-        let expected = collect(exec.execute(0, Arc::clone(&task_ctx))?)
-            .await
-            .unwrap();
+        let expected = collect(exec.execute(0, Arc::clone(&task_ctx))?).await?;
 
         let projection = ProjectionExec::try_new(vec![], exec)?;
         let stream = projection.execute(0, Arc::clone(&task_ctx))?;
-        let output = collect(stream).await.unwrap();
+        let output = collect(stream).await?;
         assert_eq!(output.len(), expected.len());
 
         Ok(())

@@ -67,13 +67,13 @@ pub(crate) mod test_util {
             .into_iter()
             .zip(tmp_files.into_iter())
             .map(|(batch, mut output)| {
-                let builder = parquet::file::properties::WriterProperties::builder();
-                let props = if multi_page {
-                    builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
-                } else {
-                    builder
+                let mut builder = parquet::file::properties::WriterProperties::builder();
+                if multi_page {
+                    builder = builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
                 }
-                .build();
+                builder = builder.set_bloom_filter_enabled(true);
+
+                let props = builder.build();
 
                 let mut writer = parquet::arrow::ArrowWriter::try_new(
                     &mut output,
@@ -125,8 +125,9 @@ mod tests {
     };
     use datafusion_common::config::{ParquetOptions, TableParquetOptions};
     use datafusion_common::stats::Precision;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::ScalarValue::Utf8;
-    use datafusion_common::{assert_batches_eq, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
     use datafusion_datasource::{ListingTableUrl, PartitionedFile};
@@ -147,8 +148,10 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field};
     use async_trait::async_trait;
+    use datafusion_datasource::file_groups::FileGroup;
     use futures::stream::BoxStream;
     use futures::{Stream, StreamExt};
+    use insta::assert_snapshot;
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectMeta;
@@ -328,7 +331,7 @@ mod tests {
         fn list(
             &self,
             _prefix: Option<&Path>,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             Box::pin(futures::stream::once(async {
                 Err(object_store::Error::NotImplemented)
             }))
@@ -405,7 +408,7 @@ mod tests {
         )));
 
         // Use the file size as the hint so we can get the full metadata from the first fetch
-        let size_hint = meta[0].size;
+        let size_hint = meta[0].size as usize;
 
         fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
             .await
@@ -440,7 +443,7 @@ mod tests {
         )));
 
         // Use the a size hint larger than the file size to make sure we don't panic
-        let size_hint = meta[0].size + 100;
+        let size_hint = (meta[0].size + 100) as usize;
 
         fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
             .await
@@ -613,9 +616,15 @@ mod tests {
         assert_eq!(tt_batches, 4 /* 8/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
         Ok(())
     }
@@ -656,9 +665,15 @@ mod tests {
             get_exec(&state, "alltypes_plain.parquet", projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());
@@ -1072,7 +1087,10 @@ mod tests {
             .map(|factory| factory.create(state, &Default::default()).unwrap())
             .unwrap_or(Arc::new(ParquetFormat::new()));
 
-        scan_format(state, &*format, &testdata, file_name, projection, limit).await
+        scan_format(
+            state, &*format, None, &testdata, file_name, projection, limit,
+        )
+        .await
     }
 
     /// Test that 0-byte files don't break while reading
@@ -1090,10 +1108,11 @@ mod tests {
             .expect("read_parquet should succeed");
 
         let result = df.collect().await?;
-        #[rustfmt::skip]
-        let expected = ["++",
-            "++"];
-        assert_batches_eq!(expected, &result);
+
+        assert_snapshot!(batches_to_string(&result), @r###"
+            ++
+            ++
+       "###);
 
         Ok(())
     }
@@ -1120,10 +1139,11 @@ mod tests {
             .expect("read_parquet should succeed");
 
         let result = df.collect().await?;
-        #[rustfmt::skip]
-        let expected = ["++",
-            "++"];
-        assert_batches_eq!(expected, &result);
+
+        assert_snapshot!(batches_to_string(&result), @r###"
+            ++
+            ++
+       "###);
 
         Ok(())
     }
@@ -1373,8 +1393,9 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
 
         let file_sink_config = FileSinkConfig {
+            original_url: String::default(),
             object_store_url: object_store_url.clone(),
-            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
             table_paths: vec![ListingTableUrl::parse(table_path)?],
             output_schema: schema.clone(),
             table_partition_cols: vec![],
@@ -1458,8 +1479,9 @@ mod tests {
 
         // set file config to include partitioning on field_a
         let file_sink_config = FileSinkConfig {
+            original_url: String::default(),
             object_store_url: object_store_url.clone(),
-            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
@@ -1541,8 +1563,12 @@ mod tests {
             let object_store_url = ObjectStoreUrl::local_filesystem();
 
             let file_sink_config = FileSinkConfig {
+                original_url: String::default(),
                 object_store_url: object_store_url.clone(),
-                file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+                file_group: FileGroup::new(vec![PartitionedFile::new(
+                    "/tmp".to_string(),
+                    1,
+                )]),
                 table_paths: vec![ListingTableUrl::parse("file:///")?],
                 output_schema: schema.clone(),
                 table_partition_cols: vec![],

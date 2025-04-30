@@ -18,15 +18,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::datetime::common::*;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-
-use crate::datetime::common::*;
-use datafusion_common::{exec_err, Result, ScalarType};
+use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -329,6 +328,30 @@ impl ScalarUDFImpl for ToTimestampFunc {
             Utf8View | LargeUtf8 | Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp")
             }
+            Decimal128(_, _) => {
+                match &args[0] {
+                    ColumnarValue::Scalar(ScalarValue::Decimal128(
+                        Some(value),
+                        _,
+                        scale,
+                    )) => {
+                        // Convert decimal to seconds and nanoseconds
+                        let scale_factor = 10_i128.pow(*scale as u32);
+                        let seconds = value / scale_factor;
+                        let fraction = value % scale_factor;
+
+                        let nanos = (fraction * 1_000_000_000) / scale_factor;
+
+                        let timestamp_nanos = seconds * 1_000_000_000 + nanos;
+
+                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                            Some(timestamp_nanos as i64),
+                            None,
+                        )))
+                    }
+                    _ => exec_err!("Invalid decimal value"),
+                }
+            }
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp",
@@ -377,7 +400,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         }
 
         match args[0].data_type() {
-            Null | Int32 | Int64 | Timestamp(_, None) => {
+            Null | Int32 | Int64 | Timestamp(_, None) | Decimal128(_, _) => {
                 args[0].cast_to(&Timestamp(Second, None), None)
             }
             Timestamp(_, Some(tz)) => args[0].cast_to(&Timestamp(Second, Some(tz)), None),
@@ -616,7 +639,7 @@ mod tests {
         TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
-    use arrow::datatypes::TimeUnit;
+    use arrow::datatypes::{Field, TimeUnit};
     use chrono::Utc;
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
@@ -989,11 +1012,13 @@ mod tests {
         for udf in &udfs {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
+                let arg_field = Field::new("arg", array.data_type().clone(), true);
                 assert!(matches!(rt, Timestamp(_, Some(_))));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
+                    arg_fields: vec![&arg_field],
                     number_rows: 4,
-                    return_type: &rt,
+                    return_field: &Field::new("f", rt, true),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1037,10 +1062,12 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 assert!(matches!(rt, Timestamp(_, None)));
+                let arg_field = Field::new("arg", array.data_type().clone(), true);
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
+                    arg_fields: vec![&arg_field],
                     number_rows: 5,
-                    return_type: &rt,
+                    return_field: &Field::new("f", rt, true),
                 };
                 let res = udf
                     .invoke_with_args(args)

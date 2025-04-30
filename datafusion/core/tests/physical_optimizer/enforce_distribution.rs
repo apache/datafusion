@@ -30,11 +30,13 @@ use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::PhysicalExpr;
@@ -50,6 +52,7 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
@@ -167,7 +170,7 @@ impl ExecutionPlan for SortRequiredExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
     }
 }
 
@@ -183,17 +186,19 @@ fn parquet_exec_multiple() -> Arc<DataSourceExec> {
 fn parquet_exec_multiple_sorted(
     output_ordering: Vec<LexOrdering>,
 ) -> Arc<DataSourceExec> {
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema(),
         Arc::new(ParquetSource::default()),
     )
     .with_file_groups(vec![
-        vec![PartitionedFile::new("x".to_string(), 100)],
-        vec![PartitionedFile::new("y".to_string(), 100)],
+        FileGroup::new(vec![PartitionedFile::new("x".to_string(), 100)]),
+        FileGroup::new(vec![PartitionedFile::new("y".to_string(), 100)]),
     ])
     .with_output_ordering(output_ordering)
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 fn csv_exec() -> Arc<DataSourceExec> {
@@ -201,14 +206,16 @@ fn csv_exec() -> Arc<DataSourceExec> {
 }
 
 fn csv_exec_with_sort(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> {
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema(),
         Arc::new(CsvSource::new(false, b',', b'"')),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 fn csv_exec_multiple() -> Arc<DataSourceExec> {
@@ -217,17 +224,19 @@ fn csv_exec_multiple() -> Arc<DataSourceExec> {
 
 // Created a sorted parquet exec with multiple files
 fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> {
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema(),
         Arc::new(CsvSource::new(false, b',', b'"')),
     )
     .with_file_groups(vec![
-        vec![PartitionedFile::new("x".to_string(), 100)],
-        vec![PartitionedFile::new("y".to_string(), 100)],
+        FileGroup::new(vec![PartitionedFile::new("x".to_string(), 100)]),
+        FileGroup::new(vec![PartitionedFile::new("y".to_string(), 100)]),
     ])
     .with_output_ordering(output_ordering)
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 fn projection_exec_with_alias(
@@ -2527,14 +2536,16 @@ fn parallelization_compressed_csv() -> Result<()> {
         };
 
         let plan = aggregate_exec_with_alias(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema(),
-                Arc::new(CsvSource::new(false, b',', b'"')),
-            )
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_file_compression_type(compression_type)
-            .build(),
+            DataSourceExec::from_data_source(
+                FileScanConfigBuilder::new(
+                    ObjectStoreUrl::parse("test:///").unwrap(),
+                    schema(),
+                    Arc::new(CsvSource::new(false, b',', b'"')),
+                )
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_file_compression_type(compression_type)
+                .build(),
+            ),
             vec![("a".to_string(), "a".to_string())],
         );
         let test_config = TestConfig::default()
@@ -3458,6 +3469,50 @@ fn optimize_away_unnecessary_repartition2() -> Result<()> {
     let test_config = TestConfig::default();
     test_config.run(expected, physical_plan.clone(), &DISTRIB_DISTRIB_SORT)?;
     test_config.run(expected, physical_plan, &SORT_DISTRIB_DISTRIB)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
+    // Create a base plan
+    let parquet_exec = parquet_exec();
+
+    let sort_expr = PhysicalSortExpr {
+        expr: Arc::new(Column::new("id", 0)),
+        options: SortOptions::default(),
+    };
+
+    let ordering = LexOrdering::new(vec![sort_expr]);
+
+    // Create a SortPreservingMergeExec with fetch=5
+    let spm_exec = Arc::new(
+        SortPreservingMergeExec::new(ordering, parquet_exec.clone()).with_fetch(Some(5)),
+    );
+
+    // Create distribution context
+    let dist_context = DistributionContext::new(
+        spm_exec,
+        true,
+        vec![DistributionContext::new(parquet_exec, false, vec![])],
+    );
+
+    // Apply the function
+    let result = replace_order_preserving_variants(dist_context)?;
+
+    // Verify the plan was transformed to CoalescePartitionsExec
+    result
+        .plan
+        .as_any()
+        .downcast_ref::<CoalescePartitionsExec>()
+        .expect("Expected CoalescePartitionsExec");
+
+    // Verify fetch was preserved
+    assert_eq!(
+        result.plan.fetch(),
+        Some(5),
+        "Fetch value was not preserved after transformation"
+    );
 
     Ok(())
 }

@@ -45,7 +45,7 @@ chrono = { version = "0.4", features = ["wasmbind"] }
 # all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.1", optional = true }
-datafusion = { workspace = true }
+datafusion = { workspace = true, features = ["parquet"] }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
@@ -58,5 +58,8 @@ getrandom = { version = "0.2.8", features = ["js"] }
 wasm-bindgen = "0.2.99"
 
 [dev-dependencies]
+insta = { workspace = true }
+object_store = { workspace = true }
 tokio = { workspace = true }
+url = { workspace = true }
 wasm-bindgen-test = "0.3.49"

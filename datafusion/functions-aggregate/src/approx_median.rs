@@ -45,7 +45,7 @@ make_udaf_expr_and_func!(
 /// APPROX_MEDIAN aggregate expression
 #[user_doc(
     doc_section(label = "Approximate Functions"),
-    description = "Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(x, 0.5)`.",
+    description = "Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY x)`.",
     syntax_example = "approx_median(expression)",
     sql_example = r#"```sql
 > SELECT approx_median(column_name) FROM table_name;

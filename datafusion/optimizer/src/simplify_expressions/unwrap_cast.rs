@@ -81,6 +81,16 @@ pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
             let Ok(expr_type) = info.get_data_type(&expr) else {
                 return internal_err!("Can't get the data type of the expr {:?}", &expr);
             };
+
+            if let Some(value) = cast_literal_to_type_with_op(&lit_value, &expr_type, op)
+            {
+                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                    left: expr,
+                    op,
+                    right: Box::new(lit(value)),
+                })));
+            };
+
             // if the lit_value can be casted to the type of internal_left_expr
             // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
             let Some(value) = try_cast_literal_to_type(&lit_value, &expr_type) else {
@@ -105,6 +115,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<
 >(
     info: &S,
     expr: &Expr,
+    op: Operator,
     literal: &Expr,
 ) -> bool {
     match (expr, literal) {
@@ -124,6 +135,10 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<
             let Ok(lit_type) = info.get_data_type(literal) else {
                 return false;
             };
+
+            if cast_literal_to_type_with_op(lit_val, &expr_type, op).is_some() {
+                return true;
+            }
 
             try_cast_literal_to_type(lit_val, &expr_type).is_some()
                 && is_supported_type(&expr_type)
@@ -182,6 +197,7 @@ fn is_supported_type(data_type: &DataType) -> bool {
     is_supported_numeric_type(data_type)
         || is_supported_string_type(data_type)
         || is_supported_dictionary_type(data_type)
+        || is_supported_binary_type(data_type)
 }
 
 /// Returns true if unwrap_cast_in_comparison support this numeric type
@@ -215,6 +231,56 @@ fn is_supported_dictionary_type(data_type: &DataType) -> bool {
                     DataType::Dictionary(_, inner) if is_supported_type(inner))
 }
 
+fn is_supported_binary_type(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Binary | DataType::FixedSizeBinary(_))
+}
+
+///// Tries to move a cast from an expression (such as column) to the literal other side of a comparison operator./
+///
+/// Specifically, rewrites
+/// ```sql
+/// cast(col) <op> <literal>
+/// ```
+///
+/// To
+///
+/// ```sql
+/// col <op> cast(<literal>)
+/// col <op> <casted_literal>
+/// ```
+fn cast_literal_to_type_with_op(
+    lit_value: &ScalarValue,
+    target_type: &DataType,
+    op: Operator,
+) -> Option<ScalarValue> {
+    match (op, lit_value) {
+        (
+            Operator::Eq | Operator::NotEq,
+            ScalarValue::Utf8(Some(_))
+            | ScalarValue::Utf8View(Some(_))
+            | ScalarValue::LargeUtf8(Some(_)),
+        ) => {
+            // Only try for integer types (TODO can we do this for other types
+            // like timestamps)?
+            use DataType::*;
+            if matches!(
+                target_type,
+                Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
+            ) {
+                let casted = lit_value.cast_to(target_type).ok()?;
+                let round_tripped = casted.cast_to(&lit_value.data_type()).ok()?;
+                if lit_value != &round_tripped {
+                    return None;
+                }
+                Some(casted)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Convert a literal value from one data type to another
 pub(super) fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
@@ -231,6 +297,7 @@ pub(super) fn try_cast_literal_to_type(
     try_cast_numeric_literal(lit_value, target_type)
         .or_else(|| try_cast_string_literal(lit_value, target_type))
         .or_else(|| try_cast_dictionary(lit_value, target_type))
+        .or_else(|| try_cast_binary(lit_value, target_type))
 }
 
 /// Convert a numeric value from one numeric data type to another
@@ -440,6 +507,20 @@ fn cast_between_timestamp(from: &DataType, to: &DataType, value: i128) -> Option
     }
 }
 
+fn try_cast_binary(
+    lit_value: &ScalarValue,
+    target_type: &DataType,
+) -> Option<ScalarValue> {
+    match (lit_value, target_type) {
+        (ScalarValue::Binary(Some(v)), DataType::FixedSizeBinary(n))
+            if v.len() == *n as usize =>
+        {
+            Some(ScalarValue::FixedSizeBinary(*n, Some(v.clone())))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,6 +549,24 @@ mod tests {
         // the 99999999999 is not within the range of MAX(int32) and MIN(int32), we don't cast the lit(99999999999) to int32 type
         let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(99999999999i64));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+
+        // cast(c1, UTF8) < '123', only eq/not_eq should be optimized
+        let expr_lt = cast(col("c1"), DataType::Utf8).lt(lit("123"));
+        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+
+        // cast(c1, UTF8) = '0123', cast(cast('0123', Int32), UTF8) != '0123', so '0123' should not
+        // be casted
+        let expr_lt = cast(col("c1"), DataType::Utf8).lt(lit("0123"));
+        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+
+        // cast(c1, UTF8) = 'not a number', should not be able to cast to column type
+        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("not a number"));
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+
+        // cast(c1, UTF8) = '99999999999', where '99999999999' does not fit into int32, so it will
+        // not be optimized to integer comparison
+        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("99999999999"));
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
     }
 
     #[test]
@@ -496,6 +595,21 @@ mod tests {
         let lit_lt_lit = cast(null_i8(), DataType::Int32).lt(lit(12i32));
         let expected = null_bool();
         assert_eq!(optimize_test(lit_lt_lit, &schema), expected);
+
+        // cast(c1, UTF8) = '123' => c1 = 123
+        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("123"));
+        let expected = col("c1").eq(lit(123i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c1, UTF8) != '123' => c1 != 123
+        let expr_input = cast(col("c1"), DataType::Utf8).not_eq(lit("123"));
+        let expected = col("c1").not_eq(lit(123i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c1, UTF8) = NULL => c1 = NULL
+        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit(ScalarValue::Utf8(None)));
+        let expected = col("c1").eq(lit(ScalarValue::Int32(None)));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
     #[test]
@@ -504,6 +618,16 @@ mod tests {
         let schema = expr_test_schema();
         let expr_input = cast(col("c6"), DataType::UInt64).eq(lit(0u64));
         let expected = col("c6").eq(lit(0u32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c6, UTF8) = "123" => c6 = 123
+        let expr_input = cast(col("c6"), DataType::Utf8).eq(lit("123"));
+        let expected = col("c6").eq(lit(123u32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c6, UTF8) != "123" => c6 != 123
+        let expr_input = cast(col("c6"), DataType::Utf8).not_eq(lit("123"));
+        let expected = col("c6").not_eq(lit(123u32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
@@ -1345,5 +1469,14 @@ mod tests {
                 ExpectedCast::Value(s.clone()),
             )
         }
+    }
+
+    #[test]
+    fn try_cast_to_fixed_size_binary() {
+        expect_cast(
+            ScalarValue::Binary(Some(vec![1, 2, 3])),
+            DataType::FixedSizeBinary(3),
+            ExpectedCast::Value(ScalarValue::FixedSizeBinary(3, Some(vec![1, 2, 3]))),
+        )
     }
 }

@@ -163,8 +163,7 @@ impl DisplayAs for WorkTableExec {
                 write!(f, "WorkTableExec: name={}", self.name)
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                write!(f, "name={}", self.name)
             }
         }
     }
@@ -226,6 +225,10 @@ impl ExecutionPlan for WorkTableExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
 }

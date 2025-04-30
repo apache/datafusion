@@ -102,10 +102,10 @@ impl CheckColumnsSatisfyExprsPurpose {
     fn message_prefix(&self) -> &'static str {
         match self {
             CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate => {
-                "Projection references non-aggregate values"
+                "Column in SELECT must be in GROUP BY or an aggregate function"
             }
             CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate => {
-                "HAVING clause references non-aggregate values"
+                "Column in HAVING must be in GROUP BY or an aggregate function"
             }
         }
     }
@@ -158,20 +158,19 @@ fn check_column_satisfies_expr(
     purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
     if !columns.contains(expr) {
+        let diagnostic = Diagnostic::new_error(
+            purpose.diagnostic_message(expr),
+            expr.spans().and_then(|spans| spans.first()),
+        )
+        .with_help(format!("Either add '{expr}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({expr})"), None);
+
         return plan_err!(
-            "{}: Expression {} could not be resolved from available columns: {}",
+            "{}: While expanding wildcard, column \"{}\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"{}\" appears in the SELECT clause satisfies this requirement",
             purpose.message_prefix(),
             expr,
-            expr_vec_fmt!(columns)
-        )
-        .map_err(|err| {
-            let diagnostic = Diagnostic::new_error(
-                purpose.diagnostic_message(expr),
-                expr.spans().and_then(|spans| spans.first()),
-            )
-            .with_help(format!("add '{expr}' to GROUP BY clause"), None);
-            err.with_diagnostic(diagnostic)
-        });
+            expr_vec_fmt!(columns);
+            diagnostic=diagnostic
+        );
     }
     Ok(())
 }
@@ -496,30 +495,30 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     ///
     /// For example an expr of **unnest(unnest(column1)) + unnest(unnest(unnest(column2)))**
     /// ```text
-    ///                         ┌──────────────────┐           
-    ///                         │    binaryexpr    │           
-    ///                         │                  │           
-    ///                         └──────────────────┘           
-    ///                f_down  / /            │ │              
-    ///                       / / f_up        │ │              
-    ///                      / /        f_down│ │f_up          
-    ///                  unnest               │ │              
-    ///                                       │ │              
-    ///       f_down  / / f_up(rewriting)     │ │              
-    ///              / /                                       
-    ///             / /                      unnest            
-    ///         unnest                                         
-    ///                           f_down  / / f_up(rewriting)  
-    /// f_down / /f_up                   / /                   
-    ///       / /                       / /                    
-    ///      / /                    unnest                     
-    ///   column1                                              
-    ///                     f_down / /f_up                     
-    ///                           / /                          
-    ///                          / /                           
-    ///                       column2                          
+    ///                         ┌──────────────────┐
+    ///                         │    binaryexpr    │
+    ///                         │                  │
+    ///                         └──────────────────┘
+    ///                f_down  / /            │ │
+    ///                       / / f_up        │ │
+    ///                      / /        f_down│ │f_up
+    ///                  unnest               │ │
+    ///                                       │ │
+    ///       f_down  / / f_up(rewriting)     │ │
+    ///              / /
+    ///             / /                      unnest
+    ///         unnest
+    ///                           f_down  / / f_up(rewriting)
+    /// f_down / /f_up                   / /
+    ///       / /                       / /
+    ///      / /                    unnest
+    ///   column1
+    ///                     f_down / /f_up
+    ///                           / /
+    ///                          / /
+    ///                       column2
     /// ```
-    ///         
+    ///
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref traversing_unnest) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {

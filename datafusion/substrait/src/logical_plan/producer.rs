@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::config::ConfigOptions;
-use datafusion::optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
-use datafusion::optimizer::AnalyzerRule;
 use std::sync::Arc;
 use substrait::proto::expression_reference::ExprType;
 
@@ -55,6 +52,7 @@ use datafusion::logical_expr::expr::{
     AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
     InSubquery, WindowFunction, WindowFunctionParams,
 };
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
@@ -434,14 +432,10 @@ pub fn to_substrait_plan(plan: &LogicalPlan, state: &SessionState) -> Result<Box
     // Generate PlanRel(s)
     // Note: Only 1 relation tree is currently supported
 
-    // We have to expand wildcard expressions first as wildcards can't be represented in substrait
-    let plan = Arc::new(ExpandWildcardRule::new())
-        .analyze(plan.clone(), &ConfigOptions::default())?;
-
     let mut producer: DefaultSubstraitProducer = DefaultSubstraitProducer::new(state);
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
-            input: Some(*producer.handle_plan(&plan)?),
+            input: Some(*producer.handle_plan(plan)?),
             names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
@@ -455,6 +449,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, state: &SessionState) -> Result<Box
         relations: plan_rels,
         advanced_extensions: None,
         expected_type_urls: vec![],
+        parameter_bindings: vec![],
     }))
 }
 
@@ -540,7 +535,7 @@ pub fn to_substrait_rel(
 }
 
 pub fn from_table_scan(
-    _producer: &mut impl SubstraitProducer,
+    producer: &mut impl SubstraitProducer,
     scan: &TableScan,
 ) -> Result<Box<Rel>> {
     let projection = scan.projection.as_ref().map(|p| {
@@ -560,11 +555,28 @@ pub fn from_table_scan(
     let table_schema = scan.source.schema().to_dfschema_ref()?;
     let base_schema = to_substrait_named_struct(&table_schema)?;
 
+    let filter_option = if scan.filters.is_empty() {
+        None
+    } else {
+        let table_schema_qualified = Arc::new(
+            DFSchema::try_from_qualified_schema(
+                scan.table_name.clone(),
+                &(scan.source.schema()),
+            )
+            .unwrap(),
+        );
+
+        let combined_expr = conjunction(scan.filters.clone()).unwrap();
+        let filter_expr =
+            producer.handle_expr(&combined_expr, &table_schema_qualified)?;
+        Some(Box::new(filter_expr))
+    };
+
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
             base_schema: Some(base_schema),
-            filter: None,
+            filter: filter_option,
             best_effort_filter: None,
             projection,
             advanced_extension: None,
@@ -1115,6 +1127,17 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::StringConcat => "str_concat",
         Operator::AtArrow => "at_arrow",
         Operator::ArrowAt => "arrow_at",
+        Operator::Arrow => "arrow",
+        Operator::LongArrow => "long_arrow",
+        Operator::HashArrow => "hash_arrow",
+        Operator::HashLongArrow => "hash_long_arrow",
+        Operator::AtAt => "at_at",
+        Operator::IntegerDivide => "integer_divide",
+        Operator::HashMinus => "hash_minus",
+        Operator::AtQuestion => "at_question",
+        Operator::Question => "question",
+        Operator::QuestionAnd => "question_and",
+        Operator::QuestionPipe => "question_pipe",
         Operator::BitwiseXor => "bitwise_xor",
         Operator::BitwiseShiftRight => "bitwise_shift_right",
         Operator::BitwiseShiftLeft => "bitwise_shift_left",

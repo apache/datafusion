@@ -33,10 +33,10 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use datafusion_catalog::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
-use datafusion_catalog::MemoryCatalogProviderList;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
+use datafusion_catalog::MemoryCatalogProviderList;
+use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -68,6 +68,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_session::Session;
 use datafusion_sql::parser::{DFParserBuilder, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 
@@ -266,6 +267,10 @@ impl Session for SessionState {
     fn table_options_mut(&mut self) -> &mut TableOptions {
         self.table_options_mut()
     }
+
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        self.task_ctx()
+    }
 }
 
 impl SessionState {
@@ -436,16 +441,16 @@ impl SessionState {
 
     /// Resolve all table references in the SQL statement. Does not include CTE references.
     ///
-    /// See [`datafusion_catalog::resolve_table_references`] for more information.
+    /// See [`datafusion_sql::resolve::resolve_table_references`] for more information.
     ///
-    /// [`datafusion_catalog::resolve_table_references`]: datafusion_catalog::resolve_table_references
+    /// [`datafusion_sql::resolve::resolve_table_references`]: datafusion_sql::resolve::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        let (table_refs, _) = datafusion_catalog::resolve_table_references(
+        let (table_refs, _) = datafusion_sql::resolve::resolve_table_references(
             statement,
             enable_ident_normalization,
         )?;
@@ -489,6 +494,7 @@ impl SessionState {
             enable_options_value_normalization: sql_parser_options
                 .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
+            map_varchar_to_utf8view: sql_parser_options.map_varchar_to_utf8view,
             collect_spans: sql_parser_options.collect_spans,
         }
     }
@@ -576,6 +582,7 @@ impl SessionState {
                     return Ok(LogicalPlan::Explain(Explain {
                         verbose: e.verbose,
                         plan: Arc::clone(&e.plan),
+                        explain_format: e.explain_format.clone(),
                         stringified_plans,
                         schema: Arc::clone(&e.schema),
                         logical_optimization_succeeded: false,
@@ -611,6 +618,7 @@ impl SessionState {
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose: e.verbose,
+                explain_format: e.explain_format.clone(),
                 plan,
                 stringified_plans,
                 schema: Arc::clone(&e.schema),
@@ -1340,28 +1348,30 @@ impl SessionStateBuilder {
         } = self;
 
         let config = config.unwrap_or_default();
-        let runtime_env = runtime_env.unwrap_or(Arc::new(RuntimeEnv::default()));
+        let runtime_env = runtime_env.unwrap_or_else(|| Arc::new(RuntimeEnv::default()));
 
         let mut state = SessionState {
-            session_id: session_id.unwrap_or(Uuid::new_v4().to_string()),
+            session_id: session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
             analyzer: analyzer.unwrap_or_default(),
             expr_planners: expr_planners.unwrap_or_default(),
             type_planner,
             optimizer: optimizer.unwrap_or_default(),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
-            query_planner: query_planner.unwrap_or(Arc::new(DefaultQueryPlanner {})),
-            catalog_list: catalog_list
-                .unwrap_or(Arc::new(MemoryCatalogProviderList::new())
-                    as Arc<dyn CatalogProviderList>),
+            query_planner: query_planner
+                .unwrap_or_else(|| Arc::new(DefaultQueryPlanner {})),
+            catalog_list: catalog_list.unwrap_or_else(|| {
+                Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>
+            }),
             table_functions: table_functions.unwrap_or_default(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: serializer_registry
-                .unwrap_or(Arc::new(EmptySerializerRegistry)),
+                .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
-            table_options: table_options
-                .unwrap_or(TableOptions::default_from_session_config(config.options())),
+            table_options: table_options.unwrap_or_else(|| {
+                TableOptions::default_from_session_config(config.options())
+            }),
             config,
             execution_props: execution_props.unwrap_or_default(),
             table_factories: table_factories.unwrap_or_default(),
@@ -1412,10 +1422,14 @@ impl SessionStateBuilder {
                 &state.runtime_env,
             );
 
-            state.catalog_list.register_catalog(
+            let existing_default_catalog = state.catalog_list.register_catalog(
                 state.config.options().catalog.default_catalog.clone(),
                 Arc::new(default_catalog),
             );
+
+            if existing_default_catalog.is_some() {
+                debug!("Overwrote the default catalog");
+            }
         }
 
         if let Some(analyzer_rules) = analyzer_rules {
@@ -1739,7 +1753,7 @@ impl FunctionRegistry for SessionState {
         let result = self.scalar_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDF named \"{name}\" in the registry")
+            plan_datafusion_err!("There is no UDF named \"{name}\" in the registry. Use session context `register_udf` function to register a custom UDF")
         })
     }
 
@@ -1747,7 +1761,7 @@ impl FunctionRegistry for SessionState {
         let result = self.aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDAF named \"{name}\" in the registry")
+            plan_datafusion_err!("There is no UDAF named \"{name}\" in the registry. Use session context `register_udaf` function to register a custom UDAF")
         })
     }
 
@@ -1755,7 +1769,7 @@ impl FunctionRegistry for SessionState {
         let result = self.window_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry")
+            plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry. Use session context `register_udwf` function to register a custom UDWF")
         })
     }
 

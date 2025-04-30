@@ -22,13 +22,13 @@
 use std::sync::Arc;
 
 use super::demux::DemuxedStreamReceiver;
-use super::{create_writer, BatchSerializer};
+use super::{BatchSerializer, ObjectWriterBuilder};
 use crate::file_compression_type::FileCompressionType;
 use datafusion_common::error::Result;
 
 use arrow::array::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
-use datafusion_common_runtime::SpawnedTask;
+use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
 
 use bytes::Bytes;
@@ -36,7 +36,6 @@ use futures::join;
 use object_store::ObjectStore;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver};
-use tokio::task::JoinSet;
 
 type WriterType = Box<dyn AsyncWrite + Send + Unpin>;
 type SerializerType = Arc<dyn BatchSerializer>;
@@ -258,7 +257,15 @@ pub async fn spawn_writer_tasks_and_join(
     });
     while let Some((location, rb_stream)) = file_stream_rx.recv().await {
         let writer =
-            create_writer(compression, &location, Arc::clone(&object_store)).await?;
+            ObjectWriterBuilder::new(compression, &location, Arc::clone(&object_store))
+                .with_buffer_size(Some(
+                    context
+                        .session_config()
+                        .options()
+                        .execution
+                        .objectstore_writer_buffer_size,
+                ))
+                .build()?;
 
         if tx_file_bundle
             .send((rb_stream, Arc::clone(&serializer), writer))

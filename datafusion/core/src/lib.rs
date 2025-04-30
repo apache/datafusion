@@ -20,8 +20,20 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
-#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
+//
+// Eliminate unnecessary function calls(some may be not cheap) due to `xxx_or`
+// for performance. Also avoid abusing `xxx_or_else` for readability:
+// https://github.com/apache/datafusion/issues/15802
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::clone_on_ref_ptr,
+        clippy::or_fun_call,
+        clippy::unnecessary_lazy_evaluations
+    )
+)]
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
@@ -299,14 +311,17 @@
 //! ```
 //!
 //! A [`TableProvider`] provides information for planning and
-//! an [`ExecutionPlan`]s for execution. DataFusion includes [`ListingTable`]
-//! which supports reading several common file formats, and you can support any
-//! new file format by implementing the [`TableProvider`] trait. See also:
+//! an [`ExecutionPlan`]s for execution. DataFusion includes [`ListingTable`],
+//! a [`TableProvider`] which reads individual files or directories of files
+//! ("partitioned datasets") of several common file formats. Uses can add
+//! support for new file formats by implementing the [`TableProvider`]
+//! trait.
 //!
-//! 1. [`ListingTable`]: Reads data from Parquet, JSON, CSV, or AVRO
-//!    files.  Supports single files or multiple files with HIVE style
-//!    partitioning, optional compression, directly reading from remote
-//!    object store and more.
+//! See also:
+//!
+//! 1. [`ListingTable`]: Reads data from one or more Parquet, JSON, CSV, or AVRO
+//!    files supporting HIVE style partitioning, optional compression, directly
+//!    reading from remote object store and more.
 //!
 //! 2. [`MemTable`]: Reads data from in memory [`RecordBatch`]es.
 //!
@@ -406,7 +421,7 @@
 //! See the [implementors of `ExecutionPlan`] for a list of physical operators available.
 //!
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
-//! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
+//! [Volcano style]: https://doi.org/10.1145/93605.98720
 //! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
 //! [DataFusion paper in SIGMOD 2024]: https://github.com/apache/datafusion/files/15149988/DataFusion_Query_Engine___SIGMOD_2024-FINAL-mk4.pdf
 //! [such as DuckDB]: https://github.com/duckdb/duckdb/issues/1583
@@ -648,6 +663,8 @@
 //!
 //! * [datafusion_common]: Common traits and types
 //! * [datafusion_catalog]: Catalog APIs such as [`SchemaProvider`] and [`CatalogProvider`]
+//! * [datafusion_datasource]: File and Data IO such as [`FileSource`] and [`DataSink`]
+//! * [datafusion_session]: [`Session`] and related structures
 //! * [datafusion_execution]: State and structures needed for execution
 //! * [datafusion_expr]: [`LogicalPlan`], [`Expr`] and related logical planning structure
 //! * [datafusion_functions]: Scalar function packages
@@ -663,6 +680,9 @@
 //!
 //! [`SchemaProvider`]: datafusion_catalog::SchemaProvider
 //! [`CatalogProvider`]: datafusion_catalog::CatalogProvider
+//! [`Session`]: datafusion_session::Session
+//! [`FileSource`]: datafusion_datasource::file::FileSource
+//! [`DataSink`]: datafusion_datasource::sink::DataSink
 //!
 //! ## Citing DataFusion in Academic Papers
 //!
@@ -699,7 +719,6 @@ pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 extern crate core;
 extern crate sqlparser;
 
-pub mod catalog_common;
 pub mod dataframe;
 pub mod datasource;
 pub mod error;
@@ -869,6 +888,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/runtime_configs.md",
+    user_guide_runtime_configs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/crate-configuration.md",
     user_guide_crate_configuration
 );
@@ -1016,8 +1041,8 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/user-guide/sql/write_options.md",
-    user_guide_sql_write_options
+    "../../../docs/source/user-guide/sql/format_options.md",
+    user_guide_sql_format_options
 );
 
 #[cfg(doctest)]

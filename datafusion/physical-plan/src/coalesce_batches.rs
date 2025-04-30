@@ -35,6 +35,10 @@ use datafusion_execution::TaskContext;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
 use crate::execution_plan::CardinalityEffect;
+use crate::filter_pushdown::{
+    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+};
+use datafusion_common::config::ConfigOptions;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -123,8 +127,11 @@ impl DisplayAs for CoalesceBatchesExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                writeln!(f, "target_batch_size={}", self.target_batch_size)?;
+                if let Some(fetch) = self.fetch {
+                    write!(f, "limit={fetch}")?;
+                };
+                Ok(())
             }
         }
     }
@@ -189,7 +196,16 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)?.with_fetch(
+            self.schema(),
+            self.fetch,
+            0,
+            1,
+        )
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -208,6 +224,17 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        fd: FilterDescription,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(filter_pushdown_transparent::<Arc<dyn ExecutionPlan>>(
+            Arc::new(self.clone()),
+            fd,
+        ))
     }
 }
 

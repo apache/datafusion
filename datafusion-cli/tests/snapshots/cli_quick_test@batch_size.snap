@@ -1,0 +1,21 @@
+---
+source: tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "--command"
+    - show datafusion.execution.batch_size
+    - "-q"
+    - "-b"
+    - "1"
+---
+success: true
+exit_code: 0
+----- stdout -----
++---------------------------------+-------+
+| name                            | value |
++---------------------------------+-------+
+| datafusion.execution.batch_size | 1     |
++---------------------------------+-------+
+
+----- stderr -----

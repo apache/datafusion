@@ -20,6 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
+use arrow::datatypes::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
@@ -46,13 +47,25 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("minute".to_string())));
         let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_trunc();
-        let return_type = &udf.return_type(&[timestamps.data_type()]).unwrap();
+        let args = vec![precision, timestamps];
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
+        let return_type = udf
+            .return_type(&args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>())
+            .unwrap();
+        let return_field = Field::new("f", return_type, true);
         b.iter(|| {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
-                    args: vec![precision.clone(), timestamps.clone()],
+                    args: args.clone(),
+                    arg_fields: arg_fields.clone(),
                     number_rows: batch_len,
-                    return_type,
+                    return_field: &return_field,
                 })
                 .expect("date_trunc should work on valid values"),
             )

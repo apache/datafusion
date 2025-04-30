@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -24,8 +25,9 @@ use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -53,6 +55,12 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// * [`SessionContext::create_physical_expr`]: A high level API
 /// * [`create_physical_expr`]: A low level API
 ///
+/// # Formatting `PhysicalExpr` as strings
+/// There are three ways to format `PhysicalExpr` as a string:
+/// * [`Debug`]: Standard Rust debugging format (e.g. `Constant { value: ... }`)
+/// * [`Display`]: Detailed SQL-like format that shows expression structure (e.g. (`Utf8 ("foobar")`). This is often used for debugging and tests
+/// * [`Self::fmt_sql`]: SQL-like human readable format (e.g. ('foobar')`), See also [`sql_fmt`]
+///
 /// [`SessionContext::create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.create_physical_expr
 /// [`PhysicalPlanner`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/trait.PhysicalPlanner.html
 /// [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
@@ -63,11 +71,23 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
     /// Get the data type of this expression, given the schema of the input
-    fn data_type(&self, input_schema: &Schema) -> Result<DataType>;
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        Ok(self.return_field(input_schema)?.data_type().to_owned())
+    }
     /// Determine whether this expression is nullable, given the schema of the input
-    fn nullable(&self, input_schema: &Schema) -> Result<bool>;
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        Ok(self.return_field(input_schema)?.is_nullable())
+    }
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
+    /// The output field associated with this expression
+    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+        Ok(Field::new(
+            format!("{self}"),
+            self.data_type(input_schema)?,
+            self.nullable(input_schema)?,
+        ))
+    }
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
     fn evaluate_selection(
@@ -266,6 +286,65 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties::new_unknown())
     }
+
+    /// Format this `PhysicalExpr` in nice human readable "SQL" format
+    ///
+    /// Specifically, this format is designed to be readable by humans, at the
+    /// expense of details. Use `Display` or `Debug` for more detailed
+    /// representation.
+    ///
+    /// See the [`fmt_sql`] function for an example of printing `PhysicalExpr`s as SQL.
+    ///
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result;
+
+    /// Take a snapshot of this `PhysicalExpr`, if it is dynamic.
+    ///
+    /// "Dynamic" in this case means containing references to structures that may change
+    /// during plan execution, such as hash tables.
+    ///
+    /// This method is used to capture the current state of `PhysicalExpr`s that may contain
+    /// dynamic references to other operators in order to serialize it over the wire
+    /// or treat it via downcast matching.
+    ///
+    /// You should not call this method directly as it does not handle recursion.
+    /// Instead use [`snapshot_physical_expr`] to handle recursion and capture the
+    /// full state of the `PhysicalExpr`.
+    ///
+    /// This is expected to return "simple" expressions that do not have mutable state
+    /// and are composed of DataFusion's built-in `PhysicalExpr` implementations.
+    /// Callers however should *not* assume anything about the returned expressions
+    /// since callers and implementers may not agree on what "simple" or "built-in"
+    /// means.
+    /// In other words, if you need to serialize a `PhysicalExpr` across the wire
+    /// you should call this method and then try to serialize the result,
+    /// but you should handle unknown or unexpected `PhysicalExpr` implementations gracefully
+    /// just as if you had not called this method at all.
+    ///
+    /// In particular, consider:
+    /// * A `PhysicalExpr` that references the current state of a `datafusion::physical_plan::TopK`
+    ///   that is involved in a query with `SELECT * FROM t1 ORDER BY a LIMIT 10`.
+    ///   This function may return something like `a >= 12`.
+    /// * A `PhysicalExpr` that references the current state of a `datafusion::physical_plan::joins::HashJoinExec`
+    ///   from a query such as `SELECT * FROM t1 JOIN t2 ON t1.a = t2.b`.
+    ///   This function may return something like `t2.b IN (1, 5, 7)`.
+    ///
+    /// A system or function that can only deal with a hardcoded set of `PhysicalExpr` implementations
+    /// or needs to serialize this state to bytes may not be able to handle these dynamic references.
+    /// In such cases, we should return a simplified version of the `PhysicalExpr` that does not
+    /// contain these dynamic references.
+    ///
+    /// Systems that implement remote execution of plans, e.g. serialize a portion of the query plan
+    /// and send it across the wire to a remote executor may want to call this method after
+    /// every batch on the source side and brodcast / update the current snaphot to the remote executor.
+    ///
+    /// Note for implementers: this method should *not* handle recursion.
+    /// Recursion is handled in [`snapshot_physical_expr`].
+    fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        // By default, we return None to indicate that this PhysicalExpr does not
+        // have any dynamic references or state.
+        // This is a safe default behavior.
+        Ok(None)
+    }
 }
 
 /// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
@@ -363,7 +442,7 @@ where
         I: Iterator + Clone,
         I::Item: Display,
     {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
@@ -378,4 +457,83 @@ where
     }
 
     DisplayWrapper(exprs.into_iter())
+}
+
+/// Prints a [`PhysicalExpr`] in a SQL-like format
+///
+/// # Example
+/// ```
+/// # // The boiler plate needed to create a `PhysicalExpr` for the example
+/// # use std::any::Any;
+/// use std::collections::HashMap;
+/// # use std::fmt::Formatter;
+/// # use std::sync::Arc;
+/// # use arrow::array::RecordBatch;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_common::Result;
+/// # use datafusion_expr_common::columnar_value::ColumnarValue;
+/// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
+/// # #[derive(Debug, Hash, PartialOrd, PartialEq)]
+/// # struct MyExpr {}
+/// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
+/// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
+/// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
+/// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
+/// # fn return_field(&self, input_schema: &Schema) -> Result<Field> { unimplemented!() }
+/// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
+/// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
+/// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }
+/// # }
+/// # impl std::fmt::Display for MyExpr {fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { unimplemented!() } }
+/// # impl DynEq for MyExpr {fn dyn_eq(&self, other: &dyn Any) -> bool { unimplemented!() } }
+/// # fn make_physical_expr() -> Arc<dyn PhysicalExpr> { Arc::new(MyExpr{}) }
+/// let expr: Arc<dyn PhysicalExpr> = make_physical_expr();
+/// // wrap the expression in `sql_fmt` which can be used with
+/// // `format!`, `to_string()`, etc
+/// let expr_as_sql = fmt_sql(expr.as_ref());
+/// assert_eq!(
+///   "The SQL: CASE a > b THEN 1 ELSE 0 END",
+///   format!("The SQL: {expr_as_sql}")
+/// );
+/// ```
+pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
+    struct Wrapper<'a> {
+        expr: &'a dyn PhysicalExpr,
+    }
+
+    impl Display for Wrapper<'_> {
+        fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+            self.expr.fmt_sql(f)?;
+            Ok(())
+        }
+    }
+
+    Wrapper { expr }
+}
+
+/// Take a snapshot of the given `PhysicalExpr` if it is dynamic.
+///
+/// Take a snapshot of this `PhysicalExpr` if it is dynamic.
+/// This is used to capture the current state of `PhysicalExpr`s that may contain
+/// dynamic references to other operators in order to serialize it over the wire
+/// or treat it via downcast matching.
+///
+/// See the documentation of [`PhysicalExpr::snapshot`] for more details.
+///
+/// # Returns
+///
+/// Returns an `Option<Arc<dyn PhysicalExpr>>` which is the snapshot of the
+/// `PhysicalExpr` if it is dynamic. If the `PhysicalExpr` does not have
+/// any dynamic references or state, it returns `None`.
+pub fn snapshot_physical_expr(
+    expr: Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_up(|e| {
+        if let Some(snapshot) = e.snapshot()? {
+            Ok(Transformed::yes(snapshot))
+        } else {
+            Ok(Transformed::no(Arc::clone(&e)))
+        }
+    })
+    .data()
 }

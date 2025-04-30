@@ -24,7 +24,7 @@
 use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::plan_err;
+use datafusion_common::{plan_err, ColumnStatistics};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -42,7 +42,7 @@ pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
     /// Arguments:
     ///
     /// * `projected_table_schema`: The schema for the table, projected to
-    ///    include only the fields being output (projected) by the this mapping.
+    ///   include only the fields being output (projected) by the this mapping.
     ///
     /// * `table_schema`: The entire table schema for the table
     fn create(
@@ -97,18 +97,11 @@ pub trait SchemaMapper: Debug + Send + Sync {
     /// Adapts a `RecordBatch` to match the `table_schema`
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;
 
-    /// Adapts a [`RecordBatch`] that does not have all the columns from the
-    /// file schema.
-    ///
-    /// This method is used, for example,  when applying a filter to a subset of
-    /// the columns as part of `DataFusionArrowPredicate` when `filter_pushdown`
-    /// is enabled.
-    ///
-    /// This method is slower than `map_batch` as it looks up columns by name.
-    fn map_partial_batch(
+    /// Adapts file-level column `Statistics` to match the `table_schema`
+    fn map_column_statistics(
         &self,
-        batch: RecordBatch,
-    ) -> datafusion_common::Result<RecordBatch>;
+        file_col_statistics: &[ColumnStatistics],
+    ) -> datafusion_common::Result<Vec<ColumnStatistics>>;
 }
 
 /// Default  [`SchemaAdapterFactory`] for mapping schemas.
@@ -215,11 +208,10 @@ impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
     fn create(
         &self,
         projected_table_schema: SchemaRef,
-        table_schema: SchemaRef,
+        _table_schema: SchemaRef,
     ) -> Box<dyn SchemaAdapter> {
         Box::new(DefaultSchemaAdapter {
             projected_table_schema,
-            table_schema,
         })
     }
 }
@@ -231,12 +223,6 @@ pub(crate) struct DefaultSchemaAdapter {
     /// The schema for the table, projected to include only the fields being output (projected) by the
     /// associated ParquetSource
     projected_table_schema: SchemaRef,
-    /// The entire table schema for the table we're using this to adapt.
-    ///
-    /// This is used to evaluate any filters pushed down into the scan
-    /// which may refer to columns that are not referred to anywhere
-    /// else in the plan.
-    table_schema: SchemaRef,
 }
 
 impl SchemaAdapter for DefaultSchemaAdapter {
@@ -290,7 +276,6 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             Arc::new(SchemaMapping {
                 projected_table_schema: Arc::clone(&self.projected_table_schema),
                 field_mappings,
-                table_schema: Arc::clone(&self.table_schema),
             }),
             projection,
         ))
@@ -300,27 +285,12 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 /// The SchemaMapping struct holds a mapping from the file schema to the table
 /// schema and any necessary type conversions.
 ///
-/// Note, because `map_batch` and `map_partial_batch` functions have different
-/// needs, this struct holds two schemas:
-///
-/// 1. The projected **table** schema
-/// 2. The full table schema
-///
 /// [`map_batch`] is used by the ParquetOpener to produce a RecordBatch which
 /// has the projected schema, since that's the schema which is supposed to come
 /// out of the execution of this query. Thus `map_batch` uses
 /// `projected_table_schema` as it can only operate on the projected fields.
 ///
-/// [`map_partial_batch`]  is used to create a RecordBatch with a schema that
-/// can be used for Parquet predicate pushdown, meaning that it may contain
-/// fields which are not in the projected schema (as the fields that parquet
-/// pushdown filters operate can be completely distinct from the fields that are
-/// projected (output) out of the ParquetSource). `map_partial_batch` thus uses
-/// `table_schema` to create the resulting RecordBatch (as it could be operating
-/// on any fields in the schema).
-///
 /// [`map_batch`]: Self::map_batch
-/// [`map_partial_batch`]: Self::map_partial_batch
 #[derive(Debug)]
 pub struct SchemaMapping {
     /// The schema of the table. This is the expected schema after conversion
@@ -332,18 +302,12 @@ pub struct SchemaMapping {
     /// They are Options instead of just plain `usize`s because the table could
     /// have fields that don't exist in the file.
     field_mappings: Vec<Option<usize>>,
-    /// The entire table schema, as opposed to the projected_table_schema (which
-    /// only contains the columns that we are projecting out of this query).
-    /// This contains all fields in the table, regardless of if they will be
-    /// projected out or not.
-    table_schema: SchemaRef,
 }
 
 impl SchemaMapper for SchemaMapping {
     /// Adapts a `RecordBatch` to match the `projected_table_schema` using the stored mapping and
-    /// conversions. The produced RecordBatch has a schema that contains only the projected
-    /// columns, so if one needs a RecordBatch with a schema that references columns which are not
-    /// in the projected, it would be better to use `map_partial_batch`
+    /// conversions.
+    /// The produced RecordBatch has a schema that contains only the projected columns.
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
         let batch_rows = batch.num_rows();
         let batch_cols = batch.columns().to_vec();
@@ -377,53 +341,125 @@ impl SchemaMapper for SchemaMapping {
         Ok(record_batch)
     }
 
-    /// Adapts a [`RecordBatch`]'s schema into one that has all the correct output types and only
-    /// contains the fields that exist in both the file schema and table schema.
-    ///
-    /// Unlike `map_batch` this method also preserves the columns that
-    /// may not appear in the final output (`projected_table_schema`) but may
-    /// appear in push down predicates
-    fn map_partial_batch(
+    /// Adapts file-level column `Statistics` to match the `table_schema`
+    fn map_column_statistics(
         &self,
-        batch: RecordBatch,
-    ) -> datafusion_common::Result<RecordBatch> {
-        let batch_cols = batch.columns().to_vec();
-        let schema = batch.schema();
+        file_col_statistics: &[ColumnStatistics],
+    ) -> datafusion_common::Result<Vec<ColumnStatistics>> {
+        let mut table_col_statistics = vec![];
 
-        // for each field in the batch's schema (which is based on a file, not a table)...
-        let (cols, fields) = schema
+        // Map the statistics for each field in the file schema to the corresponding field in the
+        // table schema, if a field is not present in the file schema, we need to fill it with `ColumnStatistics::new_unknown`
+        for (_, file_col_idx) in self
+            .projected_table_schema
             .fields()
             .iter()
-            .zip(batch_cols.iter())
-            .flat_map(|(field, batch_col)| {
-                self.table_schema
-                    // try to get the same field from the table schema that we have stored in self
-                    .field_with_name(field.name())
-                    // and if we don't have it, that's fine, ignore it. This may occur when we've
-                    // created an external table whose fields are a subset of the fields in this
-                    // file, then tried to read data from the file into this table. If that is the
-                    // case here, it's fine to ignore because we don't care about this field
-                    // anyways
-                    .ok()
-                    // but if we do have it,
-                    .map(|table_field| {
-                        // try to cast it into the correct output type. we don't want to ignore this
-                        // error, though, so it's propagated.
-                        cast(batch_col, table_field.data_type())
-                            // and if that works, return the field and column.
-                            .map(|new_col| (new_col, table_field.clone()))
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .unzip::<_, _, Vec<_>, Vec<_>>();
+            .zip(&self.field_mappings)
+        {
+            if let Some(file_col_idx) = file_col_idx {
+                table_col_statistics.push(
+                    file_col_statistics
+                        .get(*file_col_idx)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+            } else {
+                table_col_statistics.push(ColumnStatistics::new_unknown());
+            }
+        }
 
-        // Necessary to handle empty batches
-        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+        Ok(table_col_statistics)
+    }
+}
 
-        let schema =
-            Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
-        let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
-        Ok(record_batch)
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{stats::Precision, Statistics};
+
+    use super::*;
+
+    #[test]
+    fn test_schema_mapping_map_statistics_basic() {
+        // Create table schema (a, b, c)
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+        ]));
+
+        // Create file schema (b, a) - different order, missing c
+        let file_schema = Schema::new(vec![
+            Field::new("b", DataType::Utf8, true),
+            Field::new("a", DataType::Int32, true),
+        ]);
+
+        // Create SchemaAdapter
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&table_schema),
+        };
+
+        // Get mapper and projection
+        let (mapper, projection) = adapter.map_schema(&file_schema).unwrap();
+
+        // Should project columns 0,1 from file
+        assert_eq!(projection, vec![0, 1]);
+
+        // Create file statistics
+        let mut file_stats = Statistics::default();
+
+        // Statistics for column b (index 0 in file)
+        let b_stats = ColumnStatistics {
+            null_count: Precision::Exact(5),
+            ..Default::default()
+        };
+
+        // Statistics for column a (index 1 in file)
+        let a_stats = ColumnStatistics {
+            null_count: Precision::Exact(10),
+            ..Default::default()
+        };
+
+        file_stats.column_statistics = vec![b_stats, a_stats];
+
+        // Map statistics
+        let table_col_stats = mapper
+            .map_column_statistics(&file_stats.column_statistics)
+            .unwrap();
+
+        // Verify stats
+        assert_eq!(table_col_stats.len(), 3);
+        assert_eq!(table_col_stats[0].null_count, Precision::Exact(10)); // a from file idx 1
+        assert_eq!(table_col_stats[1].null_count, Precision::Exact(5)); // b from file idx 0
+        assert_eq!(table_col_stats[2].null_count, Precision::Absent); // c (unknown)
+    }
+
+    #[test]
+    fn test_schema_mapping_map_statistics_empty() {
+        // Create schemas
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&table_schema),
+        };
+        let (mapper, _) = adapter.map_schema(&file_schema).unwrap();
+
+        // Empty file statistics
+        let file_stats = Statistics::default();
+        let table_col_stats = mapper
+            .map_column_statistics(&file_stats.column_statistics)
+            .unwrap();
+
+        // All stats should be unknown
+        assert_eq!(table_col_stats.len(), 2);
+        assert_eq!(table_col_stats[0], ColumnStatistics::new_unknown(),);
+        assert_eq!(table_col_stats[1], ColumnStatistics::new_unknown(),);
     }
 }
