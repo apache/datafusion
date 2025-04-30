@@ -59,7 +59,7 @@ pub(crate) fn replace_qualified_name(
     let replace_map: HashMap<&Column, &Column> =
         cols.iter().zip(alias_cols.iter()).collect();
 
-    replace_col(expr, &replace_map)
+    replace_col(expr, &replace_map, |col| Expr::Column((*col).clone()))
 }
 
 /// Log the plan in debug/tracing mode after some part of the optimizer runs
@@ -136,7 +136,9 @@ fn evaluate_expr_with_null_column<'a>(
         .map(|column| (column, &null_column))
         .collect::<HashMap<_, _>>();
 
-    let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
+    let replaced_predicate = replace_col(predicate, &join_cols_to_replace, |col| {
+        Expr::Column((*col).clone())
+    })?;
     let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
     create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?
         .evaluate(&input_batch)

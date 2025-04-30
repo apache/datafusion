@@ -631,7 +631,10 @@ impl InferredPredicates {
                 Ok(true)
             )
         {
-            self.predicates.push(replace_col(predicate, replace_map)?);
+            self.predicates
+                .push(replace_col(predicate, replace_map, |col| {
+                    Expr::Column((*col).clone())
+                })?);
         }
 
         Ok(())
@@ -784,13 +787,14 @@ impl OptimizerRule for PushDownFilter {
 
                 // remove duplicated filters
                 let child_predicates = split_conjunction_owned(child_filter.predicate);
-                let new_predicates = parents_predicates
+                let mut new_predicates = parents_predicates
                     .into_iter()
                     .chain(child_predicates)
                     // use IndexSet to remove dupes while preserving predicate order
                     .collect::<IndexSet<_>>()
                     .into_iter()
                     .collect::<Vec<_>>();
+                new_predicates = infer_predicates_from_equalities(new_predicates)?;
 
                 let Some(new_predicate) = conjunction(new_predicates) else {
                     return plan_err!("at least one expression exists");
@@ -1380,6 +1384,73 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     })
     .unwrap();
     is_contain
+}
+
+/// Infers new predicates by substituting equalities.
+/// For example, with predicates `t2.b = 3` and `t1.b > t2.b`,
+/// we can infer `t1.b > 3`.
+fn infer_predicates_from_equalities(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
+    // Map from column names to their literal values (from equality predicates)
+    let mut equality_map: HashMap<Column, Expr> =
+        HashMap::with_capacity(predicates.len());
+    let mut final_predicates = Vec::with_capacity(predicates.len());
+    // First pass: collect column=literal equalities
+    for predicate in predicates.iter() {
+        if let Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        }) = predicate
+        {
+            if let Expr::Column(col) = left.as_ref() {
+                // Only add to map if right side is a literal
+                if matches!(right.as_ref(), Expr::Literal(_)) {
+                    equality_map.insert(col.clone(), *right.clone());
+                    final_predicates.push(predicate.clone());
+                }
+            } else if let Expr::Column(col) = right.as_ref() {
+                // Only add to map if left side is a literal
+                if matches!(left.as_ref(), Expr::Literal(_)) {
+                    equality_map.insert(col.clone(), *right.clone());
+                    final_predicates.push(predicate.clone());
+                }
+            }
+        }
+    }
+
+    // If no equality mappings found, nothing to infer
+    if equality_map.is_empty() {
+        return Ok(predicates);
+    }
+
+    // Second pass: apply substitutions to create new predicates
+    for predicate in predicates {
+        // Skip equality predicates we already used for mapping
+        if final_predicates.contains(&predicate) {
+            continue;
+        }
+
+        // Try to replace columns with their literal values
+        let mut columns_in_expr = HashSet::new();
+        expr_to_columns(&predicate, &mut columns_in_expr)?;
+
+        // Create a combined replacement map for all columns in this predicate
+        let replace_map: HashMap<_, _> = columns_in_expr
+            .iter()
+            .filter_map(|col| equality_map.get(col).map(|lit| (col, lit)))
+            .collect();
+
+        if replace_map.is_empty() {
+            final_predicates.push(predicate);
+            continue;
+        }
+        // Apply all substitutions at once to get the fully substituted predicate
+        let new_pred = replace_col(predicate, &replace_map, |e| (*e).clone())?;
+
+        final_predicates.push(new_pred);
+    }
+
+    Ok(final_predicates)
 }
 
 #[cfg(test)]
