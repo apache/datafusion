@@ -16,13 +16,29 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This script is meant for developers of DataFusion -- it is runnable
-# from the standard DataFusion development environment and uses cargo,
-# etc and orchestrates gathering data and run the benchmark binary to
-# collect benchmarks from the current main and last 5 major releases.
+# Collect benchmark results for different datafusion releases.
+#
+# Usage: collect_bench.sh <bench_name>
+#
+# `<bench_name>`: an argument to bench.sh
+#
+# Example:
+# collect_bench.sh clickbench
+#
+# This script is designed for developers of DataFusion to track the performance
+# of DataFusion over time.
+#
+# Run this from the standard DataFusion development environment.
+#
+# The script uses cargo to check out and run run the benchmark binary to
+# collect benchmarks from current main and last 5 major releases (checks out tags)
 
 trap 'git checkout main' EXIT #checkout to main on exit
-ARG1=$1
+BENCH_NAME=$1
+
+if [ -z "$BENCH_NAME" ] ; then
+    echo "USAGE: collect_bench.sh <bench_name>"
+fi
 
 main(){
 
@@ -36,7 +52,7 @@ major_version=$(echo "$output" | grep -oE '[0-9]+' | head -n1)
 # run for current main
 echo "current major version: $major_version"  
 export RESULTS_DIR="results/main"
-./bench.sh run $ARG1
+./bench.sh run $BENCH_NAME
 
 # run for last 5 major releases
 for i in {1..5}; do
@@ -44,8 +60,7 @@ for i in {1..5}; do
     git fetch upstream $((major_version-i)).0.0
     git checkout $((major_version-i)).0.0
     export RESULTS_DIR="results/$((major_version-i)).0.0"
-    ./bench.sh run $ARG1
+    ./bench.sh run $BENCH_NAME
 done
-}
 
 main
