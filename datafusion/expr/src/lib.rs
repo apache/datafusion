@@ -104,6 +104,7 @@ pub use literal::{
 };
 pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
+#[cfg(feature = "sql")]
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{

@@ -28,9 +28,14 @@ use arrow::datatypes::DataType;
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 
-use datafusion_common::{plan_err, sql_err, DataFusionError, Result, ScalarValue};
-use sqlparser::ast::{self, ValueWithSpan};
-use sqlparser::parser::ParserError::ParserError;
+use datafusion_common::{
+    exec_err, plan_err, DataFusionError, Result, ScalarValue,
+};
+#[cfg(feature = "sql")]
+use sqlparser::{
+    ast::{self, ValueWithSpan},
+    parser::ParserError::ParserError,
+};
 
 /// The frame specification determines which output rows are read by an aggregate
 /// window function. The ending frame boundary can be omitted if the `BETWEEN`
@@ -115,6 +120,7 @@ impl fmt::Debug for WindowFrame {
     }
 }
 
+#[cfg(feature = "sql")]
 impl TryFrom<ast::WindowFrame> for WindowFrame {
     type Error = DataFusionError;
 
@@ -343,6 +349,7 @@ impl WindowFrameBound {
 }
 
 impl WindowFrameBound {
+    #[cfg(feature = "sql")]
     fn try_parse(
         value: ast::WindowFrameBound,
         units: &ast::WindowFrameUnits,
@@ -365,6 +372,7 @@ impl WindowFrameBound {
     }
 }
 
+#[cfg(feature = "sql")]
 fn convert_frame_bound_to_scalar_value(
     v: ast::Expr,
     units: &ast::WindowFrameUnits,
@@ -385,9 +393,9 @@ fn convert_frame_bound_to_scalar_value(
                 let value = match *value {
                     ast::Expr::Value(ValueWithSpan{value: ast::Value::SingleQuotedString(item), span: _}) => item,
                     e => {
-                        return sql_err!(ParserError(format!(
+                        return exec_err!(
                             "INTERVAL expression cannot be {e:?}"
-                        )));
+                        );
                     }
                 };
                 Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?)
@@ -408,9 +416,9 @@ fn convert_frame_bound_to_scalar_value(
                 let result = match *value {
                     ast::Expr::Value(ValueWithSpan{value: ast::Value::SingleQuotedString(item), span: _}) => item,
                     e => {
-                        return sql_err!(ParserError(format!(
+                        return exec_err!(
                             "INTERVAL expression cannot be {e:?}"
-                        )));
+                        );
                     }
                 };
                 if let Some(leading_field) = leading_field {
@@ -477,6 +485,7 @@ impl fmt::Display for WindowFrameUnits {
     }
 }
 
+#[cfg(feature = "sql")]
 impl From<ast::WindowFrameUnits> for WindowFrameUnits {
     fn from(value: ast::WindowFrameUnits) -> Self {
         match value {

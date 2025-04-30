@@ -18,7 +18,9 @@
 //! Column
 
 use crate::error::{_schema_err, add_possible_columns_to_diag};
-use crate::utils::{parse_identifiers_normalized, quote_identifier};
+#[cfg(feature = "sql")]
+use crate::utils::parse_identifiers_normalized;
+use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow::datatypes::{Field, FieldRef};
 use std::collections::HashSet;
@@ -128,6 +130,7 @@ impl Column {
     /// Treats the name as a SQL identifier. For example
     /// `foo.BAR` would be parsed to a reference to relation `foo`, column name `bar` (lower case)
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
+    #[cfg(feature = "sql")]
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
         Self::from_idents(parse_identifiers_normalized(&flat_name, false)).unwrap_or_else(
@@ -140,6 +143,7 @@ impl Column {
     }
 
     /// Deserialize a fully qualified name string into a column preserving column text case
+    #[cfg(feature = "sql")]
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
         Self::from_idents(parse_identifiers_normalized(&flat_name, true)).unwrap_or_else(
@@ -322,6 +326,7 @@ impl Column {
     }
 }
 
+#[cfg(feature = "sql")]
 impl From<&str> for Column {
     fn from(c: &str) -> Self {
         Self::from_qualified_name(c)
@@ -329,6 +334,7 @@ impl From<&str> for Column {
 }
 
 /// Create a column, cloning the string
+#[cfg(feature = "sql")]
 impl From<&String> for Column {
     fn from(c: &String) -> Self {
         Self::from_qualified_name(c)
@@ -336,6 +342,7 @@ impl From<&String> for Column {
 }
 
 /// Create a column, reusing the existing string
+#[cfg(feature = "sql")]
 impl From<String> for Column {
     fn from(c: String) -> Self {
         Self::from_qualified_name(c)
@@ -356,6 +363,7 @@ impl From<(Option<&TableReference>, &FieldRef)> for Column {
     }
 }
 
+#[cfg(feature = "sql")]
 impl FromStr for Column {
     type Err = Infallible;
 
