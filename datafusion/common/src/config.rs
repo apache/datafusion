@@ -300,7 +300,7 @@ config_namespace! {
         /// concurrency.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub target_partitions: usize, default = get_available_parallelism()
+        pub target_partitions: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// The default time zone
         ///
@@ -316,7 +316,7 @@ config_namespace! {
         /// This is mostly use to plan `UNION` children in parallel.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub planning_concurrency: usize, default = get_available_parallelism()
+        pub planning_concurrency: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// When set to true, skips verifying that the schema produced by
         /// planning the input of `LogicalPlan::Aggregate` exactly matches the
@@ -405,6 +405,13 @@ config_namespace! {
         /// in joins can reduce memory usage when joining large
         /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
+
+        /// Size (bytes) of data buffer DataFusion uses when writing output files.
+        /// This affects the size of the data chunks that are uploaded to remote
+        /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being
+        /// written, it may be necessary to increase this size to avoid errors from
+        /// the remote end point.
+        pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
     }
 }
 
@@ -458,6 +465,14 @@ config_namespace! {
         /// the UTF8 flag for strings, causing string columns to be loaded as
         /// BLOB instead.
         pub binary_as_string: bool, default = false
+
+        /// (reading) If true, parquet reader will read columns of
+        /// physical type int96 as originating from a different resolution
+        /// than nanosecond. This is useful for reading data from systems like Spark
+        /// which stores microsecond resolution timestamps in an int96 allowing it
+        /// to write values with a larger date range than 64-bit timestamps with
+        /// nanosecond resolution.
+        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -731,6 +746,19 @@ config_namespace! {
     }
 }
 
+impl ExecutionOptions {
+    /// Returns the correct parallelism based on the provided `value`.
+    /// If `value` is `"0"`, returns the default available parallelism, computed with
+    /// `get_available_parallelism`. Otherwise, returns `value`.
+    fn normalized_parallelism(value: &str) -> String {
+        if value.parse::<usize>() == Ok(0) {
+            get_available_parallelism().to_string()
+        } else {
+            value.to_owned()
+        }
+    }
+}
+
 /// A key value pair, with a corresponding description
 #[derive(Debug)]
 pub struct ConfigEntry {
@@ -843,7 +871,9 @@ impl ConfigOptions {
         for key in keys.0 {
             let env = key.to_uppercase().replace('.', "_");
             if let Some(var) = std::env::var_os(env) {
-                ret.set(&key, var.to_string_lossy().as_ref())?;
+                let value = var.to_string_lossy();
+                log::info!("Set {key} to {value} from the environment variable");
+                ret.set(&key, value.as_ref())?;
             }
         }
 

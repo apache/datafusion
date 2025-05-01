@@ -55,6 +55,7 @@ regex-syntax = "0.8.0"
 
 [dev-dependencies]
 async-trait = { workspace = true }
+criterion = { workspace = true }
 ctor = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
@@ -62,3 +63,7 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
+
+[[bench]]
+name = "projection_unnecessary"
+harness = false

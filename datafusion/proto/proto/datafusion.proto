@@ -90,7 +90,7 @@ message ListingTableScanNode {
   ProjectionColumns projection = 4;
   datafusion_common.Schema schema = 5;
   repeated LogicalExprNode filters = 6;
-  repeated string table_partition_cols = 7;
+  repeated PartitionColumn table_partition_cols = 7;
   bool collect_stat = 8;
   uint32 target_partitions = 9;
   oneof FileFormatType {
@@ -1217,6 +1217,7 @@ message CoalesceBatchesExecNode {
 
 message CoalescePartitionsExecNode {
   PhysicalPlanNode input = 1;
+  optional uint32 fetch = 2;
 }
 
 message PhysicalHashRepartition {

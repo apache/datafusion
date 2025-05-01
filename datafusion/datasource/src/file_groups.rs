@@ -224,10 +224,11 @@ impl FileGroupPartitioner {
             return None;
         }
 
-        let target_partition_size = (total_size as usize).div_ceil(target_partitions);
+        let target_partition_size =
+            (total_size as u64).div_ceil(target_partitions as u64);
 
         let current_partition_index: usize = 0;
-        let current_partition_size: usize = 0;
+        let current_partition_size: u64 = 0;
 
         // Partition byte range evenly for all `PartitionedFile`s
         let repartitioned_files = flattened_files
@@ -419,9 +420,19 @@ impl FileGroup {
         self.files.push(file);
     }
 
-    /// Get the statistics for this group
-    pub fn statistics(&self) -> Option<&Statistics> {
-        self.statistics.as_deref()
+    /// Get the specific file statistics for the given index
+    /// If the index is None, return the `FileGroup` statistics
+    pub fn file_statistics(&self, index: Option<usize>) -> Option<&Statistics> {
+        if let Some(index) = index {
+            self.files.get(index).and_then(|f| f.statistics.as_deref())
+        } else {
+            self.statistics.as_deref()
+        }
+    }
+
+    /// Get the mutable reference to the statistics for this group
+    pub fn statistics_mut(&mut self) -> Option<&mut Statistics> {
+        self.statistics.as_mut().map(Arc::make_mut)
     }
 
     /// Partition the list of files into `n` groups
@@ -497,15 +508,15 @@ struct ToRepartition {
     /// the index from which the original file will be taken
     source_index: usize,
     /// the size of the original file
-    file_size: usize,
+    file_size: u64,
     /// indexes of which group(s) will this be distributed to (including `source_index`)
     new_groups: Vec<usize>,
 }
 
 impl ToRepartition {
-    // how big will each file range be when this file is read in its new groups?
-    fn range_size(&self) -> usize {
-        self.file_size / self.new_groups.len()
+    /// How big will each file range be when this file is read in its new groups?
+    fn range_size(&self) -> u64 {
+        self.file_size / (self.new_groups.len() as u64)
     }
 }
 

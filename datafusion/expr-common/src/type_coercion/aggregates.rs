@@ -210,6 +210,7 @@ pub fn avg_return_type(func_name: &str, arg_type: &DataType) -> Result<DataType>
             let new_scale = DECIMAL256_MAX_SCALE.min(*scale + 4);
             Ok(DataType::Decimal256(new_precision, new_scale))
         }
+        DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
         arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
         DataType::Dictionary(_, dict_value_type) => {
             avg_return_type(func_name, dict_value_type.as_ref())
@@ -231,6 +232,7 @@ pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
             let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal256(new_precision, *scale))
         }
+        DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
         arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
         DataType::Dictionary(_, dict_value_type) => {
             avg_sum_type(dict_value_type.as_ref())
@@ -298,6 +300,7 @@ pub fn coerce_avg_type(func_name: &str, arg_types: &[DataType]) -> Result<Vec<Da
             DataType::Decimal128(p, s) => Ok(DataType::Decimal128(*p, *s)),
             DataType::Decimal256(p, s) => Ok(DataType::Decimal256(*p, *s)),
             d if d.is_numeric() => Ok(DataType::Float64),
+            DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
             DataType::Dictionary(_, v) => coerced_type(func_name, v.as_ref()),
             _ => {
                 plan_err!(
