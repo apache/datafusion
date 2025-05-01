@@ -86,7 +86,7 @@ impl MetadataColumn {
                 Some(meta.last_modified.timestamp_micros()),
                 Some("UTC".into()),
             ),
-            MetadataColumn::Size => ScalarValue::UInt64(Some(meta.size as u64)),
+            MetadataColumn::Size => ScalarValue::UInt64(Some(meta.size)),
         }
     }
 
@@ -136,7 +136,7 @@ impl MetadataBuilder {
             Self::LastModified(builder) => {
                 builder.append_value(meta.last_modified.timestamp_micros())
             }
-            Self::Size(builder) => builder.append_value(meta.size as u64),
+            Self::Size(builder) => builder.append_value(meta.size),
         }
     }
 
