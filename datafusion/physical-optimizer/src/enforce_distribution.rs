@@ -1030,10 +1030,9 @@ pub fn replace_order_preserving_variants(
 
     if is_sort_preserving_merge(&context.plan) {
         let child_plan = Arc::clone(&context.children[0].plan);
-        // It's safe to unwrap because `CoalescePartitionsExec` supports `fetch`.
-        context.plan = CoalescePartitionsExec::new(child_plan)
-            .with_fetch(context.plan.fetch())
-            .unwrap();
+        context.plan = Arc::new(
+            CoalescePartitionsExec::new(child_plan).with_fetch(context.plan.fetch()),
+        );
         return Ok(context);
     } else if let Some(repartition) =
         context.plan.as_any().downcast_ref::<RepartitionExec>()
@@ -1110,7 +1109,8 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match child.statistics()?.num_rows {
+        let roundrobin_beneficial_stats = match child.partition_statistics(None)?.num_rows
+        {
             Precision::Exact(n_rows) => n_rows > batch_size,
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,

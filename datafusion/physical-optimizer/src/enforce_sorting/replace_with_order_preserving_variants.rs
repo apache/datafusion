@@ -169,7 +169,7 @@ pub fn plan_with_order_preserving_variants(
 /// Calculates the updated plan by replacing operators that preserve ordering
 /// inside `sort_input` with their order-breaking variants. This will restore
 /// the original plan modified by [`plan_with_order_preserving_variants`].
-fn plan_with_order_breaking_variants(
+pub fn plan_with_order_breaking_variants(
     mut sort_input: OrderPreservationContext,
 ) -> Result<OrderPreservationContext> {
     let plan = &sort_input.plan;
@@ -204,10 +204,12 @@ fn plan_with_order_breaking_variants(
         let partitioning = plan.output_partitioning().clone();
         sort_input.plan = Arc::new(RepartitionExec::try_new(child, partitioning)?) as _;
     } else if is_sort_preserving_merge(plan) {
-        // Replace `SortPreservingMergeExec` with a `CoalescePartitionsExec`:
+        // Replace `SortPreservingMergeExec` with a `CoalescePartitionsExec`
+        // SPM may have `fetch`, so pass it to the `CoalescePartitionsExec`
         let child = Arc::clone(&sort_input.children[0].plan);
-        let coalesce = CoalescePartitionsExec::new(child);
-        sort_input.plan = Arc::new(coalesce) as _;
+        let coalesce =
+            Arc::new(CoalescePartitionsExec::new(child).with_fetch(plan.fetch()));
+        sort_input.plan = coalesce;
     } else {
         return sort_input.update_plan_from_children();
     }

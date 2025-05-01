@@ -59,7 +59,7 @@ pub enum DataFusionError {
     ParquetError(ParquetError),
     /// Error when reading Avro data.
     #[cfg(feature = "avro")]
-    AvroError(AvroError),
+    AvroError(Box<AvroError>),
     /// Error when reading / writing to / from an object_store (e.g. S3 or LocalFile)
     #[cfg(feature = "object_store")]
     ObjectStore(object_store::Error),
@@ -311,7 +311,7 @@ impl From<ParquetError> for DataFusionError {
 #[cfg(feature = "avro")]
 impl From<AvroError> for DataFusionError {
     fn from(e: AvroError) -> Self {
-        DataFusionError::AvroError(e)
+        DataFusionError::AvroError(Box::new(e))
     }
 }
 
