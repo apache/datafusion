@@ -17,6 +17,7 @@
 
 use super::binary::binary_numeric_coercion;
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
+use arrow::datatypes::Field;
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
