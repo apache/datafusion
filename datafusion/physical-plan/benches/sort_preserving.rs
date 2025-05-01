@@ -89,7 +89,7 @@ fn create_partitions(
         })
         .collect()
 }
-
+/// Add a benchmark to test the optimization effect of reusing Rows.
 /// Run this benchmark with:
 /// ```sh
 /// cargo bench --features="bench"  --bench sort_preserving -- --sample-size=10
