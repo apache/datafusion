@@ -325,8 +325,8 @@ impl Optimizer {
         let options = config.options();
         let mut new_plan = plan;
 
-        let mut previous_plans = HashSet::with_capacity(16);
-        previous_plans.insert(LogicalPlanSignature::new(&new_plan));
+        let mut previous_plans = Vec::with_capacity(16);
+        previous_plans.push(new_plan.clone());
 
         let starting_schema = Arc::clone(new_plan.schema());
 
@@ -412,10 +412,10 @@ impl Optimizer {
             }
             log_plan(&format!("Optimized plan (pass {i})"), &new_plan);
 
-            // HashSet::insert returns, whether the value was newly inserted.
-            let plan_is_fresh =
-                previous_plans.insert(LogicalPlanSignature::new(&new_plan));
-            if !plan_is_fresh {
+            let plan_is_fresh = previous_plans.contains(&new_plan);
+            if plan_is_fresh {
+                previous_plans.push(new_plan.clone());
+            } else {
                 // plan did not change, so no need to continue trying to optimize
                 debug!("optimizer pass {i} did not make changes");
                 break;
