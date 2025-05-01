@@ -90,6 +90,10 @@ fn create_partitions(
         .collect()
 }
 
+/// Run this benchmark with:
+/// ```sh
+/// cargo bench --features="bench"  --bench sort_preserving -- --sample-size=10
+/// ```
 fn bench_merge_sorted_preserving(c: &mut Criterion) {
     let num_partitions = 3;
 
