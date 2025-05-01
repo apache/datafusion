@@ -70,4 +70,5 @@ ctor = { workspace = true }
 insta = { workspace = true }
 insta-cmd = "0.6.0"
 predicates = "3.0"
+pty-process = { version = "0.5.1" }
 rstest = { workspace = true }
