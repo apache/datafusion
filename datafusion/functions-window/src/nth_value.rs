@@ -270,10 +270,13 @@ impl WindowUDFImpl for NthValue {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        let nullable = true;
-        let return_type = field_args.input_types().first().unwrap_or(&DataType::Null);
+        let return_field = field_args
+            .input_fields()
+            .first()
+            .cloned()
+            .unwrap_or(Field::new("f", DataType::Null, true));
 
-        Ok(Field::new(field_args.name(), return_type.clone(), nullable))
+        Ok(return_field.with_name(field_args.name()))
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
@@ -511,7 +514,12 @@ mod tests {
         let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         test_i32_result(
             NthValue::first(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true)],
+                false,
+                false,
+            ),
             Int32Array::from(vec![1; 8]).iter().collect::<Int32Array>(),
         )
     }
@@ -521,7 +529,12 @@ mod tests {
         let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         test_i32_result(
             NthValue::last(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true)],
+                false,
+                false,
+            ),
             Int32Array::from(vec![
                 Some(1),
                 Some(-2),
@@ -545,7 +558,7 @@ mod tests {
             NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
-                &[DataType::Int32],
+                &[Field::new("f", DataType::Int32, true)],
                 false,
                 false,
             ),
@@ -564,7 +577,7 @@ mod tests {
             NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
-                &[DataType::Int32],
+                &[Field::new("f", DataType::Int32, true)],
                 false,
                 false,
             ),

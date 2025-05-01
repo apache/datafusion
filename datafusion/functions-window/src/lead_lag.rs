@@ -201,7 +201,7 @@ impl WindowUDFImpl for WindowShift {
     ///
     /// For more details see: <https://github.com/apache/datafusion/issues/12717>
     fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
-        parse_expr(expr_args.input_exprs(), expr_args.input_types())
+        parse_expr(expr_args.input_exprs(), expr_args.input_fields())
             .into_iter()
             .collect::<Vec<_>>()
     }
@@ -224,7 +224,7 @@ impl WindowUDFImpl for WindowShift {
                 })?;
         let default_value = parse_default_value(
             partition_evaluator_args.input_exprs(),
-            partition_evaluator_args.input_types(),
+            partition_evaluator_args.input_fields(),
         )?;
 
         Ok(Box::new(WindowShiftEvaluator {
@@ -236,9 +236,9 @@ impl WindowUDFImpl for WindowShift {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        let return_type = parse_expr_type(field_args.input_types())?;
+        let return_field = parse_expr_type(field_args.input_fields())?;
 
-        Ok(Field::new(field_args.name(), return_type, true))
+        Ok(return_field.with_name(field_args.name()))
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
@@ -270,16 +270,16 @@ impl WindowUDFImpl for WindowShift {
 /// For more details see: <https://github.com/apache/datafusion/issues/12717>
 fn parse_expr(
     input_exprs: &[Arc<dyn PhysicalExpr>],
-    input_types: &[DataType],
+    input_fields: &[Field],
 ) -> Result<Arc<dyn PhysicalExpr>> {
     assert!(!input_exprs.is_empty());
-    assert!(!input_types.is_empty());
+    assert!(!input_fields.is_empty());
 
     let expr = Arc::clone(input_exprs.first().unwrap());
-    let expr_type = input_types.first().unwrap();
+    let expr_field = input_fields.first().unwrap();
 
     // Handles the most common case where NULL is unexpected
-    if !expr_type.is_null() {
+    if !expr_field.data_type().is_null() {
         return Ok(expr);
     }
 
@@ -296,32 +296,33 @@ fn parse_expr(
 /// expression is `NULL`.
 ///
 /// Otherwise, returns the expression type unchanged.
-fn parse_expr_type(input_types: &[DataType]) -> Result<DataType> {
-    assert!(!input_types.is_empty());
-    let expr_type = input_types.first().unwrap_or(&DataType::Null);
+fn parse_expr_type(input_fields: &[Field]) -> Result<Field> {
+    assert!(!input_fields.is_empty());
+    let null_field = Field::new("value", DataType::Null, true);
+    let expr_field = input_fields.first().unwrap_or(&null_field);
 
     // Handles the most common case where NULL is unexpected
-    if !expr_type.is_null() {
-        return Ok(expr_type.clone());
+    if !expr_field.data_type().is_null() {
+        return Ok(expr_field.clone());
     }
 
-    let default_value_type = input_types.get(2).unwrap_or(&DataType::Null);
-    Ok(default_value_type.clone())
+    let default_value_field = input_fields.get(2).unwrap_or(&null_field);
+    Ok(default_value_field.clone())
 }
 
 /// Handles type coercion and null value refinement for default value
 /// argument depending on the data type of the input expression.
 fn parse_default_value(
     input_exprs: &[Arc<dyn PhysicalExpr>],
-    input_types: &[DataType],
+    input_types: &[Field],
 ) -> Result<ScalarValue> {
     let expr_type = parse_expr_type(input_types)?;
     let unparsed = get_scalar_value_from_args(input_exprs, 2)?;
 
     unparsed
         .filter(|v| !v.data_type().is_null())
-        .map(|v| v.cast_to(&expr_type))
-        .unwrap_or(ScalarValue::try_from(expr_type))
+        .map(|v| v.cast_to(expr_type.data_type()))
+        .unwrap_or(ScalarValue::try_from(expr_type.data_type()))
 }
 
 #[derive(Debug)]
@@ -666,7 +667,12 @@ mod tests {
 
         test_i32_result(
             WindowShift::lead(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true)],
+                false,
+                false,
+            ),
             [
                 Some(-2),
                 Some(3),
@@ -688,7 +694,12 @@ mod tests {
 
         test_i32_result(
             WindowShift::lag(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true)],
+                false,
+                false,
+            ),
             [
                 None,
                 Some(1),
@@ -713,12 +724,14 @@ mod tests {
             as Arc<dyn PhysicalExpr>;
 
         let input_exprs = &[expr, shift_offset, default_value];
-        let input_types: &[DataType] =
-            &[DataType::Int32, DataType::Int32, DataType::Int32];
+        let input_fields = [DataType::Int32, DataType::Int32, DataType::Int32]
+            .into_iter()
+            .map(|d| Field::new("f", d, true))
+            .collect::<Vec<_>>();
 
         test_i32_result(
             WindowShift::lag(),
-            PartitionEvaluatorArgs::new(input_exprs, input_types, false, false),
+            PartitionEvaluatorArgs::new(input_exprs, &input_fields, false, false),
             [
                 Some(100),
                 Some(1),

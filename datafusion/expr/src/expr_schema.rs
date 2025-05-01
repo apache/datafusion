@@ -647,8 +647,8 @@ impl Expr {
                     .map(|f| f.data_type())
                     .cloned()
                     .collect::<Vec<_>>();
-                let new_types =
-                    data_types_with_window_udf(&data_types, udwf).map_err(|err| {
+                let new_fields =
+                    data_types_with_window_udf(&fields, udwf).map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
                             match err {
@@ -663,7 +663,7 @@ impl Expr {
                         )
                     })?;
                 let (_, function_name) = self.qualified_name();
-                let field_args = WindowUDFFieldArgs::new(&new_types, &function_name);
+                let field_args = WindowUDFFieldArgs::new(&new_fields, &function_name);
 
                 udwf.field(field_args)
                     .map(|field| (field.data_type().clone(), field.is_nullable()))
