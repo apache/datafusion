@@ -57,6 +57,7 @@ paste = "^1.0"
 recursive = { workspace = true, optional = true }
 serde_json = { workspace = true }
 sqlparser = { workspace = true, optional = true }
+itertools = "0.14.0"
 
 [dev-dependencies]
 ctor = { workspace = true }

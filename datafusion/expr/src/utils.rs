@@ -39,7 +39,10 @@ use datafusion_common::{
 };
 
 use indexmap::IndexSet;
+#[cfg(feature = "sql")]
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
+#[cfg(not(feature = "sql"))]
+use crate::expr::{ExceptSelectItem, ExcludeSelectItem};
 
 pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 

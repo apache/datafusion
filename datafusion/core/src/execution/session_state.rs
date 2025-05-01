@@ -51,7 +51,9 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::planner::{ExprPlanner, TypePlanner};
+use datafusion_expr::planner::ExprPlanner;
+#[cfg(feature = "sql")]
+use datafusion_expr::planner::TypePlanner;
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
@@ -138,6 +140,7 @@ pub struct SessionState {
     /// Provides support for customizing the SQL planner, e.g. to add support for custom operators like `->>` or `?`
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     /// Provides support for customizing the SQL type planning
+    #[cfg(feature = "sql")]
     type_planner: Option<Arc<dyn TypePlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
@@ -191,7 +194,8 @@ impl Debug for SessionState {
     /// Prefer having short fields at the top and long vector fields near the end
     /// Group fields by
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SessionState")
+        let mut debug_struct = f.debug_struct("SessionState");
+        let ret = debug_struct
             .field("session_id", &self.session_id)
             .field("config", &self.config)
             .field("runtime_env", &self.runtime_env)
@@ -202,9 +206,12 @@ impl Debug for SessionState {
             .field("table_options", &self.table_options)
             .field("table_factories", &self.table_factories)
             .field("function_factory", &self.function_factory)
-            .field("expr_planners", &self.expr_planners)
-            .field("type_planner", &self.type_planner)
-            .field("query_planners", &self.query_planner)
+            .field("expr_planners", &self.expr_planners);
+
+        #[cfg(feature = "sql")]
+        let ret = ret.field("type_planner", &self.type_planner);
+
+        ret.field("query_planners", &self.query_planner)
             .field("analyzer", &self.analyzer)
             .field("optimizer", &self.optimizer)
             .field("physical_optimizers", &self.physical_optimizers)
@@ -906,6 +913,7 @@ pub struct SessionStateBuilder {
     session_id: Option<String>,
     analyzer: Option<Analyzer>,
     expr_planners: Option<Vec<Arc<dyn ExprPlanner>>>,
+    #[cfg(feature = "sql")]
     type_planner: Option<Arc<dyn TypePlanner>>,
     optimizer: Option<Optimizer>,
     physical_optimizers: Option<PhysicalOptimizer>,
@@ -942,6 +950,7 @@ impl SessionStateBuilder {
             session_id: None,
             analyzer: None,
             expr_planners: None,
+            #[cfg(feature = "sql")]
             type_planner: None,
             optimizer: None,
             physical_optimizers: None,
@@ -991,6 +1000,7 @@ impl SessionStateBuilder {
             session_id: None,
             analyzer: Some(existing.analyzer),
             expr_planners: Some(existing.expr_planners),
+            #[cfg(feature = "sql")]
             type_planner: existing.type_planner,
             optimizer: Some(existing.optimizer),
             physical_optimizers: Some(existing.physical_optimizers),
@@ -1132,6 +1142,7 @@ impl SessionStateBuilder {
     }
 
     /// Set the [`TypePlanner`] used to customize the behavior of the SQL planner.
+    #[cfg(feature = "sql")]
     pub fn with_type_planner(mut self, type_planner: Arc<dyn TypePlanner>) -> Self {
         self.type_planner = Some(type_planner);
         self
@@ -1343,6 +1354,7 @@ impl SessionStateBuilder {
             session_id,
             analyzer,
             expr_planners,
+            #[cfg(feature = "sql")]
             type_planner,
             optimizer,
             physical_optimizers,
@@ -1372,6 +1384,7 @@ impl SessionStateBuilder {
             session_id: session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
             analyzer: analyzer.unwrap_or_default(),
             expr_planners: expr_planners.unwrap_or_default(),
+            #[cfg(feature = "sql")]
             type_planner,
             optimizer: optimizer.unwrap_or_default(),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
@@ -1490,6 +1503,7 @@ impl SessionStateBuilder {
     }
 
     /// Returns the current type_planner value
+    #[cfg(feature = "sql")]
     pub fn type_planner(&mut self) -> &mut Option<Arc<dyn TypePlanner>> {
         &mut self.type_planner
     }
@@ -1604,7 +1618,9 @@ impl Debug for SessionStateBuilder {
     /// Prefer having short fields at the top and long vector fields near the end
     /// Group fields by
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SessionStateBuilder")
+        let mut debug_struct = f
+            .debug_struct("SessionStateBuilder");
+        let ret = debug_struct
             .field("session_id", &self.session_id)
             .field("config", &self.config)
             .field("runtime_env", &self.runtime_env)
@@ -1615,9 +1631,10 @@ impl Debug for SessionStateBuilder {
             .field("table_options", &self.table_options)
             .field("table_factories", &self.table_factories)
             .field("function_factory", &self.function_factory)
-            .field("expr_planners", &self.expr_planners)
-            .field("type_planner", &self.type_planner)
-            .field("query_planners", &self.query_planner)
+            .field("expr_planners", &self.expr_planners);
+        #[cfg(feature = "sql")]
+        let ret = ret.field("type_planner", &self.type_planner);
+        ret.field("query_planners", &self.query_planner)
             .field("analyzer_rules", &self.analyzer_rules)
             .field("analyzer", &self.analyzer)
             .field("optimizer_rules", &self.optimizer_rules)
@@ -2011,8 +2028,10 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    #[cfg(feature = "sql")]
     fn test_session_state_with_default_features() {
         // test array planners with and without builtin planners
+        #[cfg(feature = "sql")]
         fn sql_to_expr(state: &SessionState) -> Result<Expr> {
             let provider = SessionContextProvider {
                 state,

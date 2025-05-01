@@ -141,7 +141,14 @@ impl Column {
             },
         )
     }
-
+    #[cfg(not(feature = "sql"))]
+    pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
+        Self {
+            relation: None,
+            name: flat_name.into(),
+            spans: Spans::new(),
+        }
+    }
     /// Deserialize a fully qualified name string into a column preserving column text case
     #[cfg(feature = "sql")]
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
@@ -154,7 +161,10 @@ impl Column {
             },
         )
     }
-
+    #[cfg(not(feature = "sql"))]
+    pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
+        Self::from_qualified_name(flat_name)
+    }
     /// return the column's name.
     ///
     /// Note: This ignores the relation and returns the column name only.
@@ -326,7 +336,6 @@ impl Column {
     }
 }
 
-#[cfg(feature = "sql")]
 impl From<&str> for Column {
     fn from(c: &str) -> Self {
         Self::from_qualified_name(c)
@@ -334,7 +343,6 @@ impl From<&str> for Column {
 }
 
 /// Create a column, cloning the string
-#[cfg(feature = "sql")]
 impl From<&String> for Column {
     fn from(c: &String) -> Self {
         Self::from_qualified_name(c)
@@ -342,7 +350,6 @@ impl From<&String> for Column {
 }
 
 /// Create a column, reusing the existing string
-#[cfg(feature = "sql")]
 impl From<String> for Column {
     fn from(c: String) -> Self {
         Self::from_qualified_name(c)

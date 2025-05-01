@@ -46,7 +46,7 @@ avro = ["datafusion/avro", "datafusion-common/avro"]
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
-datafusion = { workspace = true, default-features = true }
+datafusion = { workspace = true, default-features = false }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-proto-common = { workspace = true }
