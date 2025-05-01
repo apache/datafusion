@@ -303,11 +303,11 @@ fn parse_expr_type(input_fields: &[Field]) -> Result<Field> {
 
     // Handles the most common case where NULL is unexpected
     if !expr_field.data_type().is_null() {
-        return Ok(expr_field.clone());
+        return Ok(expr_field.clone().with_nullable(true));
     }
 
     let default_value_field = input_fields.get(2).unwrap_or(&null_field);
-    Ok(default_value_field.clone())
+    Ok(default_value_field.clone().with_nullable(true))
 }
 
 /// Handles type coercion and null value refinement for default value

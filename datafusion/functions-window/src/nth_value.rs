@@ -270,13 +270,14 @@ impl WindowUDFImpl for NthValue {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        let return_field = field_args
+        let return_type = field_args
             .input_fields()
             .first()
+            .map(|f| f.data_type())
             .cloned()
-            .unwrap_or(Field::new("f", DataType::Null, true));
+            .unwrap_or(DataType::Null);
 
-        Ok(return_field.with_name(field_args.name()))
+        Ok(Field::new(field_args.name(), return_type, true))
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
