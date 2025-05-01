@@ -27,7 +27,6 @@ use datafusion::{
 };
 use datafusion_common::{DataFusionError, Result};
 use structopt::StructOpt;
-use datafusion::common::utils::get_available_parallelism;
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
@@ -71,16 +70,13 @@ impl CommonOpt {
     }
 
     /// Modify the existing config appropriately
-    pub fn update_config(&self, config: SessionConfig) -> SessionConfig {
-        let mut config = config
-            .with_target_partitions(
-                self.partitions.unwrap_or_else(get_available_parallelism),
-            )
-            .with_batch_size(self.batch_size.unwrap_or(8192));
+    pub fn update_config(&self, mut config: SessionConfig) -> SessionConfig {
+        if let Some(batch_size) = self.batch_size {
+            config = config.with_batch_size(batch_size);
+        }
 
-        if let Some(sort_spill_reservation_bytes) = self.sort_spill_reservation_bytes {
-            config =
-                config.with_sort_spill_reservation_bytes(sort_spill_reservation_bytes);
+        if let Some(partitions) = self.partitions {
+            config = config.with_target_partitions(partitions);
         }
 
         config

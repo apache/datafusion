@@ -949,11 +949,7 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
 
         let new_plan = if should_preserve_ordering {
             Arc::new(SortPreservingMergeExec::new(
-                input
-                    .plan
-                    .output_ordering()
-                    .cloned()
-                    .unwrap_or_default(),
+                input.plan.output_ordering().cloned().unwrap_or_default(),
                 Arc::clone(&input.plan),
             )) as _
         } else {
