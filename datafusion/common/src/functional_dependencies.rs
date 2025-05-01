@@ -54,13 +54,13 @@ impl Constraints {
         Self { inner: constraints }
     }
 
-    /// Check whether constraints is empty
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+    /// Extends the current constraints with the given `other` constraints.
+    pub fn extend(&mut self, other: Constraints) {
+        self.inner.extend(other.inner);
     }
 
-    /// Projects constraints using the given projection indices.
-    /// Returns None if any of the constraint columns are not included in the projection.
+    /// Projects constraints using the given projection indices. Returns `None`
+    /// if any of the constraint columns are not included in the projection.
     pub fn project(&self, proj_indices: &[usize]) -> Option<Self> {
         let projected = self
             .inner
@@ -70,14 +70,14 @@ impl Constraints {
                     Constraint::PrimaryKey(indices) => {
                         let new_indices =
                             update_elements_with_matching_indices(indices, proj_indices);
-                        // Only keep constraint if all columns are preserved
+                        // Only keep the constraint if all columns are preserved:
                         (new_indices.len() == indices.len())
                             .then_some(Constraint::PrimaryKey(new_indices))
                     }
                     Constraint::Unique(indices) => {
                         let new_indices =
                             update_elements_with_matching_indices(indices, proj_indices);
-                        // Only keep constraint if all columns are preserved
+                        // Only keep the constraint if all columns are preserved:
                         (new_indices.len() == indices.len())
                             .then_some(Constraint::Unique(new_indices))
                     }

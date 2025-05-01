@@ -230,6 +230,7 @@ impl EquivalenceProperties {
     pub fn extend(mut self, other: Self) -> Self {
         self.eq_group.extend(other.eq_group);
         self.oeq_class.extend(other.oeq_class);
+        self.constraints.extend(other.constraints);
         self
     }
 
@@ -431,8 +432,7 @@ impl EquivalenceProperties {
         let sort_exprs = sort_exprs
             .into_iter()
             .map(|sort_expr| self.eq_group.normalize_sort_expr(sort_expr))
-            .filter(|order| self.is_expr_constant(&order.expr).is_none())
-            .collect::<Vec<_>>();
+            .filter(|order| self.is_expr_constant(&order.expr).is_none());
         LexOrdering::new(sort_exprs).map(|o| o.collapse())
     }
 
