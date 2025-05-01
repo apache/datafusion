@@ -343,7 +343,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(None)
     }
 
     fn supports_limit_pushdown(&self) -> bool {

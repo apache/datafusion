@@ -439,7 +439,9 @@ impl ParquetSource {
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
-fn parse_coerce_int96_string(str_setting: &str) -> datafusion_common::Result<TimeUnit> {
+pub(crate) fn parse_coerce_int96_string(
+    str_setting: &str,
+) -> datafusion_common::Result<TimeUnit> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
 
     match str_setting_lower {

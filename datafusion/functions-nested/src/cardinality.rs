@@ -23,12 +23,12 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DataType,
-    DataType::{FixedSizeList, LargeList, List, Map, UInt64},
+    DataType::{LargeList, List, Map, Null, UInt64},
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
-use datafusion_common::utils::take_function_args;
+use datafusion_common::exec_err;
+use datafusion_common::utils::{take_function_args, ListCoercion};
 use datafusion_common::Result;
-use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -52,7 +52,7 @@ impl Cardinality {
                 vec![
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                         arguments: vec![ArrayFunctionArgument::Array],
-                        array_coercion: None,
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray),
                 ],
@@ -103,13 +103,8 @@ impl ScalarUDFImpl for Cardinality {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) | Map(_, _) => UInt64,
-            _ => {
-                return plan_err!("The cardinality function can only accept List/LargeList/FixedSizeList/Map.");
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(UInt64)
     }
 
     fn invoke_with_args(
@@ -131,21 +126,22 @@ impl ScalarUDFImpl for Cardinality {
 /// Cardinality SQL function
 pub fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("cardinality", args)?;
-    match &array.data_type() {
+    match array.data_type() {
+        Null => Ok(Arc::new(UInt64Array::from_value(0, array.len()))),
         List(_) => {
-            let list_array = as_list_array(&array)?;
+            let list_array = as_list_array(array)?;
             generic_list_cardinality::<i32>(list_array)
         }
         LargeList(_) => {
-            let list_array = as_large_list_array(&array)?;
+            let list_array = as_large_list_array(array)?;
             generic_list_cardinality::<i64>(list_array)
         }
         Map(_, _) => {
-            let map_array = as_map_array(&array)?;
+            let map_array = as_map_array(array)?;
             generic_map_cardinality(map_array)
         }
-        other => {
-            exec_err!("cardinality does not support type '{:?}'", other)
+        arg_type => {
+            exec_err!("cardinality does not support type {arg_type}")
         }
     }
 }

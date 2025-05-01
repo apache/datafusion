@@ -451,6 +451,9 @@ impl Statistics {
 
     /// Summarize zero or more statistics into a single `Statistics` instance.
     ///
+    /// The method assumes that all statistics are for the same schema.
+    /// If not, maybe you can call `SchemaMapper::map_column_statistics` to make them consistent.
+    ///
     /// Returns an error if the statistics do not match the specified schemas.
     pub fn try_merge_iter<'a, I>(items: I, schema: &Schema) -> Result<Statistics>
     where

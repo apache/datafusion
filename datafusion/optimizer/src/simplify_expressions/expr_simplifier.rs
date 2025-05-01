@@ -188,7 +188,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// assert_eq!(expr, b_lt_2);
     /// ```
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
-        Ok(self.simplify_with_cycle_count(expr)?.0)
+        Ok(self.simplify_with_cycle_count_transformed(expr)?.0.data)
     }
 
     /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
@@ -198,7 +198,34 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// See [Self::simplify] for details and usage examples.
     ///
+    #[deprecated(
+        since = "48.0.0",
+        note = "Use `simplify_with_cycle_count_transformed` instead"
+    )]
+    #[allow(unused_mut)]
     pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
+        let (transformed, cycle_count) =
+            self.simplify_with_cycle_count_transformed(expr)?;
+        Ok((transformed.data, cycle_count))
+    }
+
+    /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
+    /// constants and applying algebraic simplifications. Additionally returns a `u32`
+    /// representing the number of simplification cycles performed, which can be useful for testing
+    /// optimizations.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// - The simplified expression wrapped in a `Transformed<Expr>` indicating if changes were made
+    /// - The number of simplification cycles that were performed
+    ///
+    /// See [Self::simplify] for details and usage examples.
+    ///
+    pub fn simplify_with_cycle_count_transformed(
+        &self,
+        mut expr: Expr,
+    ) -> Result<(Transformed<Expr>, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
@@ -212,6 +239,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // simplifications can enable new constant evaluation
         // see `Self::with_max_cycles`
         let mut num_cycles = 0;
+        let mut has_transformed = false;
         loop {
             let Transformed {
                 data, transformed, ..
@@ -221,13 +249,18 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
                 .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
             expr = data;
             num_cycles += 1;
+            // Track if any transformation occurred
+            has_transformed = has_transformed || transformed;
             if !transformed || num_cycles >= self.max_simplifier_cycles {
                 break;
             }
         }
         // shorten inlist should be started after other inlist rules are applied
         expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
-        Ok((expr, num_cycles))
+        Ok((
+            Transformed::new_transformed(expr, has_transformed),
+            num_cycles,
+        ))
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
@@ -392,15 +425,15 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// let expr = col("a").is_not_null();
     ///
     /// // When using default maximum cycles, 2 cycles will be performed.
-    /// let (simplified_expr, count) = simplifier.simplify_with_cycle_count(expr.clone()).unwrap();
-    /// assert_eq!(simplified_expr, lit(true));
+    /// let (simplified_expr, count) = simplifier.simplify_with_cycle_count_transformed(expr.clone()).unwrap();
+    /// assert_eq!(simplified_expr.data, lit(true));
     /// // 2 cycles were executed, but only 1 was needed
     /// assert_eq!(count, 2);
     ///
     /// // Only 1 simplification pass is necessary here, so we can set the maximum cycles to 1.
-    /// let (simplified_expr, count) = simplifier.with_max_cycles(1).simplify_with_cycle_count(expr.clone()).unwrap();
+    /// let (simplified_expr, count) = simplifier.with_max_cycles(1).simplify_with_cycle_count_transformed(expr.clone()).unwrap();
     /// // Expression has been rewritten to: (c = a AND b = 1)
-    /// assert_eq!(simplified_expr, lit(true));
+    /// assert_eq!(simplified_expr.data, lit(true));
     /// // Only 1 cycle was executed
     /// assert_eq!(count, 1);
     ///
@@ -1573,8 +1606,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                 }))
                             }
                             Some(pattern_str)
-                                if !pattern_str
-                                    .contains(['%', '_', escape_char].as_ref()) =>
+                                if !like.case_insensitive
+                                    && !pattern_str
+                                        .contains(['%', '_', escape_char].as_ref()) =>
                             {
                                 // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
                                 // TODO: handle escape characters
@@ -3329,7 +3363,8 @@ mod tests {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        simplifier.simplify_with_cycle_count(expr)
+        let (expr, count) = simplifier.simplify_with_cycle_count_transformed(expr)?;
+        Ok((expr.data, count))
     }
 
     fn simplify_with_cycle_count(expr: Expr) -> (Expr, u32) {
@@ -4068,6 +4103,11 @@ mod tests {
         assert_eq!(simplify(expr), col("c1").like(lit("a_")));
         let expr = col("c1").not_like(lit("a_"));
         assert_eq!(simplify(expr), col("c1").not_like(lit("a_")));
+
+        let expr = col("c1").ilike(lit("a"));
+        assert_eq!(simplify(expr), col("c1").ilike(lit("a")));
+        let expr = col("c1").not_ilike(lit("a"));
+        assert_eq!(simplify(expr), col("c1").not_ilike(lit("a")));
     }
 
     #[test]

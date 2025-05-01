@@ -20,7 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Date32Array, StringArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use chrono::prelude::*;
 use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -93,8 +93,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", data.data_type(), true),
+                            &Field::new("b", patterns.data_type(), true),
+                        ],
                         number_rows: batch_len,
-                        return_type: &DataType::Utf8,
+                        return_field: &Field::new("f", DataType::Utf8, true),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -114,8 +118,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", data.data_type(), true),
+                            &Field::new("b", patterns.data_type(), true),
+                        ],
                         number_rows: batch_len,
-                        return_type: &DataType::Utf8,
+                        return_field: &Field::new("f", DataType::Utf8, true),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -141,8 +149,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), pattern.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", data.data_type(), true),
+                            &Field::new("b", pattern.data_type(), true),
+                        ],
                         number_rows: 1,
-                        return_type: &DataType::Utf8,
+                        return_field: &Field::new("f", DataType::Utf8, true),
                     })
                     .expect("to_char should work on valid values"),
             )

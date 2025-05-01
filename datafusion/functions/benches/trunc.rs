@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::{
-    datatypes::{Float32Type, Float64Type},
+    datatypes::{Field, Float32Type, Float64Type},
     util::bench_util::create_primitive_array,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -39,8 +39,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                     trunc
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f32_args.clone(),
+                            arg_fields: vec![&Field::new("a", DataType::Float32, false)],
                             number_rows: size,
-                            return_type: &DataType::Float32,
+                            return_field: &Field::new("f", DataType::Float32, true),
                         })
                         .unwrap(),
                 )
@@ -54,8 +55,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                     trunc
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f64_args.clone(),
+                            arg_fields: vec![&Field::new("a", DataType::Float64, false)],
                             number_rows: size,
-                            return_type: &DataType::Float64,
+                            return_field: &Field::new("f", DataType::Float64, true),
                         })
                         .unwrap(),
                 )

@@ -246,16 +246,7 @@ pub fn pushdown_limit_helper(
                 Ok((Transformed::no(pushdown_plan), global_state))
             }
         } else {
-            // Add fetch or a `LimitExec`:
-            // If the plan's children have limit and the child's limit < parent's limit, we shouldn't change the global state to true,
-            // because the children limit will be overridden if the global state is changed.
-            if !pushdown_plan
-                .children()
-                .iter()
-                .any(|&child| extract_limit(child).is_some())
-            {
-                global_state.satisfied = true;
-            }
+            global_state.satisfied = true;
             pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
                 if global_skip > 0 {
                     add_global_limit(plan_with_fetch, global_skip, Some(global_fetch))

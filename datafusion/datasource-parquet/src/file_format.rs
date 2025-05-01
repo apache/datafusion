@@ -27,7 +27,9 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
+use datafusion_datasource::write::{
+    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
+};
 
 use datafusion_datasource::file_format::{
     FileFormat, FileFormatFactory, FilePushdownSupport,
@@ -61,7 +63,7 @@ use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
 use crate::can_expr_be_pushed_down_with_schemas;
-use crate::source::ParquetSource;
+use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -304,9 +306,10 @@ async fn fetch_schema_with_location(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    coerce_int96: Option<TimeUnit>,
 ) -> Result<(Path, Schema)> {
     let loc_path = file.location.clone();
-    let schema = fetch_schema(store, file, metadata_size_hint).await?;
+    let schema = fetch_schema(store, file, metadata_size_hint, coerce_int96).await?;
     Ok((loc_path, schema))
 }
 
@@ -337,12 +340,17 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
+        let coerce_int96 = match self.coerce_int96() {
+            Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
+            None => None,
+        };
         let mut schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
                 fetch_schema_with_location(
                     store.as_ref(),
                     object,
                     self.metadata_size_hint(),
+                    coerce_int96,
                 )
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -825,6 +833,7 @@ async fn fetch_schema(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    coerce_int96: Option<TimeUnit>,
 ) -> Result<Schema> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
     let file_metadata = metadata.file_metadata();
@@ -832,6 +841,11 @@ async fn fetch_schema(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
+    let schema = coerce_int96
+        .and_then(|time_unit| {
+            coerce_int96_to_resolution(file_metadata.schema_descr(), &schema, &time_unit)
+        })
+        .unwrap_or(schema);
     Ok(schema)
 }
 
@@ -1090,9 +1104,18 @@ impl ParquetSink {
         &self,
         location: &Path,
         object_store: Arc<dyn ObjectStore>,
+        context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
     ) -> Result<AsyncArrowWriter<BufWriter>> {
-        let buf_writer = BufWriter::new(object_store, location.clone());
+        let buf_writer = BufWriter::with_capacity(
+            object_store,
+            location.clone(),
+            context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size,
+        );
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
@@ -1148,6 +1171,7 @@ impl FileSink for ParquetSink {
                     .create_async_arrow_writer(
                         &path,
                         Arc::clone(&object_store),
+                        context,
                         parquet_props.clone(),
                     )
                     .await?;
@@ -1166,14 +1190,21 @@ impl FileSink for ParquetSink {
                     Ok((path, file_metadata))
                 });
             } else {
-                let writer = create_writer(
+                let writer = ObjectWriterBuilder::new(
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
                     &path,
                     Arc::clone(&object_store),
                 )
-                .await?;
+                .with_buffer_size(Some(
+                    context
+                        .session_config()
+                        .options()
+                        .execution
+                        .objectstore_writer_buffer_size,
+                ))
+                .build()?;
                 let schema = get_writer_schema(&self.config);
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();

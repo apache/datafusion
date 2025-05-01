@@ -155,7 +155,7 @@ WHERE
         THEN split_part(split_part("URL", 'resolution=', 2), '&', 1)::INT 
         ELSE 0 
     END > 1920 -- Extract and validate resolution parameter
-    AND levenshtein("UTMSource", "UTMCampaign") < 3 -- Verify UTM parameter similarity
+    AND levenshtein(CAST("UTMSource" AS STRING), CAST("UTMCampaign" AS STRING)) < 3 -- Verify UTM parameter similarity
 ```
 Result is empty,Since it has already been filtered by `"SocialAction" = 'share'`.
 

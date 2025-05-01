@@ -74,15 +74,25 @@ impl OptimizerRule for EliminateJoin {
 
 #[cfg(test)]
 mod tests {
+    use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_join::EliminateJoin;
-    use crate::test::*;
     use datafusion_common::Result;
     use datafusion_expr::JoinType::Inner;
-    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder, LogicalPlan};
+    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use std::sync::Arc;
 
-    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(Arc::new(EliminateJoin::new()), plan, expected)
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @$expected:literal $(,)?
+        ) => {{
+            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateJoin::new());
+            assert_optimized_plan_eq_snapshot!(
+                rule,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[test]
@@ -95,7 +105,6 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "EmptyRelation";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @"EmptyRelation")
     }
 }
