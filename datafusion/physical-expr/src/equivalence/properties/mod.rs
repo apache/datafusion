@@ -204,7 +204,7 @@ impl EquivalenceProperties {
 
     /// Returns the output ordering of the properties.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let mut sort_exprs: Vec<_> = self.oeq_class().output_ordering()?.into();
+        let mut sort_exprs: Vec<_> = self.oeq_class.output_ordering()?.into();
         // Prune out constant expressions:
         sort_exprs.retain(|sort_expr| {
             self.eq_group
