@@ -203,9 +203,8 @@ impl Partitioning {
         input_eq_properties: &EquivalenceProperties,
     ) -> Self {
         if let Partitioning::Hash(exprs, part) = self {
-            let proj_exprs = input_eq_properties.project_expressions(exprs, mapping);
-            let normalized_exprs = proj_exprs
-                .into_iter()
+            let normalized_exprs = input_eq_properties
+                .project_expressions(exprs, mapping)
                 .zip(exprs)
                 .map(|(proj_expr, expr)| {
                     proj_expr.unwrap_or_else(|| {

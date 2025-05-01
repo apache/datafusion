@@ -817,10 +817,10 @@ impl EquivalenceProperties {
     /// to [`Self::project_expr`], but projects multiple expressions at once
     /// more efficiently than calling `project_expr` for each expression.
     pub fn project_expressions<'a>(
-        &self,
-        expressions: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
-        mapping: &ProjectionMapping,
-    ) -> Vec<Option<Arc<dyn PhysicalExpr>>> {
+        &'a self,
+        expressions: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>> + 'a,
+        mapping: &'a ProjectionMapping,
+    ) -> impl Iterator<Item = Option<Arc<dyn PhysicalExpr>>> + 'a {
         self.eq_group.project_expressions(mapping, expressions)
     }
 

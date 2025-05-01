@@ -593,32 +593,29 @@ impl EquivalenceGroup {
     /// expressions at once more efficiently than calling `project_expr` for each
     /// expression.
     pub fn project_expressions<'a>(
-        &self,
-        mapping: &ProjectionMapping,
-        expressions: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
-    ) -> Vec<Option<Arc<dyn PhysicalExpr>>> {
+        &'a self,
+        mapping: &'a ProjectionMapping,
+        expressions: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>> + 'a,
+    ) -> impl Iterator<Item = Option<Arc<dyn PhysicalExpr>>> + 'a {
         let mut aug_mapping = None;
-        expressions
-            .into_iter()
-            .map(|expr| {
-                if let Some(targets) = mapping.get(expr) {
-                    // If we match the source, we can project directly:
-                    let (target, _) = targets.first();
-                    Some(Arc::clone(target))
-                } else {
-                    let aug_mapping = aug_mapping
-                        .get_or_insert_with(|| self.augment_projection_mapping(mapping));
-                    Self::project_expr_indirect(aug_mapping, expr)
-                }
-            })
-            .collect()
+        expressions.into_iter().map(move |expr| {
+            if let Some(targets) = mapping.get(expr) {
+                // If we match the source, we can project directly:
+                let (target, _) = targets.first();
+                Some(Arc::clone(target))
+            } else {
+                let aug_mapping = aug_mapping
+                    .get_or_insert_with(|| self.augment_projection_mapping(mapping));
+                Self::project_expr_indirect(aug_mapping, expr)
+            }
+        })
     }
 
     /// Projects this equivalence group according to the given projection mapping.
     pub fn project(&self, mapping: &ProjectionMapping) -> Self {
         let projected_classes = self.iter().map(|cls| {
             let new_exprs = self.project_expressions(mapping, cls.iter());
-            EquivalenceClass::new(new_exprs.into_iter().flatten())
+            EquivalenceClass::new(new_exprs.flatten())
         });
 
         // The key is the source expression, and the value is the equivalence
