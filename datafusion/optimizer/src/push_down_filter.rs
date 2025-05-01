@@ -3375,13 +3375,6 @@ mod tests {
             .project(vec![col("b.a")])?
             .build()?;
 
-        let expected_before = "Projection: b.a\
-        \n  Filter: b.a = Int64(1)\
-        \n    SubqueryAlias: b\
-        \n      Projection: b.a\
-        \n        SubqueryAlias: b\
-        \n          Projection: Int64(0) AS a\
-        \n            EmptyRelation";
         assert_snapshot!(plan,
         @r"
         Projection: b.a
