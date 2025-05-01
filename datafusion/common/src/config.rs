@@ -771,7 +771,7 @@ config_namespace! {
         /// Time format for time arrays
         pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
         /// Duration format. Can be either `"pretty"` or `"ISO8601"`
-        pub duration_format: String, default = "pretty".into()
+        pub duration_format: String, transform = str::to_lowercase, default = "pretty".into()
         /// Show types in visual representation batches
         pub types_info: bool, default = false
     }
