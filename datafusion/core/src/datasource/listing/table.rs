@@ -38,8 +38,10 @@ use datafusion_datasource::{
     file_scan_config::{FileScanConfig, FileScanConfigBuilder},
     metadata::MetadataColumn,
 };
-use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
-use datafusion_expr::{SortExpr, TableType};
+use datafusion_expr::{
+    dml::InsertOp, utils::conjunction, Expr, SortExpr, TableProviderFilterPushDown,
+    TableType,
+};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
