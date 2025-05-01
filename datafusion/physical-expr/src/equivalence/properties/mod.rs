@@ -1600,7 +1600,7 @@ fn get_expr_properties(
     } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
-            range: Interval::try_new(literal.value().clone(), literal.value().clone())?,
+            range: literal.value().into(),
             preserves_lex_ordering: true,
         })
     } else {
