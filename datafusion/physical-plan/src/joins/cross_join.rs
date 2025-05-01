@@ -25,7 +25,6 @@ use super::utils::{
     BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
     StatefulStreamResult,
 };
-use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
@@ -189,19 +188,11 @@ impl CrossJoinExec {
 
 /// Asynchronously collect the result of the left child
 async fn load_left_input(
-    left: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    stream: SendableRecordBatchStream,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
-    // merge all left parts into a single stream
-    let left_schema = left.schema();
-    let merge = if left.output_partitioning().partition_count() != 1 {
-        Arc::new(CoalescePartitionsExec::new(left))
-    } else {
-        left
-    };
-    let stream = merge.execute(0, context)?;
+    let left_schema = stream.schema();
 
     // Load all batches and count the rows
     let (batches, _metrics, reservation) = stream
@@ -291,6 +282,13 @@ impl ExecutionPlan for CrossJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if self.left.output_partitioning().partition_count() != 1 {
+            return internal_err!(
+                "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
+                 consider using CoalescePartitionsExec or the EnforceDistribution rule"
+            );
+        }
+
         let stream = self.right.execute(partition, Arc::clone(&context))?;
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
@@ -303,14 +301,15 @@ impl ExecutionPlan for CrossJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let left_fut = self.left_fut.once(|| {
-            load_left_input(
-                Arc::clone(&self.left),
-                context,
+        let left_fut = self.left_fut.try_once(|| {
+            let left_stream = self.left.execute(0, context)?;
+
+            Ok(load_left_input(
+                left_stream,
                 join_metrics.clone(),
                 reservation,
-            )
-        });
+            ))
+        })?;
 
         if enforce_batch_size_in_joins {
             Ok(Box::pin(CrossJoinStream {
@@ -338,10 +337,15 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(stats_cartesian_product(
-            self.left.statistics()?,
-            self.right.statistics()?,
-        ))
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        // Get the all partitions statistics of the left
+        let left_stats = self.left.partition_statistics(None)?;
+        let right_stats = self.right.partition_statistics(partition)?;
+
+        Ok(stats_cartesian_product(left_stats, right_stats))
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
@@ -645,8 +649,9 @@ mod tests {
     use crate::common;
     use crate::test::build_table_scan_i32;
 
-    use datafusion_common::{assert_batches_sorted_eq, assert_contains};
+    use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use insta::assert_snapshot;
 
     async fn join_collect(
         left: Arc<dyn ExecutionPlan>,
@@ -829,20 +834,19 @@ mod tests {
         let (columns, batches) = join_collect(left, right, task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 12 | 14 |",
-            "| 1  | 4  | 7  | 11 | 13 | 15 |",
-            "| 2  | 5  | 8  | 10 | 12 | 14 |",
-            "| 2  | 5  | 8  | 11 | 13 | 15 |",
-            "| 3  | 6  | 9  | 10 | 12 | 14 |",
-            "| 3  | 6  | 9  | 11 | 13 | 15 |",
-            "+----+----+----+----+----+----+",
-        ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 12 | 14 |
+            | 1  | 4  | 7  | 11 | 13 | 15 |
+            | 2  | 5  | 8  | 10 | 12 | 14 |
+            | 2  | 5  | 8  | 11 | 13 | 15 |
+            | 3  | 6  | 9  | 10 | 12 | 14 |
+            | 3  | 6  | 9  | 11 | 13 | 15 |
+            +----+----+----+----+----+----+
+            "#);
 
         Ok(())
     }

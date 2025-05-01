@@ -25,13 +25,12 @@ use std::task::Poll;
 use crate::file_format::JsonDecoder;
 
 use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_datasource::{
-    calculate_range, ListingTableUrl, PartitionedFile, RangeCalculation,
-};
+use datafusion_datasource::{calculate_range, ListingTableUrl, RangeCalculation};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
@@ -47,11 +46,11 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
+use datafusion_datasource::file_groups::FileGroup;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
-use tokio::task::JoinSet;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
@@ -146,7 +145,7 @@ impl NdJsonExec {
         )
     }
 
-    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
         self.base_config.file_groups = file_groups.clone();
         let mut file_source = self.file_scan_config();
         file_source = file_source.with_file_groups(file_groups);
@@ -356,6 +355,7 @@ impl FileOpener for JsonOpener {
             let result = store.get_opts(file_meta.location(), options).await?;
 
             match result.payload {
+                #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
                     let bytes = match file_meta.range {
                         None => file_compression_type.convert_read(file)?,
@@ -399,6 +399,11 @@ pub async fn plan_to_json(
     let parsed = ListingTableUrl::parse(path)?;
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+    let writer_buffer_size = task_ctx
+        .session_config()
+        .options()
+        .execution
+        .objectstore_writer_buffer_size;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let storeref = Arc::clone(&store);
@@ -408,7 +413,8 @@ pub async fn plan_to_json(
 
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
-            let mut buf_writer = BufWriter::new(storeref, file.clone());
+            let mut buf_writer =
+                BufWriter::with_capacity(storeref, file.clone(), writer_buffer_size);
 
             let mut buffer = Vec::with_capacity(1024);
             while let Some(batch) = stream.next().await.transpose()? {

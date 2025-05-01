@@ -26,6 +26,7 @@ use arrow::csv::ReaderBuilder;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::test_util::batches_to_string;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
@@ -34,7 +35,7 @@ use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
-use datafusion_common::{assert_batches_eq, DFSchema, ScalarValue};
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 
 use async_trait::async_trait;
@@ -54,17 +55,17 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
         .collect()
         .await?;
 
-    let excepted = [
-        "+-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+",
-        "| n_nationkey | n_name    | n_regionkey | n_comment                                                                                                   |",
-        "+-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+",
-        "| 1           | ARGENTINA | 1           | al foxes promise slyly according to the regular accounts. bold requests alon                                |",
-        "| 2           | BRAZIL    | 1           | y alongside of the pending deposits. carefully special packages are about the ironic forges. slyly special  |",
-        "| 3           | CANADA    | 1           | eas hang ironic, silent packages. slyly regular packages are furiously over the tithes. fluffily bold       |",
-        "| 4           | EGYPT     | 4           | y above the carefully unusual theodolites. final dugouts are quickly across the furiously regular d         |",
-        "| 5           | ETHIOPIA  | 0           | ven packages wake quickly. regu                                                                             |",
-        "+-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+",    ];
-    assert_batches_eq!(excepted, &rbs);
+    insta::assert_snapshot!(batches_to_string(&rbs), @r###"
+    +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
+    | n_nationkey | n_name    | n_regionkey | n_comment                                                                                                   |
+    +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
+    | 1           | ARGENTINA | 1           | al foxes promise slyly according to the regular accounts. bold requests alon                                |
+    | 2           | BRAZIL    | 1           | y alongside of the pending deposits. carefully special packages are about the ironic forges. slyly special  |
+    | 3           | CANADA    | 1           | eas hang ironic, silent packages. slyly regular packages are furiously over the tithes. fluffily bold       |
+    | 4           | EGYPT     | 4           | y above the carefully unusual theodolites. final dugouts are quickly across the furiously regular d         |
+    | 5           | ETHIOPIA  | 0           | ven packages wake quickly. regu                                                                             |
+    +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
+    "###);
 
     // just run, return all rows
     let rbs = ctx
@@ -72,23 +73,23 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
         .await?
         .collect()
         .await?;
-    let excepted = [
-        "+-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+", 
-        "| n_nationkey | n_name    | n_regionkey | n_comment                                                                                                          |",
-        "+-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+",
-        "| 1           | ARGENTINA | 1           | al foxes promise slyly according to the regular accounts. bold requests alon                                       |",
-        "| 2           | BRAZIL    | 1           | y alongside of the pending deposits. carefully special packages are about the ironic forges. slyly special         |", 
-        "| 3           | CANADA    | 1           | eas hang ironic, silent packages. slyly regular packages are furiously over the tithes. fluffily bold              |", 
-        "| 4           | EGYPT     | 4           | y above the carefully unusual theodolites. final dugouts are quickly across the furiously regular d                |", 
-        "| 5           | ETHIOPIA  | 0           | ven packages wake quickly. regu                                                                                    |", 
-        "| 6           | FRANCE    | 3           | refully final requests. regular, ironi                                                                             |", 
-        "| 7           | GERMANY   | 3           | l platelets. regular accounts x-ray: unusual, regular acco                                                         |", 
-        "| 8           | INDIA     | 2           | ss excuses cajole slyly across the packages. deposits print aroun                                                  |", 
-        "| 9           | INDONESIA | 2           |  slyly express asymptotes. regular deposits haggle slyly. carefully ironic hockey players sleep blithely. carefull |", 
-        "| 10          | IRAN      | 4           | efully alongside of the slyly final dependencies.                                                                  |",
-        "+-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+"
-    ];
-    assert_batches_eq!(excepted, &rbs);
+
+    insta::assert_snapshot!(batches_to_string(&rbs), @r###"
+    +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
+    | n_nationkey | n_name    | n_regionkey | n_comment                                                                                                          |
+    +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
+    | 1           | ARGENTINA | 1           | al foxes promise slyly according to the regular accounts. bold requests alon                                       |
+    | 2           | BRAZIL    | 1           | y alongside of the pending deposits. carefully special packages are about the ironic forges. slyly special         |
+    | 3           | CANADA    | 1           | eas hang ironic, silent packages. slyly regular packages are furiously over the tithes. fluffily bold              |
+    | 4           | EGYPT     | 4           | y above the carefully unusual theodolites. final dugouts are quickly across the furiously regular d                |
+    | 5           | ETHIOPIA  | 0           | ven packages wake quickly. regu                                                                                    |
+    | 6           | FRANCE    | 3           | refully final requests. regular, ironi                                                                             |
+    | 7           | GERMANY   | 3           | l platelets. regular accounts x-ray: unusual, regular acco                                                         |
+    | 8           | INDIA     | 2           | ss excuses cajole slyly across the packages. deposits print aroun                                                  |
+    | 9           | INDONESIA | 2           |  slyly express asymptotes. regular deposits haggle slyly. carefully ironic hockey players sleep blithely. carefull |
+    | 10          | IRAN      | 4           | efully alongside of the slyly final dependencies.                                                                  |
+    +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
+    "###);
 
     Ok(())
 }

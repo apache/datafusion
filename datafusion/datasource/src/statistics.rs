@@ -20,8 +20,10 @@
 //! Currently, this module houses code to sort file groups if they are non-overlapping with
 //! respect to the required sort order. See [`MinMaxStatistics`]
 
+use futures::{Stream, StreamExt};
 use std::sync::Arc;
 
+use crate::file_groups::FileGroup;
 use crate::PartitionedFile;
 
 use arrow::array::RecordBatch;
@@ -30,9 +32,11 @@ use arrow::{
     compute::SortColumn,
     row::{Row, Rows},
 };
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::stats::Precision;
+use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::{ColumnStatistics, Statistics};
 
 /// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
 /// The min/max values are ordered by [`Self::sort_order`].
@@ -202,10 +206,10 @@ impl MinMaxStatistics {
                         .zip(max_values.column_by_name(column.name()))
                 }
                 .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
+                    plan_datafusion_err!(
                         "missing column in MinMaxStatistics::new: '{}'",
                         column.name()
-                    ))
+                    )
                 })
             })
             .collect::<Result<Vec<_>>>()?
@@ -280,4 +284,214 @@ fn sort_columns_from_physical_sort_exprs(
         .iter()
         .map(|expr| expr.expr.as_any().downcast_ref::<Column>())
         .collect::<Option<Vec<_>>>()
+}
+
+/// Get all files as well as the file level summary statistics (no statistic for partition columns).
+/// If the optional `limit` is provided, includes only sufficient files. Needed to read up to
+/// `limit` number of rows. `collect_stats` is passed down from the configuration parameter on
+/// `ListingTable`. If it is false we only construct bare statistics and skip a potentially expensive
+///  call to `multiunzip` for constructing file level summary statistics.
+#[deprecated(
+    since = "47.0.0",
+    note = "Please use `get_files_with_limit` and  `compute_all_files_statistics` instead"
+)]
+#[allow(unused)]
+pub async fn get_statistics_with_limit(
+    all_files: impl Stream<Item = Result<(PartitionedFile, Arc<Statistics>)>>,
+    file_schema: SchemaRef,
+    limit: Option<usize>,
+    collect_stats: bool,
+) -> Result<(FileGroup, Statistics)> {
+    let mut result_files = FileGroup::default();
+    // These statistics can be calculated as long as at least one file provides
+    // useful information. If none of the files provides any information, then
+    // they will end up having `Precision::Absent` values. Throughout calculations,
+    // missing values will be imputed as:
+    // - zero for summations, and
+    // - neutral element for extreme points.
+    let size = file_schema.fields().len();
+    let mut col_stats_set = vec![ColumnStatistics::default(); size];
+    let mut num_rows = Precision::<usize>::Absent;
+    let mut total_byte_size = Precision::<usize>::Absent;
+
+    // Fusing the stream allows us to call next safely even once it is finished.
+    let mut all_files = Box::pin(all_files.fuse());
+
+    if let Some(first_file) = all_files.next().await {
+        let (mut file, file_stats) = first_file?;
+        file.statistics = Some(Arc::clone(&file_stats));
+        result_files.push(file);
+
+        // First file, we set them directly from the file statistics.
+        num_rows = file_stats.num_rows;
+        total_byte_size = file_stats.total_byte_size;
+        for (index, file_column) in
+            file_stats.column_statistics.clone().into_iter().enumerate()
+        {
+            col_stats_set[index].null_count = file_column.null_count;
+            col_stats_set[index].max_value = file_column.max_value;
+            col_stats_set[index].min_value = file_column.min_value;
+            col_stats_set[index].sum_value = file_column.sum_value;
+        }
+
+        // If the number of rows exceeds the limit, we can stop processing
+        // files. This only applies when we know the number of rows. It also
+        // currently ignores tables that have no statistics regarding the
+        // number of rows.
+        let conservative_num_rows = match num_rows {
+            Precision::Exact(nr) => nr,
+            _ => usize::MIN,
+        };
+        if conservative_num_rows <= limit.unwrap_or(usize::MAX) {
+            while let Some(current) = all_files.next().await {
+                let (mut file, file_stats) = current?;
+                file.statistics = Some(Arc::clone(&file_stats));
+                result_files.push(file);
+                if !collect_stats {
+                    continue;
+                }
+
+                // We accumulate the number of rows, total byte size and null
+                // counts across all the files in question. If any file does not
+                // provide any information or provides an inexact value, we demote
+                // the statistic precision to inexact.
+                num_rows = num_rows.add(&file_stats.num_rows);
+
+                total_byte_size = total_byte_size.add(&file_stats.total_byte_size);
+
+                for (file_col_stats, col_stats) in file_stats
+                    .column_statistics
+                    .iter()
+                    .zip(col_stats_set.iter_mut())
+                {
+                    let ColumnStatistics {
+                        null_count: file_nc,
+                        max_value: file_max,
+                        min_value: file_min,
+                        sum_value: file_sum,
+                        distinct_count: _,
+                    } = file_col_stats;
+
+                    col_stats.null_count = col_stats.null_count.add(file_nc);
+                    col_stats.max_value = col_stats.max_value.max(file_max);
+                    col_stats.min_value = col_stats.min_value.min(file_min);
+                    col_stats.sum_value = col_stats.sum_value.add(file_sum);
+                }
+
+                // If the number of rows exceeds the limit, we can stop processing
+                // files. This only applies when we know the number of rows. It also
+                // currently ignores tables that have no statistics regarding the
+                // number of rows.
+                if num_rows.get_value().unwrap_or(&usize::MIN)
+                    > &limit.unwrap_or(usize::MAX)
+                {
+                    break;
+                }
+            }
+        }
+    };
+
+    let mut statistics = Statistics {
+        num_rows,
+        total_byte_size,
+        column_statistics: col_stats_set,
+    };
+    if all_files.next().await.is_some() {
+        // If we still have files in the stream, it means that the limit kicked
+        // in, and the statistic could have been different had we processed the
+        // files in a different order.
+        statistics = statistics.to_inexact()
+    }
+
+    Ok((result_files, statistics))
+}
+
+/// Computes the summary statistics for a group of files(`FileGroup` level's statistics).
+///
+/// This function combines statistics from all files in the file group to create
+/// summary statistics. It handles the following aspects:
+/// - Merges row counts and byte sizes across files
+/// - Computes column-level statistics like min/max values
+/// - Maintains appropriate precision information (exact, inexact, absent)
+///
+/// # Parameters
+/// * `file_group` - The group of files to process
+/// * `file_schema` - Schema of the files
+/// * `collect_stats` - Whether to collect statistics (if false, returns original file group)
+///
+/// # Returns
+/// A new file group with summary statistics attached
+pub fn compute_file_group_statistics(
+    file_group: FileGroup,
+    file_schema: SchemaRef,
+    collect_stats: bool,
+) -> Result<FileGroup> {
+    if !collect_stats {
+        return Ok(file_group);
+    }
+
+    let file_group_stats = file_group.iter().filter_map(|file| {
+        let stats = file.statistics.as_ref()?;
+        Some(stats.as_ref())
+    });
+    let statistics = Statistics::try_merge_iter(file_group_stats, &file_schema)?;
+
+    Ok(file_group.with_statistics(Arc::new(statistics)))
+}
+
+/// Computes statistics for all files across multiple file groups.
+///
+/// This function:
+/// 1. Computes statistics for each individual file group
+/// 2. Summary statistics across all file groups
+/// 3. Optionally marks statistics as inexact
+///
+/// # Parameters
+/// * `file_groups` - Vector of file groups to process
+/// * `table_schema` - Schema of the table
+/// * `collect_stats` - Whether to collect statistics
+/// * `inexact_stats` - Whether to mark the resulting statistics as inexact
+///
+/// # Returns
+/// A tuple containing:
+/// * The processed file groups with their individual statistics attached
+/// * The summary statistics across all file groups, aka all files summary statistics
+pub fn compute_all_files_statistics(
+    file_groups: Vec<FileGroup>,
+    table_schema: SchemaRef,
+    collect_stats: bool,
+    inexact_stats: bool,
+) -> Result<(Vec<FileGroup>, Statistics)> {
+    let file_groups_with_stats = file_groups
+        .into_iter()
+        .map(|file_group| {
+            compute_file_group_statistics(
+                file_group,
+                Arc::clone(&table_schema),
+                collect_stats,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Then summary statistics across all file groups
+    let file_groups_statistics = file_groups_with_stats
+        .iter()
+        .filter_map(|file_group| file_group.file_statistics(None));
+
+    let mut statistics =
+        Statistics::try_merge_iter(file_groups_statistics, &table_schema)?;
+
+    if inexact_stats {
+        statistics = statistics.to_inexact()
+    }
+
+    Ok((file_groups_with_stats, statistics))
+}
+
+#[deprecated(since = "47.0.0", note = "Use Statistics::add")]
+pub fn add_row_stats(
+    file_num_rows: Precision<usize>,
+    num_rows: Precision<usize>,
+) -> Precision<usize> {
+    file_num_rows.add(&num_rows)
 }

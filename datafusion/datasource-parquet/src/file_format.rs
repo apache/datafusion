@@ -24,10 +24,12 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{Fields, Schema, SchemaRef};
+use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
+use datafusion_datasource::write::{
+    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
+};
 
 use datafusion_datasource::file_format::{
     FileFormat, FileFormatFactory, FilePushdownSupport,
@@ -36,7 +38,6 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
@@ -45,10 +46,11 @@ use datafusion_common::{
     DataFusionError, GetExt, Result, DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common::{HashMap, Statistics};
-use datafusion_common_runtime::SpawnedTask;
+use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
@@ -57,11 +59,14 @@ use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::Accumulator;
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_session::Session;
 
+use crate::can_expr_be_pushed_down_with_schemas;
+use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_datasource::source::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::debug;
@@ -75,17 +80,15 @@ use parquet::arrow::arrow_writer::{
 };
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
+use parquet::basic::Type;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
+use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task::JoinSet;
-
-use crate::can_expr_be_pushed_down_with_schemas;
-use crate::source::ParquetSource;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -271,6 +274,15 @@ impl ParquetFormat {
         self.options.global.binary_as_string = binary_as_string;
         self
     }
+
+    pub fn coerce_int96(&self) -> Option<String> {
+        self.options.global.coerce_int96.clone()
+    }
+
+    pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
+        self.options.global.coerce_int96 = time_unit;
+        self
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
@@ -294,9 +306,10 @@ async fn fetch_schema_with_location(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    coerce_int96: Option<TimeUnit>,
 ) -> Result<(Path, Schema)> {
     let loc_path = file.location.clone();
-    let schema = fetch_schema(store, file, metadata_size_hint).await?;
+    let schema = fetch_schema(store, file, metadata_size_hint, coerce_int96).await?;
     Ok((loc_path, schema))
 }
 
@@ -327,12 +340,17 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
+        let coerce_int96 = match self.coerce_int96() {
+            Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
+            None => None,
+        };
         let mut schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
                 fetch_schema_with_location(
                     store.as_ref(),
                     object,
                     self.metadata_size_hint(),
+                    coerce_int96,
                 )
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -420,7 +438,11 @@ impl FileFormat for ParquetFormat {
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
-        Ok(conf.with_source(Arc::new(source)).build())
+
+        let conf = FileScanConfigBuilder::from(conf)
+            .with_source(Arc::new(source))
+            .build();
+        Ok(DataSourceExec::from_data_source(conf))
     }
 
     async fn create_writer_physical_plan(
@@ -465,7 +487,154 @@ impl FileFormat for ParquetFormat {
     }
 }
 
+/// Apply necessary schema type coercions to make file schema match table schema.
+///
+/// This function performs two main types of transformations in a single pass:
+/// 1. Binary types to string types conversion - Converts binary data types to their
+///    corresponding string types when the table schema expects string data
+/// 2. Regular to view types conversion - Converts standard string/binary types to
+///    view types when the table schema uses view types
+///
+/// # Arguments
+/// * `table_schema` - The table schema containing the desired types
+/// * `file_schema` - The file schema to be transformed
+///
+/// # Returns
+/// * `Some(Schema)` - If any transformations were applied, returns the transformed schema
+/// * `None` - If no transformations were needed
+pub fn apply_file_schema_type_coercions(
+    table_schema: &Schema,
+    file_schema: &Schema,
+) -> Option<Schema> {
+    let mut needs_view_transform = false;
+    let mut needs_string_transform = false;
+
+    // Create a mapping of table field names to their data types for fast lookup
+    // and simultaneously check if we need any transformations
+    let table_fields: HashMap<_, _> = table_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let dt = f.data_type();
+            // Check if we need view type transformation
+            if matches!(dt, &DataType::Utf8View | &DataType::BinaryView) {
+                needs_view_transform = true;
+            }
+            // Check if we need string type transformation
+            if matches!(
+                dt,
+                &DataType::Utf8 | &DataType::LargeUtf8 | &DataType::Utf8View
+            ) {
+                needs_string_transform = true;
+            }
+
+            (f.name(), dt)
+        })
+        .collect();
+
+    // Early return if no transformation needed
+    if !needs_view_transform && !needs_string_transform {
+        return None;
+    }
+
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let field_name = field.name();
+            let field_type = field.data_type();
+
+            // Look up the corresponding field type in the table schema
+            if let Some(table_type) = table_fields.get(field_name) {
+                match (table_type, field_type) {
+                    // table schema uses string type, coerce the file schema to use string type
+                    (
+                        &DataType::Utf8,
+                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                    ) => {
+                        return field_with_new_type(field, DataType::Utf8);
+                    }
+                    // table schema uses large string type, coerce the file schema to use large string type
+                    (
+                        &DataType::LargeUtf8,
+                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                    ) => {
+                        return field_with_new_type(field, DataType::LargeUtf8);
+                    }
+                    // table schema uses string view type, coerce the file schema to use view type
+                    (
+                        &DataType::Utf8View,
+                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                    ) => {
+                        return field_with_new_type(field, DataType::Utf8View);
+                    }
+                    // Handle view type conversions
+                    (&DataType::Utf8View, DataType::Utf8 | DataType::LargeUtf8) => {
+                        return field_with_new_type(field, DataType::Utf8View);
+                    }
+                    (&DataType::BinaryView, DataType::Binary | DataType::LargeBinary) => {
+                        return field_with_new_type(field, DataType::BinaryView);
+                    }
+                    _ => {}
+                }
+            }
+
+            // If no transformation is needed, keep the original field
+            Arc::clone(field)
+        })
+        .collect();
+
+    Some(Schema::new_with_metadata(
+        transformed_fields,
+        file_schema.metadata.clone(),
+    ))
+}
+
+/// Coerces the file schema's Timestamps to the provided TimeUnit if Parquet schema contains INT96.
+pub fn coerce_int96_to_resolution(
+    parquet_schema: &SchemaDescriptor,
+    file_schema: &Schema,
+    time_unit: &TimeUnit,
+) -> Option<Schema> {
+    let mut transform = false;
+    let parquet_fields: HashMap<_, _> = parquet_schema
+        .columns()
+        .iter()
+        .map(|f| {
+            let dt = f.physical_type();
+            if dt.eq(&Type::INT96) {
+                transform = true;
+            }
+            (f.name(), dt)
+        })
+        .collect();
+
+    if !transform {
+        return None;
+    }
+
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(|field| match parquet_fields.get(field.name().as_str()) {
+            Some(Type::INT96) => {
+                field_with_new_type(field, DataType::Timestamp(*time_unit, None))
+            }
+            _ => Arc::clone(field),
+        })
+        .collect();
+
+    Some(Schema::new_with_metadata(
+        transformed_fields,
+        file_schema.metadata.clone(),
+    ))
+}
+
 /// Coerces the file schema if the table schema uses a view type.
+#[deprecated(
+    since = "47.0.0",
+    note = "Use `apply_file_schema_type_coercions` instead"
+)]
 pub fn coerce_file_schema_to_view_type(
     table_schema: &Schema,
     file_schema: &Schema,
@@ -515,6 +684,10 @@ pub fn coerce_file_schema_to_view_type(
 /// If the table schema uses a string type, coerce the file schema to use a string type.
 ///
 /// See [ParquetFormat::binary_as_string] for details
+#[deprecated(
+    since = "47.0.0",
+    note = "Use `apply_file_schema_type_coercions` instead"
+)]
 pub fn coerce_file_schema_to_string_type(
     table_schema: &Schema,
     file_schema: &Schema,
@@ -623,10 +796,7 @@ impl<'a> ObjectStoreFetch<'a> {
 }
 
 impl MetadataFetch for ObjectStoreFetch<'_> {
-    fn fetch(
-        &mut self,
-        range: Range<usize>,
-    ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
         async {
             self.store
                 .get_range(&self.meta.location, range)
@@ -663,6 +833,7 @@ async fn fetch_schema(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    coerce_int96: Option<TimeUnit>,
 ) -> Result<Schema> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
     let file_metadata = metadata.file_metadata();
@@ -670,6 +841,11 @@ async fn fetch_schema(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
+    let schema = coerce_int96
+        .and_then(|time_unit| {
+            coerce_int96_to_resolution(file_metadata.schema_descr(), &schema, &time_unit)
+        })
+        .unwrap_or(schema);
     Ok(schema)
 }
 
@@ -686,10 +862,34 @@ pub async fn fetch_statistics(
     statistics_from_parquet_meta_calc(&metadata, table_schema)
 }
 
-/// Convert statistics in  [`ParquetMetaData`] into [`Statistics`] using ['StatisticsConverter`]
+/// Convert statistics in [`ParquetMetaData`] into [`Statistics`] using [`StatisticsConverter`]
 ///
 /// The statistics are calculated for each column in the table schema
 /// using the row group statistics in the parquet metadata.
+///
+/// # Key behaviors:
+///
+/// 1. Extracts row counts and byte sizes from all row groups
+/// 2. Applies schema type coercions to align file schema with table schema
+/// 3. Collects and aggregates statistics across row groups when available
+///
+/// # When there are no statistics:
+///
+/// If the Parquet file doesn't contain any statistics (has_statistics is false), the function returns a Statistics object with:
+/// - Exact row count
+/// - Exact byte size
+/// - All column statistics marked as unknown via Statistics::unknown_column(&table_schema)
+/// # When only some columns have statistics:
+///
+/// For columns with statistics:
+/// - Min/max values are properly extracted and represented as Precision::Exact
+/// - Null counts are calculated by summing across row groups
+///
+/// For columns without statistics,
+/// - For min/max, there are two situations:
+///     1. The column isn't in arrow schema, then min/max values are set to Precision::Absent
+///     2. The column is in arrow schema, but not in parquet schema due to schema revolution, min/max values are set to Precision::Exact(null)
+/// - Null counts are set to Precision::Exact(num_rows) (conservatively assuming all values could be null)
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
@@ -705,9 +905,10 @@ pub fn statistics_from_parquet_meta_calc(
         total_byte_size += row_group_meta.total_byte_size() as usize;
 
         if !has_statistics {
-            row_group_meta.columns().iter().for_each(|column| {
-                has_statistics = column.statistics().is_some();
-            });
+            has_statistics = row_group_meta
+                .columns()
+                .iter()
+                .any(|column| column.statistics().is_some());
         }
     }
     statistics.num_rows = Precision::Exact(num_rows);
@@ -718,11 +919,8 @@ pub fn statistics_from_parquet_meta_calc(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
-    if let Some(merged) = coerce_file_schema_to_string_type(&table_schema, &file_schema) {
-        file_schema = merged;
-    }
 
-    if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &file_schema) {
+    if let Some(merged) = apply_file_schema_type_coercions(&table_schema, &file_schema) {
         file_schema = merged;
     }
 
@@ -851,7 +1049,7 @@ impl DisplayAs for ParquetSink {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ParquetSink(file_groups=",)?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
@@ -906,9 +1104,18 @@ impl ParquetSink {
         &self,
         location: &Path,
         object_store: Arc<dyn ObjectStore>,
+        context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
     ) -> Result<AsyncArrowWriter<BufWriter>> {
-        let buf_writer = BufWriter::new(object_store, location.clone());
+        let buf_writer = BufWriter::with_capacity(
+            object_store,
+            location.clone(),
+            context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size,
+        );
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
@@ -964,6 +1171,7 @@ impl FileSink for ParquetSink {
                     .create_async_arrow_writer(
                         &path,
                         Arc::clone(&object_store),
+                        context,
                         parquet_props.clone(),
                     )
                     .await?;
@@ -982,14 +1190,21 @@ impl FileSink for ParquetSink {
                     Ok((path, file_metadata))
                 });
             } else {
-                let writer = create_writer(
+                let writer = ObjectWriterBuilder::new(
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
                     &path,
                     Arc::clone(&object_store),
                 )
-                .await?;
+                .with_buffer_size(Some(
+                    context
+                        .session_config()
+                        .options()
+                        .execution
+                        .objectstore_writer_buffer_size,
+                ))
+                .build()?;
                 let schema = get_writer_schema(&self.config);
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();

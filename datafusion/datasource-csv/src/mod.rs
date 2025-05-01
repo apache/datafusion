@@ -15,24 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
+#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+
 pub mod file_format;
 pub mod source;
 
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_datasource::{
-    file::FileSource, file_scan_config::FileScanConfig, PartitionedFile,
-};
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::{file::FileSource, file_scan_config::FileScanConfig};
 use datafusion_execution::object_store::ObjectStoreUrl;
 pub use file_format::*;
 
 /// Returns a [`FileScanConfig`] for given `file_groups`
 pub fn partitioned_csv_config(
     schema: SchemaRef,
-    file_groups: Vec<Vec<PartitionedFile>>,
+    file_groups: Vec<FileGroup>,
     file_source: Arc<dyn FileSource>,
 ) -> FileScanConfig {
-    FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, file_source)
+    FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema, file_source)
         .with_file_groups(file_groups)
+        .build()
 }

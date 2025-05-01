@@ -31,7 +31,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
     schema_name_from_exprs, schema_name_from_exprs_comma_separated_without_space,
-    schema_name_from_sorts, AggregateFunction, AggregateFunctionParams,
+    schema_name_from_sorts, AggregateFunction, AggregateFunctionParams, ExprListDisplay,
     WindowFunctionParams,
 };
 use crate::function::{
@@ -175,6 +175,13 @@ impl AggregateUDF {
         self.inner.schema_name(params)
     }
 
+    /// Returns a human readable expression.
+    ///
+    /// See [`Expr::human_display`] for details.
+    pub fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.human_display(params)
+    }
+
     pub fn window_function_schema_name(
         &self,
         params: &WindowFunctionParams,
@@ -308,6 +315,16 @@ impl AggregateUDF {
         self.inner.default_value(data_type)
     }
 
+    /// See [`AggregateUDFImpl::supports_null_handling_clause`] for more details.
+    pub fn supports_null_handling_clause(&self) -> bool {
+        self.inner.supports_null_handling_clause()
+    }
+
+    /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
+    pub fn is_ordered_set_aggregate(&self) -> bool {
+        self.inner.is_ordered_set_aggregate()
+    }
+
     /// Returns the documentation for this Aggregate UDF.
     ///
     /// Documentation can be accessed programmatically as well as
@@ -425,6 +442,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             null_treatment,
         } = params;
 
+        // exclude the first function argument(= column) in ordered set aggregate function,
+        // because it is duplicated with the WITHIN GROUP clause in schema name.
+        let args = if self.is_ordered_set_aggregate() {
+            &args[1..]
+        } else {
+            &args[..]
+        };
+
         let mut schema_name = String::new();
 
         schema_name.write_fmt(format_args!(
@@ -432,6 +457,51 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             self.name(),
             if *distinct { "DISTINCT " } else { "" },
             schema_name_from_exprs_comma_separated_without_space(args)?
+        ))?;
+
+        if let Some(null_treatment) = null_treatment {
+            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+        }
+
+        if let Some(filter) = filter {
+            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+        };
+
+        if let Some(order_by) = order_by {
+            let clause = match self.is_ordered_set_aggregate() {
+                true => "WITHIN GROUP",
+                false => "ORDER BY",
+            };
+
+            schema_name.write_fmt(format_args!(
+                " {} [{}]",
+                clause,
+                schema_name_from_sorts(order_by)?
+            ))?;
+        };
+
+        Ok(schema_name)
+    }
+
+    /// Returns a human readable expression.
+    ///
+    /// See [`Expr::human_display`] for details.
+    fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+        let AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        } = params;
+
+        let mut schema_name = String::new();
+
+        schema_name.write_fmt(format_args!(
+            "{}({}{})",
+            self.name(),
+            if *distinct { "DISTINCT " } else { "" },
+            ExprListDisplay::comma_separated(args.as_slice())
         ))?;
 
         if let Some(null_treatment) = null_treatment {
@@ -843,6 +913,18 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// while `count` returns 0 if input is Null
     fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         ScalarValue::try_from(data_type)
+    }
+
+    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
+    /// If the function does not, return false
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    /// If this function is ordered-set aggregate function, return true
+    /// If the function is not, return false
+    fn is_ordered_set_aggregate(&self) -> bool {
+        false
     }
 
     /// Returns the documentation for this Aggregate UDF.

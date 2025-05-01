@@ -45,7 +45,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, InputOrderMode};
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting, PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
@@ -56,6 +56,8 @@ use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use rstest::rstest;
 
 /// Create a csv exec for tests
@@ -65,14 +67,16 @@ fn csv_exec_ordered(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         Arc::new(CsvSource::new(true, 0, b'"')),
     )
     .with_file(PartitionedFile::new("file_path".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 /// Created a sorted parquet exec
@@ -83,14 +87,16 @@ pub fn parquet_exec_sorted(
     let sort_exprs = sort_exprs.into_iter().collect();
 
     let source = Arc::new(ParquetSource::default());
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         source,
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 /// Create a sorted Csv exec
@@ -100,14 +106,16 @@ fn csv_exec_sorted(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         Arc::new(CsvSource::new(false, 0, 0)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 /// Runs the sort enforcement optimizer and asserts the plan
@@ -1644,7 +1652,7 @@ async fn test_remove_unnecessary_sort7() -> Result<()> {
     ) as Arc<dyn ExecutionPlan>;
 
     let expected_input = [
-        "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+        "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false], sort_prefix=[non_nullable_col@1 ASC]",
         "  SortExec: expr=[non_nullable_col@1 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
         "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
@@ -3430,5 +3438,39 @@ fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
     ];
     assert_optimized!(expected_input, expected_optimized, output_sort, true);
 
+    Ok(())
+}
+
+#[test]
+fn test_parallelize_sort_preserves_fetch() -> Result<()> {
+    // Create a schema
+    let schema = create_test_schema3()?;
+    let parquet_exec = parquet_exec(&schema);
+    let coalesced = Arc::new(CoalescePartitionsExec::new(parquet_exec.clone()));
+    let top_coalesced =
+        Arc::new(CoalescePartitionsExec::new(coalesced.clone()).with_fetch(Some(10)));
+
+    let requirements = PlanWithCorrespondingCoalescePartitions::new(
+        top_coalesced.clone(),
+        true,
+        vec![PlanWithCorrespondingCoalescePartitions::new(
+            coalesced,
+            true,
+            vec![PlanWithCorrespondingCoalescePartitions::new(
+                parquet_exec,
+                false,
+                vec![],
+            )],
+        )],
+    );
+
+    let res = parallelize_sorts(requirements)?;
+
+    // Verify fetch was preserved
+    assert_eq!(
+        res.data.plan.fetch(),
+        Some(10),
+        "Fetch value was not preserved after transformation"
+    );
     Ok(())
 }

@@ -28,13 +28,14 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    calculate_range, FileRange, ListingTableUrl, PartitionedFile, RangeCalculation,
+    calculate_range, FileRange, ListingTableUrl, RangeCalculation,
 };
 
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, DataFusionError, Result, Statistics};
+use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
@@ -48,13 +49,12 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 
+use crate::file_format::CsvDecoder;
+use datafusion_datasource::file_groups::FileGroup;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
-use tokio::task::JoinSet;
-
-use crate::file_format::CsvDecoder;
 
 /// Old Csv source, deprecated with DataSourceExec implementation and CsvSource
 ///
@@ -314,7 +314,7 @@ impl CsvExec {
         )
     }
 
-    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
         self.base_config.file_groups = file_groups.clone();
         let mut file_source = self.file_scan_config();
         file_source = file_source.with_file_groups(file_groups);
@@ -381,6 +381,10 @@ impl ExecutionPlan for CsvExec {
         self.inner.statistics()
     }
 
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.inner.partition_statistics(partition)
+    }
+
     fn metrics(&self) -> Option<MetricsSet> {
         self.inner.metrics()
     }
@@ -407,7 +411,7 @@ impl ExecutionPlan for CsvExec {
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource_csv::source::CsvSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
@@ -424,10 +428,11 @@ impl ExecutionPlan for CsvExec {
 ///     .with_terminator(Some(b'#')
 /// ));
 /// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
-/// let file_scan_config = FileScanConfig::new(object_store_url, file_schema, source)
+/// let config = FileScanConfigBuilder::new(object_store_url, file_schema, source)
 ///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
-///     .with_newlines_in_values(true); // The file contains newlines in values;
-/// let exec = file_scan_config.build();
+///     .with_newlines_in_values(true) // The file contains newlines in values;
+///     .build();
+/// let exec = (DataSourceExec::from_data_source(config));
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct CsvSource {
@@ -703,6 +708,7 @@ impl FileOpener for CsvOpener {
             let result = store.get_opts(file_meta.location(), options).await?;
 
             match result.payload {
+                #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
                     let is_whole_file_scanned = file_meta.range.is_none();
                     let decoder = if is_whole_file_scanned {
@@ -741,6 +747,11 @@ pub async fn plan_to_csv(
     let parsed = ListingTableUrl::parse(path)?;
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+    let writer_buffer_size = task_ctx
+        .session_config()
+        .options()
+        .execution
+        .objectstore_writer_buffer_size;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let storeref = Arc::clone(&store);
@@ -750,7 +761,8 @@ pub async fn plan_to_csv(
 
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
-            let mut buf_writer = BufWriter::new(storeref, file.clone());
+            let mut buf_writer =
+                BufWriter::with_capacity(storeref, file.clone(), writer_buffer_size);
             let mut buffer = Vec::with_capacity(1024);
             //only write headers on first iteration
             let mut write_headers = true;

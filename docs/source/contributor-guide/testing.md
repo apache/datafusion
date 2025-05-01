@@ -79,8 +79,15 @@ than the standard test suite and add important test coverage such as that the
 code works when there are hash collisions as well as running the relevant
 portions of the entire [sqlite test suite].
 
+You can run the extended tests on any PR by leaving the following comment (see [example here]):
+
+```
+Run extended tests
+```
+
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 [sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
+[example here]: https://github.com/apache/datafusion/pull/15427#issuecomment-2759160812
 
 ## Rust Integration Tests
 

@@ -547,9 +547,9 @@ fn test_simplify_with_cycle_count(
     };
     let simplifier = ExprSimplifier::new(info);
     let (simplified_expr, count) = simplifier
-        .simplify_with_cycle_count(input_expr.clone())
+        .simplify_with_cycle_count_transformed(input_expr.clone())
         .expect("successfully evaluated");
-
+    let simplified_expr = simplified_expr.data;
     assert_eq!(
         simplified_expr, expected_expr,
         "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{simplified_expr}"

@@ -837,7 +837,7 @@ fn new_join_conditions(
 ///
 /// * `input`: Current node.
 /// * `n_target`: desired target partition number, if partition number of the
-///    current executor is less than this value. Partition number will be increased.
+///   current executor is less than this value. Partition number will be increased.
 ///
 /// # Returns
 ///
@@ -880,7 +880,7 @@ fn add_roundrobin_on_top(
 /// * `input`: Current node.
 /// * `hash_exprs`: Stores Physical Exprs that are used during hashing.
 /// * `n_target`: desired target partition number, if partition number of the
-///    current executor is less than this value. Partition number will be increased.
+///   current executor is less than this value. Partition number will be increased.
 ///
 /// # Returns
 ///
@@ -1018,7 +1018,7 @@ fn remove_dist_changing_operators(
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
 /// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
-fn replace_order_preserving_variants(
+pub fn replace_order_preserving_variants(
     mut context: DistributionContext,
 ) -> Result<DistributionContext> {
     context.children = context
@@ -1035,7 +1035,9 @@ fn replace_order_preserving_variants(
 
     if is_sort_preserving_merge(&context.plan) {
         let child_plan = Arc::clone(&context.children[0].plan);
-        context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));
+        context.plan = Arc::new(
+            CoalescePartitionsExec::new(child_plan).with_fetch(context.plan.fetch()),
+        );
         return Ok(context);
     } else if let Some(repartition) =
         context.plan.as_any().downcast_ref::<RepartitionExec>()
@@ -1112,7 +1114,8 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match child.statistics()?.num_rows {
+        let roundrobin_beneficial_stats = match child.partition_statistics(None)?.num_rows
+        {
             Precision::Exact(n_rows) => n_rows > batch_size,
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,

@@ -20,10 +20,8 @@
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{
-    ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
-};
-use arrow::datatypes::DataType;
+use crate::{ColumnarValue, Documentation, Expr, Signature};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -172,7 +170,7 @@ impl ScalarUDF {
     ///
     ///  # Notes
     ///
-    /// If a function implement [`ScalarUDFImpl::return_type_from_args`],
+    /// If a function implement [`ScalarUDFImpl::return_field_from_args`],
     /// its [`ScalarUDFImpl::return_type`] should raise an error.
     ///
     /// See [`ScalarUDFImpl::return_type`] for more details.
@@ -182,9 +180,9 @@ impl ScalarUDF {
 
     /// Return the datatype this function returns given the input argument types.
     ///
-    /// See [`ScalarUDFImpl::return_type_from_args`] for more details.
-    pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        self.inner.return_type_from_args(args)
+    /// See [`ScalarUDFImpl::return_field_from_args`] for more details.
+    pub fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+        self.inner.return_field_from_args(args)
     }
 
     /// Do the function rewrite
@@ -198,25 +196,9 @@ impl ScalarUDF {
         self.inner.simplify(args, info)
     }
 
-    #[deprecated(since = "42.1.0", note = "Use `invoke_with_args` instead")]
-    pub fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.inner.invoke(args)
-    }
-
     #[allow(deprecated)]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         self.inner.is_nullable(args, schema)
-    }
-
-    #[deprecated(since = "46.0.0", note = "Use `invoke_with_args` instead")]
-    pub fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.inner.invoke_batch(args, number_rows)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -224,25 +206,6 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::invoke_with_args`] for details.
     pub fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         self.inner.invoke_with_args(args)
-    }
-
-    /// Invoke the function without `args` but number of rows, returning the appropriate result.
-    ///
-    /// Note: This method is deprecated and will be removed in future releases.
-    /// User defined functions should implement [`Self::invoke_with_args`] instead.
-    #[deprecated(since = "42.1.0", note = "Use `invoke_with_args` instead")]
-    pub fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.inner.invoke_no_args(number_rows)
-    }
-
-    /// Returns a `ScalarFunctionImplementation` that can invoke the function
-    /// during execution
-    #[deprecated(since = "42.0.0", note = "Use `invoke_with_args` instead")]
-    pub fn fun(&self) -> ScalarFunctionImplementation {
-        let captured = Arc::clone(&self.inner);
-        #[allow(deprecated)]
-        Arc::new(move |args| captured.invoke(args))
     }
 
     /// Get the circuits of inner implementation
@@ -330,14 +293,17 @@ where
 
 /// Arguments passed to [`ScalarUDFImpl::invoke_with_args`] when invoking a
 /// scalar function.
-pub struct ScalarFunctionArgs<'a> {
+pub struct ScalarFunctionArgs<'a, 'b> {
     /// The evaluated arguments to the function
     pub args: Vec<ColumnarValue>,
+    /// Field associated with each arg, if it exists
+    pub arg_fields: Vec<&'a Field>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
-    /// The return type of the scalar function returned (from `return_type` or `return_type_from_args`)
-    /// when creating the physical expression from the logical expression
-    pub return_type: &'a DataType,
+    /// The return field of the scalar function returned (from `return_type`
+    /// or `return_field_from_args`) when creating the physical expression
+    /// from the logical expression
+    pub return_field: &'b Field,
 }
 
 /// Information about arguments passed to the function
@@ -346,11 +312,11 @@ pub struct ScalarFunctionArgs<'a> {
 /// such as the type of the arguments, any scalar arguments and if the
 /// arguments can (ever) be null
 ///
-/// See [`ScalarUDFImpl::return_type_from_args`] for more information
+/// See [`ScalarUDFImpl::return_field_from_args`] for more information
 #[derive(Debug)]
-pub struct ReturnTypeArgs<'a> {
+pub struct ReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
-    pub arg_types: &'a [DataType],
+    pub arg_fields: &'a [Field],
     /// Is argument `i` to the function a scalar (constant)
     ///
     /// If argument `i` is not a scalar, it will be None
@@ -358,52 +324,6 @@ pub struct ReturnTypeArgs<'a> {
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
     pub scalar_arguments: &'a [Option<&'a ScalarValue>],
-    /// Can argument `i` (ever) null?
-    pub nullables: &'a [bool],
-}
-
-/// Return metadata for this function.
-///
-/// See [`ScalarUDFImpl::return_type_from_args`] for more information
-#[derive(Debug)]
-pub struct ReturnInfo {
-    return_type: DataType,
-    nullable: bool,
-}
-
-impl ReturnInfo {
-    pub fn new(return_type: DataType, nullable: bool) -> Self {
-        Self {
-            return_type,
-            nullable,
-        }
-    }
-
-    pub fn new_nullable(return_type: DataType) -> Self {
-        Self {
-            return_type,
-            nullable: true,
-        }
-    }
-
-    pub fn new_non_nullable(return_type: DataType) -> Self {
-        Self {
-            return_type,
-            nullable: false,
-        }
-    }
-
-    pub fn return_type(&self) -> &DataType {
-        &self.return_type
-    }
-
-    pub fn nullable(&self) -> bool {
-        self.nullable
-    }
-
-    pub fn into_parts(self) -> (DataType, bool) {
-        (self.return_type, self.nullable)
-    }
 }
 
 /// Trait for implementing user defined scalar functions.
@@ -517,7 +437,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Notes
     ///
-    /// If you provide an implementation for [`Self::return_type_from_args`],
+    /// If you provide an implementation for [`Self::return_field_from_args`],
     /// DataFusion will not call `return_type` (this function). In such cases
     /// is recommended to return [`DataFusionError::Internal`].
     ///
@@ -555,58 +475,23 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function **must** consistently return the same type for the same
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        let return_type = self.return_type(args.arg_types)?;
-        Ok(ReturnInfo::new_nullable(return_type))
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type())
+            .cloned()
+            .collect::<Vec<_>>();
+        let return_type = self.return_type(&data_types)?;
+        Ok(Field::new(self.name(), return_type, true))
     }
 
     #[deprecated(
         since = "45.0.0",
-        note = "Use `return_type_from_args` instead. if you use `is_nullable` that returns non-nullable with `return_type`, you would need to switch to `return_type_from_args`, you might have error"
+        note = "Use `return_field_from_args` instead. if you use `is_nullable` that returns non-nullable with `return_type`, you would need to switch to `return_field_from_args`, you might have error"
     )]
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
         true
-    }
-
-    /// Invoke the function on `args`, returning the appropriate result
-    ///
-    /// Note: This method is deprecated and will be removed in future releases.
-    /// User defined functions should implement [`Self::invoke_with_args`] instead.
-    #[deprecated(since = "42.1.0", note = "Use `invoke_with_args` instead")]
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!(
-            "Function {} does not implement invoke but called",
-            self.name()
-        )
-    }
-
-    /// Invoke the function with `args` and the number of rows,
-    /// returning the appropriate result.
-    ///
-    /// Note: See notes on  [`Self::invoke_with_args`]
-    ///
-    /// Note: This method is deprecated and will be removed in future releases.
-    /// User defined functions should implement [`Self::invoke_with_args`] instead.
-    ///
-    /// See <https://github.com/apache/datafusion/issues/13515> for more details.
-    #[deprecated(since = "46.0.0", note = "Use `invoke_with_args` instead")]
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args.is_empty() {
-            true =>
-            {
-                #[allow(deprecated)]
-                self.invoke_no_args(number_rows)
-            }
-            false =>
-            {
-                #[allow(deprecated)]
-                self.invoke(args)
-            }
-        }
     }
 
     /// Invoke the function returning the appropriate result.
@@ -619,23 +504,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.invoke_batch(&args.args, args.number_rows)
-    }
-
-    /// Invoke the function without `args`, instead the number of rows are provided,
-    /// returning the appropriate result.
-    ///
-    /// Note: This method is deprecated and will be removed in future releases.
-    /// User defined functions should implement [`Self::invoke_with_args`] instead.
-    #[deprecated(since = "42.1.0", note = "Use `invoke_with_args` instead")]
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        not_impl_err!(
-            "Function {} does not implement invoke_no_args but called",
-            self.name()
-        )
-    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue>;
 
     /// Returns any aliases (alternate names) for this function.
     ///
@@ -859,16 +728,16 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type(arg_types)
     }
 
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        self.inner.return_type_from_args(args)
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+        self.inner.return_field_from_args(args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         self.inner.invoke_with_args(args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn simplify(

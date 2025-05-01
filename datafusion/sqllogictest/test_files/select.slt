@@ -1869,5 +1869,5 @@ select *, count(*) over() as ta from t;
 3 4
 1 4
 
-query
+statement count 0
 drop table t;

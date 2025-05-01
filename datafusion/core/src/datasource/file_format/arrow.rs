@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use super::file_compression_type::FileCompressionType;
 use super::write::demux::DemuxedStreamReceiver;
-use super::write::{create_writer, SharedBuffer};
+use super::write::SharedBuffer;
 use super::FileFormatFactory;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
@@ -46,23 +46,24 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
 };
-use datafusion_common_runtime::SpawnedTask;
+use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::write::ObjectWriterBuilder;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 use tokio::io::AsyncWriteExt;
-use tokio::task::JoinSet;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -144,6 +145,7 @@ impl FileFormat for ArrowFormat {
         for object in objects {
             let r = store.as_ref().get(&object.location).await?;
             let schema = match r.payload {
+                #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
                     let reader = FileReader::try_new(&mut file, None)?;
                     reader.schema()
@@ -174,7 +176,12 @@ impl FileFormat for ArrowFormat {
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(conf.with_source(Arc::new(ArrowSource::default())).build())
+        let source = Arc::new(ArrowSource::default());
+        let config = FileScanConfigBuilder::from(conf)
+            .with_source(source)
+            .build();
+
+        Ok(DataSourceExec::from_data_source(config))
     }
 
     async fn create_writer_physical_plan(
@@ -217,7 +224,7 @@ impl FileSink for ArrowFileSink {
 
     async fn spawn_writer_tasks_and_join(
         &self,
-        _context: &Arc<TaskContext>,
+        context: &Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
@@ -235,12 +242,19 @@ impl FileSink for ArrowFileSink {
                 &get_writer_schema(&self.config),
                 ipc_options.clone(),
             )?;
-            let mut object_store_writer = create_writer(
+            let mut object_store_writer = ObjectWriterBuilder::new(
                 FileCompressionType::UNCOMPRESSED,
                 &path,
                 Arc::clone(&object_store),
             )
-            .await?;
+            .with_buffer_size(Some(
+                context
+                    .session_config()
+                    .options()
+                    .execution
+                    .objectstore_writer_buffer_size,
+            ))
+            .build()?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
                 while let Some(batch) = rx.recv().await {
@@ -298,7 +312,7 @@ impl DisplayAs for ArrowFileSink {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ArrowFileSink(file_groups=",)?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
@@ -437,7 +451,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -480,7 +494,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };

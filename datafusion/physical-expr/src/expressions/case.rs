@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expressions::try_cast;
+use crate::PhysicalExpr;
 use std::borrow::Cow;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
-
-use crate::expressions::try_cast;
-use crate::PhysicalExpr;
 
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
@@ -156,7 +155,10 @@ impl CaseExpr {
                 && else_expr.as_ref().unwrap().as_any().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
-            } else if when_then_expr.len() == 1 && else_expr.is_some() {
+            } else if when_then_expr.len() == 1
+                && is_cheap_and_infallible(&(when_then_expr[0].1))
+                && else_expr.as_ref().is_some_and(is_cheap_and_infallible)
+            {
                 EvalMethod::ExpressionOrExpression
             } else {
                 EvalMethod::NoExpression
@@ -600,7 +602,7 @@ mod tests {
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
-    use arrow::datatypes::*;
+    use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -813,9 +815,18 @@ mod tests {
     }
 
     fn case_test_batch1() -> Result<RecordBatch> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
         let a = Int32Array::from(vec![Some(1), Some(0), None, Some(5)]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        let b = Int32Array::from(vec![Some(3), None, Some(14), Some(7)]);
+        let c = Int32Array::from(vec![Some(0), Some(-3), Some(777), None]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )?;
         Ok(batch)
     }
 
@@ -1306,18 +1317,8 @@ mod tests {
             lit(2i32),
             &batch.schema(),
         )?;
-        let then = binary(
-            col("a", &schema)?,
-            Operator::Plus,
-            lit(1i32),
-            &batch.schema(),
-        )?;
-        let else_expr = binary(
-            col("a", &schema)?,
-            Operator::Minus,
-            lit(1i32),
-            &batch.schema(),
-        )?;
+        let then = col("b", &schema)?;
+        let else_expr = col("c", &schema)?;
         let expr = CaseExpr::try_new(None, vec![(when, then)], Some(else_expr))?;
         assert!(matches!(
             expr.eval_method,
@@ -1329,7 +1330,7 @@ mod tests {
             .expect("Failed to convert to array");
         let result = as_int32_array(&result).expect("failed to downcast to Int32Array");
 
-        let expected = &Int32Array::from(vec![Some(2), Some(1), None, Some(4)]);
+        let expected = &Int32Array::from(vec![Some(3), None, Some(777), None]);
 
         assert_eq!(expected, result);
         Ok(())

@@ -17,24 +17,23 @@
 
 //! The table implementation.
 
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
+use super::{ListingTableUrl, PartitionedFile};
 use std::collections::HashMap;
 use std::{any::Any, str::FromStr, sync::Arc};
-
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
-use super::{ListingTableUrl, PartitionedFile};
 
 use crate::datasource::{
     create_ordering,
     file_format::{
         file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
     },
-    get_statistics_with_limit,
     physical_plan::FileSinkConfig,
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -55,28 +54,34 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_common::stats::Precision;
+use datafusion_datasource::compute_all_files_statistics;
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use futures::{future, stream, StreamExt, TryStreamExt};
+use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
 
 /// Configuration for creating a [`ListingTable`]
+///
+///
 #[derive(Debug, Clone)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
     /// They should share the same schema and object store.
     pub table_paths: Vec<ListingTableUrl>,
     /// Optional `SchemaRef` for the to be created `ListingTable`.
+    ///
+    /// See details on [`ListingTableConfig::with_schema`]
     pub file_schema: Option<SchemaRef>,
-    /// Optional `ListingOptions` for the to be created `ListingTable`.
+    /// Optional [`ListingOptions`] for the to be created [`ListingTable`].
+    ///
+    /// See details on [`ListingTableConfig::with_listing_options`]
     pub options: Option<ListingOptions>,
 }
 
 impl ListingTableConfig {
-    /// Creates new [`ListingTableConfig`].
-    ///
-    /// The [`SchemaRef`] and [`ListingOptions`] are inferred based on
-    /// the suffix of the provided `table_paths` first element.
+    /// Creates new [`ListingTableConfig`] for reading the specified URL
     pub fn new(table_path: ListingTableUrl) -> Self {
         let table_paths = vec![table_path];
         Self {
@@ -88,8 +93,7 @@ impl ListingTableConfig {
 
     /// Creates new [`ListingTableConfig`] with multiple table paths.
     ///
-    /// The [`SchemaRef`] and [`ListingOptions`] are inferred based on
-    /// the suffix of the provided `table_paths` first element.
+    /// See [`Self::infer_options`] for details on what happens with multiple paths
     pub fn new_with_multi_paths(table_paths: Vec<ListingTableUrl>) -> Self {
         Self {
             table_paths,
@@ -97,7 +101,16 @@ impl ListingTableConfig {
             options: None,
         }
     }
-    /// Add `schema` to [`ListingTableConfig`]
+    /// Set the `schema` for the overall [`ListingTable`]
+    ///
+    /// [`ListingTable`] will automatically coerce, when possible, the schema
+    /// for individual files to match this schema.
+    ///
+    /// If a schema is not provided, it is inferred using
+    /// [`Self::infer_schema`].
+    ///
+    /// If the schema is provided, it must contain only the fields in the file
+    /// without the table partitioning columns.
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
             table_paths: self.table_paths,
@@ -107,6 +120,9 @@ impl ListingTableConfig {
     }
 
     /// Add `listing_options` to [`ListingTableConfig`]
+    ///
+    /// If not provided, format and other options are inferred via
+    /// [`Self::infer_options`].
     pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
         Self {
             table_paths: self.table_paths,
@@ -115,7 +131,7 @@ impl ListingTableConfig {
         }
     }
 
-    ///Returns a tupe of (file_extension, optional compression_extension)
+    /// Returns a tuple of `(file_extension, optional compression_extension)`
     ///
     /// For example a path ending with blah.test.csv.gz returns `("csv", Some("gz"))`
     /// For example a path ending with blah.test.csv returns `("csv", None)`
@@ -137,7 +153,9 @@ impl ListingTableConfig {
         }
     }
 
-    /// Infer `ListingOptions` based on `table_path` suffix.
+    /// Infer `ListingOptions` based on `table_path` and file suffix.
+    ///
+    /// The format is inferred based on the first `table_path`.
     pub async fn infer_options(self, state: &dyn Session) -> Result<Self> {
         let store = if let Some(url) = self.table_paths.first() {
             state.runtime_env().object_store(url)?
@@ -191,7 +209,13 @@ impl ListingTableConfig {
         })
     }
 
-    /// Infer the [`SchemaRef`] based on `table_path` suffix.  Requires `self.options` to be set prior to using.
+    /// Infer the [`SchemaRef`] based on `table_path`s.
+    ///
+    /// This method infers the table schema using the first `table_path`.
+    /// See [`ListingOptions::infer_schema`] for more details
+    ///
+    /// # Errors
+    /// * if `self.options` is not set. See [`Self::with_listing_options`]
     pub async fn infer_schema(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
@@ -211,12 +235,15 @@ impl ListingTableConfig {
         }
     }
 
-    /// Convenience wrapper for calling `infer_options` and `infer_schema`
+    /// Convenience method to call both [`Self::infer_options`] and [`Self::infer_schema`]
     pub async fn infer(self, state: &dyn Session) -> Result<Self> {
         self.infer_options(state).await?.infer_schema(state).await
     }
 
-    /// Infer the partition columns from the path. Requires `self.options` to be set prior to using.
+    /// Infer the partition columns from `table_paths`.
+    ///
+    /// # Errors
+    /// * if `self.options` is not set. See [`Self::with_listing_options`]
     pub async fn infer_partitions_from_path(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
@@ -276,6 +303,7 @@ pub struct ListingOptions {
     /// parquet metadata.
     ///
     /// See <https://github.com/apache/datafusion/issues/4177>
+    ///
     /// NOTE: This attribute stores all equivalent orderings (the outer `Vec`)
     ///       where each ordering consists of an individual lexicographic
     ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
@@ -478,11 +506,13 @@ impl ListingOptions {
     }
 
     /// Infer the schema of the files at the given path on the provided object store.
-    /// The inferred schema does not include the partitioning columns.
     ///
-    /// This method will not be called by the table itself but before creating it.
-    /// This way when creating the logical plan we can decide to resolve the schema
-    /// locally or ask a remote service to do it (e.g a scheduler).
+    /// If the table_path contains one or more files (i.e. it is a directory /
+    /// prefix of files) their schema is merged by calling [`FileFormat::infer_schema`]
+    ///
+    /// Note: The inferred schema does not include any partitioning columns.
+    ///
+    /// This method is called as part of creating a [`ListingTable`].
     pub async fn infer_schema<'a>(
         &'a self,
         state: &dyn Session,
@@ -655,16 +685,14 @@ impl ListingOptions {
 /// `ListingTable` also supports limit, filter and projection pushdown for formats that
 /// support it as such as Parquet.
 ///
-/// # Implementation
+/// # See Also
 ///
-/// `ListingTable` Uses [`DataSourceExec`] to execute the data. See that struct
-/// for more details.
+/// 1. [`ListingTableConfig`]: Configuration options
+/// 1. [`DataSourceExec`]: `ExecutionPlan` used by `ListingTable`
 ///
 /// [`DataSourceExec`]: crate::datasource::source::DataSourceExec
 ///
-/// # Example
-///
-/// To read a directory of parquet files using a [`ListingTable`]:
+/// # Example: Read a directory of parquet files using a [`ListingTable`]
 ///
 /// ```no_run
 /// # use datafusion::prelude::SessionContext;
@@ -711,12 +739,16 @@ impl ListingOptions {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
-    /// File fields only
+    /// `file_schema` contains only the columns physically stored in the data files themselves.
+    ///     - Represents the actual fields found in files like Parquet, CSV, etc.
+    ///     - Used when reading the raw data from files
     file_schema: SchemaRef,
-    /// File fields + partition columns
+    /// `table_schema` combines `file_schema` + partition columns
+    ///     - Partition columns are derived from directory paths (not stored in files)
+    ///     - These are columns like "year=2022/month=01" in paths like `/data/year=2022/month=01/file.parquet`
     table_schema: SchemaRef,
     options: ListingOptions,
     definition: Option<String>,
@@ -726,16 +758,9 @@ pub struct ListingTable {
 }
 
 impl ListingTable {
-    /// Create new [`ListingTable`] that lists the FS to get the files
-    /// to scan. See [`ListingTable`] for and example.
+    /// Create new [`ListingTable`]
     ///
-    /// Takes a `ListingTableConfig` as input which requires an `ObjectStore` and `table_path`.
-    /// `ListingOptions` and `SchemaRef` are optional.  If they are not
-    /// provided the file type is inferred based on the file suffix.
-    /// If the schema is provided then it must be resolved before creating the table
-    /// and should contain the fields of the file without the table
-    /// partitioning columns.
-    ///
+    /// See documentation and example on [`ListingTable`] and [`ListingTableConfig`]
     pub fn try_new(config: ListingTableConfig) -> Result<Self> {
         let file_schema = config
             .file_schema
@@ -794,7 +819,7 @@ impl ListingTable {
     /// If `None`, creates a new [`DefaultFileStatisticsCache`] scoped to this query.
     pub fn with_cache(mut self, cache: Option<FileStatisticsCache>) -> Self {
         self.collected_statistics =
-            cache.unwrap_or(Arc::new(DefaultFileStatisticsCache::default()));
+            cache.unwrap_or_else(|| Arc::new(DefaultFileStatisticsCache::default()));
         self
     }
 
@@ -873,15 +898,13 @@ impl TableProvider for ListingTable {
             filters.iter().cloned().partition(|filter| {
                 can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
             });
-        // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
-        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
 
         // We should not limit the number of partitioned files to scan if there are filters and limit
         // at the same time. This is because the limit should be applied after the filters are applied.
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
         let (mut partitioned_file_lists, statistics) = self
-            .list_files_for_scan(session_state, &partition_filters, statistic_file_limit)
+            .list_files_for_scan(state, &partition_filters, statistic_file_limit)
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -897,10 +920,11 @@ impl TableProvider for ListingTable {
             .split_file_groups_by_statistics
             .then(|| {
                 output_ordering.first().map(|output_ordering| {
-                    FileScanConfig::split_groups_by_statistics(
+                    FileScanConfig::split_groups_by_statistics_with_target_partitions(
                         &self.table_schema,
                         &partitioned_file_lists,
                         output_ordering,
+                        self.options.target_partitions,
                     )
                 })
             })
@@ -940,8 +964,8 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
-                session_state,
-                FileScanConfig::new(
+                state,
+                FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
                     self.options.format.file_source(),
@@ -952,7 +976,8 @@ impl TableProvider for ListingTable {
                 .with_projection(projection.cloned())
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
-                .with_table_partition_cols(table_partition_cols),
+                .with_table_partition_cols(table_partition_cols)
+                .build(),
                 filters.as_ref(),
             )
             .await
@@ -1019,10 +1044,8 @@ impl TableProvider for ListingTable {
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
 
-        // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
-        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let file_list_stream = pruned_partition_list(
-            session_state,
+            state,
             store.as_ref(),
             table_path,
             &[],
@@ -1031,7 +1054,7 @@ impl TableProvider for ListingTable {
         )
         .await?;
 
-        let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
+        let file_group = file_list_stream.try_collect::<Vec<_>>().await?.into();
         let keep_partition_by_columns =
             state.config_options().execution.keep_partition_by_columns;
 
@@ -1040,7 +1063,7 @@ impl TableProvider for ListingTable {
             original_url: String::default(),
             object_store_url: self.table_paths()[0].object_store(),
             table_paths: self.table_paths().clone(),
-            file_groups,
+            file_group,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             insert_op,
@@ -1070,7 +1093,7 @@ impl TableProvider for ListingTable {
 
         self.options()
             .format
-            .create_writer_physical_plan(input, session_state, config, order_requirements)
+            .create_writer_physical_plan(input, state, config, order_requirements)
             .await
     }
 
@@ -1088,7 +1111,7 @@ impl ListingTable {
         ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
+    ) -> Result<(Vec<FileGroup>, Statistics)> {
         let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
@@ -1113,32 +1136,38 @@ impl ListingTable {
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                if self.options.collect_stat {
-                    let statistics =
-                        self.do_collect_statistics(ctx, &store, &part_file).await?;
-                    Ok((part_file, statistics))
+                let statistics = if self.options.collect_stat {
+                    self.do_collect_statistics(ctx, &store, &part_file).await?
                 } else {
-                    Ok((
-                        part_file,
-                        Arc::new(Statistics::new_unknown(&self.file_schema)),
-                    ))
-                }
+                    Arc::new(Statistics::new_unknown(&self.file_schema))
+                };
+                Ok(part_file.with_statistics(statistics))
             })
             .boxed()
             .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
-        let (files, statistics) = get_statistics_with_limit(
-            files,
-            self.schema(),
-            limit,
-            self.options.collect_stat,
-        )
-        .await?;
+        let (file_group, inexact_stats) =
+            get_files_with_limit(files, limit, self.options.collect_stat).await?;
 
-        Ok((
-            split_files(files, self.options.target_partitions),
-            statistics,
-        ))
+        let file_groups = file_group.split_files(self.options.target_partitions);
+        let (mut file_groups, mut stats) = compute_all_files_statistics(
+            file_groups,
+            self.schema(),
+            self.options.collect_stat,
+            inexact_stats,
+        )?;
+        let (schema_mapper, _) = DefaultSchemaAdapterFactory::from_schema(self.schema())
+            .map_schema(self.file_schema.as_ref())?;
+        stats.column_statistics =
+            schema_mapper.map_column_statistics(&stats.column_statistics)?;
+        file_groups.iter_mut().try_for_each(|file_group| {
+            if let Some(stat) = file_group.statistics_mut() {
+                stat.column_statistics =
+                    schema_mapper.map_column_statistics(&stat.column_statistics)?;
+            }
+            Ok::<_, DataFusionError>(())
+        })?;
+        Ok((file_groups, stats))
     }
 
     /// Collects statistics for a given partitioned file.
@@ -1180,6 +1209,82 @@ impl ListingTable {
     }
 }
 
+/// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
+///
+/// This function collects files from the provided stream until either:
+/// 1. The stream is exhausted
+/// 2. The accumulated number of rows exceeds the provided `limit` (if specified)
+///
+/// # Arguments
+/// * `files` - A stream of `Result<PartitionedFile>` items to process
+/// * `limit` - An optional row count limit. If provided, the function will stop collecting files
+///   once the accumulated number of rows exceeds this limit
+/// * `collect_stats` - Whether to collect and accumulate statistics from the files
+///
+/// # Returns
+/// A `Result` containing a `FileGroup` with the collected files
+/// and a boolean indicating whether the statistics are inexact.
+///
+/// # Note
+/// The function will continue processing files if statistics are not available or if the
+/// limit is not provided. If `collect_stats` is false, statistics won't be accumulated
+/// but files will still be collected.
+async fn get_files_with_limit(
+    files: impl Stream<Item = Result<PartitionedFile>>,
+    limit: Option<usize>,
+    collect_stats: bool,
+) -> Result<(FileGroup, bool)> {
+    let mut file_group = FileGroup::default();
+    // Fusing the stream allows us to call next safely even once it is finished.
+    let mut all_files = Box::pin(files.fuse());
+    enum ProcessingState {
+        ReadingFiles,
+        ReachedLimit,
+    }
+
+    let mut state = ProcessingState::ReadingFiles;
+    let mut num_rows = Precision::Absent;
+
+    while let Some(file_result) = all_files.next().await {
+        // Early exit if we've already reached our limit
+        if matches!(state, ProcessingState::ReachedLimit) {
+            break;
+        }
+
+        let file = file_result?;
+
+        // Update file statistics regardless of state
+        if collect_stats {
+            if let Some(file_stats) = &file.statistics {
+                num_rows = if file_group.is_empty() {
+                    // For the first file, just take its row count
+                    file_stats.num_rows
+                } else {
+                    // For subsequent files, accumulate the counts
+                    num_rows.add(&file_stats.num_rows)
+                };
+            }
+        }
+
+        // Always add the file to our group
+        file_group.push(file);
+
+        // Check if we've hit the limit (if one was specified)
+        if let Some(limit) = limit {
+            if let Precision::Exact(row_count) = num_rows {
+                if row_count > limit {
+                    state = ProcessingState::ReachedLimit;
+                }
+            }
+        }
+    }
+    // If we still have files in the stream, it means that the limit kicked
+    // in, and the statistic could have been different had we processed the
+    // files in a different order.
+    let inexact_stats = all_files.next().await.is_some();
+    Ok((file_group, inexact_stats))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1190,14 +1295,12 @@ mod tests {
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
-    use crate::{
-        assert_batches_eq,
-        test::{columns, object_store::register_test_store},
-    };
+    use crate::test::{columns, object_store::register_test_store};
 
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::stats::Precision;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -1223,8 +1326,14 @@ mod tests {
         assert_eq!(exec.output_partitioning().partition_count(), 1);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
         Ok(())
     }
@@ -1249,9 +1358,15 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
         Ok(())
     }
@@ -1277,8 +1392,11 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
+        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
 
         Ok(())
     }
@@ -2208,16 +2326,14 @@ mod tests {
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &res);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Read the records in the table
         let batches = session_ctx
@@ -2225,16 +2341,14 @@ mod tests {
             .await?
             .collect()
             .await?;
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Assert that `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -2248,17 +2362,14 @@ mod tests {
 
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
-        // Insert returns the number of rows written, in our case this would be 6.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &res);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Read the contents of the table
         let batches = session_ctx
@@ -2267,17 +2378,13 @@ mod tests {
             .collect()
             .await?;
 
-        // Define the expected result after the second append.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 40    |",
-            "+-------+",
-        ];
-
-        // Assert that the batches read from the file after the second append match the expected result.
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 40    |
+            +-------+
+        "###);}
 
         // Assert that another `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -2333,16 +2440,15 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+-----+-----+---+",
-            "| a   | b   | c |",
-            "+-----+-----+---+",
-            "| foo | bar | 1 |",
-            "| foo | bar | 2 |",
-            "| foo | bar | 3 |",
-            "+-----+-----+---+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-----+-----+---+
+            | a   | b   | c |
+            +-----+-----+---+
+            | foo | bar | 1 |
+            | foo | bar | 2 |
+            | foo | bar | 3 |
+            +-----+-----+---+
+        "###);}
 
         Ok(())
     }

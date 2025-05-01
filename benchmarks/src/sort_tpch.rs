@@ -63,6 +63,15 @@ pub struct RunOpt {
     /// Load the data into a MemTable before executing the query
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
+
+    /// Mark the first column of each table as sorted in ascending order.
+    /// The tables should have been created with the `--sort` option for this to have any effect.
+    #[structopt(short = "t", long = "sorted")]
+    sorted: bool,
+
+    /// Append a `LIMIT n` clause to the query
+    #[structopt(short = "l", long = "limit")]
+    limit: Option<usize>,
 }
 
 struct QueryResult {
@@ -92,7 +101,7 @@ impl RunOpt {
     /// Payload Columns:
     /// - Thin variant: `l_partkey` column with `BIGINT` type (1 column)
     /// - Wide variant: all columns except for possible key columns (12 columns)
-    const SORT_QUERIES: [&'static str; 10] = [
+    const SORT_QUERIES: [&'static str; 11] = [
         // Q1: 1 sort key (type: INTEGER, cardinality: 7) + 1 payload column
         r#"
         SELECT l_linenumber, l_partkey
@@ -159,6 +168,12 @@ impl RunOpt {
         FROM lineitem
         ORDER BY l_orderkey, l_suppkey, l_linenumber, l_comment
         "#,
+        // Q11: 1 sort key (type: VARCHAR, cardinality: 4.5M) + 1 payload column
+        r#"
+        SELECT l_shipmode, l_comment, l_partkey
+        FROM lineitem
+        ORDER BY l_shipmode
+        "#,
     ];
 
     /// If query is specified from command line, run only that query.
@@ -187,7 +202,7 @@ impl RunOpt {
 
     /// Benchmark query `query_id` in `SORT_QUERIES`
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
-        let config = self.common.config();
+        let config = self.common.config()?;
         let rt_builder = self.common.runtime_env_builder()?;
         let state = SessionStateBuilder::new()
             .with_config(config)
@@ -206,9 +221,14 @@ impl RunOpt {
             let start = Instant::now();
 
             let query_idx = query_id - 1; // 1-indexed -> 0-indexed
-            let sql = Self::SORT_QUERIES[query_idx];
+            let base_sql = Self::SORT_QUERIES[query_idx].to_string();
+            let sql = if let Some(limit) = self.limit {
+                format!("{base_sql} LIMIT {limit}")
+            } else {
+                base_sql
+            };
 
-            let row_count = self.execute_query(&ctx, sql).await?;
+            let row_count = self.execute_query(&ctx, sql.as_str()).await?;
 
             let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
             let ms = elapsed.as_secs_f64() * 1000.0;
@@ -309,8 +329,18 @@ impl RunOpt {
             .with_collect_stat(state.config().collect_statistics());
 
         let table_path = ListingTableUrl::parse(path)?;
-        let config = ListingTableConfig::new(table_path).with_listing_options(options);
-        let config = config.infer_schema(&state).await?;
+        let schema = options.infer_schema(&state, &table_path).await?;
+        let options = if self.sorted {
+            let key_column_name = schema.fields()[0].name();
+            options
+                .with_file_sort_order(vec![vec![col(key_column_name).sort(true, false)]])
+        } else {
+            options
+        };
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(options)
+            .with_schema(schema);
 
         Ok(Arc::new(ListingTable::try_new(config)?))
     }
