@@ -30,7 +30,10 @@ use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecur
 use datafusion_common::{
     Constraints, DFSchemaRef, Result, SchemaReference, TableReference,
 };
+#[cfg(feature = "sql")]
 use sqlparser::ast::Ident;
+#[cfg(not(feature = "sql"))]
+use crate::expr::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]

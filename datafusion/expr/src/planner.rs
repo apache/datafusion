@@ -262,7 +262,10 @@ pub trait ExprPlanner: Debug + Send + Sync {
 /// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawBinaryExpr {
+    #[cfg(not(feature = "sql"))]
     pub op: Operator,
+    #[cfg(feature = "sql")]
+    pub op: sqlparser::ast::BinaryOperator,
     pub left: Expr,
     pub right: Expr,
 }
@@ -328,7 +331,7 @@ pub trait TypePlanner: Debug + Send + Sync {
     /// Plan SQL [`ast::DataType`] to DataFusion [`DataType`]
     ///
     /// Returns None if not possible
-    fn plan_type(&self, _sql_type: &ast::DataType) -> Result<Option<DataType>> {
+    fn plan_type(&self, _sql_type: &sqlparser::ast::DataType) -> Result<Option<DataType>> {
         Ok(None)
     }
 }
