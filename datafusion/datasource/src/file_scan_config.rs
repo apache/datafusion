@@ -64,6 +64,7 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan,
 };
 use log::{debug, warn};
+use object_store::ObjectMeta;
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -2326,7 +2327,7 @@ mod tests {
 
         ObjectMeta {
             location: Path::from(path),
-            size,
+            size: size.try_into().unwrap(),
             last_modified: timestamp,
             e_tag: None,
             version: None,
