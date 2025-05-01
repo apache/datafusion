@@ -166,7 +166,7 @@ mod tests {
         ObjectMeta {
             location: Path::from(path),
             last_modified: timestamp,
-            size,
+            size: size.try_into().unwrap(),
             e_tag: None,
             version: None,
         }
