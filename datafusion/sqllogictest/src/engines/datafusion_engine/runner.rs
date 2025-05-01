@@ -31,6 +31,7 @@ use sqllogictest::DBOutput;
 use tokio::time::Instant;
 
 use crate::engines::output::{DFColumnType, DFOutput};
+use crate::is_spark_path;
 
 pub struct DataFusion {
     ctx: SessionContext,
@@ -79,7 +80,7 @@ impl sqllogictest::AsyncDB for DataFusion {
         }
 
         let start = Instant::now();
-        let result = run_query(&self.ctx, sql).await;
+        let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
         let duration = start.elapsed();
 
         if duration.gt(&Duration::from_millis(500)) {
@@ -115,7 +116,11 @@ impl sqllogictest::AsyncDB for DataFusion {
     async fn shutdown(&mut self) {}
 }
 
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
+async fn run_query(
+    ctx: &SessionContext,
+    is_spark_path: bool,
+    sql: impl Into<String>,
+) -> Result<DFOutput> {
     let df = ctx.sql(sql.into().as_str()).await?;
     let task_ctx = Arc::new(df.task_ctx());
     let plan = df.create_physical_plan().await?;
@@ -123,7 +128,7 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOut
     let stream = execute_stream(plan, task_ctx)?;
     let types = normalize::convert_schema_to_types(stream.schema().fields());
     let results: Vec<RecordBatch> = collect(stream).await?;
-    let rows = normalize::convert_batches(results)?;
+    let rows = normalize::convert_batches(results, is_spark_path)?;
 
     if rows.is_empty() && types.is_empty() {
         Ok(DBOutput::StatementComplete(0))
