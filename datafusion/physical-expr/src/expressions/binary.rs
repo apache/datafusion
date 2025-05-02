@@ -17,12 +17,11 @@
 
 mod kernels;
 
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
-
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
@@ -517,7 +516,7 @@ impl PhysicalExpr for BinaryExpr {
             }
         } else if self.op.eq(&Operator::Or) {
             if interval.eq(&Interval::CERTAINLY_FALSE) {
-                // A certainly false logical conjunction can only derive from certainly
+                // A certainly false logical disjunction can only derive from certainly
                 // false operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
                     && !right_interval.eq(&Interval::CERTAINLY_TRUE))
@@ -5305,5 +5304,99 @@ mod tests {
             let result = pre_selection_scatter(&left, right).unwrap();
             assert!(matches!(result, ColumnarValue::Scalar(_)));
         }
+    }
+
+    #[test]
+    fn test_evaluate_bounds_int32() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = Arc::new(Column::new("b", 1)) as _;
+
+        // Test addition bounds
+        let add_expr =
+            binary_expr(Arc::clone(&a), Operator::Plus, Arc::clone(&b), &schema).unwrap();
+        let add_bounds = add_expr
+            .evaluate_bounds(&[
+                &Interval::make(Some(1), Some(10)).unwrap(),
+                &Interval::make(Some(5), Some(15)).unwrap(),
+            ])
+            .unwrap();
+        assert_eq!(add_bounds, Interval::make(Some(6), Some(25)).unwrap());
+
+        // Test subtraction bounds
+        let sub_expr =
+            binary_expr(Arc::clone(&a), Operator::Minus, Arc::clone(&b), &schema)
+                .unwrap();
+        let sub_bounds = sub_expr
+            .evaluate_bounds(&[
+                &Interval::make(Some(1), Some(10)).unwrap(),
+                &Interval::make(Some(5), Some(15)).unwrap(),
+            ])
+            .unwrap();
+        assert_eq!(sub_bounds, Interval::make(Some(-14), Some(5)).unwrap());
+
+        // Test multiplication bounds
+        let mul_expr =
+            binary_expr(Arc::clone(&a), Operator::Multiply, Arc::clone(&b), &schema)
+                .unwrap();
+        let mul_bounds = mul_expr
+            .evaluate_bounds(&[
+                &Interval::make(Some(1), Some(10)).unwrap(),
+                &Interval::make(Some(5), Some(15)).unwrap(),
+            ])
+            .unwrap();
+        assert_eq!(mul_bounds, Interval::make(Some(5), Some(150)).unwrap());
+
+        // Test division bounds
+        let div_expr =
+            binary_expr(Arc::clone(&a), Operator::Divide, Arc::clone(&b), &schema)
+                .unwrap();
+        let div_bounds = div_expr
+            .evaluate_bounds(&[
+                &Interval::make(Some(10), Some(20)).unwrap(),
+                &Interval::make(Some(2), Some(5)).unwrap(),
+            ])
+            .unwrap();
+        assert_eq!(div_bounds, Interval::make(Some(2), Some(10)).unwrap());
+    }
+
+    #[test]
+    fn test_evaluate_bounds_bool() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("b", DataType::Boolean, false),
+        ]);
+
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = Arc::new(Column::new("b", 1)) as _;
+
+        // Test OR bounds
+        let or_expr =
+            binary_expr(Arc::clone(&a), Operator::Or, Arc::clone(&b), &schema).unwrap();
+        let or_bounds = or_expr
+            .evaluate_bounds(&[
+                &Interval::make(Some(true), Some(true)).unwrap(),
+                &Interval::make(Some(false), Some(false)).unwrap(),
+            ])
+            .unwrap();
+        assert_eq!(or_bounds, Interval::make(Some(true), Some(true)).unwrap());
+
+        // Test AND bounds
+        let and_expr =
+            binary_expr(Arc::clone(&a), Operator::And, Arc::clone(&b), &schema).unwrap();
+        let and_bounds = and_expr
+            .evaluate_bounds(&[
+                &Interval::make(Some(true), Some(true)).unwrap(),
+                &Interval::make(Some(false), Some(false)).unwrap(),
+            ])
+            .unwrap();
+        assert_eq!(
+            and_bounds,
+            Interval::make(Some(false), Some(false)).unwrap()
+        );
     }
 }

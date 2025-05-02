@@ -17,7 +17,7 @@
 
 extern crate criterion;
 
-use arrow::datatypes::{DataType, Int32Type, Int64Type};
+use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
 use arrow::util::bench_util::create_primitive_array;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
@@ -36,8 +36,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 hex.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_fields: vec![&Field::new("a", DataType::Int32, false)],
                     number_rows: batch_len,
-                    return_type: &DataType::Utf8,
+                    return_field: &Field::new("f", DataType::Utf8, true),
                 })
                 .unwrap(),
             )
@@ -52,8 +53,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 hex.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_fields: vec![&Field::new("a", DataType::Int64, false)],
                     number_rows: batch_len,
-                    return_type: &DataType::Utf8,
+                    return_field: &Field::new("f", DataType::Utf8, true),
                 })
                 .unwrap(),
             )
