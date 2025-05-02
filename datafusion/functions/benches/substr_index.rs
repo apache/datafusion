@@ -20,7 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, StringArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::distributions::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
@@ -91,13 +91,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         let counts = ColumnarValue::Array(Arc::new(counts) as ArrayRef);
 
         let args = vec![strings, delimiters, counts];
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         b.iter(|| {
             black_box(
                 substr_index()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
+                        arg_fields: arg_fields.clone(),
                         number_rows: batch_len,
-                        return_type: &DataType::Utf8,
+                        return_field: &Field::new("f", DataType::Utf8, true),
                     })
                     .expect("substr_index should work on valid values"),
             )

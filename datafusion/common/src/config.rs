@@ -405,6 +405,13 @@ config_namespace! {
         /// in joins can reduce memory usage when joining large
         /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
+
+        /// Size (bytes) of data buffer DataFusion uses when writing output files.
+        /// This affects the size of the data chunks that are uploaded to remote
+        /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being
+        /// written, it may be necessary to increase this size to avoid errors from
+        /// the remote end point.
+        pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
     }
 }
 

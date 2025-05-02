@@ -28,7 +28,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use log::trace;
+use log::{debug, trace};
 
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::tree_node::TransformedResult;
@@ -1557,7 +1557,7 @@ fn build_predicate_expression(
         // allow partial failure in predicate expression generation
         // this can still produce a useful predicate when multiple conditions are joined using AND
         Err(e) => {
-            dbg!(format!("Error building pruning expression: {e}"));
+            debug!("Error building pruning expression: {e}");
             return unhandled_hook.handle(expr);
         }
     };

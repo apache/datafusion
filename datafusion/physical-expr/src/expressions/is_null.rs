@@ -17,17 +17,16 @@
 
 //! IS NULL expression
 
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
-
 use crate::PhysicalExpr;
 use arrow::{
-    datatypes::{DataType, Schema},
+    datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 /// IS NULL expression
 #[derive(Debug, Eq)]
@@ -91,6 +90,10 @@ impl PhysicalExpr for IsNullExpr {
                 ScalarValue::Boolean(Some(scalar.is_null())),
             )),
         }
+    }
+
+    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+        self.arg.return_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

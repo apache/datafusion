@@ -22,7 +22,7 @@ use apache_avro::types::Value;
 use apache_avro::Schema as AvroSchema;
 use arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit, UnionMode};
 use arrow::datatypes::{Field, UnionFields};
-use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::error::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -107,9 +107,7 @@ fn schema_to_field_with_props(
                         .data_type()
                         .clone()
                 } else {
-                    return Err(DataFusionError::AvroError(
-                        apache_avro::Error::GetUnionDuplicate,
-                    ));
+                    return Err(apache_avro::Error::GetUnionDuplicate.into());
                 }
             } else {
                 let fields = sub_schemas

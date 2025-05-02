@@ -36,6 +36,7 @@ pub mod overlay;
 pub mod planner;
 pub mod r#struct;
 pub mod union_extract;
+pub mod union_tag;
 pub mod version;
 
 // create UDFs
@@ -52,6 +53,7 @@ make_udf_function!(coalesce::CoalesceFunc, coalesce);
 make_udf_function!(greatest::GreatestFunc, greatest);
 make_udf_function!(least::LeastFunc, least);
 make_udf_function!(union_extract::UnionExtractFun, union_extract);
+make_udf_function!(union_tag::UnionTagFunc, union_tag);
 make_udf_function!(version::VersionFunc, version);
 
 pub mod expr_fn {
@@ -101,6 +103,10 @@ pub mod expr_fn {
         least,
         "Returns `least(args...)`, which evaluates to the smallest value in the list of expressions or NULL if all the expressions are NULL",
         args,
+    ),(
+        union_tag,
+        "Returns the name of the currently selected field in the union",
+        arg1
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -136,6 +142,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         greatest(),
         least(),
         union_extract(),
+        union_tag(),
         version(),
         r#struct(),
     ]

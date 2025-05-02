@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expressions::try_cast;
+use crate::PhysicalExpr;
 use std::borrow::Cow;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
-
-use crate::expressions::try_cast;
-use crate::PhysicalExpr;
 
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
@@ -603,7 +602,7 @@ mod tests {
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
-    use arrow::datatypes::*;
+    use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};

@@ -1753,7 +1753,7 @@ impl FunctionRegistry for SessionState {
         let result = self.scalar_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDF named \"{name}\" in the registry")
+            plan_datafusion_err!("There is no UDF named \"{name}\" in the registry. Use session context `register_udf` function to register a custom UDF")
         })
     }
 
@@ -1761,7 +1761,7 @@ impl FunctionRegistry for SessionState {
         let result = self.aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDAF named \"{name}\" in the registry")
+            plan_datafusion_err!("There is no UDAF named \"{name}\" in the registry. Use session context `register_udaf` function to register a custom UDAF")
         })
     }
 
@@ -1769,7 +1769,7 @@ impl FunctionRegistry for SessionState {
         let result = self.window_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry")
+            plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry. Use session context `register_udwf` function to register a custom UDWF")
         })
     }
 
