@@ -2555,6 +2555,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-spark"
+version = "47.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-functions",
+ "datafusion-macros",
+ "log",
+]
+
+[[package]]
 name = "datafusion-sql"
 version = "47.0.0"
 dependencies = [
@@ -2589,6 +2603,7 @@ dependencies = [
  "chrono",
  "clap 4.5.37",
  "datafusion",
+ "datafusion-spark",
  "env_logger",
  "futures",
  "half",
