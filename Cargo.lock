@@ -504,9 +504,9 @@ dependencies = [
 
 [[package]]
 name = "assert_cmd"
-version = "2.0.16"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc1835b7f27878de8525dc71410b5a31cdcc5f230aed5ba5df968e09c201b23d"
+checksum = "2bd389a4b2970a01282ee455294913c0a43724daedcd1a24c3eb0ec1c1320b66"
 dependencies = [
  "anstyle",
  "bstr",
@@ -2556,6 +2556,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-spark"
+version = "47.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-functions",
+ "datafusion-macros",
+ "log",
+]
+
+[[package]]
 name = "datafusion-sql"
 version = "47.0.0"
 dependencies = [
@@ -2590,6 +2604,7 @@ dependencies = [
  "chrono",
  "clap 4.5.37",
  "datafusion",
+ "datafusion-spark",
  "env_logger",
  "futures",
  "half",
