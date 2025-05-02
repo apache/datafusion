@@ -144,9 +144,7 @@ impl DiskManager {
             inner.set_max_temp_directory_size(max_temp_directory_size)?;
             Ok(())
         } else {
-            return config_err!(
-                "Cannot set max temp directory size for a disk manager already in used"
-            );
+            config_err!("DiskManager should be a single instance")
         }
     }
 
