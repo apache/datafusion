@@ -260,6 +260,10 @@ pub enum Statement {
     CopyTo(CopyToStatement),
     /// EXPLAIN for extensions
     Explain(ExplainStatement),
+    /// Extension: `CREATE MACRO`
+    /// The boolean flag indicates whether this is a "CREATE OR REPLACE MACRO" (true)
+    /// or just a "CREATE MACRO" (false)
+    CreateMacro(MacroDefinition, bool),
 }
 
 impl fmt::Display for Statement {
@@ -269,6 +273,15 @@ impl fmt::Display for Statement {
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
             Statement::Explain(stmt) => write!(f, "{stmt}"),
+            Statement::CreateMacro(stmt, or_replace) => {
+                write!(f, "CREATE ")?;
+                if *or_replace {
+                    write!(f, "OR REPLACE ")?;
+                }
+                write!(f, "MACRO {}(", stmt.name)?;
+                let params = stmt.parameters.join(", ");
+                write!(f, "{}) AS TABLE ({})", params, stmt.body)
+            }
         }
     }
 }
@@ -279,6 +292,8 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionErro
     }
     Ok(())
 }
+
+pub use datafusion_common::MacroDefinition;
 
 /// DataFusion SQL Parser based on [`sqlparser`]
 ///
@@ -694,13 +709,31 @@ impl<'a> DFParser<'a> {
         Ok(Some(format))
     }
 
-    /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
+    /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE` and `CREATE MACRO`
     pub fn parse_create(&mut self) -> Result<Statement, DataFusionError> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table(false)
         } else if self.parser.parse_keyword(Keyword::UNBOUNDED) {
             self.parser.expect_keyword(Keyword::EXTERNAL)?;
             self.parse_create_external_table(true)
+        } else if self.parser.parse_keywords(&[Keyword::OR, Keyword::REPLACE]) {
+            if let Token::Word(w) = self.parser.peek_token().token {
+                if w.value.to_uppercase() == "MACRO" {
+                    self.parser.next_token();
+                    self.parse_create_macro(true)
+                } else {
+                    Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
+                }
+            } else {
+                Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
+            }
+        } else if let Token::Word(w) = self.parser.peek_token().token {
+            if w.value.to_uppercase() == "MACRO" {
+                self.parser.next_token();
+                self.parse_create_macro(false)
+            } else {
+                Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
+            }
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
@@ -733,6 +766,51 @@ impl<'a> DFParser<'a> {
             }
         }
         Ok(partitions)
+    }
+
+    /// Parse a SQL `CREATE MACRO` statement
+    pub fn parse_create_macro(
+        &mut self,
+        or_replace: bool,
+    ) -> Result<Statement, DataFusionError> {
+        let name = self.parser.parse_identifier()?.value;
+
+        self.parser.expect_token(&Token::LParen)?;
+        let mut parameters = Vec::new();
+
+        if !self.parser.consume_token(&Token::RParen) {
+            loop {
+                if let Token::Word(_) = self.parser.peek_token().token {
+                    let identifier = self.parser.parse_identifier()?;
+                    parameters.push(identifier.value);
+                } else {
+                    return self.expected("parameter name", self.parser.peek_token());
+                }
+
+                if !self.parser.consume_token(&Token::Comma) {
+                    self.parser.expect_token(&Token::RParen)?;
+                    break;
+                }
+            }
+        }
+
+        self.parser.expect_keyword(Keyword::AS)?;
+        self.parser.expect_keyword(Keyword::TABLE)?;
+
+        self.parser.expect_token(&Token::LParen)?;
+        let body = self.parser.parse_query()?;
+        self.parser.expect_token(&Token::RParen)?;
+
+        let body_str = body.to_string();
+
+        Ok(Statement::CreateMacro(
+            MacroDefinition {
+                name,
+                parameters,
+                body: body_str,
+            },
+            or_replace,
+        ))
     }
 
     /// Parse the ordering clause of a `CREATE EXTERNAL TABLE` SQL statement
@@ -1615,19 +1693,18 @@ mod tests {
 
     #[test]
     fn copy_to_query_to_table() -> Result<(), DataFusionError> {
-        let statement = verified_stmt("SELECT 1");
+        let df_statement = verified_stmt("SELECT 1");
 
-        // unwrap the various layers
-        let statement = if let Statement::Statement(statement) = statement {
+        let sql_statement = if let Statement::Statement(statement) = df_statement {
             *statement
         } else {
-            panic!("Expected statement, got {statement:?}");
+            panic!("Expected DataFusion Statement::Statement, got {df_statement:?}");
         };
 
-        let query = if let SQLStatement::Query(query) = statement {
+        let query = if let SQLStatement::Query(query) = sql_statement {
             query
         } else {
-            panic!("Expected query, got {statement:?}");
+            panic!("Expected SQLStatement::Query, got {sql_statement:?}");
         };
 
         let sql =

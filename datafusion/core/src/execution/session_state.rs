@@ -22,6 +22,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
 use crate::datasource::cte_worktable::CteWorkTable;
@@ -36,12 +37,14 @@ use datafusion_catalog::information_schema::{
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_catalog::MemoryCatalogProviderList;
+use datafusion_catalog::MemoryMacroCatalog;
 use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::tree_node::TreeNode;
+use datafusion_common::MacroCatalog;
 use datafusion_common::{
     config_err, exec_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
     ResolvedTableReference, TableReference,
@@ -69,6 +72,7 @@ use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
+use datafusion_sql::macro_context::MacroContextProvider;
 use datafusion_sql::parser::{DFParserBuilder, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 
@@ -127,6 +131,10 @@ use uuid::Uuid;
 pub struct SessionState {
     /// A unique UUID that identifies the session
     session_id: String,
+    /// SQL macro catalog for storing and retrieving SQL macro definitions
+    macro_catalog: Arc<dyn MacroCatalog>,
+    /// Storage for prepared statements
+    prepared_statements: Arc<RwLock<HashMap<String, LogicalPlan>>>,
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
     /// Provides support for customizing the SQL planner, e.g. to add support for custom operators like `->>` or `?`
@@ -274,6 +282,11 @@ impl Session for SessionState {
 }
 
 impl SessionState {
+    /// Access the macro catalog to retrieve macro definitions
+    pub fn macro_catalog(&self) -> &Arc<dyn MacroCatalog> {
+        &self.macro_catalog
+    }
+
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
     #[deprecated(since = "41.0.0", note = "Use SessionStateBuilder")]
@@ -878,6 +891,30 @@ impl SessionState {
             None => exec_err!("Prepared statement '{}' does not exist", name),
         }
     }
+
+    /// Register a prepared SQL statement
+    pub fn register_prepared_statement(
+        &self,
+        name: &str,
+        plan: LogicalPlan,
+    ) -> datafusion_common::Result<()> {
+        self.prepared_statements
+            .write()
+            .unwrap()
+            .insert(name.to_string(), plan);
+        Ok(())
+    }
+
+    /// Get the prepared statement by name
+    pub fn get_prepared_statement(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<LogicalPlan> {
+        match self.prepared_statements.read().unwrap().get(name) {
+            Some(plan) => Ok(plan.clone()),
+            None => exec_err!("Prepared statement '{}' does not exist", name),
+        }
+    }
 }
 
 /// A builder to be used for building [`SessionState`]'s. Defaults will
@@ -893,6 +930,7 @@ pub struct SessionStateBuilder {
     physical_optimizers: Option<PhysicalOptimizer>,
     query_planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
     catalog_list: Option<Arc<dyn CatalogProviderList>>,
+    macro_catalog: Option<Arc<dyn MacroCatalog>>,
     table_functions: Option<HashMap<String, Arc<TableFunction>>>,
     scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
     aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
@@ -929,6 +967,7 @@ impl SessionStateBuilder {
             physical_optimizers: None,
             query_planner: None,
             catalog_list: None,
+            macro_catalog: None,
             table_functions: None,
             scalar_functions: None,
             aggregate_functions: None,
@@ -978,6 +1017,7 @@ impl SessionStateBuilder {
             physical_optimizers: Some(existing.physical_optimizers),
             query_planner: Some(existing.query_planner),
             catalog_list: Some(existing.catalog_list),
+            macro_catalog: Some(existing.macro_catalog),
             table_functions: Some(existing.table_functions),
             scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
             aggregate_functions: Some(
@@ -1330,6 +1370,7 @@ impl SessionStateBuilder {
             physical_optimizers,
             query_planner,
             catalog_list,
+            macro_catalog,
             table_functions,
             scalar_functions,
             aggregate_functions,
@@ -1362,10 +1403,13 @@ impl SessionStateBuilder {
             catalog_list: catalog_list.unwrap_or_else(|| {
                 Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>
             }),
+            macro_catalog: macro_catalog
+                .unwrap_or_else(|| Arc::new(MemoryMacroCatalog::new())),
             table_functions: table_functions.unwrap_or_default(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
+            prepared_statements: Arc::new(RwLock::new(HashMap::new())),
             serializer_registry: serializer_registry
                 .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
@@ -1494,6 +1538,17 @@ impl SessionStateBuilder {
     /// Returns the current catalog_list value
     pub fn catalog_list(&mut self) -> &mut Option<Arc<dyn CatalogProviderList>> {
         &mut self.catalog_list
+    }
+
+    /// Returns the current macro_catalog value
+    pub fn macro_catalog(&mut self) -> &mut Option<Arc<dyn MacroCatalog>> {
+        &mut self.macro_catalog
+    }
+
+    /// Set the macro catalog for this session
+    pub fn with_macro_catalog(mut self, macro_catalog: Arc<dyn MacroCatalog>) -> Self {
+        self.macro_catalog = Some(macro_catalog);
+        self
     }
 
     /// Returns the current table_functions value
@@ -1633,6 +1688,14 @@ impl From<SessionState> for SessionStateBuilder {
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
+}
+
+/// Implementation of MacroContextProvider for SessionContextProvider
+impl MacroContextProvider for SessionContextProvider<'_> {
+    fn macro_catalog(&self) -> datafusion_common::Result<Arc<dyn MacroCatalog>> {
+        // Simply return the macro catalog directly - no adapter needed
+        Ok(Arc::clone(&self.state.macro_catalog))
+    }
 }
 
 impl ContextProvider for SessionContextProvider<'_> {

@@ -175,3 +175,5 @@ pub trait CatalogProviderList: Debug + Sync + Send {
     /// Retrieves a specific catalog by name, provided it exists.
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>>;
 }
+
+pub use datafusion_common::MacroCatalog;

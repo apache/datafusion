@@ -1178,6 +1178,9 @@ mod tests {
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 
+    use crate::macro_context::MacroContextProvider;
+    use datafusion_common::MacroCatalog;
+
     use super::*;
 
     struct TestContextProvider {
@@ -1201,6 +1204,12 @@ mod tests {
                 options: Default::default(),
                 tables,
             }
+        }
+    }
+
+    impl MacroContextProvider for TestContextProvider {
+        fn macro_catalog(&self) -> Result<Arc<dyn MacroCatalog>> {
+            not_impl_err!("SQL macros are not supported in tests")
         }
     }
 

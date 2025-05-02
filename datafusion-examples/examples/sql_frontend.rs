@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::common::MacroCatalog;
 use datafusion::common::{plan_err, TableReference};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
@@ -26,6 +27,7 @@ use datafusion::logical_expr::{
 use datafusion::optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
 };
+use datafusion::sql::macro_context::MacroContextProvider;
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion::sql::sqlparser::parser::Parser;
@@ -52,12 +54,63 @@ pub fn main() -> Result<()> {
     let sql = "SELECT name FROM person WHERE age BETWEEN 21 AND 32";
     let statements = Parser::parse_sql(&dialect, sql)?;
 
-    // Now, use DataFusion's SQL planner, called `SqlToRel` to create a
-    // `LogicalPlan` from the parsed statement
+    struct MacroAdapter<T: ContextProvider> {
+        inner: T,
+    }
+
+    impl<T: ContextProvider> MacroContextProvider for MacroAdapter<T> {
+        fn macro_catalog(&self) -> Result<Arc<dyn MacroCatalog>> {
+            plan_err!("SQL macros are not supported in this example")
+        }
+    }
+
+    impl<T: ContextProvider> ContextProvider for MacroAdapter<T> {
+        fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+            self.inner.get_table_source(name)
+        }
+
+        fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+            self.inner.get_function_meta(name)
+        }
+
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            self.inner.get_aggregate_meta(name)
+        }
+
+        fn get_variable_type(&self, var_names: &[String]) -> Option<DataType> {
+            self.inner.get_variable_type(var_names)
+        }
+
+        fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+            self.inner.get_window_meta(name)
+        }
+
+        fn options(&self) -> &ConfigOptions {
+            self.inner.options()
+        }
+
+        fn udf_names(&self) -> Vec<String> {
+            self.inner.udf_names()
+        }
+
+        fn udaf_names(&self) -> Vec<String> {
+            self.inner.udaf_names()
+        }
+
+        fn udwf_names(&self) -> Vec<String> {
+            self.inner.udwf_names()
+        }
+    }
+
+    // Now, to use DataFusion's SQL planner (SqlToRel) to create a LogicalPlan,
+    // we must provide schema and function information via an object that
+    // implements the ContextProvider trait.
     //
-    // To invoke SqlToRel we must provide it schema and function information
-    // via an object that implements the `ContextProvider` trait
-    let context_provider = MyContextProvider::default();
+    // DataFusion also requires the MacroContextProvider trait for SQL macro support
+    let base_provider = MyContextProvider::default();
+    let context_provider = MacroAdapter {
+        inner: base_provider,
+    };
     let sql_to_rel = SqlToRel::new(&context_provider);
     let logical_plan = sql_to_rel.sql_statement_to_plan(statements[0].clone())?;
 

@@ -28,6 +28,7 @@ mod column;
 mod dfschema;
 mod functional_dependencies;
 mod join_type;
+mod macros;
 mod param_value;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
@@ -78,6 +79,7 @@ pub use functional_dependencies::{
 };
 use hashbrown::hash_map::DefaultHashBuilder;
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
+pub use macros::{MacroCatalog, MacroDefinition};
 pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;

@@ -46,7 +46,7 @@ use std::ops::Add;
 use std::sync::Arc;
 use std::{fmt, vec};
 
-use crate::common::{MockContextProvider, MockSessionState};
+use crate::common::{MockContextProvider, MockMacroCatalog, MockSessionState};
 use datafusion_expr::builder::{
     project, subquery_alias, table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
@@ -92,7 +92,10 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
     let dialect = GenericDialect {};
     let sql_expr = Parser::new(&dialect).try_with_sql(sql)?.parse_expr()?;
     let state = MockSessionState::default().with_aggregate_function(sum_udaf());
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: MockMacroCatalog::default(),
+    };
     let schema = context.get_table_source(table)?.schema();
     let df_schema = DFSchema::try_from(schema.as_ref().clone())?;
     let sql_to_rel = SqlToRel::new(&context);
@@ -237,7 +240,10 @@ fn roundtrip_statement() -> Result<()> {
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner));
-        let context = MockContextProvider { state };
+        let context = MockContextProvider {
+            state,
+            macro_catalog: MockMacroCatalog::default(),
+        };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
@@ -265,7 +271,10 @@ fn roundtrip_crossjoin() -> Result<()> {
     let state = MockSessionState::default()
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: MockMacroCatalog::default(),
+    };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
@@ -309,7 +318,7 @@ macro_rules! roundtrip_statement_with_dialect_helper {
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner));
 
-        let context = MockContextProvider { state };
+        let context = MockContextProvider { state, macro_catalog: MockMacroCatalog::default() };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel
             .sql_statement_to_plan(statement)
@@ -934,6 +943,7 @@ fn test_unnest_logical_plan() -> Result<()> {
 
     let context = MockContextProvider {
         state: MockSessionState::default(),
+        macro_catalog: MockMacroCatalog::default(),
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -1219,6 +1229,7 @@ fn test_pretty_roundtrip() -> Result<()> {
 
     let context = MockContextProvider {
         state: MockSessionState::default(),
+        macro_catalog: MockMacroCatalog::default(),
     };
     let sql_to_rel = SqlToRel::new(&context);
 
@@ -1303,6 +1314,7 @@ where
             .with_window_function(rank_udwf())
             .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
             .with_scalar_function(make_array_udf()),
+        macro_catalog: MockMacroCatalog::default(),
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -1964,7 +1976,10 @@ fn test_unparse_extension_to_statement() -> Result<()> {
         .try_with_sql("SELECT * FROM j1")?
         .parse_statement()?;
     let state = MockSessionState::default();
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: MockMacroCatalog::default(),
+    };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement)?;
 
@@ -2025,7 +2040,10 @@ fn test_unparse_extension_to_sql() -> Result<()> {
         .try_with_sql("SELECT * FROM j1")?
         .parse_statement()?;
     let state = MockSessionState::default();
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: MockMacroCatalog::default(),
+    };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement)?;
 

@@ -29,6 +29,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
+use crate::macro_context::MacroContextProvider;
 use arrow::datatypes::{DataType, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -175,7 +176,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
     constraints
 }
 
-impl<S: ContextProvider> SqlToRel<'_, S> {
+impl<S: ContextProvider + MacroContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an DataFusion SQL statement
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         match statement {
@@ -188,6 +189,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 format,
                 statement,
             }) => self.explain_to_plan(verbose, analyze, format, *statement),
+            DFStatement::CreateMacro(macro_def, or_replace) => {
+                let catalog = self.context_provider.macro_catalog()?;
+
+                let name = macro_def.name.clone();
+
+                catalog.register_macro(&name, Arc::new(macro_def.clone()), or_replace)?;
+
+                let macro_expr = Expr::Literal(ScalarValue::Utf8(Some(format!(
+                    "CREATE OR REPLACE MACRO {} AS TABLE ...",
+                    name
+                ))));
+
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateFunction(
+                    CreateFunction {
+                        name: name.clone(),
+                        or_replace,
+                        temporary: false,
+                        args: None,
+                        return_type: None,
+                        params: CreateFunctionBody {
+                            language: None,
+                            behavior: None,
+                            function_body: Some(macro_expr),
+                        },
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    },
+                )))
+            }
         }
     }
 
@@ -760,6 +789,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     name: ident_to_string(&name),
                 },
             ))),
+
+            Statement::CreateMacro {
+                or_replace,
+                temporary: _,
+                name,
+                args,
+                definition,
+                ..
+            } => {
+                let query_string =
+                    if let ast::MacroDefinition::Table(table_query) = &definition {
+                        table_query.to_string()
+                    } else {
+                        return plan_err!("Only TABLE macros are currently supported");
+                    };
+
+                let macro_def = datafusion_common::MacroDefinition {
+                    name: name.to_string(),
+                    parameters: args.iter().map(|p| format!("{:?}", p)).collect(),
+                    body: query_string,
+                };
+
+                let stmt = DFStatement::CreateMacro(macro_def, or_replace);
+
+                self.statement_to_plan(stmt)
+            }
 
             Statement::ShowTables {
                 extended,

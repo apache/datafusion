@@ -147,6 +147,9 @@ fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) {
             }
         },
         DFStatement::Explain(explain) => visit_statement(&explain.statement, visitor),
+        DFStatement::CreateMacro(_, _) => {} // Macros are not validated during creation time - table references in the macro body
+                                             // will be resolved when the macro is actually used/expanded in a query.
+                                             // This allows creating macros that reference tables that don't exist yet.
     }
 }
 
