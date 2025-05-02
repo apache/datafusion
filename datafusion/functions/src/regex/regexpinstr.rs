@@ -346,14 +346,13 @@ enum ScalarOrArray<T> {
 impl<T: Clone> ScalarOrArray<T> {
     fn iter(&self, len: usize) -> Box<dyn Iterator<Item = T> + '_> {
         match self {
-            ScalarOrArray::Scalar(val) => {
-                Box::new(std::iter::repeat(val.clone()).take(len))
-            }
+            ScalarOrArray::Scalar(val) => Box::new(std::iter::repeat_n(val.clone(), len)),
             ScalarOrArray::Array(arr) => Box::new(arr.iter().cloned()),
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn regexp_instr_inner<'a, S>(
     values: S,
     regex_array: S,
@@ -390,13 +389,10 @@ where
 
             ScalarOrArray::Array(start_vec)
         }
+    } else if len == 1 {
+        ScalarOrArray::Scalar(1)
     } else {
-        if len == 1 {
-            ScalarOrArray::Scalar(1)
-        } else {
-            ScalarOrArray::Array(vec![1; len])
-        }
-        // Default start = 1
+        ScalarOrArray::Array(vec![1; len])
     };
 
     let nth_input = if let Some(nth) = nth_array {
@@ -408,14 +404,12 @@ where
                 .collect();
             ScalarOrArray::Array(nth_vec)
         }
-    } else {
-        if len == 1 {
-            ScalarOrArray::Scalar(1)
-        }
-        // Default nth = 0
-        else {
-            ScalarOrArray::Array(vec![1; len])
-        }
+    } else if len == 1 {
+        ScalarOrArray::Scalar(1)
+    }
+    // Default nth = 0
+    else {
+        ScalarOrArray::Array(vec![1; len])
     };
 
     let endoption_input = if let Some(endoption) = endoption_array {
@@ -433,14 +427,12 @@ where
                 .collect();
             ScalarOrArray::Array(endoption_vec)
         }
-    } else {
-        if len == 1 {
-            ScalarOrArray::Scalar(0)
-        }
-        // Default nth = 0
-        else {
-            ScalarOrArray::Array(vec![0; len])
-        } // Default endoption = 0
+    } else if len == 1 {
+        ScalarOrArray::Scalar(0)
+    }
+    // Default nth = 0
+    else {
+        ScalarOrArray::Array(vec![0; len])
     };
 
     let flags_input = if let Some(ref flags) = flags_array {
@@ -450,14 +442,12 @@ where
             let flags_vec: Vec<&str> = flags.iter().map(|v| v.unwrap_or("")).collect();
             ScalarOrArray::Array(flags_vec)
         }
-    } else {
-        if len == 1 {
-            ScalarOrArray::Scalar("")
-        }
-        // Default flags = ""
-        else {
-            ScalarOrArray::Array(vec![""; len])
-        } // Default flags = ""
+    } else if len == 1 {
+        ScalarOrArray::Scalar("")
+    }
+    // Default flags = ""
+    else {
+        ScalarOrArray::Array(vec![""; len])
     };
 
     let subexp_input = if let Some(subexp) = subexp_array {
@@ -475,14 +465,12 @@ where
                 .collect();
             ScalarOrArray::Array(subexp_vec)
         }
-    } else {
-        if len == 1 {
-            ScalarOrArray::Scalar(0)
-        }
-        // Default subexp = 0
-        else {
-            ScalarOrArray::Array(vec![0; len])
-        }
+    } else if len == 1 {
+        ScalarOrArray::Scalar(0)
+    }
+    // Default subexp = 0
+    else {
+        ScalarOrArray::Array(vec![0; len])
     };
 
     let mut regex_cache = HashMap::new();
@@ -501,9 +489,9 @@ where
             return Ok(0);
         }
 
-        let pattern = compile_and_cache_regex(&regex, Some(flags), &mut regex_cache)?;
+        let pattern = compile_and_cache_regex(regex, Some(flags), &mut regex_cache)?;
 
-        get_index(value, &pattern, start, nth, endoption, subexp)
+        get_index(value, pattern, start, nth, endoption, subexp)
     })
     .collect();
 
@@ -991,5 +979,4 @@ mod tests {
         .unwrap();
         assert_eq!(re.as_ref(), &expected);
     }
-
 }

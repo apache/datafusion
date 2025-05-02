@@ -23,7 +23,7 @@ use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_functions::regex::regexpcount::regexp_count_func;
-use datafusion_functions::regex::regexpcount::regexp_instr;
+use datafusion_functions::regex::regexpinstr::regexp_instr_func;
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
 use datafusion_functions::regex::regexpreplace::regexp_replace;
