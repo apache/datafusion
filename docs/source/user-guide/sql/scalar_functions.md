@@ -1866,6 +1866,41 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
+### `regexp_instr`
+
+Returns the position in a string where the specified occurrence of a [regular expression](https://docs.rs/regex/latest/regex/#syntax) is located.
+
+```sql
+regexp_instr(string, pattern [, start [, N [, endoption [, flags [, subexpr ]]]]])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.
+- **N**: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function.
+- **endoption**:  Optional. If 0, returns the starting position of the match (default). If 1, returns the ending position of the match. Can be a constant, column, or function.
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?
+- **subexpr**: Optional. An integer indicating which parenthesized subexpression's position to return. Defaults to 0, which means the whole match
+
+#### Example
+
+```sql
+> select regexp_instr('ABCDEF', 'c(.)(..)', 1, 1, 0, 'i', 2);
++---------------------------------------------------------------+
+| regexp_instr(Utf8('ABCDEF'), Utf8('c(.)(..)'), Int64(1),      |
+|               Int64(1), Int64(0),, 'i', Int64(2),)            |
++---------------------------------------------------------------+
+| 5                                                             |
++---------------------------------------------------------------+
+```
+
 ### `regexp_match`
 
 Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.
