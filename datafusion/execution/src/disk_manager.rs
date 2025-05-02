@@ -120,10 +120,10 @@ impl DiskManager {
         }
     }
 
-    pub fn with_max_temp_directory_size(
-        mut self,
+    pub fn set_max_temp_directory_size(
+        &mut self,
         max_temp_directory_size: u64,
-    ) -> Result<Self> {
+    ) -> Result<()> {
         // If the disk manager is disabled and `max_temp_directory_size` is not 0,
         // this operation is not meaningful, fail early.
         if self.local_dirs.lock().is_none() && max_temp_directory_size != 0 {
@@ -133,6 +133,28 @@ impl DiskManager {
         }
 
         self.max_temp_directory_size = max_temp_directory_size;
+        Ok(())
+    }
+
+    pub fn set_arc_max_temp_directory_size(
+        this: &mut Arc<Self>,
+        max_temp_directory_size: u64,
+    ) -> Result<()> {
+        if let Some(inner) = Arc::get_mut(this) {
+            inner.set_max_temp_directory_size(max_temp_directory_size)?;
+            Ok(())
+        } else {
+            return config_err!(
+                "Cannot set max temp directory size for a disk manager already in used"
+            );
+        }
+    }
+
+    pub fn with_max_temp_directory_size(
+        mut self,
+        max_temp_directory_size: u64,
+    ) -> Result<Self> {
+        self.set_max_temp_directory_size(max_temp_directory_size)?;
         Ok(self)
     }
 
