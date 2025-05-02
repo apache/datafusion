@@ -473,6 +473,9 @@ config_namespace! {
         /// nanosecond resolution.
         pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
+        /// (reading) Use any available bloom filters when reading parquet files
+        pub bloom_filter_on_read: bool, default = true
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -547,9 +550,6 @@ config_namespace! {
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<String>, transform = str::to_lowercase, default = None
-
-        /// (writing) Use any available bloom filters when reading parquet files
-        pub bloom_filter_on_read: bool, default = true
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
