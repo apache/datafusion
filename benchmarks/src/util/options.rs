@@ -79,6 +79,11 @@ impl CommonOpt {
             config = config.with_target_partitions(partitions);
         }
 
+        if let Some(sort_spill_reservation_bytes) = self.sort_spill_reservation_bytes {
+            config =
+                config.with_sort_spill_reservation_bytes(sort_spill_reservation_bytes);
+        }
+
         config
     }
 
