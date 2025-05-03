@@ -16,7 +16,7 @@
 // under the License.
 
 use super::arrow_array_reader::AvroArrowArrayReader;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Fields, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -133,19 +133,35 @@ impl<R: Read> Reader<'_, R> {
     ///
     /// If reading a `File`, you can customise the Reader, such as to enable schema
     /// inference, use `ReaderBuilder`.
+    ///
+    /// If projection is provided, it uses a schema with only the fields in the projection, respecting their order.
+    /// Only the first level of projection is handled. No further projection currently occurs, but would be
+    /// useful if plucking values from a struct, e.g. getting `a.b.c.e` from `a.b.c.{d, e}`.
     pub fn try_new(
         reader: R,
         schema: SchemaRef,
         batch_size: usize,
         projection: Option<Vec<String>>,
     ) -> Result<Self> {
+        let projected_schema = projection.as_ref().filter(|p| !p.is_empty()).map_or_else(
+            || Arc::clone(&schema),
+            |proj| {
+                Arc::new(arrow::datatypes::Schema::new(
+                    proj.iter()
+                        .filter_map(|name| {
+                            schema.column_with_name(name).map(|(_, f)| f.clone())
+                        })
+                        .collect::<Fields>(),
+                ))
+            },
+        );
+
         Ok(Self {
             array_reader: AvroArrowArrayReader::try_new(
                 reader,
-                Arc::clone(&schema),
-                projection,
+                Arc::clone(&projected_schema),
             )?,
-            schema,
+            schema: projected_schema,
             batch_size,
         })
     }
@@ -179,10 +195,13 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use std::fs::File;
 
-    fn build_reader(name: &str) -> Reader<File> {
+    fn build_reader(name: &str, projection: Option<Vec<String>>) -> Reader<File> {
         let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
-        let builder = ReaderBuilder::new().read_schema().with_batch_size(64);
+        let mut builder = ReaderBuilder::new().read_schema().with_batch_size(64);
+        if let Some(projection) = projection {
+            builder = builder.with_projection(projection);
+        }
         builder.build(File::open(filename).unwrap()).unwrap()
     }
 
@@ -195,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_avro_basic() {
-        let mut reader = build_reader("alltypes_dictionary.avro");
+        let mut reader = build_reader("alltypes_dictionary.avro", None);
         let batch = reader.next().unwrap().unwrap();
 
         assert_eq!(11, batch.num_columns());
@@ -280,5 +299,59 @@ mod tests {
         let col = get_col::<TimestampMicrosecondArray>(&batch, timestamp_col).unwrap();
         assert_eq!(1230768000000000, col.value(0));
         assert_eq!(1230768060000000, col.value(1));
+    }
+
+    #[test]
+    fn test_avro_with_projection() {
+        // Test projection to filter and reorder columns
+        let projection = Some(vec![
+            "string_col".to_string(),
+            "double_col".to_string(),
+            "bool_col".to_string(),
+        ]);
+        let mut reader = build_reader("alltypes_dictionary.avro", projection);
+        let batch = reader.next().unwrap().unwrap();
+
+        // Only 3 columns should be present (not all 11)
+        assert_eq!(3, batch.num_columns());
+        assert_eq!(2, batch.num_rows());
+
+        let schema = reader.schema();
+        let batch_schema = batch.schema();
+        assert_eq!(schema, batch_schema);
+
+        // Verify columns are in the order specified in projection
+        // First column should be string_col (was at index 9 in original)
+        assert_eq!("string_col", schema.field(0).name());
+        assert_eq!(&DataType::Binary, schema.field(0).data_type());
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!("0".as_bytes(), col.value(0));
+        assert_eq!("1".as_bytes(), col.value(1));
+
+        // Second column should be double_col (was at index 7 in original)
+        assert_eq!("double_col", schema.field(1).name());
+        assert_eq!(&DataType::Float64, schema.field(1).data_type());
+        let col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert_eq!(0.0, col.value(0));
+        assert_eq!(10.1, col.value(1));
+
+        // Third column should be bool_col (was at index 1 in original)
+        assert_eq!("bool_col", schema.field(2).name());
+        assert_eq!(&DataType::Boolean, schema.field(2).data_type());
+        let col = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        assert!(col.value(0));
+        assert!(!col.value(1));
     }
 }
