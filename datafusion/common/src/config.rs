@@ -405,23 +405,23 @@ config_namespace! {
         /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
 
-        /// Should DataFusion use a blocked approach to manage grouping state. 
-        /// By default, the blocked approach is used which 
-        /// allocates capacity based on a predefined block size firstly.
-        /// When the block reaches its limit, we allocate a new block (also with
-        /// the same predefined block size based capacity) instead of expanding
-        /// the current one and copying the data.
-        /// If `false`, a single allocation approach is used, where
-        /// values are managed within a single large memory block. 
-        /// As this block grows, it often triggers numerous copies, resulting in poor performance.
-        pub enable_aggregation_blocked_groups: bool, default = true
-        
         /// Size (bytes) of data buffer DataFusion uses when writing output files.
         /// This affects the size of the data chunks that are uploaded to remote
         /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
+
+        /// Should DataFusion use a blocked approach to manage grouping state.
+        /// By default, the blocked approach is used which
+        /// allocates capacity based on a predefined block size firstly.
+        /// When the block reaches its limit, we allocate a new block (also with
+        /// the same predefined block size based capacity) instead of expanding
+        /// the current one and copying the data.
+        /// If `false`, a single allocation approach is used, where
+        /// values are managed within a single large memory block.
+        /// As this block grows, it often triggers numerous copies, resulting in poor performance.
+        pub enable_aggregation_blocked_groups: bool, default = true
     }
 }
 
