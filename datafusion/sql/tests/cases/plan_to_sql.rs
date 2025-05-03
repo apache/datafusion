@@ -698,7 +698,7 @@ fn roundtrip_statement_with_dialect_27() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3])",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
+        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS derived_projection ("UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
     );
     Ok(())
 }
@@ -720,7 +720,7 @@ fn roundtrip_statement_with_dialect_29() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]), j1",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
+        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS derived_projection ("UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
     );
     Ok(())
 }
