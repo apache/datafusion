@@ -265,6 +265,11 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
         config_options.explain.format = String::from("tree");
     }
 
+    // in the CLI, we want to show NULL values rather the empty strings
+    if env::var_os("DATAFUSION_FORMAT_NULL").is_none() {
+        config_options.format.null = String::from("NULL");
+    }
+
     let session_config =
         SessionConfig::from(config_options).with_information_schema(true);
     Ok(session_config)
