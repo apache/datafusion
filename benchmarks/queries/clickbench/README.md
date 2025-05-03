@@ -112,7 +112,7 @@ Results look like
 Note this query is somewhat synthetic as "WatchID" is almost unique (there are a few duplicates)
 
 ```sql
-SELECT "ClientIP", "WatchID",  COUNT(*) c, MIN("ResponseStartTiming") tmin, APPROX_PERCENTILE_CONT("ResponseStartTiming", 0.95) tp95, MAX("ResponseStartTiming") tmax
+SELECT "ClientIP", "WatchID",  COUNT(*) c, MIN("ResponseStartTiming") tmin, APPROX_PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY "ResponseStartTiming") tp95, MAX("ResponseStartTiming") tmax
 FROM 'hits.parquet'
 WHERE "JavaEnable" = 0 -- filters to 32M of 100M rows
 GROUP BY  "ClientIP", "WatchID"
