@@ -579,6 +579,10 @@ where
         // increment counts, update sums
         self.counts.resize(total_num_groups, 0);
         self.sums.resize(total_num_groups, T::default_value());
+
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             values,
@@ -663,6 +667,10 @@ where
         let partial_sums = values[1].as_primitive::<T>();
         // update counts with partial counts
         self.counts.resize(total_num_groups, 0);
+
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             partial_counts,
@@ -675,6 +683,9 @@ where
 
         // update sums
         self.sums.resize(total_num_groups, T::default_value());
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             partial_sums,

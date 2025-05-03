@@ -245,7 +245,10 @@ pub trait SeenValues: Default + Debug + Send {
 }
 
 /// [`SeenValues`] for `flat groups input`
-///
+/// 
+/// At first, you may need to see something about `block_id` and `block_offset`
+/// from [`GroupsAccumulator::supports_blocked_groups`].
+/// 
 /// The `flat groups input` are organized like:
 ///
 /// ```text
@@ -261,7 +264,9 @@ pub trait SeenValues: Default + Debug + Send {
 ///
 /// For `set_bit(block_id, block_offset, value)`, `block_id` is unused,
 /// `block_offset` will be set to `group_index`.
-///
+/// 
+/// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
+/// 
 #[derive(Debug)]
 pub struct FlatSeenValues {
     builder: BooleanBufferBuilder,
@@ -318,6 +323,9 @@ impl SeenValues for FlatSeenValues {
 
 /// [`SeenValues`] for `blocked groups input`
 ///
+/// At first, you may need to see something about `block_id` and `block_offset`
+/// from [`GroupsAccumulator::supports_blocked_groups`].
+/// 
 /// The `flat groups input` are organized like:
 ///
 /// ```text
@@ -328,10 +336,12 @@ impl SeenValues for FlatSeenValues {
 ///     row_n (block_id_n, block_offset_n)    
 /// ```
 ///
-/// If ` row_x (block_id_x, block_offset_x)` is not filtered
+/// If `row_x (block_id_x, block_offset_x)` is not filtered
 /// (`block_id_x, block_offset_x` is seen), `seen_values[block_id_x][block_offset_x]`
 /// will be set to `true`.
 ///
+/// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
+/// 
 #[derive(Debug, Default)]
 pub struct BlockedSeenValues {
     blocked_builders: VecDeque<BooleanBufferBuilder>,

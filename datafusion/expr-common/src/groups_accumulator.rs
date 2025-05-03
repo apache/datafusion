@@ -41,6 +41,14 @@ pub enum EmitTo {
 
 impl EmitTo {
     /// Remove and return `needed values` from `values`.
+    ///
+    /// Inputs:
+    ///   - `values`, the emitting source.
+    ///   - `is_blocked_groups`, is the `values` organized in `single`
+    ///     or `blocked` approach, more details can see
+    ///     [`GroupsAccumulator::supports_blocked_groups`].
+    ///     
+    ///
     pub fn take_needed<T>(
         &self,
         values: &mut VecDeque<Vec<T>>,
@@ -290,6 +298,25 @@ pub trait GroupsAccumulator: Send {
     fn size(&self) -> usize;
 
     /// Returns `true` if this accumulator supports blocked groups.
+    ///
+    /// Blocked groups(or called blocked management approach) is an optimization
+    /// to reduce the cost of managing aggregation intermediate states.
+    ///
+    /// Here is brief introduction for two states management approaches:
+    ///   - Blocked approach, states are stored and managed in multiple `Vec`s,
+    ///     we call it `Block`s. Organize like this is for avoiding to resize `Vec`
+    ///     and allocate a new `Vec` instead to reduce cost and get better performance.
+    ///     When locating data in `Block`s, we need to use `block_id` to locate the
+    ///     needed `Block` at first, and use `block_offset` to locate the needed
+    ///     data in `Block` after.
+    ///
+    ///   - Single approach, all states are stored and managed in a single large `Block`.
+    ///     So when locating data, `block_id` will always be 0, and we only need `block_offset`
+    ///     to locate data in the single `Block`.
+    ///
+    /// More details can see:
+    /// https://github.com/apache/datafusion/issues/7065
+    ///
     fn supports_blocked_groups(&self) -> bool {
         false
     }

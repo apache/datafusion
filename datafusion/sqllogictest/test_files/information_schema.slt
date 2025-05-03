@@ -676,14 +676,16 @@ DROP VIEW test.xyz
 
 
 # show_external_create_table()
-statement error DataFusion error: Object Store error: Object at location /Users/kamille/Desktop/github/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+statement ok
 CREATE EXTERNAL TABLE abc
 STORED AS CSV
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 OPTIONS ('format.has_header' 'true');
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.abc' not found
+query TTTT
 SHOW CREATE TABLE abc;
+----
+datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv
 
 # string_agg has different arg_types but same return type. Test avoiding duplicate entries for the same function.
 query TTT

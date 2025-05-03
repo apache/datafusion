@@ -248,7 +248,10 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         // increment counts, update sums
         self.counts.resize(total_num_groups, 0);
         self.prods.resize(total_num_groups, 1.0);
-        // Use the `NullState` structure to generate specialized code for null / non null input elements
+        // Use the `NullState` structure to generate specialized code for null / non null input elements.
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             values,
@@ -280,6 +283,9 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         let partial_counts = values[1].as_primitive::<UInt32Type>();
         // update counts with partial counts
         self.counts.resize(total_num_groups, 0);
+        // `block_id` is ignored in `value_fn`, because `AvgGroupsAccumulator`
+        // still not support blocked groups.
+        // More details can see `GroupsAccumulator::supports_blocked_groups`.
         self.null_state.accumulate(
             group_indices,
             partial_counts,

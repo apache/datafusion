@@ -360,11 +360,16 @@ impl SkipAggregationProbe {
 /// (also with the same predefined block size based capacity)
 /// instead of expanding the current one and copying the data.
 /// This method eliminates unnecessary copies and significantly improves performance.
-/// For a nice introduction to the blocked approach, maybe you can see [#7065].
+///
+/// You can find some implementation details(like how to locate data in such two approaches)
+/// in [`GroupsAccumulator::supports_blocked_groups`] and [`GroupValues::supports_blocked_groups`].
+///
+/// And for a really detailed introduction to the design of blocked approach, maybe you can see [#7065].
 ///
 /// The conditions that trigger the blocked groups optimization can be found in
 /// [`maybe_enable_blocked_groups`].
 ///  
+/// [`GroupAccumulator`]
 /// [`group_values`]: Self::group_values
 /// [`accumulators`]: Self::accumulators
 /// [#7065]: https://github.com/apache/datafusion/issues/7065
