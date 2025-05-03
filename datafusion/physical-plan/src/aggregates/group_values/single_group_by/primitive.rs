@@ -27,7 +27,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
 };
 use half::f16;
@@ -419,7 +419,7 @@ mod tests {
     use arrow::array::{AsArray, UInt32Array};
     use arrow::datatypes::{DataType, UInt32Type};
     use datafusion_expr::EmitTo;
-    use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+    use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_index_operations::{
         BlockedGroupIndexOperations, GroupIndexOperations,
     };
 
