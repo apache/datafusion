@@ -394,7 +394,7 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = plan.statistics().map_err(|_e| fmt::Error)?;
+            let stats = plan.partition_statistics(None).map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{}]", stats)?;
         }
         if self.show_schema {
@@ -479,7 +479,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = plan.statistics().map_err(|_e| fmt::Error)?;
+            let stats = plan.partition_statistics(None).map_err(|_e| fmt::Error)?;
             format!("statistics=[{}]", stats)
         } else {
             "".to_string()
@@ -1120,6 +1120,13 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
+            self.partition_statistics(None)
+        }
+
+        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+            if partition.is_some() {
+                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+            }
             match self {
                 Self::Panic => panic!("expected panic"),
                 Self::Error => {

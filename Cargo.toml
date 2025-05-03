@@ -48,6 +48,7 @@ members = [
     "datafusion/proto-common",
     "datafusion/proto-common/gen",
     "datafusion/session",
+    "datafusion/spark",
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",
@@ -138,11 +139,12 @@ datafusion-physical-plan = { path = "datafusion/physical-plan", version = "47.0.
 datafusion-proto = { path = "datafusion/proto", version = "47.0.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "47.0.0" }
 datafusion-session = { path = "datafusion/session", version = "47.0.0" }
+datafusion-spark = { path = "datafusion/spark", version = "47.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "47.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
-half = { version = "2.5.0", default-features = false }
+half = { version = "2.6.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 indexmap = "2.9.0"
 itertools = "0.14"

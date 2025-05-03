@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
+use crate::memory_pool::{MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation};
 use datafusion_common::HashMap;
 use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
 use log::debug;
@@ -47,6 +47,10 @@ impl MemoryPool for UnboundedMemoryPool {
 
     fn reserved(&self) -> usize {
         self.used.load(Ordering::Relaxed)
+    }
+
+    fn memory_limit(&self) -> MemoryLimit {
+        MemoryLimit::Infinite
     }
 }
 
@@ -99,6 +103,10 @@ impl MemoryPool for GreedyMemoryPool {
 
     fn reserved(&self) -> usize {
         self.used.load(Ordering::Relaxed)
+    }
+
+    fn memory_limit(&self) -> MemoryLimit {
+        MemoryLimit::Finite(self.pool_size)
     }
 }
 
@@ -232,6 +240,10 @@ impl MemoryPool for FairSpillPool {
     fn reserved(&self) -> usize {
         let state = self.state.lock();
         state.spillable + state.unspillable
+    }
+
+    fn memory_limit(&self) -> MemoryLimit {
+        MemoryLimit::Finite(self.pool_size)
     }
 }
 
@@ -407,6 +419,10 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 
     fn reserved(&self) -> usize {
         self.inner.reserved()
+    }
+
+    fn memory_limit(&self) -> MemoryLimit {
+        self.inner.memory_limit()
     }
 }
 
