@@ -39,7 +39,7 @@ use datafusion_common::{
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
-    NullTreatment, OrderByExpr, OrderByOptions, RenameSelectItem, ReplaceSelectElement,
+    NullTreatment, RenameSelectItem, ReplaceSelectElement,
 };
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
@@ -698,24 +698,6 @@ impl TryCast {
     /// Create a new TryCast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
         Self { expr, data_type }
-    }
-}
-
-/// OrderBy Expressions
-pub enum OrderByExprs {
-    OrderByExprVec(Vec<OrderByExpr>),
-    All {
-        exprs: Vec<Expr>,
-        options: OrderByOptions,
-    },
-}
-
-impl OrderByExprs {
-    pub fn is_empty(&self) -> bool {
-        match self {
-            OrderByExprs::OrderByExprVec(exprs) => exprs.is_empty(),
-            OrderByExprs::All { exprs, .. } => exprs.is_empty(),
-        }
     }
 }
 

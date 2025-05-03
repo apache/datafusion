@@ -39,7 +39,6 @@ use datafusion_common::{
     ToDFSchema,
 };
 use datafusion_expr::dml::{CopyTo, InsertOp};
-use datafusion_expr::expr::OrderByExprs;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
@@ -1241,7 +1240,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .to_dfschema_ref()?;
                 let using: Option<String> = using.as_ref().map(ident_to_string);
                 let columns = self.order_by_to_sort_expr(
-                    OrderByExprs::OrderByExprVec(columns),
+                    columns,
                     &table_schema,
                     planner_context,
                     false,
@@ -1424,13 +1423,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut all_results = vec![];
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
-            let expr_vec = self.order_by_to_sort_expr(
-                OrderByExprs::OrderByExprVec(expr),
-                schema,
-                planner_context,
-                true,
-                None,
-            )?;
+            let expr_vec =
+                self.order_by_to_sort_expr(expr, schema, planner_context, true, None)?;
             // Verify that columns of all SortExprs exist in the schema:
             for sort in expr_vec.iter() {
                 for column in sort.expr.column_refs().iter() {

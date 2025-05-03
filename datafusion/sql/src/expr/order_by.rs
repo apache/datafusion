@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, Result,
 };
-use datafusion_expr::expr::{OrderByExprs, Sort};
+use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
 use sqlparser::ast::{
     Expr as SQLExpr, OrderByExpr, OrderByOptions, Value, ValueWithSpan,
@@ -41,7 +41,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// If false, interpret numeric literals as constant values.
     pub(crate) fn order_by_to_sort_expr(
         &self,
-        order_by_exprs: OrderByExprs,
+        order_by_exprs: Vec<OrderByExpr>,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
@@ -72,62 +72,48 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Sort::new(expr, asc, nulls_first)
             };
 
-        match order_by_exprs {
-            OrderByExprs::OrderByExprVec(expressions) => {
-                for e in expressions {
-                    let OrderByExpr {
-                        expr,
-                        options: OrderByOptions { asc, nulls_first },
-                        with_fill,
-                    } = e;
+        for order_by_expr in order_by_exprs {
+            let OrderByExpr {
+                expr,
+                options: OrderByOptions { asc, nulls_first },
+                with_fill,
+            } = order_by_expr;
 
-                    if let Some(with_fill) = with_fill {
-                        return not_impl_err!(
-                            "ORDER BY WITH FILL is not supported: {with_fill}"
+            if let Some(with_fill) = with_fill {
+                return not_impl_err!("ORDER BY WITH FILL is not supported: {with_fill}");
+            }
+
+            let expr = match expr {
+                SQLExpr::Value(ValueWithSpan {
+                    value: Value::Number(v, _),
+                    span: _,
+                }) if literal_to_column => {
+                    let field_index = v
+                        .parse::<usize>()
+                        .map_err(|err| plan_datafusion_err!("{}", err))?;
+
+                    if field_index == 0 {
+                        return plan_err!(
+                            "Order by index starts at 1 for column indexes"
+                        );
+                    } else if input_schema.fields().len() < field_index {
+                        return plan_err!(
+                            "Order by column out of bounds, specified: {}, max: {}",
+                            field_index,
+                            input_schema.fields().len()
                         );
                     }
 
-                    let expr = match expr {
-                        SQLExpr::Value(ValueWithSpan {
-                            value: Value::Number(v, _),
-                            span: _,
-                        }) if literal_to_column => {
-                            let field_index = v
-                                .parse::<usize>()
-                                .map_err(|err| plan_datafusion_err!("{}", err))?;
-
-                            if field_index == 0 {
-                                return plan_err!(
-                                    "Order by index starts at 1 for column indexes"
-                                );
-                            } else if input_schema.fields().len() < field_index {
-                                return plan_err!(
-                                    "Order by column out of bounds, specified: {}, max: {}",
-                                    field_index,
-                                    input_schema.fields().len()
-                                );
-                            }
-
-                            Expr::Column(Column::from(
-                                input_schema.qualified_field(field_index - 1),
-                            ))
-                        }
-                        e => self.sql_expr_to_logical_expr(
-                            e,
-                            order_by_schema,
-                            planner_context,
-                        )?,
-                    };
-                    sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
+                    Expr::Column(Column::from(
+                        input_schema.qualified_field(field_index - 1),
+                    ))
                 }
-            }
-            OrderByExprs::All { exprs, options } => {
-                let OrderByOptions { asc, nulls_first } = options;
-                for expr in exprs {
-                    sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
+                e => {
+                    self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
                 }
-            }
-        };
+            };
+            sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
+        }
 
         Ok(sort_expr_vec)
     }

@@ -22,7 +22,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{OrderByExprs, ScalarFunction, Unnest, WildcardOptions};
+use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions};
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
 use datafusion_expr::{
     expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
@@ -291,7 +291,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let mut order_by = self.order_by_to_sort_expr(
-                OrderByExprs::OrderByExprVec(window.order_by),
+                window.order_by,
                 schema,
                 planner_context,
                 // Numeric literals in window function ORDER BY are treated as constants
@@ -405,7 +405,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     (!within_group.is_empty()).then_some(within_group)
                 } else {
                     let order_by = self.order_by_to_sort_expr(
-                        OrderByExprs::OrderByExprVec(order_by),
+                        order_by,
                         schema,
                         planner_context,
                         true,

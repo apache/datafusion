@@ -21,15 +21,16 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use crate::stack::StackGuard;
 use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
-use datafusion_expr::expr::{OrderByExprs, Sort};
+use datafusion_expr::expr::Sort;
 
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Offset as SQLOffset, OrderBy, OrderByKind, Query, SelectInto,
-    SetExpr,
+    Expr as SQLExpr, Ident, Offset as SQLOffset, OrderBy, OrderByExpr, OrderByKind,
+    Query, SelectInto, SetExpr,
 };
+use sqlparser::tokenizer::Span;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an SQL query/subquery
@@ -151,7 +152,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 }
 
 /// Returns the order by expressions from the query.
-fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<OrderByExprs> {
+fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<Vec<OrderByExpr>> {
     to_order_by_exprs_with_select(order_by, None)
 }
 
@@ -159,10 +160,10 @@ fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<OrderByExprs> {
 pub(crate) fn to_order_by_exprs_with_select(
     order_by: Option<OrderBy>,
     select_exprs: Option<&Vec<Expr>>,
-) -> Result<OrderByExprs> {
+) -> Result<Vec<OrderByExpr>> {
     let Some(OrderBy { kind, interpolate }) = order_by else {
         // If no order by, return an empty array.
-        return Ok(OrderByExprs::OrderByExprVec(vec![]));
+        return Ok(vec![]);
     };
     if let Some(_interpolate) = interpolate {
         return not_impl_err!("ORDER BY INTERPOLATE is not supported");
@@ -170,27 +171,25 @@ pub(crate) fn to_order_by_exprs_with_select(
     match kind {
         OrderByKind::All(order_by_options) => {
             let Some(exprs) = select_exprs else {
-                return Ok(OrderByExprs::All {
-                    exprs: vec![],
-                    options: order_by_options,
-                });
+                return Ok(vec![]);
             };
-
-            let order_by_epxrs = exprs
+            let order_by_exprs = exprs
                 .iter()
                 .filter_map(|select_expr| match select_expr {
-                    Expr::Column(_) => Some(select_expr.clone()),
+                    Expr::Column(column) => Some(OrderByExpr {
+                        expr: SQLExpr::Identifier(Ident {
+                            value: column.name.clone(),
+                            quote_style: None,
+                            span: Span::empty(),
+                        }),
+                        options: order_by_options.clone(),
+                        with_fill: None,
+                    }),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-
-            Ok(OrderByExprs::All {
-                exprs: order_by_epxrs,
-                options: order_by_options,
-            })
+            Ok(order_by_exprs)
         }
-        OrderByKind::Expressions(order_by_exprs) => {
-            Ok(OrderByExprs::OrderByExprVec(order_by_exprs))
-        }
+        OrderByKind::Expressions(order_by_exprs) => Ok(order_by_exprs),
     }
 }
