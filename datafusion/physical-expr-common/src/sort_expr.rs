@@ -323,10 +323,10 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
     }
 }
 
-///`LexOrdering` contains a `Vec<PhysicalSortExpr>`, which represents
-/// a lexicographical ordering.
+/// This object represents a lexicographical ordering and contains a vector
+/// of `PhysicalSortExpr` objects.
 ///
-/// For example, `vec![a ASC, b DESC]` represents a lexicographical ordering
+/// For example, a `vec![a ASC, b DESC]` represents a lexicographical ordering
 /// that first sorts by column `a` in ascending order, then by column `b` in
 /// descending order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -460,8 +460,8 @@ impl From<LexOrdering> for Vec<PhysicalSortExpr> {
     }
 }
 
-///`LexRequirement` is an struct containing a `Vec<PhysicalSortRequirement>`, which
-/// represents a lexicographical ordering requirement.
+/// This object represents a lexicographical ordering requirement and contains
+/// a vector of `PhysicalSortRequirement` objects.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexRequirement {
     reqs: Vec<PhysicalSortRequirement>,
