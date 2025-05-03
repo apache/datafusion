@@ -32,6 +32,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
+use itertools::Itertools;
+
 /// Represents Sort operation for a column in a RecordBatch
 ///
 /// Example:
@@ -329,46 +331,42 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 /// descending order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LexOrdering {
-    inner: Vec<PhysicalSortExpr>,
+    exprs: Vec<PhysicalSortExpr>,
 }
 
 impl LexOrdering {
     /// Creates a new [`LexOrdering`] from the given vector of sort expressions.
     /// If the vector is empty, returns `None`.
-    pub fn new(inner: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
-        let inner = inner.into_iter().collect::<Vec<_>>();
-        (!inner.is_empty()).then(|| Self { inner })
+    pub fn new(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
+        let exprs = exprs.into_iter().collect::<Vec<_>>();
+        (!exprs.is_empty()).then(|| Self { exprs })
     }
 
     /// Appends an element to the back of the `LexOrdering`.
     pub fn push(&mut self, physical_sort_expr: PhysicalSortExpr) {
-        self.inner.push(physical_sort_expr)
+        self.exprs.push(physical_sort_expr)
     }
 
     /// Add all elements from `iter` to the `LexOrdering`.
     pub fn extend(&mut self, iter: impl IntoIterator<Item = PhysicalSortExpr>) {
-        self.inner.extend(iter)
+        self.exprs.extend(iter)
     }
 
     /// Returns the number of elements that can be stored in the `LexOrdering`
     /// without reallocating.
     pub fn capacity(&self) -> usize {
-        self.inner.capacity()
+        self.exprs.capacity()
     }
 
-    /// Constructs a duplicate-free `LexOrdering` by filtering out duplicate
-    /// entries that have same physical expression inside.
-    ///
-    /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
-    /// Some(ASC)]`.
+    /// Constructs a duplicate-free `LexOrdering` by filtering out entries with
+    /// the same physical expression inside. For example, `[a ASC, a DESC]`
+    /// collapses to `[a ASC]`.
     pub fn collapse(mut self) -> Self {
-        let mut orderings = Vec::<PhysicalSortExpr>::new();
-        for element in self.inner {
-            if !orderings.iter().any(|item| item.expr.eq(&element.expr)) {
-                orderings.push(element);
-            }
-        }
-        self.inner = orderings;
+        self.exprs = self
+            .exprs
+            .into_iter()
+            .unique_by(|s| Arc::clone(&s.expr))
+            .collect();
         self
     }
 
@@ -378,10 +376,10 @@ impl LexOrdering {
     /// to the number of expressions inside this `LexOrdering`, making truncation
     /// a no-op, or (2) when `len` is `0`, making truncation impossible.
     pub fn truncate(&mut self, len: usize) -> bool {
-        if len == 0 || len >= self.inner.len() {
+        if len == 0 || len >= self.exprs.len() {
             return false;
         }
-        self.inner.truncate(len);
+        self.exprs.truncate(len);
         true
     }
 }
@@ -404,7 +402,7 @@ impl<const N: usize> From<[PhysicalSortExpr; N]> for LexOrdering {
         //       Rust supports it.
         assert!(N > 0);
         Self {
-            inner: value.to_vec(),
+            exprs: value.to_vec(),
         }
     }
 }
@@ -413,20 +411,20 @@ impl Deref for LexOrdering {
     type Target = [PhysicalSortExpr];
 
     fn deref(&self) -> &Self::Target {
-        self.inner.as_slice()
+        self.exprs.as_slice()
     }
 }
 
 impl DerefMut for LexOrdering {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.as_mut_slice()
+        self.exprs.as_mut_slice()
     }
 }
 
 impl Display for LexOrdering {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let mut first = true;
-        for sort_expr in &self.inner {
+        for sort_expr in &self.exprs {
             if first {
                 first = false;
             } else {
@@ -443,7 +441,7 @@ impl IntoIterator for LexOrdering {
     type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.into_iter()
+        self.exprs.into_iter()
     }
 }
 
@@ -452,13 +450,13 @@ impl<'a> IntoIterator for &'a LexOrdering {
     type IntoIter = std::slice::Iter<'a, PhysicalSortExpr>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.iter()
+        self.exprs.iter()
     }
 }
 
 impl From<LexOrdering> for Vec<PhysicalSortExpr> {
     fn from(ordering: LexOrdering) -> Self {
-        ordering.inner
+        ordering.exprs
     }
 }
 
@@ -466,46 +464,42 @@ impl From<LexOrdering> for Vec<PhysicalSortExpr> {
 /// represents a lexicographical ordering requirement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexRequirement {
-    inner: Vec<PhysicalSortRequirement>,
+    reqs: Vec<PhysicalSortRequirement>,
 }
 
 impl LexRequirement {
     /// Creates a new [`LexRequirement`] from the given vector of sort expressions.
     /// If the vector is empty, returns `None`.
-    pub fn new(inner: impl IntoIterator<Item = PhysicalSortRequirement>) -> Option<Self> {
-        let inner = inner.into_iter().collect::<Vec<_>>();
-        (!inner.is_empty()).then(|| Self { inner })
+    pub fn new(reqs: impl IntoIterator<Item = PhysicalSortRequirement>) -> Option<Self> {
+        let reqs = reqs.into_iter().collect::<Vec<_>>();
+        (!reqs.is_empty()).then(|| Self { reqs })
     }
 
     /// Appends an element to the back of the `LexRequirement`.
     pub fn push(&mut self, requirement: PhysicalSortRequirement) {
-        self.inner.push(requirement)
+        self.reqs.push(requirement)
     }
 
     /// Add all elements from `iter` to the `LexRequirement`.
     pub fn extend(&mut self, iter: impl IntoIterator<Item = PhysicalSortRequirement>) {
-        self.inner.extend(iter)
+        self.reqs.extend(iter)
     }
 
     /// Returns the number of elements that can be stored in the `LexRequirement`
     /// without reallocating.
     pub fn capacity(&self) -> usize {
-        self.inner.capacity()
+        self.reqs.capacity()
     }
 
-    /// Constructs a duplicate-free `LexRequirement` by filtering out duplicate
-    /// entries that have same physical expression inside.
-    ///
-    /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
-    /// Some(ASC)]`.
+    /// Constructs a duplicate-free `LexRequirement` by filtering out entries
+    /// with the same physical expression inside. For example, the requirement
+    /// `[a Some(ASC), a None]` collapses to `[a Some(ASC)]`.
     pub fn collapse(mut self) -> Self {
-        let mut reqs = Vec::<PhysicalSortRequirement>::new();
-        for element in self.inner {
-            if !reqs.iter().any(|item| item.expr.eq(&element.expr)) {
-                reqs.push(element);
-            }
-        }
-        self.inner = reqs;
+        self.reqs = self
+            .reqs
+            .into_iter()
+            .unique_by(|r| Arc::clone(&r.expr))
+            .collect();
         self
     }
 }
@@ -516,7 +510,7 @@ impl<const N: usize> From<[PhysicalSortRequirement; N]> for LexRequirement {
         //       Rust supports it.
         assert!(N > 0);
         Self {
-            inner: value.to_vec(),
+            reqs: value.to_vec(),
         }
     }
 }
@@ -525,13 +519,13 @@ impl Deref for LexRequirement {
     type Target = [PhysicalSortRequirement];
 
     fn deref(&self) -> &Self::Target {
-        self.inner.as_slice()
+        self.reqs.as_slice()
     }
 }
 
 impl DerefMut for LexRequirement {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.as_mut_slice()
+        self.reqs.as_mut_slice()
     }
 }
 
@@ -540,7 +534,7 @@ impl IntoIterator for LexRequirement {
     type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.into_iter()
+        self.reqs.into_iter()
     }
 }
 
@@ -549,13 +543,13 @@ impl<'a> IntoIterator for &'a LexRequirement {
     type IntoIter = std::slice::Iter<'a, PhysicalSortRequirement>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.iter()
+        self.reqs.iter()
     }
 }
 
 impl From<LexRequirement> for Vec<PhysicalSortRequirement> {
     fn from(requirement: LexRequirement) -> Self {
-        requirement.inner
+        requirement.reqs
     }
 }
 
@@ -564,7 +558,7 @@ impl From<LexOrdering> for LexRequirement {
     fn from(value: LexOrdering) -> Self {
         // Can construct directly as `value` is non-degenerate:
         Self {
-            inner: value.into_iter().map(Into::into).collect(),
+            reqs: value.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -573,7 +567,7 @@ impl From<LexRequirement> for LexOrdering {
     fn from(value: LexRequirement) -> Self {
         // Can construct directly as `value` is non-degenerate:
         Self {
-            inner: value.into_iter().map(Into::into).collect(),
+            exprs: value.into_iter().map(Into::into).collect(),
         }
     }
 }

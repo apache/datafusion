@@ -374,11 +374,10 @@ impl EquivalenceProperties {
         mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Self {
-        // Filter out constant expressions as they don't affect ordering
+        // Filter out constant expressions as they don't affect ordering:
         let filtered_exprs = ordering
             .into_iter()
-            .filter(|expr| self.is_expr_constant(&expr.expr).is_none())
-            .collect::<Vec<_>>();
+            .filter(|expr| self.is_expr_constant(&expr.expr).is_none());
 
         if let Some(filtered_exprs) = LexOrdering::new(filtered_exprs) {
             // Preserve valid suffixes from existing orderings:
@@ -411,55 +410,25 @@ impl EquivalenceProperties {
     }
 
     /// Normalizes the given sort expressions (i.e. `sort_exprs`) using the
-    /// equivalence group and the ordering equivalence class within. Returns
-    /// a `LexOrdering` instance if the expressions define a proper lexicographical
-    /// ordering. It works by:
-    /// - Removing expressions that have a constant value from the given expressions.
-    /// - Replacing sections that belong to some equivalence class in the equivalence
-    ///   group with the first entry in the matching equivalence class.
-    ///
-    /// Assume that `self.eq_group` states column `a` and `b` are aliases. Also
-    /// assume that `self.oeq_class` contains equivalent orderings `d ASC` and
-    /// `a ASC, c ASC` (in the sense that both describe the ordering of the
-    /// table). If `sort_exprs` were `[b ASC, c ASC, a ASC]`, then this function
-    /// would return `[a ASC, c ASC]`. Internally, it would first normalize to
-    /// `[a ASC, c ASC, a ASC]` and end up with the final result after deduplication.
+    /// equivalence group within. Returns a `LexOrdering` instance if the
+    /// expressions define a proper lexicographical ordering. For more details,
+    /// see [`EquivalenceGroup::normalize_sort_exprs`].
     pub fn normalize_sort_exprs(
         &self,
         sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Option<LexOrdering> {
-        // Prune redundant sections in the ordering:
-        let sort_exprs = sort_exprs
-            .into_iter()
-            .map(|sort_expr| self.eq_group.normalize_sort_expr(sort_expr))
-            .filter(|order| self.is_expr_constant(&order.expr).is_none());
-        LexOrdering::new(sort_exprs).map(|o| o.collapse())
+        LexOrdering::new(self.eq_group.normalize_sort_exprs(sort_exprs))
     }
 
     /// Normalizes the given sort requirements (i.e. `sort_reqs`) using the
-    /// equivalence group and the ordering equivalence class within. Returns
-    /// a `LexRequirement` instance if the expressions define a proper lexicographical
-    /// ordering requirement. It works by:
-    /// - Removing expressions that have a constant value from the given requirements.
-    /// - Replacing sections that belong to some equivalence class in the equivalence
-    ///   group with the first entry in the matching equivalence class.
-    ///
-    /// Assume that `self.eq_group` states column `a` and `b` are aliases. Also
-    /// assume that `self.oeq_class` contains equivalent orderings `d ASC` and
-    /// `a ASC, c ASC` (in the sense that both describe the ordering of the
-    /// table). If `sort_exprs` were `[b ASC, c ASC, a ASC]`, then this function
-    /// would return `[a ASC, c ASC]`. Internally, it would first normalize to
-    /// `[a ASC, c ASC, a ASC]` and end up with the final result after deduplication.
+    /// equivalence group within. Returns a `LexRequirement` instance if the
+    /// expressions define a proper lexicographical requirement. For more
+    /// details, see [`EquivalenceGroup::normalize_sort_exprs`].
     fn normalize_sort_requirements(
         &self,
         sort_reqs: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> Option<LexRequirement> {
-        // Prune redundant sections in the requirement:
-        let reqs = sort_reqs
-            .into_iter()
-            .map(|req| self.eq_group.normalize_sort_requirement(req))
-            .filter(|order| self.is_expr_constant(&order.expr).is_none());
-        LexRequirement::new(reqs).map(|r| r.collapse())
+        LexRequirement::new(self.eq_group.normalize_sort_requirements(sort_reqs))
     }
 
     /// Checks whether the given ordering is satisfied by any of the existing

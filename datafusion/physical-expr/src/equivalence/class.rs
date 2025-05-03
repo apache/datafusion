@@ -30,6 +30,7 @@ use datafusion_common::{JoinType, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 
 /// Represents whether a constant expression's value is uniform or varies across
 /// partitions. Has two variants:
@@ -470,8 +471,8 @@ impl EquivalenceGroup {
         self.remove_redundant_entries();
     }
 
-    /// Normalizes the given physical expression according to this group.
-    /// The expression is replaced with the first expression in the equivalence
+    /// Normalizes the given physical expression according to this group. The
+    /// expression is replaced with the first expression in the equivalence
     /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.transform(|expr| {
@@ -491,11 +492,11 @@ impl EquivalenceGroup {
         // The unwrap above is safe because the closure always returns `Ok`.
     }
 
-    /// Normalizes the given sort expression according to this group.
-    /// The underlying physical expression is replaced with the first expression
-    /// in the equivalence class it matches with (if any). If the underlying
-    /// expression does not belong to any equivalence class in this group, returns
-    /// the sort expression as is.
+    /// Normalizes the given sort expression according to this group. The
+    /// underlying physical expression is replaced with the first expression in
+    /// the equivalence class it matches with (if any). If the underlying
+    /// expression does not belong to any equivalence class in this group,
+    /// returns the sort expression as is.
     pub fn normalize_sort_expr(
         &self,
         mut sort_expr: PhysicalSortExpr,
@@ -504,17 +505,57 @@ impl EquivalenceGroup {
         sort_expr
     }
 
-    /// Normalizes the given sort requirement according to this group.
-    /// The underlying physical expression is replaced with the first expression
-    /// in the equivalence class it matches with (if any). If the underlying
-    /// expression does not belong to any equivalence class in this group, returns
-    /// the given sort requirement as is.
+    /// Normalizes the given sort expressions (i.e. `sort_exprs`) by:
+    /// - Removing expressions that have a constant value.
+    /// - Replacing sections that belong to some equivalence class in the
+    ///   with the first entry in the matching equivalence class.
+    /// - Removing duplicate sort expressions.
+    ///
+    /// If columns `a` and `b` are known to be equal, `d` is known to be a
+    /// constant, and `sort_exprs` is `[b ASC, d DESC, c ASC, a ASC]`, this
+    /// function would return `[a ASC, c ASC, a ASC]`.
+    pub fn normalize_sort_exprs<'a>(
+        &'a self,
+        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr> + 'a,
+    ) -> impl Iterator<Item = PhysicalSortExpr> + 'a {
+        sort_exprs
+            .into_iter()
+            .map(|sort_expr| self.normalize_sort_expr(sort_expr))
+            .filter(|sort_expr| self.is_expr_constant(&sort_expr.expr).is_none())
+            .unique_by(|sort_expr| Arc::clone(&sort_expr.expr))
+    }
+
+    /// Normalizes the given sort requirement according to this group. The
+    /// underlying physical expression is replaced with the first expression in
+    /// the equivalence class it matches with (if any). If the underlying
+    /// expression does not belong to any equivalence class in this group,
+    /// returns the given sort requirement as is.
     pub fn normalize_sort_requirement(
         &self,
         mut sort_requirement: PhysicalSortRequirement,
     ) -> PhysicalSortRequirement {
         sort_requirement.expr = self.normalize_expr(sort_requirement.expr);
         sort_requirement
+    }
+
+    /// Normalizes the given sort requirements (i.e. `sort_reqs`) by:
+    /// - Removing expressions that have a constant value.
+    /// - Replacing sections that belong to some equivalence class in the
+    ///   with the first entry in the matching equivalence class.
+    /// - Removing duplicate sort expressions.
+    ///
+    /// If columns `a` and `b` are known to be equal, `d` is known to be a
+    /// constant, and `sort_reqs` is `[b ASC, d DESC, c ASC, a ASC]`, this
+    /// function would return `[a ASC, c ASC, a ASC]`.
+    pub fn normalize_sort_requirements<'a>(
+        &'a self,
+        sort_reqs: impl IntoIterator<Item = PhysicalSortRequirement> + 'a,
+    ) -> impl Iterator<Item = PhysicalSortRequirement> + 'a {
+        sort_reqs
+            .into_iter()
+            .map(|req| self.normalize_sort_requirement(req))
+            .filter(|req| self.is_expr_constant(&req.expr).is_none())
+            .unique_by(|req| Arc::clone(&req.expr))
     }
 
     /// Perform an indirect projection of `expr` by consulting the equivalence
