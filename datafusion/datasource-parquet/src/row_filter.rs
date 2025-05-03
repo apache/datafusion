@@ -657,10 +657,7 @@ mod test {
 
         let expr = col("list_col").is_not_null();
 
-        assert!(!can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-        ));
+        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &file_schema,));
     }
 
     #[test]
@@ -670,10 +667,7 @@ mod test {
 
         let expr = col("nonexistent_column").is_null();
 
-        assert!(!can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-        ));
+        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &file_schema,));
     }
 
     #[test]
@@ -683,10 +677,7 @@ mod test {
 
         let expr = col("string_col").is_null();
 
-        assert!(can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-        ));
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &file_schema,));
     }
 
     #[test]
@@ -700,9 +691,6 @@ mod test {
             .is_not_null()
             .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)))));
 
-        assert!(can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-        ));
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &file_schema,));
     }
 }

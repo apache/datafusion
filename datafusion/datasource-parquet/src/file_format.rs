@@ -471,9 +471,9 @@ impl FileFormat for ParquetFormat {
             return Ok(FilePushdownSupport::NoSupport);
         }
 
-        let all_supported = filters.iter().all(|filter| {
-            can_expr_be_pushed_down_with_schemas(filter, file_schema)
-        });
+        let all_supported = filters
+            .iter()
+            .all(|filter| can_expr_be_pushed_down_with_schemas(filter, file_schema));
 
         Ok(if all_supported {
             FilePushdownSupport::Supported
