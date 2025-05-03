@@ -679,69 +679,69 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>NULL</p></td>
 <td><p>(reading) If true, parquet reader will read columns of physical type int96 as originating from a different resolution than nanosecond. This is useful for reading data from systems like Spark which stores microsecond resolution timestamps in an int96 allowing it to write values with a larger date range than 64-bit timestamps with nanosecond resolution.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.execution.parquet.data_pagesize_limit</p></td>
+<tr class="row-even"><td><p>datafusion.execution.parquet.bloom_filter_on_read</p></td>
+<td><p>true</p></td>
+<td><p>(reading) Use any available bloom filters when reading parquet files</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.data_pagesize_limit</p></td>
 <td><p>1048576</p></td>
 <td><p>(writing) Sets best effort maximum size of data page in bytes</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.execution.parquet.write_batch_size</p></td>
+<tr class="row-even"><td><p>datafusion.execution.parquet.write_batch_size</p></td>
 <td><p>1024</p></td>
 <td><p>(writing) Sets write_batch_size in bytes</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.execution.parquet.writer_version</p></td>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.writer_version</p></td>
 <td><p>1.0</p></td>
 <td><p>(writing) Sets parquet writer version valid values are “1.0” and “2.0”</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.execution.parquet.skip_arrow_metadata</p></td>
+<tr class="row-even"><td><p>datafusion.execution.parquet.skip_arrow_metadata</p></td>
 <td><p>false</p></td>
 <td><p>(writing) Skip encoding the embedded arrow metadata in the KV_meta This is analogous to the <code class="docutils literal notranslate"><span class="pre">ArrowWriterOptions::with_skip_arrow_metadata</span></code>. Refer to <a class="reference external" href="https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata">https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata</a></p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.execution.parquet.compression</p></td>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.compression</p></td>
 <td><p>zstd(3)</p></td>
 <td><p>(writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting Note that this default setting is not the same as the default parquet writer setting.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.execution.parquet.dictionary_enabled</p></td>
+<tr class="row-even"><td><p>datafusion.execution.parquet.dictionary_enabled</p></td>
 <td><p>true</p></td>
 <td><p>(writing) Sets if dictionary encoding is enabled. If NULL, uses default parquet writer setting</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.execution.parquet.dictionary_page_size_limit</p></td>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.dictionary_page_size_limit</p></td>
 <td><p>1048576</p></td>
 <td><p>(writing) Sets best effort maximum dictionary page size, in bytes</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.execution.parquet.statistics_enabled</p></td>
+<tr class="row-even"><td><p>datafusion.execution.parquet.statistics_enabled</p></td>
 <td><p>page</p></td>
 <td><p>(writing) Sets if statistics are enabled for any column Valid values are: “none”, “chunk”, and “page” These values are not case sensitive. If NULL, uses default parquet writer setting</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.execution.parquet.max_statistics_size</p></td>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.max_statistics_size</p></td>
 <td><p>4096</p></td>
 <td><p>(writing) Sets max statistics size for any column. If NULL, uses default parquet writer setting max_statistics_size is deprecated, currently it is not being used</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.execution.parquet.max_row_group_size</p></td>
+<tr class="row-even"><td><p>datafusion.execution.parquet.max_row_group_size</p></td>
 <td><p>1048576</p></td>
 <td><p>(writing) Target maximum number of rows in each row group (defaults to 1M rows). Writing larger row groups requires more memory to write, but can get better compression and be faster to read.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.execution.parquet.created_by</p></td>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.created_by</p></td>
 <td><p>datafusion version 47.0.0</p></td>
 <td><p>(writing) Sets “created by” property</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.execution.parquet.column_index_truncate_length</p></td>
+<tr class="row-even"><td><p>datafusion.execution.parquet.column_index_truncate_length</p></td>
 <td><p>64</p></td>
 <td><p>(writing) Sets column index truncate length</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.execution.parquet.statistics_truncate_length</p></td>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.statistics_truncate_length</p></td>
 <td><p>NULL</p></td>
 <td><p>(writing) Sets statictics truncate length. If NULL, uses default parquet writer setting</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.execution.parquet.data_page_row_count_limit</p></td>
+<tr class="row-even"><td><p>datafusion.execution.parquet.data_page_row_count_limit</p></td>
 <td><p>20000</p></td>
 <td><p>(writing) Sets best effort maximum number of rows in data page</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.execution.parquet.encoding</p></td>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.encoding</p></td>
 <td><p>NULL</p></td>
 <td><p>(writing) Sets default encoding for any column. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting</p></td>
-</tr>
-<tr class="row-odd"><td><p>datafusion.execution.parquet.bloom_filter_on_read</p></td>
-<td><p>true</p></td>
-<td><p>(writing) Use any available bloom filters when reading parquet files</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.bloom_filter_on_write</p></td>
 <td><p>false</p></td>
