@@ -328,7 +328,7 @@ datafusion.catalog.newlines_in_values false Specifies whether newlines in (quote
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 datafusion.execution.collect_statistics false Should DataFusion collect statistics after listing files
-datafusion.execution.enable_aggregation_blocked_groups true Should DataFusion use the the blocked approach to manage the groups values and their related states in accumulators. By default, the blocked approach will be used. And the blocked approach allocates capacity for the block based on a predefined block size firstly. When the block reaches its limit, we allocate a new block (also with the same predefined block size based capacity) instead of expanding the current one and copying the data. If setting this flag to `false`, will fall-back to use the single approach, values are managed within a single large block(can think of it as a Vec). As this block grows, it often triggers numerous copies, resulting in poor performance.
+datafusion.execution.enable_aggregation_blocked_groups true Should DataFusion use a blocked approach to manage grouping state. By default, the blocked approach is used which allocates capacity based on a predefined block size firstly. When the block reaches its limit, we allocate a new block (also with the same predefined block size based capacity) instead of expanding the current one and copying the data. If `false`, a single allocation approach is used, where values are managed within a single large memory block. As this block grows, it often triggers numerous copies, resulting in poor performance.
 datafusion.execution.enable_recursive_ctes true Should DataFusion support recursive CTEs
 datafusion.execution.enforce_batch_size_in_joins false Should DataFusion enforce batch size in joins or not. By default, DataFusion will not enforce batch size in joins. Enforcing batch size in joins can reduce memory usage when joining large tables with a highly-selective join filter, but is also slightly slower.
 datafusion.execution.keep_partition_by_columns false Should DataFusion keep the columns used for partition_by in the output RecordBatches
@@ -676,16 +676,14 @@ DROP VIEW test.xyz
 
 
 # show_external_create_table()
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/kamille/Desktop/github/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE abc
 STORED AS CSV
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 OPTIONS ('format.has_header' 'true');
 
-query TTTT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.abc' not found
 SHOW CREATE TABLE abc;
-----
-datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv
 
 # string_agg has different arg_types but same return type. Test avoiding duplicate entries for the same function.
 query TTT
