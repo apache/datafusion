@@ -5,12 +5,13 @@ This directory contains queries for the ClickBench benchmark https://benchmark.c
 ClickBench is focused on aggregation and filtering performance (though it has no Joins)
 
 ## Files:
-* `queries.sql` - Actual ClickBench queries, downloaded from the [ClickBench repository]
-* `extended.sql` - "Extended" DataFusion specific queries. 
 
-[ClickBench repository]: https://github.com/ClickHouse/ClickBench/blob/main/datafusion/queries.sql
+- `queries.sql` - Actual ClickBench queries, downloaded from the [ClickBench repository]
+- `extended.sql` - "Extended" DataFusion specific queries.
 
-## "Extended" Queries 
+[clickbench repository]: https://github.com/ClickHouse/ClickBench/blob/main/datafusion/queries.sql
+
+## "Extended" Queries
 
 The "extended" queries are not part of the official ClickBench benchmark.
 Instead they are used to test other DataFusion features that are not covered by
@@ -25,7 +26,7 @@ the standard benchmark. Each description below is for the corresponding line in
 distinct string columns.
 
 ```sql
-SELECT COUNT(DISTINCT "SearchPhrase"), COUNT(DISTINCT "MobilePhone"), COUNT(DISTINCT "MobilePhoneModel") 
+SELECT COUNT(DISTINCT "SearchPhrase"), COUNT(DISTINCT "MobilePhone"), COUNT(DISTINCT "MobilePhoneModel")
 FROM hits;
 ```
 
@@ -35,7 +36,6 @@ FROM hits;
 
 **Important Query Properties**: multiple `COUNT DISTINCT`s. All three are small strings (length either 1 or 2).
 
-
 ```sql
 SELECT COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")
 FROM hits;
@@ -43,20 +43,19 @@ FROM hits;
 
 ### Q2: Top 10 analysis
 
-**Question**: "Find the top 10 "browser country" by number of distinct "social network"s, 
-including the distinct counts of  "hit color", "browser language",
+**Question**: "Find the top 10 "browser country" by number of distinct "social network"s,
+including the distinct counts of "hit color", "browser language",
 and "social action"."
 
 **Important Query Properties**: GROUP BY short, string, multiple `COUNT DISTINCT`s. There are several small strings (length either 1 or 2).
 
 ```sql
 SELECT "BrowserCountry",  COUNT(DISTINCT "SocialNetwork"), COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserLanguage"), COUNT(DISTINCT "SocialAction")
-FROM hits 
-GROUP BY 1 
-ORDER BY 2 DESC 
+FROM hits
+GROUP BY 1
+ORDER BY 2 DESC
 LIMIT 10;
 ```
-
 
 ### Q3: What is the income distribution for users in specific regions
 
@@ -65,17 +64,17 @@ LIMIT 10;
 **Important Query Properties**: STDDEV and VAR aggregation functions, GROUP BY multiple small ints
 
 ```sql
-SELECT "SocialSourceNetworkID", "RegionID", COUNT(*), AVG("Age"), AVG("ParamPrice"), STDDEV("ParamPrice") as s, VAR("ParamPrice") 
-FROM 'hits.parquet' 
-GROUP BY "SocialSourceNetworkID", "RegionID"  
+SELECT "SocialSourceNetworkID", "RegionID", COUNT(*), AVG("Age"), AVG("ParamPrice"), STDDEV("ParamPrice") as s, VAR("ParamPrice")
+FROM 'hits.parquet'
+GROUP BY "SocialSourceNetworkID", "RegionID"
 HAVING s IS NOT NULL
-ORDER BY s DESC 
+ORDER BY s DESC
 LIMIT 10;
 ```
 
 ### Q4: Response start time distribution analysis (median)
 
-**Question**:  Find the WatchIDs with the highest median "ResponseStartTiming" without Java enabled
+**Question**: Find the WatchIDs with the highest median "ResponseStartTiming" without Java enabled
 
 **Important Query Properties**: MEDIAN, functions, high cardinality grouping that skips intermediate aggregation
 
@@ -95,17 +94,16 @@ Results look like
 
 ```
 +-------------+---------------------+---+------+------+------+
-| ClientIP    | WatchID             | c | tmin | tmed | tmax |
+| ClientIP | WatchID | c | tmin | tmed | tmax |
 +-------------+---------------------+---+------+------+------+
-| 1611957945  | 6655575552203051303 | 2 | 0    | 0    | 0    |
-| -1402644643 | 8566928176839891583 | 2 | 0    | 0    | 0    |
+| 1611957945 | 6655575552203051303 | 2 | 0 | 0 | 0 |
+| -1402644643 | 8566928176839891583 | 2 | 0 | 0 | 0 |
 +-------------+---------------------+---+------+------+------+
 ```
 
-
 ### Q5: Response start time distribution analysis (p95)
 
-**Question**:  Find the WatchIDs with the highest p95 "ResponseStartTiming" without Java enabled
+**Question**: Find the WatchIDs with the highest p95 "ResponseStartTiming" without Java enabled
 
 **Important Query Properties**: APPROX_PERCENTILE_CONT, functions, high cardinality grouping that skips intermediate aggregation
 
@@ -122,16 +120,18 @@ LIMIT 10;
 ```
 
 Results look like
+
 ```
 +-------------+---------------------+---+------+------+------+
-| ClientIP    | WatchID             | c | tmin | tp95 | tmax |
+| ClientIP | WatchID | c | tmin | tp95 | tmax |
 +-------------+---------------------+---+------+------+------+
-| 1611957945  | 6655575552203051303 | 2 | 0    | 0    | 0    |
-| -1402644643 | 8566928176839891583 | 2 | 0    | 0    | 0    |
+| 1611957945 | 6655575552203051303 | 2 | 0 | 0 | 0 |
+| -1402644643 | 8566928176839891583 | 2 | 0 | 0 | 0 |
 +-------------+---------------------+---+------+------+------+
 ```
 
 ### Q6: How many social shares meet complex multi-stage filtering criteria?
+
 **Question**: What is the count of sharing actions from iPhone mobile users on specific social networks, within common timezones, participating in seasonal campaigns, with high screen resolutions and closely matched UTM parameters?
 **Important Query Properties**: Simple filter with high-selectivity, Costly string matching, A large number of filters with high overhead are positioned relatively later in the process
 
@@ -150,20 +150,21 @@ WHERE
 
 	-- Stage 3: Heavy computations (expensive)
     AND regexp_match("Referer", '\/campaign\/(spring|summer)_promo') IS NOT NULL -- Find campaign-specific referrers
-    AND CASE 
-        WHEN split_part(split_part("URL", 'resolution=', 2), '&', 1) ~ '^\d+$' 
-        THEN split_part(split_part("URL", 'resolution=', 2), '&', 1)::INT 
-        ELSE 0 
+    AND CASE
+        WHEN split_part(split_part("URL", 'resolution=', 2), '&', 1) ~ '^\d+$'
+        THEN split_part(split_part("URL", 'resolution=', 2), '&', 1)::INT
+        ELSE 0
     END > 1920 -- Extract and validate resolution parameter
     AND levenshtein(CAST("UTMSource" AS STRING), CAST("UTMCampaign" AS STRING)) < 3 -- Verify UTM parameter similarity
 ```
-Result is empty,Since it has already been filtered by `"SocialAction" = 'share'`.
 
+Result is empty,Since it has already been filtered by `"SocialAction" = 'share'`.
 
 ## Data Notes
 
 Here are some interesting statistics about the data used in the queries
 Max length of `"SearchPhrase"` is 1113 characters
+
 ```sql
 > select min(length("SearchPhrase")) as "SearchPhrase_len_min", max(length("SearchPhrase")) "SearchPhrase_len_max" from 'hits.parquet' limit 10;
 +----------------------+----------------------+
@@ -173,8 +174,8 @@ Max length of `"SearchPhrase"` is 1113 characters
 +----------------------+----------------------+
 ```
 
-
 Here is the schema of the data
+
 ```sql
 > describe 'hits.parquet';
 +-----------------------+-----------+-------------+
