@@ -22,7 +22,7 @@ use crate::expr::{
     WindowFunctionParams,
 };
 use crate::type_coercion::functions::{
-    data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
+    data_types_with_scalar_udf, fields_with_aggregate_udf, fields_with_window_udf,
 };
 use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
@@ -163,7 +163,7 @@ impl ExprSchemable for Expr {
                     .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
                     .collect::<Result<Vec<_>>>()?;
                 let new_fields =
-                    data_types_with_aggregate_udf(&fields, func).map_err(|err| {
+                    fields_with_aggregate_udf(&fields, func).map_err(|err| {
                         let data_types = fields
                             .iter()
                             .map(|f| f.data_type().clone())
@@ -469,7 +469,7 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
                 let new_fields =
-                    data_types_with_aggregate_udf(&fields, func).map_err(|err| {
+                    fields_with_aggregate_udf(&fields, func).map_err(|err| {
                         let arg_types = fields
                             .iter()
                             .map(|f| f.data_type())
@@ -622,7 +622,7 @@ impl Expr {
                     .cloned()
                     .collect::<Vec<_>>();
                 let new_fields =
-                    data_types_with_aggregate_udf(&fields, udaf).map_err(|err| {
+                    fields_with_aggregate_udf(&fields, udaf).map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
                             match err {
@@ -648,7 +648,7 @@ impl Expr {
                     .cloned()
                     .collect::<Vec<_>>();
                 let new_fields =
-                    data_types_with_window_udf(&fields, udwf).map_err(|err| {
+                    fields_with_window_udf(&fields, udwf).map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
                             match err {

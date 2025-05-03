@@ -25,7 +25,7 @@ pub struct ExpressionArgs<'a> {
     /// The expressions passed as arguments to the user-defined window
     /// function.
     input_exprs: &'a [Arc<dyn PhysicalExpr>],
-    /// The corresponding data types of expressions passed as arguments
+    /// The corresponding fields of expressions passed as arguments
     /// to the user-defined window function.
     input_fields: &'a [Field],
 }

@@ -20,7 +20,7 @@ use datafusion_common::arrow::datatypes::Field;
 /// Metadata for defining the result field from evaluating a
 /// user-defined window function.
 pub struct WindowUDFFieldArgs<'a> {
-    /// The data types corresponding to the arguments to the
+    /// The fields corresponding to the arguments to the
     /// user-defined window function.
     input_fields: &'a [Field],
     /// The display name of the user-defined window function.

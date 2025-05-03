@@ -198,7 +198,7 @@ pub struct WindowUDFExpr {
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Display name
     name: String,
-    /// Types of input expressions
+    /// Fields of input expressions
     input_fields: Vec<Field>,
     /// This is set to `true` only if the user-defined window function
     /// expression supports evaluation in reverse order, and the

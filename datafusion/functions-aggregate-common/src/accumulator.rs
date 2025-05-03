@@ -27,7 +27,7 @@ use std::sync::Arc;
 /// ordering expressions.
 #[derive(Debug)]
 pub struct AccumulatorArgs<'a> {
-    /// The return type of the aggregate function.
+    /// The return field of the aggregate function.
     pub return_field: &'a Field,
 
     /// The schema of the input arguments

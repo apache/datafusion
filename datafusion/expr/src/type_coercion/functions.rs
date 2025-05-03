@@ -78,12 +78,12 @@ pub fn data_types_with_scalar_udf(
 
 /// Performs type coercion for aggregate function arguments.
 ///
-/// Returns the data types to which each argument must be coerced to
+/// Returns the fields to which each argument must be coerced to
 /// match `signature`.
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
-pub fn data_types_with_aggregate_udf(
+pub fn fields_with_aggregate_udf(
     current_fields: &[Field],
     func: &AggregateUDF,
 ) -> Result<Vec<Field>> {
@@ -132,7 +132,7 @@ pub fn data_types_with_aggregate_udf(
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
-pub fn data_types_with_window_udf(
+pub fn fields_with_window_udf(
     current_fields: &[Field],
     func: &WindowUDF,
 ) -> Result<Vec<Field>> {

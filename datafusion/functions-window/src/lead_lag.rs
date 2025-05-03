@@ -236,7 +236,7 @@ impl WindowUDFImpl for WindowShift {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        let return_field = parse_expr_type(field_args.input_fields())?;
+        let return_field = parse_expr_field(field_args.input_fields())?;
 
         Ok(return_field.with_name(field_args.name()))
     }
@@ -292,11 +292,11 @@ fn parse_expr(
     })
 }
 
-/// Returns the data type of the default value(if provided) when the
+/// Returns the field of the default value(if provided) when the
 /// expression is `NULL`.
 ///
-/// Otherwise, returns the expression type unchanged.
-fn parse_expr_type(input_fields: &[Field]) -> Result<Field> {
+/// Otherwise, returns the expression field unchanged.
+fn parse_expr_field(input_fields: &[Field]) -> Result<Field> {
     assert!(!input_fields.is_empty());
     let null_field = Field::new("value", DataType::Null, true);
     let expr_field = input_fields.first().unwrap_or(&null_field);
@@ -316,7 +316,7 @@ fn parse_default_value(
     input_exprs: &[Arc<dyn PhysicalExpr>],
     input_types: &[Field],
 ) -> Result<ScalarValue> {
-    let expr_type = parse_expr_type(input_types)?;
+    let expr_type = parse_expr_field(input_types)?;
     let unparsed = get_scalar_value_from_args(input_exprs, 2)?;
 
     unparsed
