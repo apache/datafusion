@@ -90,5 +90,5 @@ name = "spill_io"
 
 [[bench]]
 harness = false
-name = "sort_preserving"
+name = "sort_preserving_merge"
 required-features = ["bench"]

@@ -16,10 +16,10 @@
 // under the License.
 
 use arrow::{
-    array::{ArrayRef, StringArray},
+    array::{ArrayRef, StringArray, UInt64Array},
     record_batch::RecordBatch,
 };
-use arrow_schema::SortOptions;
+use arrow_schema::{SchemaRef, SortOptions};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 const BENCH_ROWS: usize = 1_000_000; // 1 million rows
 
-fn get_random_large_string(idx: usize) -> String {
+fn get_large_string(idx: usize) -> String {
     let base_content = [
         concat!(
             "# Advanced Topics in Computer Science\n\n",
@@ -67,21 +67,34 @@ fn get_random_large_string(idx: usize) -> String {
 fn generate_sorted_string_column(rows: usize) -> ArrayRef {
     let mut values = Vec::with_capacity(rows);
     for i in 0..rows {
-        values.push(get_random_large_string(i));
+        values.push(get_large_string(i));
     }
     values.sort();
     Arc::new(StringArray::from(values))
 }
 
-fn create_partitions(
+fn generate_sorted_u64_column(rows: usize) -> ArrayRef {
+    Arc::new(UInt64Array::from((0_u64..rows as u64).collect::<Vec<_>>()))
+}
+
+fn create_partitions<const IS_LARGE_COLUMN_TYPE: bool>(
     num_partitions: usize,
-    column_names: &[&str],
+    num_columns: usize,
+    num_rows: usize,
 ) -> Vec<Vec<RecordBatch>> {
     (0..num_partitions)
         .map(|_| {
-            let rows = column_names
-                .iter()
-                .map(|&name| (name.to_owned(), generate_sorted_string_column(BENCH_ROWS)))
+            let rows = (0..num_columns)
+                .map(|i| {
+                    (
+                        format!("col-{i}"),
+                        if IS_LARGE_COLUMN_TYPE {
+                            generate_sorted_string_column(num_rows)
+                        } else {
+                            generate_sorted_u64_column(num_rows)
+                        },
+                    )
+                })
                 .collect::<Vec<_>>();
 
             let batch = RecordBatch::try_from_iter(rows).unwrap();
@@ -89,49 +102,100 @@ fn create_partitions(
         })
         .collect()
 }
+
+struct BenchData {
+    bench_name: String,
+    partitions: Vec<Vec<RecordBatch>>,
+    schema: SchemaRef,
+    sort_order: LexOrdering,
+}
+
+fn get_bench_data() -> Vec<BenchData> {
+    let mut ret = Vec::new();
+    let mut push_bench_data = |bench_name: &str, partitions: Vec<Vec<RecordBatch>>| {
+        let schema = partitions[0][0].schema();
+        // Define sort order (col1 ASC, col2 ASC, col3 ASC)
+        let sort_order = LexOrdering::new(
+            schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    PhysicalSortExpr::new(
+                        col(field.name(), &schema).unwrap(),
+                        SortOptions::default(),
+                    )
+                })
+                .collect(),
+        );
+        ret.push(BenchData {
+            bench_name: bench_name.to_string(),
+            partitions,
+            schema,
+            sort_order,
+        });
+    };
+    // 1. single large string column
+    {
+        let partitions = create_partitions::<true>(3, 1, BENCH_ROWS);
+        push_bench_data("single_large_string_column_with_1m_rows", partitions);
+    }
+    // 2. single u64 column
+    {
+        let partitions = create_partitions::<false>(3, 1, BENCH_ROWS);
+        push_bench_data("single_u64_column_with_1m_rows", partitions);
+    }
+    // 3. multiple large string columns
+    {
+        let partitions = create_partitions::<true>(3, 3, BENCH_ROWS);
+        push_bench_data("multiple_large_string_columns_with_1m_rows", partitions);
+    }
+    // 4. multiple u64 columns
+    {
+        let partitions = create_partitions::<false>(3, 3, BENCH_ROWS);
+        push_bench_data("multiple_u64_columns_with_1m_rows", partitions);
+    }
+    ret
+}
+
 /// Add a benchmark to test the optimization effect of reusing Rows.
 /// Run this benchmark with:
 /// ```sh
-/// cargo bench --features="bench"  --bench sort_preserving -- --sample-size=10
+/// cargo bench --features="bench"  --bench sort_preserving_merge -- --sample-size=10
 /// ```
 fn bench_merge_sorted_preserving(c: &mut Criterion) {
-    let num_partitions = 3;
-
-    let column_names = vec!["col1", "col2", "col3"];
-
-    // Create sorted partitions
-    let partitions = create_partitions(num_partitions, &column_names);
-    let schema = partitions[0][0].schema();
-
-    // Define sort order (col1 ASC, col2 ASC, col3 ASC)
-    let sort_order = LexOrdering::new(
-        column_names
-            .iter()
-            .map(|&name| {
-                PhysicalSortExpr::new(col(name, &schema).unwrap(), SortOptions::default())
-            })
-            .collect(),
-    );
-
     let task_ctx = Arc::new(TaskContext::default());
-
-    c.bench_function("sort_preserving_merge_1m_rows_and_3_columns", |b| {
-        b.iter_batched(
-            || {
-                let exec =
-                    TestMemoryExec::try_new_exec(&partitions, schema.clone(), None)
+    let bench_data = get_bench_data();
+    for data in bench_data.into_iter() {
+        let BenchData {
+            bench_name,
+            partitions,
+            schema,
+            sort_order,
+        } = data;
+        c.bench_function(
+            &format!("bench_merge_sorted_preserving/{}", bench_name),
+            |b| {
+                b.iter_batched(
+                    || {
+                        let exec = TestMemoryExec::try_new_exec(
+                            &partitions,
+                            schema.clone(),
+                            None,
+                        )
                         .unwrap();
-                Arc::new(SortPreservingMergeExec::new(sort_order.clone(), exec))
+                        Arc::new(SortPreservingMergeExec::new(sort_order.clone(), exec))
+                    },
+                    |merge_exec| {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async {
+                            collect(merge_exec, task_ctx.clone()).await.unwrap();
+                        });
+                    },
+                    BatchSize::LargeInput,
+                )
             },
-            |merge_exec| {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    collect(merge_exec, task_ctx.clone()).await.unwrap();
-                });
-            },
-            BatchSize::LargeInput,
-        )
-    });
+        );
+    }
 }
 
 criterion_group!(benches, bench_merge_sorted_preserving);
