@@ -226,6 +226,24 @@ pub fn assert_optimized_plan_eq_display_indent(
     assert_eq!(formatted_plan, expected);
 }
 
+#[macro_export]
+macro_rules! assert_optimized_plan_eq_display_indent_snapshot {
+    (
+        $rule:expr,
+        $plan:expr,
+        @ $expected:literal $(,)?
+    ) => {{
+        let optimizer = $crate::Optimizer::with_rules(vec![$rule]);
+        let optimized_plan = optimizer
+            .optimize($plan, &$crate::OptimizerContext::new(), |_, _| {})
+            .expect("failed to optimize plan");
+        let formatted_plan = optimized_plan.display_indent_schema();
+        insta::assert_snapshot!(formatted_plan, @ $expected);
+
+        Ok::<(), datafusion_common::DataFusionError>(())
+    }};
+}
+
 pub fn assert_multi_rules_optimized_plan_eq_display_indent(
     rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     plan: LogicalPlan,
