@@ -809,11 +809,17 @@ make_error!(plan_err, plan_datafusion_err, Plan);
 // Exposes a macro to create `DataFusionError::Internal` with optional backtrace
 make_error!(internal_err, internal_datafusion_err, Internal);
 
+// Exposes a macro to create `DataFusionError::IoError` with optional backtrace
+make_error!(external_err, external_datafusion_err, External);
+
 // Exposes a macro to create `DataFusionError::NotImplemented` with optional backtrace
 make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
 
 // Exposes a macro to create `DataFusionError::Execution` with optional backtrace
 make_error!(exec_err, exec_datafusion_err, Execution);
+
+// Exposes a macro to create `DataFusionError::ExecutionJoin` with optional backtrace
+make_error!(exec_join_err, exec_join_datafusion_err, ExecutionJoin);
 
 // Exposes a macro to create `DataFusionError::Configuration` with optional backtrace
 make_error!(config_err, config_datafusion_err, Configuration);
