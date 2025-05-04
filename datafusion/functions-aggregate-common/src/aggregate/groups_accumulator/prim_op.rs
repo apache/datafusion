@@ -29,7 +29,9 @@ use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::NullStateAdapter;
-use crate::aggregate::groups_accumulator::{ensure_room_enough_for_blocks, Block};
+use crate::aggregate::groups_accumulator::{
+    ensure_room_enough_for_blocks, Block, Blocks,
+};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -47,7 +49,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
     /// Values per group, stored as the native type
-    values: VecDeque<Vec<T::Native>>,
+    values: Blocks<Vec<T::Native>>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -79,7 +81,7 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values: VecDeque::new(),
+            values: Blocks::new(None),
             data_type: data_type.clone(),
             null_state: NullStateAdapter::new(None),
             starting_value: T::default_value(),
@@ -107,31 +109,18 @@ where
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        const DEFAULT_BLOCK_CAP: usize = 128;
+
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
         // Expand to ensure values are large enough
-        if let Some(blk_size) = self.block_size {
-            // Expand blocks in `blocked mode`
-            let new_block = |block_size: usize| Vec::with_capacity(block_size);
-            ensure_room_enough_for_blocks(
-                &mut self.values,
-                total_num_groups,
-                blk_size,
-                new_block,
-                self.starting_value,
-            );
-        } else {
-            // Expand the single block in `flat mode`
-            if self.values.is_empty() {
-                self.values.push_back(Vec::new());
-            }
-
-            self.values
-                .back_mut()
-                .unwrap()
-                .resize(total_num_groups, self.starting_value);
-        }
+        let new_block = |block_size: Option<usize>| {
+            let cap = block_size.unwrap_or(DEFAULT_BLOCK_CAP);
+            Vec::with_capacity(cap)
+        };
+        self.values
+            .resize(total_num_groups, new_block, self.starting_value);
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(
@@ -149,7 +138,15 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = emit_to.take_needed(&mut self.values, self.block_size.is_some());
+        let values = match emit_to {
+            EmitTo::All | EmitTo::First(_) => {
+                emit_to.take_needed_rows(&mut self.values[0])
+            }
+            EmitTo::NextBlock => {
+                self.values.emit_block().expect("should not call emit for empty blocks")
+            }
+        };
+
         let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
@@ -230,7 +227,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
+        self.values.size() + self.null_state.size()
     }
 
     fn supports_blocked_groups(&self) -> bool {
@@ -249,11 +246,15 @@ where
 impl<N: ArrowNativeTypeOp> Block for Vec<N> {
     type T = N;
 
+    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
+        self.extend(iter::repeat_n(default_value, fill_len));
+    }
+
     fn len(&self) -> usize {
         self.len()
     }
 
-    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
-        self.extend(iter::repeat_n(default_value, fill_len));
+    fn size(&self) -> usize {
+        self.capacity() * size_of::<N>()
     }
 }

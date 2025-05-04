@@ -32,7 +32,9 @@ use datafusion_expr_common::groups_accumulator::EmitTo;
 use crate::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
 };
-use crate::aggregate::groups_accumulator::{ensure_room_enough_for_blocks, Block};
+use crate::aggregate::groups_accumulator::{
+    ensure_room_enough_for_blocks, Block, Blocks,
+};
 
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
@@ -60,7 +62,7 @@ use crate::aggregate::groups_accumulator::{ensure_room_enough_for_blocks, Block}
 ///
 /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 #[derive(Debug)]
-pub struct NullState<V: SeenValues, O: GroupIndexOperations> {
+pub struct NullState<O: GroupIndexOperations> {
     /// Have we seen any non-filtered input values for `group_index`?
     ///
     /// If `seen_values[i]` is true, have seen at least one non null
@@ -68,17 +70,17 @@ pub struct NullState<V: SeenValues, O: GroupIndexOperations> {
     ///
     /// If `seen_values[i]` is false, have not seen any values that
     /// pass the filter yet for group `i`
-    seen_values: V,
+    seen_values: Blocks<BooleanBufferBuilder>,
 
     /// phantom data for required type `<O>`
     _phantom: PhantomData<O>,
 }
 
-impl<V: SeenValues, O: GroupIndexOperations> NullState<V, O> {
+impl<O: GroupIndexOperations> NullState<O> {
     /// return the size of all buffers allocated by this null state, not including self
     pub fn size(&self) -> usize {
         // capacity is in bits, so convert to bytes
-        self.seen_values.capacity() / 8
+        self.seen_values.size() / 8
     }
 
     /// Invokes `value_fn(group_index, value)` for each non null, non
@@ -110,7 +112,10 @@ impl<V: SeenValues, O: GroupIndexOperations> NullState<V, O> {
     {
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
-        self.seen_values.resize(total_num_groups, false);
+        let new_block = |block_size: Option<usize>| {
+            BooleanBufferBuilder::new(block_size.unwrap_or(0))
+        };
+        self.seen_values.resize(total_num_groups, new_block, false);
 
         let seen_values = &mut self.seen_values;
         accumulate(group_indices, values, opt_filter, |packed_index, value| {
@@ -147,7 +152,10 @@ impl<V: SeenValues, O: GroupIndexOperations> NullState<V, O> {
 
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
-        self.seen_values.resize(total_num_groups, false);
+        let new_block = |block_size: Option<usize>| {
+            BooleanBufferBuilder::new(block_size.unwrap_or(0))
+        };
+        self.seen_values.resize(total_num_groups, new_block, false);
 
         // These could be made more performant by iterating in chunks of 64 bits at a time
         let seen_values = &mut self.seen_values;
@@ -233,94 +241,6 @@ impl<V: SeenValues, O: GroupIndexOperations> NullState<V, O> {
     }
 }
 
-/// Structure marking if accumulating groups are seen at least one
-pub trait SeenValues: Default + Debug + Send {
-    fn resize(&mut self, total_num_groups: usize, default_value: bool);
-
-    fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool);
-
-    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer;
-
-    fn capacity(&self) -> usize;
-}
-
-/// [`SeenValues`] for `flat groups input`
-///
-/// At first, you may need to see something about `block_id` and `block_offset`
-/// from [`GroupsAccumulator::supports_blocked_groups`].
-///
-/// The `flat groups input` are organized like:
-///
-/// ```text
-///     row_0 group_index_0
-///     row_1 group_index_1
-///     row_2 group_index_2
-///     ...
-///     row_n group_index_n     
-/// ```
-///
-/// If `row_x group_index_x` is not filtered(`group_index_x` is seen)
-/// `seen_values[group_index_x]` will be set to `true`.
-///
-/// For `set_bit(block_id, block_offset, value)`, `block_id` is unused,
-/// `block_offset` will be set to `group_index`.
-///
-/// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
-///
-#[derive(Debug)]
-pub struct FlatSeenValues {
-    builder: BooleanBufferBuilder,
-}
-
-impl Default for FlatSeenValues {
-    fn default() -> Self {
-        Self {
-            builder: BooleanBufferBuilder::new(0),
-        }
-    }
-}
-
-impl SeenValues for FlatSeenValues {
-    fn resize(&mut self, total_num_groups: usize, default_value: bool) {
-        if self.builder.len() < total_num_groups {
-            let new_groups = total_num_groups - self.builder.len();
-            self.builder.append_n(new_groups, default_value);
-        }
-    }
-
-    fn set_bit(&mut self, _block_id: u32, block_offset: u64, value: bool) {
-        self.builder.set_bit(block_offset as usize, value);
-    }
-
-    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
-        let nulls = self.builder.finish();
-
-        let nulls = match emit_to {
-            EmitTo::All => nulls,
-            EmitTo::First(n) => {
-                // split off the first N values in seen_values
-                //
-                // TODO make this more efficient rather than two
-                // copies and bitwise manipulation
-                let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
-                // reset the existing seen buffer
-                for seen in nulls.iter().skip(n) {
-                    self.builder.append(seen);
-                }
-                first_n_null
-            }
-            EmitTo::NextBlock => {
-                unreachable!("not support block emit in flat seen values")
-            }
-        };
-        NullBuffer::new(nulls)
-    }
-
-    fn capacity(&self) -> usize {
-        self.builder.capacity()
-    }
-}
-
 /// [`SeenValues`] for `blocked groups input`
 ///
 /// At first, you may need to see something about `block_id` and `block_offset`
@@ -342,70 +262,54 @@ impl SeenValues for FlatSeenValues {
 ///
 /// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
 ///
-#[derive(Debug, Default)]
-pub struct BlockedSeenValues {
-    blocked_builders: VecDeque<BooleanBufferBuilder>,
-
-    block_size: usize,
-}
-
-impl BlockedSeenValues {
-    pub fn new(block_size: usize) -> Self {
-        Self {
-            blocked_builders: VecDeque::new(),
-            block_size,
-        }
-    }
-}
-
 impl Block for BooleanBufferBuilder {
     type T = bool;
-
-    fn len(&self) -> usize {
-        self.len()
-    }
 
     fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
         self.append_n(fill_len, default_value);
     }
-}
 
-impl SeenValues for BlockedSeenValues {
-    fn resize(&mut self, total_num_groups: usize, default_value: bool) {
-        let block_size = self.block_size;
-        let blocked_builders = &mut self.blocked_builders;
-        let new_block = |block_size: usize| BooleanBufferBuilder::new(block_size);
-
-        ensure_room_enough_for_blocks(
-            blocked_builders,
-            total_num_groups,
-            block_size,
-            new_block,
-            default_value,
-        );
+    fn size(&self) -> usize {
+        self.capacity()
     }
 
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+impl Blocks<BooleanBufferBuilder> {
     fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool) {
-        self.blocked_builders[block_id as usize].set_bit(block_offset as usize, value);
+        self[block_id as usize].set_bit(block_offset as usize, value);
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
-        assert!(matches!(emit_to, EmitTo::NextBlock));
+        let nulls = match emit_to {
+            EmitTo::All | EmitTo::First(_) => self[0].finish(),
+            EmitTo::NextBlock => {
+                let mut block = self
+                    .emit_block()
+                    .expect("should not try to emit empty blocks");
+                block.finish()
+            }
+        };
 
-        let mut block = self
-            .blocked_builders
-            .pop_front()
-            .expect("should not try to emit empty blocks");
-        let nulls = block.finish();
+        let nulls = if let EmitTo::First(n) = emit_to {
+            // split off the first N values in seen_values
+            //
+            // TODO make this more efficient rather than two
+            // copies and bitwise manipulation
+            let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
+            // reset the existing seen buffer
+            for seen in nulls.iter().skip(n) {
+                self[0].append(seen);
+            }
+            first_n_null
+        } else {
+            nulls
+        };
 
         NullBuffer::new(nulls)
-    }
-
-    fn capacity(&self) -> usize {
-        self.blocked_builders
-            .iter()
-            .map(|builder| builder.capacity())
-            .sum()
     }
 }
 
@@ -503,11 +407,13 @@ impl NullStateAdapter {
     fn build_cloned_seen_values(&self) -> BooleanBuffer {
         match self {
             NullStateAdapter::Flat(null_state) => {
-                null_state.seen_values.builder.finish_cloned()
+                null_state.seen_values[0].finish_cloned()
             }
             NullStateAdapter::Blocked(null_state) => {
                 let mut return_builder = BooleanBufferBuilder::new(0);
-                for builder in &null_state.seen_values.blocked_builders {
+                let num_blocks = null_state.seen_values.len();
+                for blk_idx in 0..num_blocks {
+                    let builder = &null_state.seen_values[blk_idx];
                     for idx in 0..builder.len() {
                         return_builder.append(builder.get_bit(idx));
                     }
@@ -523,7 +429,7 @@ impl NullStateAdapter {
             NullStateAdapter::Flat(null_state) => null_state.build(EmitTo::All),
             NullStateAdapter::Blocked(null_state) => {
                 let mut return_builder = BooleanBufferBuilder::new(0);
-                let num_blocks = null_state.seen_values.blocked_builders.len();
+                let num_blocks = null_state.seen_values.len();
                 for _ in 0..num_blocks {
                     let blocked_nulls = null_state.build(EmitTo::NextBlock);
                     for bit in blocked_nulls.inner().iter() {
@@ -538,7 +444,7 @@ impl NullStateAdapter {
 }
 
 /// [`NullState`] implementation for `flat group index`
-pub type FlatNullState = NullState<FlatSeenValues, FlatGroupIndexOperations>;
+pub type FlatNullState = NullState<FlatGroupIndexOperations>;
 
 impl FlatNullState {
     pub fn new() -> Self {
@@ -549,19 +455,19 @@ impl FlatNullState {
 impl Default for FlatNullState {
     fn default() -> Self {
         Self {
-            seen_values: FlatSeenValues::default(),
+            seen_values: Blocks::new(None),
             _phantom: PhantomData {},
         }
     }
 }
 
 /// [`NullState`] implementation for `blocked group index`
-pub type BlockedNullState = NullState<BlockedSeenValues, BlockedGroupIndexOperations>;
+pub type BlockedNullState = NullState<BlockedGroupIndexOperations>;
 
 impl BlockedNullState {
     pub fn new(block_size: usize) -> Self {
         Self {
-            seen_values: BlockedSeenValues::new(block_size),
+            seen_values: Blocks::new(Some(block_size)),
             _phantom: PhantomData {},
         }
     }
