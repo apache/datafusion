@@ -17,6 +17,12 @@
 
 //! Aggregation intermediate results blocks in blocked approach
 
+use std::{
+    collections::VecDeque,
+    fmt,
+    ops::{Index, IndexMut},
+};
+
 /// Structure used to store aggregation intermediate results in `blocked approach`
 ///
 /// Aggregation intermediate results will be stored as multiple [`Block`]s
@@ -118,6 +124,10 @@ impl<B: Block> Blocks<B> {
         self.inner.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     pub fn size(&self) -> usize {
         self.inner.iter().map(|b| b.size()).sum::<usize>()
     }
@@ -147,12 +157,109 @@ impl<B: Block> IndexMut<usize> for Blocks<B> {
 /// Many types of aggregation intermediate result exist, and we define an interface
 /// to abstract the necessary behaviors of various intermediate result types.
 ///
-pub trait Block: Debug {
+pub trait Block: fmt::Debug {
     type T: Clone;
 
     fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T);
 
     fn len(&self) -> usize;
 
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     fn size(&self) -> usize;
+}
+
+#[cfg(test)]
+mod test {
+    use crate::aggregate::groups_accumulator::blocks::Blocks;
+
+    type TestBlocks = Blocks<Vec<u32>>;
+
+    #[test]
+    fn test_single_block_resize() {
+        let new_block = |block_size: Option<usize>| {
+            let cap = block_size.unwrap_or(0);
+            Vec::with_capacity(cap)
+        };
+
+        let mut blocks = TestBlocks::new(None);
+        assert_eq!(blocks.len(), 0);
+        assert_eq!(blocks.size(), 0);
+
+        for _ in 0..2 {
+            // Should have single block, 5 block len, all data are 42
+            blocks.resize(5, new_block, 42);
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks[0].len(), 5);
+            blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
+
+            // Resize to a larger block
+            // Should still have single block, 10 block len, all data are 42
+            blocks.resize(10, new_block, 42);
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks[0].len(), 10);
+            blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
+
+            // Clear
+            // Should have nothing after clearing
+            blocks.clear();
+            assert_eq!(blocks.len(), 0);
+
+            // Test resize after clear in next round
+        }
+    }
+
+    #[test]
+    fn test_multi_blocks_resize() {
+        let new_block = |block_size: Option<usize>| {
+            let cap = block_size.unwrap_or(0);
+            Vec::with_capacity(cap)
+        };
+
+        let mut blocks = TestBlocks::new(Some(3));
+        assert_eq!(blocks.len(), 0);
+        assert_eq!(blocks.size(), 0);
+
+        for _ in 0..2 {
+            // Should have:
+            //  - 2 blocks
+            //  - `block 0` of 3 len
+            //  - `block 1` of 2 len
+            //  - all data are 42
+            blocks.resize(5, new_block, 42);
+            assert_eq!(blocks.len(), 2);
+            assert_eq!(blocks[0].len(), 3);
+            blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
+            assert_eq!(blocks[1].len(), 2);
+            blocks[1].iter().for_each(|num| assert_eq!(*num, 42));
+
+            // Resize to larger blocks
+            // Should have:
+            //  - 4 blocks
+            //  - `block 0` of 3 len
+            //  - `block 1` of 3 len
+            //  - `block 2` of 3 len
+            //  - `block 3` of 1 len
+            //  - all data are 42
+            blocks.resize(10, new_block, 42);
+            assert_eq!(blocks.len(), 4);
+            assert_eq!(blocks[0].len(), 3);
+            blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
+            assert_eq!(blocks[1].len(), 3);
+            blocks[1].iter().for_each(|num| assert_eq!(*num, 42));
+            assert_eq!(blocks[2].len(), 3);
+            blocks[2].iter().for_each(|num| assert_eq!(*num, 42));
+            assert_eq!(blocks[3].len(), 1);
+            blocks[3].iter().for_each(|num| assert_eq!(*num, 42));
+
+            // Clear
+            // Should have nothing after clearing
+            blocks.clear();
+            assert_eq!(blocks.len(), 0);
+
+            // Test resize after clear in next round
+        }
+    }
 }

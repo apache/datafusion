@@ -19,15 +19,13 @@
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
 pub mod accumulate;
+pub mod blocks;
 pub mod bool_op;
 pub mod group_index_operations;
 pub mod nulls;
 pub mod prim_op;
 
-use std::collections::VecDeque;
-use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
-use std::ops::{Index, IndexMut};
 
 use arrow::array::new_empty_array;
 use arrow::{
