@@ -47,6 +47,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         literal_to_column: bool,
         additional_schema: Option<&DFSchema>,
     ) -> Result<Vec<SortExpr>> {
+        if order_by_exprs.is_empty() {
+            return Ok(vec![]);
+        }
+
         let mut combined_schema;
         let order_by_schema = match additional_schema {
             Some(schema) => {
@@ -57,11 +61,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             None => input_schema,
         };
 
-        if order_by_exprs.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let mut sort_expr_vec = vec![];
+        let mut sort_expr_vec = Vec::with_capacity(order_by_exprs.len());
 
         let make_sort_expr =
             |expr: Expr, asc: Option<bool>, nulls_first: Option<bool>| {
