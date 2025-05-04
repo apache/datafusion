@@ -1835,7 +1835,7 @@ pub struct PhysicalHashRepartition {
     pub partition_count: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PhysicalHashSelectionVectorRepartition {
+pub struct PhysicalHashSelectionBitmapRepartition {
     #[prost(message, repeated, tag = "1")]
     pub hash_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(uint64, tag = "2")]
@@ -1849,7 +1849,7 @@ pub struct RepartitionExecNode {
     ///    uint64 round_robin = 2;
     ///    PhysicalHashRepartition hash = 3;
     ///    uint64 unknown = 4;
-    ///    PhysicalHashSelectionVectorRepartition hash_selection_vector = 6;
+    ///    PhysicalHashSelectionBitmapRepartition hash_selection_bitmap = 6;
     /// }
     #[prost(message, optional, tag = "5")]
     pub partitioning: ::core::option::Option<Partitioning>,
@@ -1870,7 +1870,7 @@ pub mod partitioning {
         #[prost(uint64, tag = "3")]
         Unknown(u64),
         #[prost(message, tag = "4")]
-        HashSelectionVector(super::PhysicalHashSelectionVectorRepartition),
+        HashSelectionBitmap(super::PhysicalHashSelectionBitmapRepartition),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

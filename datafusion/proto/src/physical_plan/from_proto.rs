@@ -440,8 +440,8 @@ pub fn parse_protobuf_hash_partitioning(
     }
 }
 
-pub fn parse_protobuf_hash_selection_vector_partitioning(
-    partitioning: Option<&protobuf::PhysicalHashSelectionVectorRepartition>,
+pub fn parse_protobuf_hash_selection_bitmap_partitioning(
+    partitioning: Option<&protobuf::PhysicalHashSelectionBitmapRepartition>,
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
@@ -455,7 +455,7 @@ pub fn parse_protobuf_hash_selection_vector_partitioning(
                 codec,
             )?;
 
-            Ok(Some(Partitioning::HashSelectionVector(
+            Ok(Some(Partitioning::HashSelectionBitmap(
                 expr,
                 hash_part.partition_count.try_into().unwrap(),
             )))
@@ -485,9 +485,9 @@ pub fn parse_protobuf_partitioning(
                     codec,
                 )
             }
-            Some(protobuf::partitioning::PartitionMethod::HashSelectionVector(
+            Some(protobuf::partitioning::PartitionMethod::HashSelectionBitmap(
                 hash_repartition,
-            )) => parse_protobuf_hash_selection_vector_partitioning(
+            )) => parse_protobuf_hash_selection_bitmap_partitioning(
                 Some(hash_repartition),
                 registry,
                 input_schema,

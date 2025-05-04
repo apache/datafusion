@@ -1120,7 +1120,7 @@ physical_plan
 10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
-set datafusion.optimizer.prefer_hash_selection_vector_partitioning_agg = true;
+set datafusion.optimizer.prefer_hash_selection_bitmap_partitioning_agg = true;
 
 query TT
 explain select median(distinct c) from t;
@@ -1135,9 +1135,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[median(alias1)]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
-05)--------AggregateExec: mode=FinalPartitioned(SelectionVector), gby=[alias1@0 as alias1], aggr=[]
+05)--------AggregateExec: mode=FinalPartitioned(SelectionBitmap), gby=[alias1@0 as alias1], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=HashSelectionVector([alias1@0], 4), input_partitions=4
+07)------------RepartitionExec: partitioning=HashSelectionBitmap([alias1@0], 4), input_partitions=4
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
 10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1149,7 +1149,7 @@ select count(distinct c) from t;
 12
 
 statement ok
-set datafusion.optimizer.prefer_hash_selection_vector_partitioning_agg = false;
+set datafusion.optimizer.prefer_hash_selection_bitmap_partitioning_agg = false;
 
 statement ok
 drop table t;

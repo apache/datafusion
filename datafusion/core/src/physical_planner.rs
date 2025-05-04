@@ -744,9 +744,9 @@ impl DefaultPhysicalPlanner {
                     let mode = if session_state
                         .config_options()
                         .optimizer
-                        .prefer_hash_selection_vector_partitioning_agg
+                        .prefer_hash_selection_bitmap_partitioning_agg
                     {
-                        HashPartitionMode::SelectionVector
+                        HashPartitionMode::SelectionBitmap
                     } else {
                         HashPartitionMode::HashPartitioned
                     };
@@ -816,9 +816,9 @@ impl DefaultPhysicalPlanner {
                         if session_state
                             .config_options()
                             .optimizer
-                            .prefer_hash_selection_vector_partitioning_agg
+                            .prefer_hash_selection_bitmap_partitioning_agg
                         {
-                            Partitioning::HashSelectionVector(runtime_expr, *n)
+                            Partitioning::HashSelectionBitmap(runtime_expr, *n)
                         } else {
                             Partitioning::Hash(runtime_expr, *n)
                         }

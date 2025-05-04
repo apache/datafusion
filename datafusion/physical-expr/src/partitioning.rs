@@ -123,7 +123,7 @@ pub enum Partitioning {
     /// The column is a boolean column called `__selection` that is used to filter out rows
     /// that should not be included in the partition. `true` means the row should be included
     /// and `false` means the row should be excluded.
-    HashSelectionVector(Vec<Arc<dyn PhysicalExpr>>, usize),
+    HashSelectionBitmap(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
@@ -140,13 +140,13 @@ impl Display for Partitioning {
                     .join(", ");
                 write!(f, "Hash([{phy_exprs_str}], {size})")
             }
-            Partitioning::HashSelectionVector(phy_exprs, size) => {
+            Partitioning::HashSelectionBitmap(phy_exprs, size) => {
                 let phy_exprs_str = phy_exprs
                     .iter()
                     .map(|e| format!("{e}"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                write!(f, "HashSelectionVector([{phy_exprs_str}], {size})")
+                write!(f, "HashSelectionBitmap([{phy_exprs_str}], {size})")
             }
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
@@ -161,7 +161,7 @@ impl Partitioning {
         match self {
             RoundRobinBatch(n)
             | Hash(_, n)
-            | HashSelectionVector(_, n)
+            | HashSelectionBitmap(_, n)
             | UnknownPartitioning(n) => *n,
         }
     }
@@ -184,7 +184,7 @@ impl Partitioning {
                     // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
                     // then we need to have the partition count and hash functions validation.
                     Partitioning::Hash(partition_exprs, _)
-                    | Partitioning::HashSelectionVector(partition_exprs, _) => {
+                    | Partitioning::HashSelectionBitmap(partition_exprs, _) => {
                         let fast_match =
                             physical_exprs_equal(required_exprs, partition_exprs);
                         // If the required exprs do not match, need to leverage the eq_properties provided by the child
@@ -280,8 +280,8 @@ impl Distribution {
             Distribution::HashPartitioned(expr, HashPartitionMode::HashPartitioned) => {
                 Partitioning::Hash(expr, partition_count)
             }
-            Distribution::HashPartitioned(expr, HashPartitionMode::SelectionVector) => {
-                Partitioning::HashSelectionVector(expr, partition_count)
+            Distribution::HashPartitioned(expr, HashPartitionMode::SelectionBitmap) => {
+                Partitioning::HashSelectionBitmap(expr, partition_count)
             }
         }
     }
@@ -307,8 +307,8 @@ impl Display for Distribution {
 /// The mode of hash partitioning
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum HashPartitionMode {
-    /// Hash partitioning with a selection vector. See [Partitioning::HashSelectionVector]
-    SelectionVector,
+    /// Hash partitioning with a selection vector. See [Partitioning::HashSelectionBitmap]
+    SelectionBitmap,
     /// The default hash partitioning
     HashPartitioned,
 }
@@ -316,7 +316,7 @@ pub enum HashPartitionMode {
 impl Display for HashPartitionMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            HashPartitionMode::SelectionVector => write!(f, "SelectionVector"),
+            HashPartitionMode::SelectionBitmap => write!(f, "SelectionBitmap"),
             HashPartitionMode::HashPartitioned => write!(f, "HashPartitioned"),
         }
     }

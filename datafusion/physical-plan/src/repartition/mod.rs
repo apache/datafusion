@@ -198,7 +198,7 @@ enum BatchPartitionerState {
         num_partitions: usize,
         next_idx: usize,
     },
-    HashSelectionVector {
+    HashSelectionBitmap {
         random_state: ahash::RandomState,
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
@@ -226,8 +226,8 @@ impl BatchPartitioner {
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
-            Partitioning::HashSelectionVector(exprs, num_partitions) => {
-                BatchPartitionerState::HashSelectionVector {
+            Partitioning::HashSelectionBitmap(exprs, num_partitions) => {
+                BatchPartitionerState::HashSelectionBitmap {
                     exprs,
                     num_partitions,
                     // Use fixed random hash
@@ -338,7 +338,7 @@ impl BatchPartitioner {
 
                     Box::new(it)
                 }
-                BatchPartitionerState::HashSelectionVector {
+                BatchPartitionerState::HashSelectionBitmap {
                     random_state,
                     exprs,
                     num_partitions,
@@ -381,9 +381,9 @@ impl BatchPartitioner {
                         let partition_scalar = UInt64Array::new_scalar(partition as u64);
                         let selection_array =
                             arrow_ord::cmp::eq(&hash_vector, &partition_scalar).unwrap();
-                        let selection_vector = Arc::new(selection_array);
+                        let selection_bitmap = Arc::new(selection_array);
                         let mut columns = batch.columns().to_vec();
-                        columns.push(selection_vector);
+                        columns.push(selection_bitmap);
                         let mut options = RecordBatchOptions::new();
                         options = options.with_row_count(Some(batch.num_rows()));
                         let batch = RecordBatch::try_new_with_options(
@@ -408,7 +408,7 @@ impl BatchPartitioner {
         match self.state {
             BatchPartitionerState::RoundRobin { num_partitions, .. } => num_partitions,
             BatchPartitionerState::Hash { num_partitions, .. } => num_partitions,
-            BatchPartitionerState::HashSelectionVector { num_partitions, .. } => {
+            BatchPartitionerState::HashSelectionBitmap { num_partitions, .. } => {
                 num_partitions
             }
         }
@@ -1293,7 +1293,7 @@ mod tests {
         let output_partitions = repartition(
             &schema,
             partitions,
-            Partitioning::HashSelectionVector(vec![col("c0", &schema)?], 8),
+            Partitioning::HashSelectionBitmap(vec![col("c0", &schema)?], 8),
         )
         .await?;
 
