@@ -645,8 +645,8 @@ fn min_max_batch_struct(array: &ArrayRef, ordering: Ordering) -> Result<ScalarVa
             }
         }
     }
-    // use deep_clone to free array reference
-    Ok(extreme.deep_clone())
+    // use force_clone to free array reference
+    Ok(extreme.force_clone())
 }
 
 macro_rules! min_max_struct {

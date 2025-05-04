@@ -6980,4 +6980,21 @@ WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
 SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c, (c1 % 2) AS key FROM t LIMIT 0) GROUP BY key
 ----
 
+# Min/Max aggregation on struct with a single field
+query ??
+WITH t AS (SELECT i as c1 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a') AS c FROM t);
+----
+{a: 1} {a: 10}
+
+# Min/Max aggregation on struct with identical first fields but different last fields
+query ??
+SELECT MIN(column1),MAX(column1) FROM (
+VALUES
+  (STRUCT(1 AS 'a',2 AS 'b', 3 AS 'c')),
+  (STRUCT(1 AS 'a',2 AS 'b', 4 AS 'c'))
+);
+----
+{a: 1, b: 2, c: 3} {a: 1, b: 2, c: 4}
+
 

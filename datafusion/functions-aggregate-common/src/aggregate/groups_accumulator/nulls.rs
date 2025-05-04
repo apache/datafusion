@@ -193,14 +193,18 @@ pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<Arr
                 ))
             }
         }
-        DataType::Struct(_) => unsafe {
+        DataType::Struct(_) => {
             let input = input.as_struct();
-            Arc::new(StructArray::new_unchecked(
-                input.fields().clone(),
-                input.columns().to_vec(),
-                nulls,
-            ))
-        },
+            // safety: values / offsets came from a valid struct array
+            // and we checked nulls has the same length as values
+            unsafe {
+                Arc::new(StructArray::new_unchecked(
+                    input.fields().clone(),
+                    input.columns().to_vec(),
+                    nulls,
+                ))
+            }
+        }
         _ => {
             return not_impl_err!("Applying nulls {:?}", input.data_type());
         }
