@@ -191,6 +191,7 @@ impl<T> FilterPushdownPropagation<T> {
 
 #[derive(Debug, Clone)]
 pub struct FilterDescription {
+    num_children: usize,
     /// Vector storing the [`PredicateSupports`] for each child.
     pub parent_filters: Vec<PredicateSupports>,
     /// Vector storing the physical expressions for each child.
@@ -199,33 +200,63 @@ pub struct FilterDescription {
 }
 
 impl FilterDescription {
-    pub fn all_unsupported_from_parent(
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        num_children: usize,
-    ) -> Self {
-        let unsupported = PredicateSupports::all_unsupported(parent_filters);
+    pub fn new_with_child_count(num_children: usize) -> Self {
         Self {
-            parent_filters: vec![unsupported; num_children],
+            num_children,
+            parent_filters: Vec::with_capacity(num_children),
             self_filters: vec![vec![]; num_children],
         }
     }
 
-    pub fn all_supported_from_parent(
+    /// Mark all parent filters as supported for all children.
+    /// This is the case if the node allows filters to be pushed down through it
+    /// without any modification.
+    /// This broadcasts the parent filters to all children.
+    /// If handling of parent filters is different for each child then you should set the
+    /// field direclty.
+    /// For example, nodes like [`RepartitionExec`] that let filters pass through it transparently
+    /// use this to mark all parent filters as supported.
+    pub fn all_parent_filters_supported(
+        self,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        num_children: usize,
     ) -> Self {
         let supported = PredicateSupports::all_supported(parent_filters);
         Self {
-            parent_filters: vec![supported; num_children],
-            self_filters: vec![vec![]; num_children],
+            num_children: self.num_children,
+            parent_filters: vec![supported; self.num_children],
+            self_filters: self.self_filters,
         }
     }
 
-    pub fn with_self_filters(
-        mut self,
-        self_filters_for_children: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    /// Mark all parent filters as unsupported for all children.
+    /// This is the case if the node does not allow filters to be pushed down through it.
+    /// This broadcasts the parent filters to all children.
+    /// If handling of parent filters is different for each child then you should set the
+    /// field direclty.
+    /// For example, the default implementation of filter pushdwon in [`ExecutionPlan`]
+    /// assumes that filters cannot be pushed down to children.
+    pub fn all_parent_filters_unsupported(
+        self,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Self {
-        self.self_filters = self_filters_for_children;
+        let unsupported = PredicateSupports::all_unsupported(parent_filters);
+        Self {
+            num_children: self.num_children,
+            parent_filters: vec![unsupported; self.num_children],
+            self_filters: self.self_filters,
+        }
+    }
+
+    /// Add a filter generated / owned by the current node to be pushed down to all children.
+    /// This assumes that there is a single filter that that gets pushed down to all children
+    /// equally.
+    /// If there are multiple filters or pushdown to children is not homogeneous then
+    /// you should set the field directly.
+    /// For example:
+    /// - `TopK` uses this to push down a single filter to all children, it can use this method.
+    /// - `HashJoinExec` pushes down a filter only to the probe side, it cannot use this method.
+    pub fn with_self_filter(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
+        self.self_filters = vec![vec![predicate]; self.num_children];
         self
     }
 }

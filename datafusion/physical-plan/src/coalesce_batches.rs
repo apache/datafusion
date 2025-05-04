@@ -232,10 +232,8 @@ impl ExecutionPlan for CoalesceBatchesExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(FilterDescription::all_supported_from_parent(
-            parent_filters,
-            1,
-        ))
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters))
     }
 
     fn handle_child_pushdown_result(

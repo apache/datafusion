@@ -501,10 +501,9 @@ impl ExecutionPlan for FilterExec {
             parent_filters
         };
 
-        Ok(
-            FilterDescription::all_supported_from_parent(parent_filters, 1)
-                .with_self_filters(vec![vec![self_filter]]),
-        )
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters)
+            .with_self_filter(self_filter))
     }
 
     fn handle_child_pushdown_result(

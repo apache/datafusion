@@ -514,10 +514,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(FilterDescription::all_unsupported_from_parent(
-            parent_filters,
-            self.children().len(),
-        ))
+        Ok(
+            FilterDescription::new_with_child_count(self.children().len())
+                .all_parent_filters_unsupported(parent_filters),
+        )
     }
 
     /// Handle the result of a child pushdown.
@@ -527,9 +527,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// (also known as late materialization).
     /// A `FilterExec` may absorb any filters its children could not absorb, or if there are no filters left it
     /// may remove itself from the plan altogether.
+    /// It combines both [`ChildPushdownResult::parent_filters`] and [`ChildPushdownResult::self_filters`] into a single
+    /// predicate and replaces it's own predicate.
+    /// Then it passes [`PredicateSupport::Supported`] for each parent predicate to the parent.
     /// A `HashJoinExec` may ignore the pushdown result since it needs to apply the filters as part of the join anyhow.
+    /// It passes [`ChildPushdownResult::parent_filters`] back up to it's parents wrapped in [`FilterPushdownPropagation::transparent`]
+    /// and [`ChildPushdownResult::self_filters`] is discarded.
     ///
     /// The default implementation is a no-op that passes the result of pushdown from the children to its parent.
+    ///
+    /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
     fn handle_child_pushdown_result(
         &self,
         child_pushdown_result: ChildPushdownResult,
