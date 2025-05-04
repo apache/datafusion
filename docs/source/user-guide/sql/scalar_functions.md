@@ -1880,7 +1880,7 @@ regexp_instr(string, pattern [, start [, N [, endoption [, flags [, subexpr ]]]]
 - **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.
 - **N**: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function.
-- **endoption**:  Optional. If 0, returns the starting position of the match (default). If 1, returns the ending position of the match. Can be a constant, column, or function.
+- **endoption**: Optional. If 0, returns the starting position of the match (default). If 1, returns the ending position of the match. Can be a constant, column, or function.
 - **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case
   - **m**: multi-line mode: ^ and $ match begin/end of line
