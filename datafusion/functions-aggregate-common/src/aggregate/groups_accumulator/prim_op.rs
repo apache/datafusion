@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::VecDeque;
 use std::iter;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -29,9 +28,7 @@ use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::NullStateAdapter;
-use crate::aggregate::groups_accumulator::{
-    ensure_room_enough_for_blocks, Block, Blocks,
-};
+use crate::aggregate::groups_accumulator::blocks::{Block, Blocks};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -142,9 +139,10 @@ where
             EmitTo::All | EmitTo::First(_) => {
                 emit_to.take_needed_rows(&mut self.values[0])
             }
-            EmitTo::NextBlock => {
-                self.values.emit_block().expect("should not call emit for empty blocks")
-            }
+            EmitTo::NextBlock => self
+                .values
+                .pop_block()
+                .expect("should not call emit for empty blocks"),
         };
 
         let nulls = self.null_state.build(emit_to);
@@ -236,6 +234,7 @@ where
 
     fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         self.values.clear();
+        self.values = Blocks::new(block_size);
         self.null_state = NullStateAdapter::new(block_size);
         self.block_size = block_size;
 
