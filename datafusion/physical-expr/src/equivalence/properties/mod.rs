@@ -1234,18 +1234,21 @@ impl From<EquivalenceProperties> for OrderingEquivalenceClass {
 ///
 /// Format:
 /// ```text
-/// order: [[a ASC, b ASC], [a ASC, c ASC]], eq: [[a = b], [a = c]], const: [a = 1]
+/// order: [[b@1 ASC NULLS LAST]], eq: [{members: [a@0], constant: (heterogeneous)}]
 /// ```
 impl Display for EquivalenceProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.eq_group.is_empty() && self.oeq_class.is_empty() {
-            return write!(f, "No properties");
-        }
-        if !self.oeq_class.is_empty() {
+        let empty_eq_group = self.eq_group.is_empty();
+        let empty_oeq_class = self.oeq_class.is_empty();
+        if empty_oeq_class && empty_eq_group {
+            write!(f, "No properties")?;
+        } else if !empty_oeq_class {
             write!(f, "order: {}", self.oeq_class)?;
-        }
-        if !self.eq_group.is_empty() {
-            write!(f, ", eq: {}", self.eq_group)?;
+            if !empty_eq_group {
+                write!(f, ", eq: {}", self.eq_group)?;
+            }
+        } else {
+            write!(f, "eq: {}", self.eq_group)?;
         }
         Ok(())
     }
