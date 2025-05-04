@@ -1,106 +1,69 @@
 {
   "extensionUris": [],
   "extensions": [],
-  "relations": [
-    {
-      "root": {
-        "input": {
-          "project": {
-            "common": {
-              "emit": {
-                "outputMapping": [3, 4, 5]
-              }
-            },
-            "input": {
-              "read": {
-                "common": {
-                  "direct": {}
-                },
-                "baseSchema": {
-                  "names": ["a", "b", "c", "d"],
-                  "struct": {
-                    "types": [
-                      {
-                        "i32": {
-                          "typeVariationReference": 0,
-                          "nullability": "NULLABILITY_NULLABLE"
-                        }
-                      },
-                      {
-                        "i32": {
-                          "typeVariationReference": 0,
-                          "nullability": "NULLABILITY_REQUIRED"
-                        }
-                      },
-                      {
-                        "map": {
-                          "key": {
-                            "string": {
-                              "nullability": "NULLABILITY_REQUIRED"
-                            }
-                          },
-                          "value": {
-                            "struct": {
-                              "types": [
-                                {
-                                  "string": {
-                                    "nullability": "NULLABILITY_NULLABLE"
-                                  }
-                                }
-                              ],
-                              "nullability": "NULLABILITY_NULLABLE"
-                            }
-                          },
-                          "nullability": "NULLABILITY_NULLABLE"
-                        }
-                      }
-                    ],
-                    "typeVariationReference": 0,
-                    "nullability": "NULLABILITY_REQUIRED"
-                  }
-                },
-                "namedTable": {
-                  "names": ["DATA"]
-                }
-              }
-            },
-            "expressions": [
-              {
-                "selection": {
-                  "directReference": {
-                    "structField": {
-                      "field": 0
-                    }
-                  },
-                  "rootReference": {}
+  "relations": [{
+    "root": {
+      "input": {
+        "project": {
+          "common": {
+            "emit": {
+              "outputMapping": [2, 3]
+            }
+          },
+          "input": {
+            "read": {
+              "common": {
+                "direct": {
                 }
               },
-              {
-                "selection": {
-                  "directReference": {
-                    "structField": {
-                      "field": 1
+              "baseSchema": {
+                "names": ["a", "b"],
+                "struct": {
+                  "types": [{
+                    "i32": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_NULLABLE"
                     }
-                  },
-                  "rootReference": {}
+                  }, {
+                    "i32": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  }],
+                  "typeVariationReference": 0,
+                  "nullability": "NULLABILITY_REQUIRED"
                 }
               },
-              {
-                "selection": {
-                  "directReference": {
-                    "structField": {
-                      "field": 2
-                    }
-                  },
-                  "rootReference": {}
-                }
+              "namedTable": {
+                "names": ["DATA"]
               }
-            ]
-          }
-        },
-        "names": ["a", "b", "c", "d"]
-      }
+            }
+          },
+          "expressions": [{
+            "selection": {
+              "directReference": {
+                "structField": {
+                  "field": 0
+                }
+              },
+              "rootReference": {
+              }
+            }
+          }, {
+            "selection": {
+              "directReference": {
+                "structField": {
+                  "field": 1
+                }
+              },
+              "rootReference": {
+              }
+            }
+          }]
+        }
+      },
+      "names": ["a", "b"]
     }
-  ],
+  }],
   "expectedTypeUrls": []
 }
