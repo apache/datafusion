@@ -216,7 +216,7 @@ impl FilterDescription {
     /// field direclty.
     /// For example, nodes like [`RepartitionExec`] that let filters pass through it transparently
     /// use this to mark all parent filters as supported.
-    /// 
+    ///
     /// [`RepartitionExec`]: crate::repartition::RepartitionExec
     pub fn all_parent_filters_supported(
         self,
@@ -237,7 +237,7 @@ impl FilterDescription {
     /// field direclty.
     /// For example, the default implementation of filter pushdwon in [`ExecutionPlan`]
     /// assumes that filters cannot be pushed down to children.
-    /// 
+    ///
     /// [`ExecutionPlan`]: crate::ExecutionPlan
     pub fn all_parent_filters_unsupported(
         self,
