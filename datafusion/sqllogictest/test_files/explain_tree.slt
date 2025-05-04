@@ -208,46 +208,6 @@ physical_plan
 08)│                           │
 09)│           mode:           │
 10)│      FinalPartitioned     │
-11)└─────────────┬─────────────┘
-12)┌─────────────┴─────────────┐
-13)│    CoalesceBatchesExec    │
-14)│    --------------------   │
-15)│     target_batch_size:    │
-16)│            8192           │
-17)└─────────────┬─────────────┘
-18)┌─────────────┴─────────────┐
-19)│      RepartitionExec      │
-20)│    --------------------   │
-21)│ partition_count(in->out): │
-22)│           4 -> 4          │
-23)│                           │
-24)│    partitioning_scheme:   │
-25)│  Hash([string_col@0], 4)  │
-26)└─────────────┬─────────────┘
-27)┌─────────────┴─────────────┐
-28)│       AggregateExec       │
-29)│    --------------------   │
-30)│           aggr:           │
-31)│   sum(table1.bigint_col)  │
-32)│                           │
-33)│    group_by: string_col   │
-34)│       mode: Partial       │
-35)└─────────────┬─────────────┘
-36)┌─────────────┴─────────────┐
-37)│      RepartitionExec      │
-38)│    --------------------   │
-39)│ partition_count(in->out): │
-40)│           1 -> 4          │
-41)│                           │
-42)│    partitioning_scheme:   │
-43)│     RoundRobinBatch(4)    │
-44)└─────────────┬─────────────┘
-45)┌─────────────┴─────────────┐
-46)│       DataSourceExec      │
-47)│    --------------------   │
-48)│          files: 1         │
-49)│        format: csv        │
-50)└───────────────────────────┘
 11)│      (HashPartitioned     │
 12)│             )             │
 13)└─────────────┬─────────────┘
@@ -260,8 +220,8 @@ physical_plan
 20)┌─────────────┴─────────────┐
 21)│      RepartitionExec      │
 22)│    --------------------   │
-23)│   input_partition_count:  │
-24)│             4             │
+23)│ partition_count(in->out): │
+24)│           4 -> 4          │
 25)│                           │
 26)│    partitioning_scheme:   │
 27)│  Hash([string_col@0], 4)  │
@@ -278,8 +238,8 @@ physical_plan
 38)┌─────────────┴─────────────┐
 39)│      RepartitionExec      │
 40)│    --------------------   │
-41)│   input_partition_count:  │
-42)│             1             │
+41)│ partition_count(in->out): │
+42)│           1 -> 4          │
 43)│                           │
 44)│    partitioning_scheme:   │
 45)│     RoundRobinBatch(4)    │
@@ -1537,44 +1497,6 @@ physical_plan
 23)│                           ││                           │
 24)│           mode:           ││           mode:           │
 25)│      FinalPartitioned     ││      FinalPartitioned     │
-26)└─────────────┬─────────────┘└─────────────┬─────────────┘
-27)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-28)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
-29)│    --------------------   ││    --------------------   │
-30)│     target_batch_size:    ││     target_batch_size:    │
-31)│            8192           ││            8192           │
-32)└─────────────┬─────────────┘└─────────────┬─────────────┘
-33)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-34)│      RepartitionExec      ││      RepartitionExec      │
-35)│    --------------------   ││    --------------------   │
-36)│ partition_count(in->out): ││ partition_count(in->out): │
-37)│           4 -> 4          ││           4 -> 4          │
-38)│                           ││                           │
-39)│    partitioning_scheme:   ││    partitioning_scheme:   │
-40)│     Hash([name@0], 4)     ││     Hash([name@0], 4)     │
-41)└─────────────┬─────────────┘└─────────────┬─────────────┘
-42)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-43)│      RepartitionExec      ││      RepartitionExec      │
-44)│    --------------------   ││    --------------------   │
-45)│ partition_count(in->out): ││ partition_count(in->out): │
-46)│           1 -> 4          ││           1 -> 4          │
-47)│                           ││                           │
-48)│    partitioning_scheme:   ││    partitioning_scheme:   │
-49)│     RoundRobinBatch(4)    ││     RoundRobinBatch(4)    │
-50)└─────────────┬─────────────┘└─────────────┬─────────────┘
-51)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-52)│       AggregateExec       ││       AggregateExec       │
-53)│    --------------------   ││    --------------------   │
-54)│       group_by: name      ││       group_by: name      │
-55)│       mode: Partial       ││       mode: Partial       │
-56)└─────────────┬─────────────┘└─────────────┬─────────────┘
-57)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-58)│       DataSourceExec      ││       DataSourceExec      │
-59)│    --------------------   ││    --------------------   │
-60)│        bytes: 1320        ││        bytes: 1312        │
-61)│       format: memory      ││       format: memory      │
-62)│          rows: 1          ││          rows: 1          │
-63)└───────────────────────────┘└───────────────────────────┘
 26)│      (HashPartitioned     ││      (HashPartitioned     │
 27)│             )             ││             )             │
 28)└─────────────┬─────────────┘└─────────────┬─────────────┘
@@ -1587,8 +1509,8 @@ physical_plan
 35)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 36)│      RepartitionExec      ││      RepartitionExec      │
 37)│    --------------------   ││    --------------------   │
-38)│   input_partition_count:  ││   input_partition_count:  │
-39)│             4             ││             4             │
+38)│ partition_count(in->out): ││ partition_count(in->out): │
+39)│           4 -> 4          ││           4 -> 4          │
 40)│                           ││                           │
 41)│    partitioning_scheme:   ││    partitioning_scheme:   │
 42)│     Hash([name@0], 4)     ││     Hash([name@0], 4)     │
@@ -1596,8 +1518,8 @@ physical_plan
 44)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 45)│      RepartitionExec      ││      RepartitionExec      │
 46)│    --------------------   ││    --------------------   │
-47)│   input_partition_count:  ││   input_partition_count:  │
-48)│             1             ││             1             │
+47)│ partition_count(in->out): ││ partition_count(in->out): │
+48)│           1 -> 4          ││           1 -> 4          │
 49)│                           ││                           │
 50)│    partitioning_scheme:   ││    partitioning_scheme:   │
 51)│     RoundRobinBatch(4)    ││     RoundRobinBatch(4)    │
