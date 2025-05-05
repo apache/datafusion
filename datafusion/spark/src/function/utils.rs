@@ -28,7 +28,7 @@ pub mod test {
             let expected: datafusion_common::Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
-            let arg_fields_owned = $ARGS
+            let arg_fields_owned: Vec<arrow::datatypes::Field> = $ARGS
                 .iter()
                 .enumerate()
                 .map(|(idx, arg)| {
@@ -41,6 +41,8 @@ pub mod test {
                 arrow::datatypes::Field::new(format!("arg_{idx}"), arg.data_type(), nullable)
             })
                 .collect::<Vec<_>>();
+
+            let arg_fields: Vec<&arrow::datatypes::Field> = arg_fields_owned.iter().collect();
 
             let cardinality = $ARGS
                 .iter()
@@ -67,7 +69,12 @@ pub mod test {
                     let return_field = return_field.unwrap();
                     assert_eq!(return_field.data_type(), &$EXPECTED_DATA_TYPE);
 
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_field: &return_field, arg_fields: arg_fields_owned.iter().collect()});
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
+                        args: $ARGS,
+                        number_rows: cardinality,
+                        return_field: &return_field,
+                        arg_fields: arg_fields.clone(),
+                    });
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
@@ -91,7 +98,12 @@ pub mod test {
                         let return_field = return_field.unwrap();
 
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality,  return_field: &return_field, arg_fields: arg_fields_owned.iter().collect()}) {
+                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
+                            args: $ARGS,
+                            number_rows: cardinality,
+                            return_field: &return_field,
+                            arg_fields,
+                        }) {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {
                                 assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));
