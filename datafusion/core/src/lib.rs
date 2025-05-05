@@ -748,11 +748,6 @@ pub mod common {
 
 // Backwards compatibility
 pub use common::config;
-pub use std::sync::*;
-pub use datafusion_execution::TaskContext;
-pub use datafusion_expr_common::statistics::Distribution;
-pub use parquet::file::statistics::Statistics;
-
 
 // NB datafusion execution is re-exported in the `execution` module
 
@@ -845,7 +840,6 @@ pub mod variable {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test;
-
 
 mod schema_equivalence;
 pub mod test_util;
