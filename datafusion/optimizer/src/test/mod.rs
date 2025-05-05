@@ -164,7 +164,6 @@ fn generate_optimized_plan_with_rules(
     rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     plan: LogicalPlan,
 ) -> LogicalPlan {
-    fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
     let config = &mut OptimizerContext::new()
         .with_max_passes(1)
         .with_skip_failing_rules(false);
@@ -206,17 +205,4 @@ macro_rules! assert_optimized_plan_eq_display_indent_snapshot {
 
         Ok::<(), datafusion_common::DataFusionError>(())
     }};
-}
-
-pub fn assert_multi_rules_optimized_plan_eq_display_indent(
-    rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
-    plan: LogicalPlan,
-    expected: &str,
-) {
-    let optimizer = Optimizer::with_rules(rules);
-    let optimized_plan = optimizer
-        .optimize(plan, &OptimizerContext::new(), observe)
-        .expect("failed to optimize plan");
-    let formatted_plan = optimized_plan.display_indent_schema().to_string();
-    assert_eq!(formatted_plan, expected);
 }
