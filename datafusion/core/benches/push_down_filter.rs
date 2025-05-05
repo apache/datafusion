@@ -42,14 +42,14 @@ async fn create_plan() -> Arc<dyn ExecutionPlan> {
     let batch = RecordBatch::new_empty(schema);
 
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let data = {
-        let out = BytesMut::new();
+    let mut out = BytesMut::new().writer();
+    {
         let mut writer =
-            ArrowWriter::try_new(out.writer(), batch.schema(), None).unwrap();
+            ArrowWriter::try_new(&mut out, batch.schema(), None).unwrap();
         writer.write(&batch).unwrap();
         writer.finish().unwrap();
-        writer.into_inner().unwrap().into_inner().freeze()
-    };
+    }
+    let data = out.into_inner().freeze();
     store
         .put(&Path::from("test.parquet"), data.into())
         .await
@@ -59,7 +59,7 @@ async fn create_plan() -> Arc<dyn ExecutionPlan> {
         store,
     );
 
-    ctx.register_parquet("t", "memory://", ParquetReadOptions::default())
+    ctx.register_parquet("t", "memory:///", ParquetReadOptions::default())
         .await
         .unwrap();
 
@@ -75,8 +75,8 @@ async fn create_plan() -> Arc<dyn ExecutionPlan> {
         SELECT id, name, age, salary
         FROM t
         JOIN brackets ON t.age % 10 = brackets.age_bracket
-        WHERE age > 20 AND data.salary > 1000
-        ORDER BY data.salary DESC
+        WHERE age > 20 AND t.salary > 1000
+        ORDER BY t.salary DESC
         LIMIT 100
     ",
         )
