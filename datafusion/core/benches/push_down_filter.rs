@@ -44,8 +44,7 @@ async fn create_plan() -> Arc<dyn ExecutionPlan> {
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
     let mut out = BytesMut::new().writer();
     {
-        let mut writer =
-            ArrowWriter::try_new(&mut out, batch.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut out, batch.schema(), None).unwrap();
         writer.write(&batch).unwrap();
         writer.finish().unwrap();
     }
