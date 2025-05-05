@@ -476,10 +476,14 @@ pub(crate) mod tests {
                 Arc::new(Field::new_map(
                     "7",
                     "entries",
-                    Arc::new(Field::new("keys", DataType::Int32, false)),
+                    Arc::new(Field::new_struct(
+                        "keys",
+                        vec![Field::new("8", DataType::Int32, false)],
+                        false,
+                    )),
                     Arc::new(Field::new_struct(
                         "values",
-                        vec![Field::new("8", DataType::Int32, false)],
+                        vec![Field::new("9", DataType::Int32, false)],
                         false,
                     )),
                     false,
@@ -499,6 +503,7 @@ pub(crate) mod tests {
             "g".to_string(),
             "h".to_string(),
             "i".to_string(),
+            "j".to_string(),
         ];
         let renamed_schema = make_renamed_schema(&schema, &dfs_names)?;
 
@@ -539,10 +544,14 @@ pub(crate) mod tests {
             Field::new_map(
                 "h",
                 "entries",
-                Arc::new(Field::new("keys", DataType::Int32, false)),
+                Arc::new(Field::new_struct(
+                    "keys",
+                    vec![Field::new("i", DataType::Int32, false)],
+                    false,
+                )),
                 Arc::new(Field::new_struct(
                     "values",
-                    vec![Field::new("i", DataType::Int32, false)],
+                    vec![Field::new("j", DataType::Int32, false)],
                     false,
                 )),
                 false,
