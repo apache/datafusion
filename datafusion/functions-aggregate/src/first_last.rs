@@ -427,21 +427,21 @@ where
         })
     }
 
-    fn take_orderings(&mut self, emit_to: EmitTo) -> Vec<Vec<ScalarValue>> {
+    fn take_orderings(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ScalarValue>>> {
         let result = emit_to.take_needed(&mut self.orderings);
 
         match emit_to {
             EmitTo::All => self.size_of_orderings = 0,
             EmitTo::First(_) => {
                 self.size_of_orderings -=
-                    result.iter().map(ScalarValue::size_of_vec).sum::<usize>()
+                    result.iter().map(ScalarValue::size_of_vec).sum::<usize>();
             }
             EmitTo::NextBlock => {
-                unreachable!("this accumulator still not support blocked groups")
+                return internal_err!("first_last does not support blocked groups")
             }
         }
 
-        result
+        Ok(result)
     }
 
     fn take_need(
@@ -518,17 +518,18 @@ where
     fn take_state(
         &mut self,
         emit_to: EmitTo,
-    ) -> (ArrayRef, Vec<Vec<ScalarValue>>, BooleanBuffer) {
+    ) -> Result<(ArrayRef, Vec<Vec<ScalarValue>>, BooleanBuffer)> {
         emit_to.take_needed(&mut self.min_of_each_group_buf.0);
         self.min_of_each_group_buf
             .1
             .truncate(self.min_of_each_group_buf.0.len());
 
-        (
+        let orderings = self.take_orderings(emit_to)?;
+        Ok((
             self.take_vals_and_null_buf(emit_to),
-            self.take_orderings(emit_to),
+            orderings,
             Self::take_need(&mut self.is_sets, emit_to),
-        )
+        ))
     }
 
     // should be used in test only
@@ -680,11 +681,11 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        Ok(self.take_state(emit_to).0)
+        self.take_state(emit_to).map(|state| state.0)
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let (val_arr, orderings, is_sets) = self.take_state(emit_to);
+        let (val_arr, orderings, is_sets) = self.take_state(emit_to)?;
         let mut result = Vec::with_capacity(self.orderings.len() + 2);
 
         result.push(val_arr);

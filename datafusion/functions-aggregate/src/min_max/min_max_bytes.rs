@@ -199,7 +199,7 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let (data_capacity, min_maxes) = self.inner.emit_to(emit_to);
+        let (data_capacity, min_maxes) = self.inner.emit_to(emit_to)?;
 
         // Convert the Vec of bytes to a vec of Strings (at no cost)
         fn bytes_to_str(
@@ -494,13 +494,13 @@ impl MinMaxBytesState {
     ///
     /// - `data_capacity`: the total length of all strings and their contents,
     /// - `min_maxes`: the actual min/max values for each group
-    fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
+    fn emit_to(&mut self, emit_to: EmitTo) -> Result<(usize, Vec<Option<Vec<u8>>>)> {
         match emit_to {
             EmitTo::All => {
-                (
+                Ok((
                     std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
                     std::mem::take(&mut self.min_max),
-                )
+                ))
             }
             EmitTo::First(n) => {
                 let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
@@ -509,10 +509,10 @@ impl MinMaxBytesState {
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
                     .sum();
                 self.total_data_bytes -= first_data_capacity;
-                (first_data_capacity, first_min_maxes)
+                Ok((first_data_capacity, first_min_maxes))
             }
             EmitTo::NextBlock => {
-                unreachable!("this accumulator still not support blocked groups")
+                internal_err!("min/max bytes does not support blocked groups")
             }
         }
     }

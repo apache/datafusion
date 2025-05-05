@@ -40,7 +40,7 @@ use arrow::datatypes::{
     UInt8Type,
 };
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -1155,7 +1155,9 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                 output
             }
             EmitTo::NextBlock => {
-                unreachable!("this group values still not support blocked groups")
+                return internal_err!(
+                    "group_values_column does not support blocked groups"
+                )
             }
         };
 

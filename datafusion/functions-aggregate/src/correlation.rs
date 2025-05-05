@@ -38,7 +38,7 @@ use log::debug;
 
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
@@ -449,7 +449,7 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             EmitTo::All => self.count.len(),
             EmitTo::First(n) => n,
             EmitTo::NextBlock => {
-                unreachable!("this accumulator still not support blocked groups")
+                return internal_err!("correlation does not support blocked groups")
             }
         };
 
@@ -505,7 +505,7 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             EmitTo::All => self.count.len(),
             EmitTo::First(n) => n,
             EmitTo::NextBlock => {
-                unreachable!("this accumulator still not support blocked groups")
+                return internal_err!("correlation does not support blocked groups")
             }
         };
 
