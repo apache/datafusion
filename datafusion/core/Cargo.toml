@@ -181,6 +181,10 @@ name = "distinct_query_sql"
 
 [[bench]]
 harness = false
+name = "push_down_filter"
+
+[[bench]]
+harness = false
 name = "sort_limit_query_sql"
 
 [[bench]]
