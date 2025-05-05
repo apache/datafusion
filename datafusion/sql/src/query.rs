@@ -175,8 +175,8 @@ pub(crate) fn to_order_by_exprs_with_select(
             };
             let order_by_exprs = exprs
                 .iter()
-                .filter_map(|select_expr| match select_expr {
-                    Expr::Column(column) => Some(OrderByExpr {
+                .map(|select_expr| match select_expr {
+                    Expr::Column(column) => Ok(OrderByExpr {
                         expr: SQLExpr::Identifier(Ident {
                             value: column.name.clone(),
                             quote_style: None,
@@ -185,9 +185,12 @@ pub(crate) fn to_order_by_exprs_with_select(
                         options: order_by_options.clone(),
                         with_fill: None,
                     }),
-                    _ => None,
+                    // TODO: Support other types of expressions
+                    _ => not_impl_err!(
+                        "ORDER BY ALL is not supported for non-column expressions"
+                    ),
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>>>()?;
             Ok(order_by_exprs)
         }
         OrderByKind::Expressions(order_by_exprs) => Ok(order_by_exprs),
