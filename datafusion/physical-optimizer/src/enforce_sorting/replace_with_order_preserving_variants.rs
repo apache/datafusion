@@ -30,7 +30,6 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_physical_plan::internal_err;
 
 use datafusion_common::Result;
-// use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::repartition::RepartitionExec;
