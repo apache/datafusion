@@ -94,6 +94,11 @@ The below example illustrates the example of topK node :
 #     sync::Arc,
 #     task::{Context, Poll},
 # };
+#use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream};
+#use datafusion_execution::TaskContext;
+#use std::sync::Arc;
+#use std::collections::BTreeMap;
+#use parquet::file::statistics::Statistics;
 #[derive(Debug)]
 struct TopKQueryPlanner {}
 
