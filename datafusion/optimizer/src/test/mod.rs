@@ -213,19 +213,6 @@ pub fn assert_optimized_plan_with_rules(
     Ok(())
 }
 
-pub fn assert_optimized_plan_eq_display_indent(
-    rule: Arc<dyn OptimizerRule + Send + Sync>,
-    plan: LogicalPlan,
-    expected: &str,
-) {
-    let optimizer = Optimizer::with_rules(vec![rule]);
-    let optimized_plan = optimizer
-        .optimize(plan, &OptimizerContext::new(), observe)
-        .expect("failed to optimize plan");
-    let formatted_plan = optimized_plan.display_indent_schema().to_string();
-    assert_eq!(formatted_plan, expected);
-}
-
 #[macro_export]
 macro_rules! assert_optimized_plan_eq_display_indent_snapshot {
     (
