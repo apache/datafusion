@@ -22,7 +22,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use datafusion::config::ConfigOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_physical_optimizer::push_down_filter::PushdownFilter;
+use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use object_store::memory::InMemory;
@@ -112,7 +112,7 @@ fn bench_push_down_filter(c: &mut Criterion) {
         &plan,
         |b, plan| {
             b.iter(|| {
-                let optimizer = PushdownFilter::new();
+                let optimizer = FilterPushdown::new();
                 optimizer
                     .optimize(Arc::clone(&plan.plan), &plan.config)
                     .unwrap();
