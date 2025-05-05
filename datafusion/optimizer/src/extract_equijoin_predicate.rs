@@ -185,6 +185,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(t1)
             .join_on(t2, JoinType::Left, Some(col("t1.a").eq(col("t2.a"))))?
             .build()?;
+
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -207,6 +208,7 @@ mod tests {
                 Some((col("t1.a") + lit(10i64)).eq(col("t2.a") * lit(2u32))),
             )?
             .build()?;
+
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -233,6 +235,7 @@ mod tests {
                 ),
             )?
             .build()?;
+
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -263,6 +266,7 @@ mod tests {
                 ),
             )?
             .build()?;
+
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -292,6 +296,7 @@ mod tests {
                 ),
             )?
             .build()?;
+
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -330,6 +335,7 @@ mod tests {
                 ),
             )?
             .build()?;
+
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -366,6 +372,7 @@ mod tests {
                 Some(col("t1.a").eq(col("t2.a")).and(col("t2.c").eq(col("t3.c")))),
             )?
             .build()?;
+
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -395,6 +402,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(t1)
             .join_on(t2, JoinType::Left, Some(filter))?
             .build()?;
+
         assert_optimized_plan_equal!(
             plan,
             @r"
