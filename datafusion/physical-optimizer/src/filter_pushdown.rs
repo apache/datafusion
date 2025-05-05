@@ -422,8 +422,8 @@ fn push_down_filters(
 
     for (child, parent_filters, self_filters) in izip!(
         children,
-        filter_description.parent_filters,
-        filter_description.self_filters
+        filter_description.parent_filters(),
+        filter_description.self_filters()
     ) {
         // Here, `parent_filters` are the predicates which are provided by the parent node of
         // the current node, and tried to be pushed down over the child which the loop points

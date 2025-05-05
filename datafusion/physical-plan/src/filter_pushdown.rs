@@ -190,22 +190,56 @@ impl<T> FilterPushdownPropagation<T> {
 }
 
 #[derive(Debug, Clone)]
+struct ChildFilterDescription {
+    /// Description of which parent filters can be pushed down into this node.
+    /// Since we need to transmit filter pushdown results back to this node's parent
+    /// we need to track each parent filter for each child, even those that are unsupported / won't be pushed down.
+    /// We do this using a [`PredicateSupports`] which simplifies manipulating supported/unsupported filters.
+    parent_filters: PredicateSupports,
+    /// Description of which filters this node is pushing down to its children.
+    /// Since this is not transmitted back to the parents we can have variable sized inner arrays
+    /// instead of having to track supported/unsupported.
+    self_filters: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+impl ChildFilterDescription {
+    fn new() -> Self {
+        Self {
+            parent_filters: PredicateSupports::new(vec![]),
+            self_filters: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct FilterDescription {
-    num_children: usize,
-    /// Vector storing the [`PredicateSupports`] for each child.
-    pub parent_filters: Vec<PredicateSupports>,
-    /// Vector storing the physical expressions for each child.
-    /// Inner vector is for multiple predicates, if the node stores them such.
-    pub self_filters: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    /// A filter description for each child.
+    /// This includes which parent filters and which self filters (from the node in question)
+    /// will get pushed down to each child.
+    child_filter_descriptions: Vec<ChildFilterDescription>,
 }
 
 impl FilterDescription {
     pub fn new_with_child_count(num_children: usize) -> Self {
         Self {
-            num_children,
-            parent_filters: Vec::with_capacity(num_children),
-            self_filters: vec![vec![]; num_children],
+            child_filter_descriptions: vec![ChildFilterDescription::new(); num_children],
         }
+    }
+
+    pub fn parent_filters(&self) -> Vec<PredicateSupports> {
+        self.child_filter_descriptions
+            .iter()
+            .map(|d| &d.parent_filters)
+            .cloned()
+            .collect()
+    }
+
+    pub fn self_filters(&self) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
+        self.child_filter_descriptions
+            .iter()
+            .map(|d| &d.self_filters)
+            .cloned()
+            .collect()
     }
 
     /// Mark all parent filters as supported for all children.
@@ -219,15 +253,14 @@ impl FilterDescription {
     ///
     /// [`RepartitionExec`]: crate::repartition::RepartitionExec
     pub fn all_parent_filters_supported(
-        self,
+        mut self,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Self {
         let supported = PredicateSupports::all_supported(parent_filters);
-        Self {
-            num_children: self.num_children,
-            parent_filters: vec![supported; self.num_children],
-            self_filters: self.self_filters,
+        for child in &mut self.child_filter_descriptions {
+            child.parent_filters = supported.clone();
         }
+        self
     }
 
     /// Mark all parent filters as unsupported for all children.
@@ -240,15 +273,14 @@ impl FilterDescription {
     ///
     /// [`ExecutionPlan`]: crate::ExecutionPlan
     pub fn all_parent_filters_unsupported(
-        self,
+        mut self,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Self {
         let unsupported = PredicateSupports::all_unsupported(parent_filters);
-        Self {
-            num_children: self.num_children,
-            parent_filters: vec![unsupported; self.num_children],
-            self_filters: self.self_filters,
+        for child in &mut self.child_filter_descriptions {
+            child.parent_filters = unsupported.clone();
         }
+        self
     }
 
     /// Add a filter generated / owned by the current node to be pushed down to all children.
@@ -260,7 +292,9 @@ impl FilterDescription {
     /// - `TopK` uses this to push down a single filter to all children, it can use this method.
     /// - `HashJoinExec` pushes down a filter only to the probe side, it cannot use this method.
     pub fn with_self_filter(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
-        self.self_filters = vec![vec![predicate]; self.num_children];
+        for child in &mut self.child_filter_descriptions {
+            child.self_filters = vec![Arc::clone(&predicate)];
+        }
         self
     }
 }
