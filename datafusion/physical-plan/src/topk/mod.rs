@@ -38,9 +38,7 @@ use datafusion_execution::{
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::{
-    expressions::{
-        DynamicFilterPhysicalExpr, is_not_null, is_null, lit, BinaryExpr,
-    },
+    expressions::{is_not_null, is_null, lit, BinaryExpr, DynamicFilterPhysicalExpr},
     PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
