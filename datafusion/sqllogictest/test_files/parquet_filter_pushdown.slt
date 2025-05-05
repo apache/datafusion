@@ -187,13 +187,13 @@ COPY  (
 STORED AS PARQUET;
 
 query TT
-select * from t_pushdown where part == val
+select * from t_pushdown where part == val order by part, val;
 ----
 a a
 b b
 
 query TT
-select * from t_pushdown where part != val
+select * from t_pushdown where part != val order by part, val;
 ----
 xyz c
 
