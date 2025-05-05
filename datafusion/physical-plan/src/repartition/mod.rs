@@ -54,7 +54,7 @@ use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use crate::filter_pushdown::{
-    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
 };
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
@@ -743,14 +743,22 @@ impl ExecutionPlan for RepartitionExec {
         )?)))
     }
 
-    fn try_pushdown_filters(
+    fn gather_filters_for_pushdown(
         &self,
-        fd: FilterDescription,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        Ok(filter_pushdown_transparent::<Arc<dyn ExecutionPlan>>(
-            Arc::new(self.clone()),
-            fd,
+    ) -> Result<FilterDescription> {
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::transparent(
+            child_pushdown_result,
         ))
     }
 }
