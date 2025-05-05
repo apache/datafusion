@@ -28,7 +28,6 @@ use super::utils::{
     need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
     BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
 };
-use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::common::can_project;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
@@ -75,7 +74,9 @@ struct JoinLeftData {
     probe_threads_counter: AtomicUsize,
     /// Memory reservation for tracking batch and bitmap
     /// Cleared on `JoinLeftData` drop
-    _reservation: MemoryReservation,
+    /// reservation is cleared on Drop
+    #[expect(dead_code)]
+    reservation: MemoryReservation,
 }
 
 impl JoinLeftData {
@@ -83,13 +84,13 @@ impl JoinLeftData {
         batch: RecordBatch,
         bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
-        _reservation: MemoryReservation,
+        reservation: MemoryReservation,
     ) -> Self {
         Self {
             batch,
             bitmap,
             probe_threads_counter,
-            _reservation,
+            reservation,
         }
     }
 
@@ -424,6 +425,13 @@ impl DisplayAs for NestedLoopJoinExec {
                     self.join_type, display_filter, display_projections
                 )
             }
+            DisplayFormatType::TreeRender => {
+                if *self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 }
@@ -474,6 +482,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if self.left.output_partitioning().partition_count() != 1 {
+            return internal_err!(
+                "Invalid NestedLoopJoinExec, the output partition count of the left child must be 1,\
+                 consider using CoalescePartitionsExec or the EnforceDistribution rule"
+            );
+        }
+
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         // Initialization reservation for load of inner table
@@ -481,16 +496,17 @@ impl ExecutionPlan for NestedLoopJoinExec {
             MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
                 .register(context.memory_pool());
 
-        let inner_table = self.inner_table.once(|| {
-            collect_left_input(
-                Arc::clone(&self.left),
-                Arc::clone(&context),
+        let inner_table = self.inner_table.try_once(|| {
+            let stream = self.left.execute(0, Arc::clone(&context))?;
+
+            Ok(collect_left_input(
+                stream,
                 join_metrics.clone(),
                 load_reservation,
                 need_produce_result_in_final(self.join_type),
                 self.right().output_partitioning().partition_count(),
-            )
-        });
+            ))
+        })?;
 
         let batch_size = context.session_config().batch_size();
         let enforce_batch_size_in_joins =
@@ -551,9 +567,16 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
+            self.left.partition_statistics(None)?,
+            self.right.partition_statistics(None)?,
             vec![],
             &self.join_type,
             &self.join_schema,
@@ -601,20 +624,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
 /// Asynchronously collect input into a single batch, and creates `JoinLeftData` from it
 async fn collect_left_input(
-    input: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    stream: SendableRecordBatchStream,
     join_metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_left_side: bool,
     probe_threads_count: usize,
 ) -> Result<JoinLeftData> {
-    let schema = input.schema();
-    let merge = if input.output_partitioning().partition_count() != 1 {
-        Arc::new(CoalescePartitionsExec::new(input))
-    } else {
-        input
-    };
-    let stream = merge.execute(0, context)?;
+    let schema = stream.schema();
 
     // Load all batches and count the rows
     let (batches, metrics, mut reservation) = stream
@@ -1038,13 +1054,15 @@ pub(crate) mod tests {
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
+    use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
+    use insta::assert_snapshot;
     use rstest::rstest;
 
     fn build_table(
@@ -1207,15 +1225,13 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 5  | 5  | 50 | 2  | 2  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 5  | 5  | 50 | 2  | 2  | 80 |
+            +----+----+----+----+----+----+
+            "#);
 
         Ok(())
     }
@@ -1236,17 +1252,15 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+-----+----+----+----+",
-            "| a1 | b1 | c1  | a2 | b2 | c2 |",
-            "+----+----+-----+----+----+----+",
-            "| 11 | 8  | 110 |    |    |    |",
-            "| 5  | 5  | 50  | 2  | 2  | 80 |",
-            "| 9  | 8  | 90  |    |    |    |",
-            "+----+----+-----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+----+----+----+
+            | a1 | b1 | c1  | a2 | b2 | c2 |
+            +----+----+-----+----+----+----+
+            | 11 | 8  | 110 |    |    |    |
+            | 5  | 5  | 50  | 2  | 2  | 80 |
+            | 9  | 8  | 90  |    |    |    |
+            +----+----+-----+----+----+----+
+            "#);
 
         Ok(())
     }
@@ -1267,17 +1281,15 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+----+----+----+-----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2  |",
-            "+----+----+----+----+----+-----+",
-            "|    |    |    | 10 | 10 | 100 |",
-            "|    |    |    | 12 | 10 | 40  |",
-            "| 5  | 5  | 50 | 2  | 2  | 80  |",
-            "+----+----+----+----+----+-----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+-----+
+            | a1 | b1 | c1 | a2 | b2 | c2  |
+            +----+----+----+----+----+-----+
+            |    |    |    | 10 | 10 | 100 |
+            |    |    |    | 12 | 10 | 40  |
+            | 5  | 5  | 50 | 2  | 2  | 80  |
+            +----+----+----+----+----+-----+
+            "#);
 
         Ok(())
     }
@@ -1298,19 +1310,17 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+-----+----+----+-----+",
-            "| a1 | b1 | c1  | a2 | b2 | c2  |",
-            "+----+----+-----+----+----+-----+",
-            "|    |    |     | 10 | 10 | 100 |",
-            "|    |    |     | 12 | 10 | 40  |",
-            "| 11 | 8  | 110 |    |    |     |",
-            "| 5  | 5  | 50  | 2  | 2  | 80  |",
-            "| 9  | 8  | 90  |    |    |     |",
-            "+----+----+-----+----+----+-----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+----+----+-----+
+            | a1 | b1 | c1  | a2 | b2 | c2  |
+            +----+----+-----+----+----+-----+
+            |    |    |     | 10 | 10 | 100 |
+            |    |    |     | 12 | 10 | 40  |
+            | 11 | 8  | 110 |    |    |     |
+            | 5  | 5  | 50  | 2  | 2  | 80  |
+            | 9  | 8  | 90  |    |    |     |
+            +----+----+-----+----+----+-----+
+            "#);
 
         Ok(())
     }
@@ -1331,15 +1341,13 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        let expected = [
-            "+----+----+----+",
-            "| a1 | b1 | c1 |",
-            "+----+----+----+",
-            "| 5  | 5  | 50 |",
-            "+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+
+            | a1 | b1 | c1 |
+            +----+----+----+
+            | 5  | 5  | 50 |
+            +----+----+----+
+            "#);
 
         Ok(())
     }
@@ -1360,16 +1368,14 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        let expected = [
-            "+----+----+-----+",
-            "| a1 | b1 | c1  |",
-            "+----+----+-----+",
-            "| 11 | 8  | 110 |",
-            "| 9  | 8  | 90  |",
-            "+----+----+-----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+
+            | a1 | b1 | c1  |
+            +----+----+-----+
+            | 11 | 8  | 110 |
+            | 9  | 8  | 90  |
+            +----+----+-----+
+            "#);
 
         Ok(())
     }
@@ -1390,15 +1396,13 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+----+",
-            "| a2 | b2 | c2 |",
-            "+----+----+----+",
-            "| 2  | 2  | 80 |",
-            "+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+
+            | a2 | b2 | c2 |
+            +----+----+----+
+            | 2  | 2  | 80 |
+            +----+----+----+
+            "#);
 
         Ok(())
     }
@@ -1419,16 +1423,14 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+-----+",
-            "| a2 | b2 | c2  |",
-            "+----+----+-----+",
-            "| 10 | 10 | 100 |",
-            "| 12 | 10 | 40  |",
-            "+----+----+-----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 10 | 10 | 100 |
+            | 12 | 10 | 40  |
+            +----+----+-----+
+            "#);
 
         Ok(())
     }
@@ -1449,17 +1451,15 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
-        let expected = [
-            "+----+----+-----+-------+",
-            "| a1 | b1 | c1  | mark  |",
-            "+----+----+-----+-------+",
-            "| 11 | 8  | 110 | false |",
-            "| 5  | 5  | 50  | true  |",
-            "| 9  | 8  | 90  | false |",
-            "+----+----+-----+-------+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+-------+
+            | a1 | b1 | c1  | mark  |
+            +----+----+-----+-------+
+            | 11 | 8  | 110 | false |
+            | 5  | 5  | 50  | true  |
+            | 9  | 8  | 90  | false |
+            +----+----+-----+-------+
+            "#);
 
         Ok(())
     }

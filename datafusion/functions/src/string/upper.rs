@@ -18,9 +18,12 @@
 use crate::string::common::to_upper;
 use crate::utils::utf8_to_str_type;
 use arrow::datatypes::DataType;
+use datafusion_common::types::logical_string;
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 
@@ -54,7 +57,12 @@ impl Default for UpperFunc {
 impl UpperFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -89,15 +97,19 @@ impl ScalarUDFImpl for UpperFunc {
 mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, StringArray};
+    use arrow::datatypes::DataType::Utf8;
+    use arrow::datatypes::Field;
     use std::sync::Arc;
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
 
+        let arg_field = Field::new("a", input.data_type().clone(), true);
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
-            return_type: &DataType::Utf8,
+            arg_fields: vec![&arg_field],
+            return_field: &Field::new("f", Utf8, true),
         };
 
         let result = match func.invoke_with_args(args)? {

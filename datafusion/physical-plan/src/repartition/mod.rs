@@ -43,6 +43,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -52,6 +53,9 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
@@ -506,6 +510,25 @@ impl DisplayAs for RepartitionExec {
                 }
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+
+                let input_partition_count =
+                    self.input.output_partitioning().partition_count();
+                let output_partition_count = self.partitioning().partition_count();
+                let input_to_output_partition_str =
+                    format!("{} -> {}", input_partition_count, output_partition_count);
+                writeln!(
+                    f,
+                    "partition_count(in->out)={}",
+                    input_to_output_partition_str
+                )?;
+
+                if self.preserve_order {
+                    writeln!(f, "preserve_order={}", self.preserve_order)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -665,7 +688,15 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_none() {
+            self.input.partition_statistics(None)
+        } else {
+            Ok(Statistics::new_unknown(&self.schema()))
+        }
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -710,6 +741,25 @@ impl ExecutionPlan for RepartitionExec {
             new_projection,
             new_partitioning,
         )?)))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::transparent(
+            child_pushdown_result,
+        ))
     }
 }
 
@@ -1066,10 +1116,11 @@ mod tests {
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
-    use datafusion_common::{arrow_datafusion_err, assert_batches_sorted_eq, exec_err};
+    use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_common::{arrow_datafusion_err, exec_err};
+    use datafusion_common_runtime::JoinSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
-    use tokio::task::JoinSet;
+    use insta::assert_snapshot;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
@@ -1322,23 +1373,30 @@ mod tests {
 
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
-        let expected = vec![
-            "+------------------+",
-            "| my_awesome_field |",
-            "+------------------+",
-            "| foo              |",
-            "| bar              |",
-            "| frob             |",
-            "| baz              |",
-            "+------------------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &expected_batches);
+        assert_snapshot!(batches_to_sort_string(&expected_batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | bar              |
+        | baz              |
+        | foo              |
+        | frob             |
+        +------------------+
+        ");
 
         let output_stream = exec.execute(0, task_ctx).unwrap();
         let batches = crate::common::collect(output_stream).await.unwrap();
 
-        assert_batches_sorted_eq!(&expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | bar              |
+        | baz              |
+        | foo              |
+        | frob             |
+        +------------------+
+        ");
     }
 
     #[tokio::test]
@@ -1372,18 +1430,16 @@ mod tests {
         // output stream 1 should *not* error and have one of the input batches
         let batches = crate::common::collect(output_stream1).await.unwrap();
 
-        let expected = vec![
-            "+------------------+",
-            "| my_awesome_field |",
-            "+------------------+",
-            "| baz              |",
-            "| frob             |",
-            "| gaz              |",
-            "| grob             |",
-            "+------------------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +------------------+
+            | my_awesome_field |
+            +------------------+
+            | baz              |
+            | frob             |
+            | gaz              |
+            | grob             |
+            +------------------+
+            "#);
     }
 
     #[tokio::test]

@@ -23,9 +23,10 @@ use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
-use arrow::array::{ArrayRef, DictionaryArray, RecordBatch};
+use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
+use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
@@ -41,14 +42,18 @@ use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_contains, Result};
 use datafusion_execution::memory_pool::{
-    GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
-use datafusion_execution::TaskContext;
+use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::{DiskManager, TaskContext};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::collect as collect_batches;
+use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
+use rand::Rng;
 use test_utils::AccessLogGenerator;
 
 use async_trait::async_trait;
@@ -117,7 +122,7 @@ async fn join_by_key_multiple_partitions() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[0]",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -154,7 +159,7 @@ async fn join_by_expression() {
 #[tokio::test]
 async fn cross_join() {
     TestCase::new()
-        .with_query("select t1.* from t t1 CROSS JOIN t t2")
+        .with_query("select t1.*, t2.* from t t1 CROSS JOIN t t2")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec",
         ])
@@ -401,6 +406,211 @@ async fn oom_with_tracked_consumer_pool() {
         ))
         .run()
         .await
+}
+
+/// For regression case: if spilled `StringViewArray`'s buffer will be referenced by
+/// other batches which are also need to be spilled, then the spill writer will
+/// repeatedly write out the same buffer, and after reading back, each batch's size
+/// will explode.
+///
+/// This test setup will cause 10 spills, each spill will sort around 20 batches.
+/// If there is memory explosion for spilled record batch, this test will fail.
+#[tokio::test]
+async fn test_stringview_external_sort() {
+    let mut rng = rand::thread_rng();
+    let array_length = 1000;
+    let num_batches = 200;
+    // Batches contain two columns: random 100-byte string, and random i32
+    let mut batches = Vec::with_capacity(num_batches);
+
+    for _ in 0..num_batches {
+        let strings: Vec<String> = (0..array_length)
+            .map(|_| {
+                (0..100)
+                    .map(|_| rng.gen_range(0..=u8::MAX) as char)
+                    .collect()
+            })
+            .collect();
+
+        let string_array = StringViewArray::from(strings);
+        let array_ref: ArrayRef = Arc::new(string_array);
+
+        let random_numbers: Vec<i32> =
+            (0..array_length).map(|_| rng.gen_range(0..=1000)).collect();
+        let int_array = Int32Array::from(random_numbers);
+        let int_array_ref: ArrayRef = Arc::new(int_array);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("strings", DataType::Utf8View, false),
+                Field::new("random_numbers", DataType::Int32, false),
+            ])),
+            vec![array_ref, int_array_ref],
+        )
+        .unwrap();
+        batches.push(batch);
+    }
+
+    // Run a sql query that sorts the batches by the int column
+    let schema = batches[0].schema();
+    let table = MemTable::try_new(schema, vec![batches]).unwrap();
+    let builder = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(60 * 1024 * 1024)));
+    let runtime = builder.build_arc().unwrap();
+
+    let config = SessionConfig::new().with_sort_spill_reservation_bytes(40 * 1024 * 1024);
+
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+    ctx.register_table("t", Arc::new(table)).unwrap();
+
+    let df = ctx
+        .sql("explain analyze SELECT * FROM t ORDER BY random_numbers")
+        .await
+        .unwrap();
+
+    let _ = df.collect().await.expect("Query execution failed");
+}
+
+/// This test case is for a previously detected bug:
+/// When `ExternalSorter` has read all input batches
+/// - It has spilled many sorted runs to disk
+/// - Its in-memory buffer for batches is almost full
+/// The previous implementation will try to merge the spills and in-memory batches
+/// together, without spilling the in-memory batches first, causing OOM.
+#[tokio::test]
+async fn test_in_mem_buffer_almost_full() {
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(3000000)
+        .with_target_partitions(1);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(10 * 1024 * 1024)))
+        .build_arc()
+        .unwrap();
+
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+
+    let query = "select * from generate_series(1,9000000) as t1(v1) order by v1;";
+    let df = ctx.sql(query).await.unwrap();
+
+    // Check not fail
+    let _ = df.collect().await.unwrap();
+}
+
+/// External sort should be able to run if there is very little pre-reserved memory
+/// for merge (set configuration sort_spill_reservation_bytes to 0).
+#[tokio::test]
+async fn test_external_sort_zero_merge_reservation() {
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(0)
+        .with_target_partitions(14);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(10 * 1024 * 1024)))
+        .build_arc()
+        .unwrap();
+
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+
+    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1;";
+    let df = ctx.sql(query).await.unwrap();
+
+    let physical_plan = df.create_physical_plan().await.unwrap();
+    let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+    let stream = physical_plan.execute(0, task_ctx).unwrap();
+
+    // Ensures execution succeed
+    let _result = collect(stream).await;
+
+    // Ensures the query spilled during execution
+    let metrics = physical_plan.metrics().unwrap();
+    let spill_count = metrics.spill_count().unwrap();
+    assert!(spill_count > 0);
+}
+
+// Tests for disk limit (`max_temp_directory_size` in `DiskManager`)
+// ------------------------------------------------------------------
+
+// Create a new `SessionContext` with speicified disk limit and memory pool limit
+async fn setup_context(
+    disk_limit: u64,
+    memory_pool_limit: usize,
+) -> Result<SessionContext> {
+    let mut disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
+
+    DiskManager::set_arc_max_temp_directory_size(&mut disk_manager, disk_limit)?;
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(memory_pool_limit)))
+        .build_arc()
+        .unwrap();
+
+    let runtime = Arc::new(RuntimeEnv {
+        memory_pool: runtime.memory_pool.clone(),
+        disk_manager,
+        cache_manager: runtime.cache_manager.clone(),
+        object_store_registry: runtime.object_store_registry.clone(),
+    });
+
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(64 * 1024) // 256KB
+        .with_sort_in_place_threshold_bytes(0)
+        .with_batch_size(64) // To reduce test memory usage
+        .with_target_partitions(1);
+
+    Ok(SessionContext::new_with_config_rt(config, runtime))
+}
+
+/// If the spilled bytes exceed the disk limit, the query should fail
+/// (specified by `max_temp_directory_size` in `DiskManager`)
+#[tokio::test]
+async fn test_disk_spill_limit_reached() -> Result<()> {
+    let ctx = setup_context(1024 * 1024, 1024 * 1024).await?; // 1MB disk limit, 1MB memory limit
+
+    let df = ctx
+        .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+
+    let err = df.collect().await.unwrap_err();
+    assert_contains!(
+    err.to_string(),
+    "The used disk space during the spilling process has exceeded the allowable limit"
+    );
+
+    Ok(())
+}
+
+/// External query should succeed, if the spilled bytes is less than the disk limit
+/// Also verify that after the query is finished, all the disk usage accounted by
+/// tempfiles are cleaned up.
+#[tokio::test]
+async fn test_disk_spill_limit_not_reached() -> Result<()> {
+    let disk_spill_limit = 1024 * 1024; // 1MB
+    let ctx = setup_context(disk_spill_limit, 128 * 1024).await?; // 1MB disk limit, 128KB memory limit
+
+    let df = ctx
+        .sql("select * from generate_series(1, 10000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    let task_ctx = ctx.task_ctx();
+    let _ = collect_batches(Arc::clone(&plan), task_ctx)
+        .await
+        .expect("Query execution failed");
+
+    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
+    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+
+    println!("spill count {}, spill bytes {}", spill_count, spilled_bytes);
+    assert!(spill_count > 0);
+    assert!((spilled_bytes as u64) < disk_spill_limit);
+
+    // Verify that all temporary files have been properly cleaned up by checking
+    // that the total disk usage tracked by the disk manager is zero
+    let current_disk_usage = ctx.runtime_env().disk_manager.used_disk_space();
+    assert_eq!(current_disk_usage, 0);
+
+    Ok(())
 }
 
 /// Run the query with the specified memory limit,
@@ -651,11 +861,10 @@ impl Scenario {
                 single_row_batches,
             } => {
                 use datafusion::physical_expr::expressions::col;
-                let batches: Vec<Vec<_>> = std::iter::repeat(maybe_split_batches(
-                    dict_batches(),
-                    *single_row_batches,
-                ))
-                .take(*partitions)
+                let batches: Vec<Vec<_>> = std::iter::repeat_n(
+                    maybe_split_batches(dict_batches(), *single_row_batches),
+                    *partitions,
+                )
                 .collect();
 
                 let schema = batches[0][0].schema();
@@ -687,7 +896,7 @@ impl Scenario {
                 // Disabling physical optimizer rules to avoid sorts /
                 // repartitions (since RepartitionExec / SortExec also
                 // has a memory budget which we'll likely hit first)
-                Some(vec![])
+                Some(vec![Arc::new(JoinSelection::new())])
             }
             Self::AccessLogStreaming => {
                 // Disable all physical optimizer rules except the
@@ -853,6 +1062,6 @@ impl TableProvider for SortedTableProvider {
         )?
         .try_with_sort_information(self.sort_information.clone())?;
 
-        Ok(Arc::new(DataSourceExec::new(Arc::new(mem_conf))))
+        Ok(DataSourceExec::from_data_source(mem_conf))
     }
 }

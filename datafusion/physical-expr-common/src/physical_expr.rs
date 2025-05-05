@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -24,12 +25,16 @@ use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
+use datafusion_expr_common::statistics::Distribution;
+
+use itertools::izip;
 
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
@@ -50,6 +55,12 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// * [`SessionContext::create_physical_expr`]: A high level API
 /// * [`create_physical_expr`]: A low level API
 ///
+/// # Formatting `PhysicalExpr` as strings
+/// There are three ways to format `PhysicalExpr` as a string:
+/// * [`Debug`]: Standard Rust debugging format (e.g. `Constant { value: ... }`)
+/// * [`Display`]: Detailed SQL-like format that shows expression structure (e.g. (`Utf8 ("foobar")`). This is often used for debugging and tests
+/// * [`Self::fmt_sql`]: SQL-like human readable format (e.g. ('foobar')`), See also [`sql_fmt`]
+///
 /// [`SessionContext::create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.create_physical_expr
 /// [`PhysicalPlanner`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/trait.PhysicalPlanner.html
 /// [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
@@ -60,11 +71,23 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
     /// Get the data type of this expression, given the schema of the input
-    fn data_type(&self, input_schema: &Schema) -> Result<DataType>;
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        Ok(self.return_field(input_schema)?.data_type().to_owned())
+    }
     /// Determine whether this expression is nullable, given the schema of the input
-    fn nullable(&self, input_schema: &Schema) -> Result<bool>;
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        Ok(self.return_field(input_schema)?.is_nullable())
+    }
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
+    /// The output field associated with this expression
+    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+        Ok(Field::new(
+            format!("{self}"),
+            self.data_type(input_schema)?,
+            self.nullable(input_schema)?,
+        ))
+    }
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
     fn evaluate_selection(
@@ -98,10 +121,15 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Computes the output interval for the expression, given the input
     /// intervals.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `children` are the intervals for the children (inputs) of this
     ///   expression.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the output interval for the expression in
+    /// case of success, or an error object in case of failure.
     ///
     /// # Example
     ///
@@ -116,19 +144,20 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// This is used to propagate constraints down through an expression tree.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `interval` is the currently known interval for this expression.
     /// * `children` are the current intervals for the children of this expression.
     ///
     /// # Returns
     ///
-    /// A `Vec` of new intervals for the children, in order.
+    /// A `Result` containing a `Vec` of new intervals for the children (in order)
+    /// in case of success, or an error object in case of failure.
     ///
     /// If constraint propagation reveals an infeasibility for any child, returns
-    /// [`None`]. If none of the children intervals change as a result of propagation,
-    /// may return an empty vector instead of cloning `children`. This is the default
-    /// (and conservative) return value.
+    /// [`None`]. If none of the children intervals change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
     ///
     /// # Example
     ///
@@ -144,6 +173,111 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         Ok(Some(vec![]))
     }
 
+    /// Computes the output statistics for the expression, given the input
+    /// statistics.
+    ///
+    /// # Parameters
+    ///
+    /// * `children` are the statistics for the children (inputs) of this
+    ///   expression.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the output statistics for the expression in
+    /// case of success, or an error object in case of failure.
+    ///
+    /// Expressions (should) implement this function and utilize the independence
+    /// assumption, match on children distribution types and compute the output
+    /// statistics accordingly. The default implementation simply creates an
+    /// unknown output distribution by combining input ranges. This logic loses
+    /// distribution information, but is a safe default.
+    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+        let children_ranges = children
+            .iter()
+            .map(|c| c.range())
+            .collect::<Result<Vec<_>>>()?;
+        let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
+        let output_interval = self.evaluate_bounds(children_ranges_refs.as_slice())?;
+        let dt = output_interval.data_type();
+        if dt.eq(&DataType::Boolean) {
+            let p = if output_interval.eq(&Interval::CERTAINLY_TRUE) {
+                ScalarValue::new_one(&dt)
+            } else if output_interval.eq(&Interval::CERTAINLY_FALSE) {
+                ScalarValue::new_zero(&dt)
+            } else {
+                ScalarValue::try_from(&dt)
+            }?;
+            Distribution::new_bernoulli(p)
+        } else {
+            Distribution::new_from_interval(output_interval)
+        }
+    }
+
+    /// Updates children statistics using the given parent statistic for this
+    /// expression.
+    ///
+    /// This is used to propagate statistics down through an expression tree.
+    ///
+    /// # Parameters
+    ///
+    /// * `parent` is the currently known statistics for this expression.
+    /// * `children` are the current statistics for the children of this expression.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `Vec` of new statistics for the children (in order)
+    /// in case of success, or an error object in case of failure.
+    ///
+    /// If statistics propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children statistics change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
+    ///
+    /// Expressions (should) implement this function and apply Bayes rule to
+    /// reconcile and update parent/children statistics. This involves utilizing
+    /// the independence assumption, and matching on distribution types. The
+    /// default implementation simply creates an unknown distribution if it can
+    /// narrow the range by propagating ranges. This logic loses distribution
+    /// information, but is a safe default.
+    fn propagate_statistics(
+        &self,
+        parent: &Distribution,
+        children: &[&Distribution],
+    ) -> Result<Option<Vec<Distribution>>> {
+        let children_ranges = children
+            .iter()
+            .map(|c| c.range())
+            .collect::<Result<Vec<_>>>()?;
+        let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
+        let parent_range = parent.range()?;
+        let Some(propagated_children) =
+            self.propagate_constraints(&parent_range, children_ranges_refs.as_slice())?
+        else {
+            return Ok(None);
+        };
+        izip!(propagated_children.into_iter(), children_ranges, children)
+            .map(|(new_interval, old_interval, child)| {
+                if new_interval == old_interval {
+                    // We weren't able to narrow the range, preserve the old statistics.
+                    Ok((*child).clone())
+                } else if new_interval.data_type().eq(&DataType::Boolean) {
+                    let dt = old_interval.data_type();
+                    let p = if new_interval.eq(&Interval::CERTAINLY_TRUE) {
+                        ScalarValue::new_one(&dt)
+                    } else if new_interval.eq(&Interval::CERTAINLY_FALSE) {
+                        ScalarValue::new_zero(&dt)
+                    } else {
+                        unreachable!("Given that we have a range reduction for a boolean interval, we should have certainty")
+                    }?;
+                    Distribution::new_bernoulli(p)
+                } else {
+                    Distribution::new_from_interval(new_interval)
+                }
+            })
+            .collect::<Result<_>>()
+            .map(Some)
+    }
+
     /// Calculates the properties of this [`PhysicalExpr`] based on its
     /// children's properties (i.e. order and range), recursively aggregating
     /// the information from its children. In cases where the [`PhysicalExpr`]
@@ -152,10 +286,69 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties::new_unknown())
     }
+
+    /// Format this `PhysicalExpr` in nice human readable "SQL" format
+    ///
+    /// Specifically, this format is designed to be readable by humans, at the
+    /// expense of details. Use `Display` or `Debug` for more detailed
+    /// representation.
+    ///
+    /// See the [`fmt_sql`] function for an example of printing `PhysicalExpr`s as SQL.
+    ///
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result;
+
+    /// Take a snapshot of this `PhysicalExpr`, if it is dynamic.
+    ///
+    /// "Dynamic" in this case means containing references to structures that may change
+    /// during plan execution, such as hash tables.
+    ///
+    /// This method is used to capture the current state of `PhysicalExpr`s that may contain
+    /// dynamic references to other operators in order to serialize it over the wire
+    /// or treat it via downcast matching.
+    ///
+    /// You should not call this method directly as it does not handle recursion.
+    /// Instead use [`snapshot_physical_expr`] to handle recursion and capture the
+    /// full state of the `PhysicalExpr`.
+    ///
+    /// This is expected to return "simple" expressions that do not have mutable state
+    /// and are composed of DataFusion's built-in `PhysicalExpr` implementations.
+    /// Callers however should *not* assume anything about the returned expressions
+    /// since callers and implementers may not agree on what "simple" or "built-in"
+    /// means.
+    /// In other words, if you need to serialize a `PhysicalExpr` across the wire
+    /// you should call this method and then try to serialize the result,
+    /// but you should handle unknown or unexpected `PhysicalExpr` implementations gracefully
+    /// just as if you had not called this method at all.
+    ///
+    /// In particular, consider:
+    /// * A `PhysicalExpr` that references the current state of a `datafusion::physical_plan::TopK`
+    ///   that is involved in a query with `SELECT * FROM t1 ORDER BY a LIMIT 10`.
+    ///   This function may return something like `a >= 12`.
+    /// * A `PhysicalExpr` that references the current state of a `datafusion::physical_plan::joins::HashJoinExec`
+    ///   from a query such as `SELECT * FROM t1 JOIN t2 ON t1.a = t2.b`.
+    ///   This function may return something like `t2.b IN (1, 5, 7)`.
+    ///
+    /// A system or function that can only deal with a hardcoded set of `PhysicalExpr` implementations
+    /// or needs to serialize this state to bytes may not be able to handle these dynamic references.
+    /// In such cases, we should return a simplified version of the `PhysicalExpr` that does not
+    /// contain these dynamic references.
+    ///
+    /// Systems that implement remote execution of plans, e.g. serialize a portion of the query plan
+    /// and send it across the wire to a remote executor may want to call this method after
+    /// every batch on the source side and brodcast / update the current snaphot to the remote executor.
+    ///
+    /// Note for implementers: this method should *not* handle recursion.
+    /// Recursion is handled in [`snapshot_physical_expr`].
+    fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        // By default, we return None to indicate that this PhysicalExpr does not
+        // have any dynamic references or state.
+        // This is a safe default behavior.
+        Ok(None)
+    }
 }
 
 /// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
-/// safe. To ease implementation blanket implementation is provided for [`Eq`] types.
+/// safe. To ease implementation, blanket implementation is provided for [`Eq`] types.
 pub trait DynEq {
     fn dyn_eq(&self, other: &dyn Any) -> bool;
 }
@@ -249,7 +442,7 @@ where
         I: Iterator + Clone,
         I::Item: Display,
     {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
@@ -264,4 +457,83 @@ where
     }
 
     DisplayWrapper(exprs.into_iter())
+}
+
+/// Prints a [`PhysicalExpr`] in a SQL-like format
+///
+/// # Example
+/// ```
+/// # // The boiler plate needed to create a `PhysicalExpr` for the example
+/// # use std::any::Any;
+/// use std::collections::HashMap;
+/// # use std::fmt::Formatter;
+/// # use std::sync::Arc;
+/// # use arrow::array::RecordBatch;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_common::Result;
+/// # use datafusion_expr_common::columnar_value::ColumnarValue;
+/// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
+/// # #[derive(Debug, Hash, PartialOrd, PartialEq)]
+/// # struct MyExpr {}
+/// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
+/// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
+/// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
+/// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
+/// # fn return_field(&self, input_schema: &Schema) -> Result<Field> { unimplemented!() }
+/// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
+/// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
+/// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }
+/// # }
+/// # impl std::fmt::Display for MyExpr {fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { unimplemented!() } }
+/// # impl DynEq for MyExpr {fn dyn_eq(&self, other: &dyn Any) -> bool { unimplemented!() } }
+/// # fn make_physical_expr() -> Arc<dyn PhysicalExpr> { Arc::new(MyExpr{}) }
+/// let expr: Arc<dyn PhysicalExpr> = make_physical_expr();
+/// // wrap the expression in `sql_fmt` which can be used with
+/// // `format!`, `to_string()`, etc
+/// let expr_as_sql = fmt_sql(expr.as_ref());
+/// assert_eq!(
+///   "The SQL: CASE a > b THEN 1 ELSE 0 END",
+///   format!("The SQL: {expr_as_sql}")
+/// );
+/// ```
+pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
+    struct Wrapper<'a> {
+        expr: &'a dyn PhysicalExpr,
+    }
+
+    impl Display for Wrapper<'_> {
+        fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+            self.expr.fmt_sql(f)?;
+            Ok(())
+        }
+    }
+
+    Wrapper { expr }
+}
+
+/// Take a snapshot of the given `PhysicalExpr` if it is dynamic.
+///
+/// Take a snapshot of this `PhysicalExpr` if it is dynamic.
+/// This is used to capture the current state of `PhysicalExpr`s that may contain
+/// dynamic references to other operators in order to serialize it over the wire
+/// or treat it via downcast matching.
+///
+/// See the documentation of [`PhysicalExpr::snapshot`] for more details.
+///
+/// # Returns
+///
+/// Returns an `Option<Arc<dyn PhysicalExpr>>` which is the snapshot of the
+/// `PhysicalExpr` if it is dynamic. If the `PhysicalExpr` does not have
+/// any dynamic references or state, it returns `None`.
+pub fn snapshot_physical_expr(
+    expr: Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_up(|e| {
+        if let Some(snapshot) = e.snapshot()? {
+            Ok(Transformed::yes(snapshot))
+        } else {
+            Ok(Transformed::no(Arc::clone(&e)))
+        }
+    })
+    .data()
 }

@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use super::super::options::{ParquetReadOptions, ReadOptions};
 use super::{DataFilePaths, DataFrame, ExecutionPlan, Result, SessionContext};
-use crate::datasource::physical_plan::parquet::plan_to_parquet;
+use datafusion_datasource_parquet::plan_to_parquet;
 
 use datafusion_common::TableReference;
 use parquet::file::properties::WriterProperties;

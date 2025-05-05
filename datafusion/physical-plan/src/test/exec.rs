@@ -175,6 +175,10 @@ impl DisplayAs for MockExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "MockExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -251,6 +255,13 @@ impl ExecutionPlan for MockExec {
 
     // Panics if one of the batches is an error
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema));
+        }
         let data: Result<Vec<_>> = self
             .data
             .iter()
@@ -337,6 +348,10 @@ impl DisplayAs for BarrierExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BarrierExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -397,6 +412,13 @@ impl ExecutionPlan for BarrierExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema));
+        }
         Ok(common::compute_record_batch_statistics(
             &self.data,
             &self.schema,
@@ -448,6 +470,10 @@ impl DisplayAs for ErrorExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ErrorExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -535,6 +561,10 @@ impl DisplayAs for StatisticsExec {
                     self.stats.num_rows,
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -573,6 +603,14 @@ impl ExecutionPlan for StatisticsExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        Ok(if partition.is_some() {
+            Statistics::new_unknown(&self.schema)
+        } else {
+            self.stats.clone()
+        })
     }
 }
 
@@ -629,6 +667,10 @@ impl DisplayAs for BlockingExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BlockingExec",)
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -771,6 +813,10 @@ impl DisplayAs for PanicExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "PanicExec",)
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

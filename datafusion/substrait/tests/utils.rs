@@ -480,6 +480,7 @@ pub mod test {
                         }
                     }
                 }
+                RexType::DynamicParameter(_) => {}
                 // Enum is deprecated
                 RexType::Enum(_) => {}
             }

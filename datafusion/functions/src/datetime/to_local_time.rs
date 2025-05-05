@@ -366,12 +366,11 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let [time_value] = take_function_args(self.name(), args)?;
+        let [time_value] = take_function_args(self.name(), args.args)?;
 
         self.to_local_time(&[time_value.clone()])
     }
@@ -408,9 +407,9 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{types::TimestampNanosecondType, TimestampNanosecondArray};
+    use arrow::array::{types::TimestampNanosecondType, Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::NaiveDateTime;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -539,11 +538,13 @@ mod tests {
     }
 
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
+        let arg_field = Field::new("a", input.data_type(), true);
         let res = ToLocalTimeFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(input)],
+                arg_fields: vec![&arg_field],
                 number_rows: 1,
-                return_type: &expected.data_type(),
+                return_field: &Field::new("f", expected.data_type(), true),
             })
             .unwrap();
         match res {
@@ -603,10 +604,18 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>();
             let batch_size = input.len();
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let result = ToLocalTimeFunc::new()
-                .invoke_batch(&[ColumnarValue::Array(Arc::new(input))], batch_size)
-                .unwrap();
+            let arg_field = Field::new("a", input.data_type().clone(), true);
+            let args = ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(Arc::new(input))],
+                arg_fields: vec![&arg_field],
+                number_rows: batch_size,
+                return_field: &Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    true,
+                ),
+            };
+            let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
                     result.data_type(),

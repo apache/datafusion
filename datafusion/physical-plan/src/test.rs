@@ -105,10 +105,10 @@ impl DisplayAs for TestMemoryExec {
                     .map_or(String::new(), |limit| format!(", fetch={}", limit));
                 if self.show_sizes {
                     write!(
-                        f,
-                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                        partition_sizes.len(),
-                    )
+                                f,
+                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                                partition_sizes.len(),
+                            )
                 } else {
                     write!(
                         f,
@@ -116,6 +116,10 @@ impl DisplayAs for TestMemoryExec {
                         partition_sizes.len(),
                     )
                 }
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -166,7 +170,15 @@ impl ExecutionPlan for TestMemoryExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.statistics()
+        self.statistics_inner()
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            Ok(Statistics::new_unknown(&self.schema))
+        } else {
+            self.statistics_inner()
+        }
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -210,7 +222,7 @@ impl TestMemoryExec {
         )
     }
 
-    fn statistics(&self) -> Result<Statistics> {
+    fn statistics_inner(&self) -> Result<Statistics> {
         Ok(common::compute_record_batch_statistics(
             &self.partitions,
             &self.schema,

@@ -16,6 +16,9 @@
 // under the License.
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+};
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
@@ -27,7 +30,7 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, udf, Distribution, Partitioning, PhysicalExpr,
+    expressions, Distribution, Partitioning, PhysicalExpr,
 };
 
 use std::any::Any;
@@ -46,12 +49,12 @@ use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::stream::{StreamExt, TryStreamExt};
-use tokio::task::JoinSet;
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -260,13 +263,32 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// used.
     /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
+    /// To enable timely cancellation, the [`Stream`] that is returned must not
+    /// block the CPU indefinitely and must yield back to the tokio runtime regularly.
+    /// In a typical [`ExecutionPlan`], this automatically happens unless there are
+    /// special circumstances; e.g. when the computational complexity of processing a
+    /// batch is superlinear. See this [general guideline][async-guideline] for more context
+    /// on this point, which explains why one should avoid spending a long time without
+    /// reaching an `await`/yield point in asynchronous runtimes.
+    /// This can be achieved by manually returning [`Poll::Pending`] and setting up wakers
+    /// appropriately, or the use of [`tokio::task::yield_now()`] when appropriate.
+    /// In special cases that warrant manual yielding, determination for "regularly" may be
+    /// made using a timer (being careful with the overhead-heavy system call needed to
+    /// take the time), or by counting rows or batches.
+    ///
+    /// The [cancellation benchmark] tracks some cases of how quickly queries can
+    /// be cancelled.
+    ///
     /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
     /// for structures to help ensure all background tasks are cancelled.
     ///
     /// [`spawn`]: tokio::task::spawn
-    /// [`JoinSet`]: tokio::task::JoinSet
+    /// [cancellation benchmark]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md#cancellation
+    /// [`JoinSet`]: datafusion_common_runtime::JoinSet
     /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
+    /// [`Poll::Pending`]: std::task::Poll::Pending
+    /// [async-guideline]: https://ryhl.io/blog/async-what-is-blocking/
     ///
     /// # Implementation Examples
     ///
@@ -404,7 +426,27 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// For TableScan executors, which supports filter pushdown, special attention
     /// needs to be paid to whether the stats returned by this method are exact or not
+    #[deprecated(since = "48.0.0", note = "Use `partition_statistics` method instead")]
     fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    /// Returns statistics for a specific partition of this `ExecutionPlan` node.
+    /// If statistics are not available, should return [`Statistics::new_unknown`]
+    /// (the default), not an error.
+    /// If `partition` is `None`, it returns statistics for the entire plan.
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(idx) = partition {
+            // Validate partition index
+            let partition_count = self.properties().partitioning.partition_count();
+            if idx >= partition_count {
+                return internal_err!(
+                    "Invalid partition index: {}, the partition count is {}",
+                    idx,
+                    partition_count
+                );
+            }
+        }
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
@@ -447,6 +489,62 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         _projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(None)
+    }
+
+    /// Collect filters that this node can push down to its children.
+    /// Filters that are being pushed down from parents are passed in,
+    /// and the node may generate additional filters to push down.
+    /// For example, given the plan FilterExec -> HashJoinExec -> DataSourceExec,
+    /// what will happen is that we recurse down the plan calling `ExecutionPlan::gather_filters_for_pushdown`:
+    /// 1. `FilterExec::gather_filters_for_pushdown` is called with no parent
+    ///    filters so it only returns that `FilterExec` wants to push down its own predicate.
+    /// 2. `HashJoinExec::gather_filters_for_pushdown` is called with the filter from
+    ///    `FilterExec`, which it only allows to push down to one side of the join (unless it's on the join key)
+    ///    but it also adds its own filters (e.g. pushing down a bloom filter of the hash table to the scan side of the join).
+    /// 3. `DataSourceExec::gather_filters_for_pushdown` is called with both filters from `HashJoinExec`
+    ///    and `FilterExec`, however `DataSourceExec::gather_filters_for_pushdown` doesn't actually do anything
+    ///    since it has no children and no additional filters to push down.
+    ///    It's only once [`ExecutionPlan::handle_child_pushdown_result`] is called on `DataSourceExec` as we recurse
+    ///    up the plan that `DataSourceExec` can actually bind the filters.
+    ///
+    /// The default implementation bars all parent filters from being pushed down and adds no new filters.
+    /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
+    fn gather_filters_for_pushdown(
+        &self,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        Ok(
+            FilterDescription::new_with_child_count(self.children().len())
+                .all_parent_filters_unsupported(parent_filters),
+        )
+    }
+
+    /// Handle the result of a child pushdown.
+    /// This is called as we recurse back up the plan tree after recursing down and calling [`ExecutionPlan::gather_filters_for_pushdown`].
+    /// Once we know what the result of pushing down filters into children is we ask the current node what it wants to do with that result.
+    /// For a `DataSourceExec` that may be absorbing the filters to apply them during the scan phase
+    /// (also known as late materialization).
+    /// A `FilterExec` may absorb any filters its children could not absorb, or if there are no filters left it
+    /// may remove itself from the plan altogether.
+    /// It combines both [`ChildPushdownResult::parent_filters`] and [`ChildPushdownResult::self_filters`] into a single
+    /// predicate and replaces it's own predicate.
+    /// Then it passes [`PredicateSupport::Supported`] for each parent predicate to the parent.
+    /// A `HashJoinExec` may ignore the pushdown result since it needs to apply the filters as part of the join anyhow.
+    /// It passes [`ChildPushdownResult::parent_filters`] back up to it's parents wrapped in [`FilterPushdownPropagation::transparent`]
+    /// and [`ChildPushdownResult::self_filters`] is discarded.
+    ///
+    /// The default implementation is a no-op that passes the result of pushdown from the children to its parent.
+    ///
+    /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::transparent(
+            child_pushdown_result,
+        ))
     }
 }
 
@@ -500,13 +598,15 @@ pub trait ExecutionPlanProperties {
     /// If this ExecutionPlan makes no changes to the schema of the rows flowing
     /// through it or how columns within each row relate to each other, it
     /// should return the equivalence properties of its input. For
-    /// example, since `FilterExec` may remove rows from its input, but does not
+    /// example, since [`FilterExec`] may remove rows from its input, but does not
     /// otherwise modify them, it preserves its input equivalence properties.
     /// However, since `ProjectionExec` may calculate derived expressions, it
     /// needs special handling.
     ///
     /// See also [`ExecutionPlan::maintains_input_order`] and [`Self::output_ordering`]
     /// for related concepts.
+    ///
+    /// [`FilterExec`]: crate::filter::FilterExec
     fn equivalence_properties(&self) -> &EquivalenceProperties;
 }
 
@@ -1118,6 +1218,10 @@ mod tests {
         fn statistics(&self) -> Result<Statistics> {
             unimplemented!()
         }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -1179,6 +1283,10 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
             unimplemented!()
         }
     }

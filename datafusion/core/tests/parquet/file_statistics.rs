@@ -50,13 +50,19 @@ async fn check_stats_precision_with_filter_pushdown() {
     let (_, _, state) = get_cache_runtime_state();
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
-    assert_eq!(exec.statistics().unwrap().num_rows, Precision::Exact(8));
+    assert_eq!(
+        exec.partition_statistics(None).unwrap().num_rows,
+        Precision::Exact(8)
+    );
 
     // Scan with filter pushdown, stats are inexact
     let filter = Expr::gt(col("id"), lit(1));
 
     let exec = table.scan(&state, None, &[filter], None).await.unwrap();
-    assert_eq!(exec.statistics().unwrap().num_rows, Precision::Inexact(8));
+    assert_eq!(
+        exec.partition_statistics(None).unwrap().num_rows,
+        Precision::Inexact(8)
+    );
 }
 
 #[tokio::test]
@@ -79,10 +85,14 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(get_static_cache_size(&state1), 0);
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
 
-    assert_eq!(exec1.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
-        exec1.statistics().unwrap().total_byte_size,
-        Precision::Exact(671)
+        exec1.partition_statistics(None).unwrap().num_rows,
+        Precision::Exact(8)
+    );
+    assert_eq!(
+        exec1.partition_statistics(None).unwrap().total_byte_size,
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+        Precision::Exact(671),
     );
     assert_eq!(get_static_cache_size(&state1), 1);
 
@@ -90,10 +100,14 @@ async fn load_table_stats_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_static_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
-    assert_eq!(exec2.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
-        exec2.statistics().unwrap().total_byte_size,
-        Precision::Exact(671)
+        exec2.partition_statistics(None).unwrap().num_rows,
+        Precision::Exact(8)
+    );
+    assert_eq!(
+        exec2.partition_statistics(None).unwrap().total_byte_size,
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+        Precision::Exact(671),
     );
     assert_eq!(get_static_cache_size(&state2), 1);
 
@@ -101,10 +115,14 @@ async fn load_table_stats_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_static_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
-    assert_eq!(exec3.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
-        exec3.statistics().unwrap().total_byte_size,
-        Precision::Exact(671)
+        exec3.partition_statistics(None).unwrap().num_rows,
+        Precision::Exact(8)
+    );
+    assert_eq!(
+        exec3.partition_statistics(None).unwrap().total_byte_size,
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+        Precision::Exact(671),
     );
     // List same file no increase
     assert_eq!(get_static_cache_size(&state1), 1);
@@ -150,9 +168,12 @@ async fn list_files_with_session_level_cache() {
     //Session 1 first time list files
     assert_eq!(get_list_file_cache_size(&state1), 0);
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
-    let data_source = exec1.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let source = data_source.source();
-    let parquet1 = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+    let data_source_exec = exec1.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source = data_source_exec.data_source();
+    let parquet1 = data_source
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet1.file_groups;
@@ -163,9 +184,12 @@ async fn list_files_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
-    let data_source = exec2.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let source = data_source.source();
-    let parquet2 = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+    let data_source_exec = exec2.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source = data_source_exec.data_source();
+    let parquet2 = data_source
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap();
 
     assert_eq!(get_list_file_cache_size(&state2), 1);
     let fg2 = &parquet2.file_groups;
@@ -176,9 +200,12 @@ async fn list_files_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
-    let data_source = exec3.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let source = data_source.source();
-    let parquet3 = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+    let data_source_exec = exec3.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source = data_source_exec.data_source();
+    let parquet3 = data_source
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet3.file_groups;

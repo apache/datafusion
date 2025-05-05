@@ -27,7 +27,7 @@ use std::convert::Infallible;
 use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::iter::repeat;
+use std::iter::repeat_n;
 use std::mem::{size_of, size_of_val};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -38,6 +38,7 @@ use crate::cast::{
     as_fixed_size_binary_array, as_fixed_size_list_array,
 };
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
+use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
 use arrow::array::{
@@ -58,8 +59,6 @@ use arrow::datatypes::{
     UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
-
-use crate::format::DEFAULT_CAST_OPTIONS;
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
@@ -598,8 +597,12 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     let arr1 = first_array_for_list(arr1);
     let arr2 = first_array_for_list(arr2);
 
-    let lt_res = arrow::compute::kernels::cmp::lt(&arr1, &arr2).ok()?;
-    let eq_res = arrow::compute::kernels::cmp::eq(&arr1, &arr2).ok()?;
+    let min_length = arr1.len().min(arr2.len());
+    let arr1_trimmed = arr1.slice(0, min_length);
+    let arr2_trimmed = arr2.slice(0, min_length);
+
+    let lt_res = arrow::compute::kernels::cmp::lt(&arr1_trimmed, &arr2_trimmed).ok()?;
+    let eq_res = arrow::compute::kernels::cmp::eq(&arr1_trimmed, &arr2_trimmed).ok()?;
 
     for j in 0..lt_res.len() {
         if lt_res.is_valid(j) && lt_res.value(j) {
@@ -610,7 +613,7 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
         }
     }
 
-    Some(Ordering::Equal)
+    Some(arr1.len().cmp(&arr2.len()))
 }
 
 fn partial_cmp_struct(s1: &Arc<StructArray>, s2: &Arc<StructArray>) -> Option<Ordering> {
@@ -803,12 +806,14 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     let values_array = value.to_array_of_size(1)?;
 
     // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = repeat(if value.is_null() {
-        None
-    } else {
-        Some(K::default_value())
-    })
-    .take(size)
+    let key_array: PrimitiveArray<K> = repeat_n(
+        if value.is_null() {
+            None
+        } else {
+            Some(K::default_value())
+        },
+        size,
+    )
     .collect();
 
     // create a new DictionaryArray
@@ -2190,8 +2195,7 @@ impl ScalarValue {
         scale: i8,
         size: usize,
     ) -> Result<Decimal256Array> {
-        Ok(repeat(value)
-            .take(size)
+        Ok(repeat_n(value, size)
             .collect::<Decimal256Array>()
             .with_precision_and_scale(precision, scale)?)
     }
@@ -2417,53 +2421,47 @@ impl ScalarValue {
             }
             ScalarValue::Utf8(e) => match e {
                 Some(value) => {
-                    Arc::new(StringArray::from_iter_values(repeat(value).take(size)))
+                    Arc::new(StringArray::from_iter_values(repeat_n(value, size)))
                 }
                 None => new_null_array(&DataType::Utf8, size),
             },
             ScalarValue::Utf8View(e) => match e {
                 Some(value) => {
-                    Arc::new(StringViewArray::from_iter_values(repeat(value).take(size)))
+                    Arc::new(StringViewArray::from_iter_values(repeat_n(value, size)))
                 }
                 None => new_null_array(&DataType::Utf8View, size),
             },
             ScalarValue::LargeUtf8(e) => match e {
                 Some(value) => {
-                    Arc::new(LargeStringArray::from_iter_values(repeat(value).take(size)))
+                    Arc::new(LargeStringArray::from_iter_values(repeat_n(value, size)))
                 }
                 None => new_null_array(&DataType::LargeUtf8, size),
             },
             ScalarValue::Binary(e) => match e {
                 Some(value) => Arc::new(
-                    repeat(Some(value.as_slice()))
-                        .take(size)
-                        .collect::<BinaryArray>(),
+                    repeat_n(Some(value.as_slice()), size).collect::<BinaryArray>(),
                 ),
-                None => {
-                    Arc::new(repeat(None::<&str>).take(size).collect::<BinaryArray>())
-                }
+                None => Arc::new(repeat_n(None::<&str>, size).collect::<BinaryArray>()),
             },
             ScalarValue::BinaryView(e) => match e {
                 Some(value) => Arc::new(
-                    repeat(Some(value.as_slice()))
-                        .take(size)
-                        .collect::<BinaryViewArray>(),
+                    repeat_n(Some(value.as_slice()), size).collect::<BinaryViewArray>(),
                 ),
                 None => {
-                    Arc::new(repeat(None::<&str>).take(size).collect::<BinaryViewArray>())
+                    Arc::new(repeat_n(None::<&str>, size).collect::<BinaryViewArray>())
                 }
             },
             ScalarValue::FixedSizeBinary(s, e) => match e {
                 Some(value) => Arc::new(
                     FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                        repeat(Some(value.as_slice())).take(size),
+                        repeat_n(Some(value.as_slice()), size),
                         *s,
                     )
                     .unwrap(),
                 ),
                 None => Arc::new(
                     FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                        repeat(None::<&[u8]>).take(size),
+                        repeat_n(None::<&[u8]>, size),
                         *s,
                     )
                     .unwrap(),
@@ -2471,15 +2469,11 @@ impl ScalarValue {
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => Arc::new(
-                    repeat(Some(value.as_slice()))
-                        .take(size)
-                        .collect::<LargeBinaryArray>(),
+                    repeat_n(Some(value.as_slice()), size).collect::<LargeBinaryArray>(),
                 ),
-                None => Arc::new(
-                    repeat(None::<&str>)
-                        .take(size)
-                        .collect::<LargeBinaryArray>(),
-                ),
+                None => {
+                    Arc::new(repeat_n(None::<&str>, size).collect::<LargeBinaryArray>())
+                }
             },
             ScalarValue::List(arr) => {
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
@@ -2607,7 +2601,7 @@ impl ScalarValue {
                         child_arrays.push(ar);
                         new_fields.push(field.clone());
                     }
-                    let type_ids = repeat(*v_id).take(size);
+                    let type_ids = repeat_n(*v_id, size);
                     let type_ids = ScalarBuffer::<i8>::from_iter(type_ids);
                     let value_offsets = match mode {
                         UnionMode::Sparse => None,
@@ -2675,7 +2669,7 @@ impl ScalarValue {
     }
 
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
-        let arrays = repeat(arr).take(size).collect::<Vec<_>>();
+        let arrays = repeat_n(arr, size).collect::<Vec<_>>();
         let ret = match !arrays.is_empty() {
             true => arrow::compute::concat(arrays.as_slice())?,
             false => arr.slice(0, 0),
@@ -2764,8 +2758,10 @@ impl ScalarValue {
         Ok(scalars)
     }
 
-    // TODO: Support more types after other ScalarValue is wrapped with ArrayRef
-    /// Get raw data (inner array) inside ScalarValue
+    #[deprecated(
+        since = "46.0.0",
+        note = "This function is obsolete. Use `to_array` instead"
+    )]
     pub fn raw_data(&self) -> Result<ArrayRef> {
         match self {
             ScalarValue::List(arr) => Ok(arr.to_owned()),
@@ -3035,6 +3031,34 @@ impl ScalarValue {
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ) => ScalarValue::Int64(Some((float_ts * 1_000_000_000_f64).trunc() as i64))
                 .to_array()?,
+            (
+                ScalarValue::Decimal128(Some(decimal_value), _, scale),
+                DataType::Timestamp(time_unit, None),
+            ) => {
+                let scale_factor = 10_i128.pow(*scale as u32);
+                let seconds = decimal_value / scale_factor;
+                let fraction = decimal_value % scale_factor;
+
+                let timestamp_value = match time_unit {
+                    TimeUnit::Second => ScalarValue::Int64(Some(seconds as i64)),
+                    TimeUnit::Millisecond => {
+                        let millis = seconds * 1_000 + (fraction * 1_000) / scale_factor;
+                        ScalarValue::Int64(Some(millis as i64))
+                    }
+                    TimeUnit::Microsecond => {
+                        let micros =
+                            seconds * 1_000_000 + (fraction * 1_000_000) / scale_factor;
+                        ScalarValue::Int64(Some(micros as i64))
+                    }
+                    TimeUnit::Nanosecond => {
+                        let nanos = seconds * 1_000_000_000
+                            + (fraction * 1_000_000_000) / scale_factor;
+                        ScalarValue::Int64(Some(nanos as i64))
+                    }
+                };
+
+                timestamp_value.to_array()?
+            }
             _ => self.to_array()?,
         };
 
@@ -3974,7 +3998,7 @@ mod tests {
         as_map_array, as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
     };
 
-    use crate::assert_batches_eq;
+    use crate::test_util::batches_to_string;
     use arrow::array::{types::Float64Type, NullBufferBuilder};
     use arrow::buffer::{Buffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
@@ -3982,6 +4006,7 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use chrono::NaiveDate;
+    use insta::assert_snapshot;
     use rand::Rng;
 
     #[test]
@@ -4731,6 +4756,57 @@ mod tests {
                 ])]),
             ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(2),
+                    Some(3),
+                    Some(4),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
     }
 
     #[test]
@@ -6908,14 +6984,13 @@ mod tests {
 
         //verify compared to arrow display
         let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
-        let expected = [
-            "+-------------+",
-            "| s           |",
-            "+-------------+",
-            "| {a: 1, b: } |",
-            "+-------------+",
-        ];
-        assert_batches_eq!(&expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +-------------+
+        | s           |
+        +-------------+
+        | {a: 1, b: } |
+        +-------------+
+        ");
     }
 
     #[test]
@@ -6944,14 +7019,13 @@ mod tests {
 
         //verify compared to arrow display
         let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
-        let expected = [
-            "+--------------+",
-            "| s            |",
-            "+--------------+",
-            "| {a: 1, b: 2} |",
-            "+--------------+",
-        ];
-        assert_batches_eq!(&expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +--------------+
+        | s            |
+        +--------------+
+        | {a: 1, b: 2} |
+        +--------------+
+        ");
     }
 
     #[test]
@@ -6967,15 +7041,13 @@ mod tests {
         //verify compared to arrow display
         let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
 
-        #[rustfmt::skip]
-            let expected = [
-            "+---+",
-            "| s |",
-            "+---+",
-            "|   |",
-            "+---+",
-        ];
-        assert_batches_eq!(&expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +---+
+        | s |
+        +---+
+        |   |
+        +---+
+        ");
     }
 
     #[test]
@@ -7009,17 +7081,16 @@ mod tests {
 
         //verify compared to arrow display
         let batch = RecordBatch::try_from_iter(vec![("m", arr as _)]).unwrap();
-        let expected = [
-            "+--------------------+",
-            "| m                  |",
-            "+--------------------+",
-            "| {joe: 1}           |",
-            "| {blogs: 2, foo: 4} |",
-            "| {}                 |",
-            "|                    |",
-            "+--------------------+",
-        ];
-        assert_batches_eq!(&expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +--------------------+
+        | m                  |
+        +--------------------+
+        | {joe: 1}           |
+        | {blogs: 2, foo: 4} |
+        | {}                 |
+        |                    |
+        +--------------------+
+        ");
     }
 
     #[test]

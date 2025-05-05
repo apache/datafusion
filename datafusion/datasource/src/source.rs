@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`DataSource`] and [`DataSourceExec`]
+
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -27,34 +29,61 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
+use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Constraints, Statistics};
+use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::filter_pushdown::{
+    ChildPushdownResult, FilterPushdownPropagation,
+};
 
-/// Common behaviors in Data Sources for both from Files and Memory.
-/// See `DataSourceExec` for physical plan implementation
-pub trait DataSource: Send + Sync {
+/// A source of data, typically a list of files or memory
+///
+/// This trait provides common behaviors for abstract sources of data. It has
+/// two common implementations:
+///
+/// 1. [`FileScanConfig`]: lists of files
+/// 2. [`MemorySourceConfig`]: in memory list of `RecordBatch`
+///
+/// File format specific behaviors are defined by [`FileSource`]
+///
+/// # See Also
+/// * [`FileSource`] for file format specific implementations (Parquet, Json, etc)
+/// * [`DataSourceExec`]: The [`ExecutionPlan`] that reads from a `DataSource`
+///
+/// # Notes
+///
+/// Requires `Debug` to assist debugging
+///
+/// [`FileScanConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html
+/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest//datafusion/datasource/memory/struct.MemorySourceConfig.html
+/// [`FileSource`]: crate::file::FileSource
+pub trait DataSource: Send + Sync + Debug {
     fn open(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
-    ) -> datafusion_common::Result<SendableRecordBatchStream>;
+    ) -> Result<SendableRecordBatchStream>;
     fn as_any(&self) -> &dyn Any;
+    /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
+
+    /// Return a copy of this DataSource with a new partitioning scheme
     fn repartitioned(
         &self,
         _target_partitions: usize,
         _repartition_file_min_size: usize,
         _output_ordering: Option<LexOrdering>,
-    ) -> datafusion_common::Result<Option<Arc<dyn DataSource>>> {
+    ) -> Result<Option<Arc<dyn DataSource>>> {
         Ok(None)
     }
 
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
-    fn statistics(&self) -> datafusion_common::Result<Statistics>;
+    fn statistics(&self) -> Result<Statistics>;
+    /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
     fn metrics(&self) -> ExecutionPlanMetricsSet {
@@ -63,26 +92,49 @@ pub trait DataSource: Send + Sync {
     fn try_swapping_with_projection(
         &self,
         _projection: &ProjectionExec,
-    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>>;
-}
-
-impl Debug for dyn DataSource {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "DataSource: ")
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
+    /// Try to push down filters into this DataSource.
+    /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
+    ///
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
+    fn try_pushdown_filters(
+        &self,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        Ok(FilterPushdownPropagation::unsupported(filters))
     }
 }
 
-/// Unified data source for file formats like JSON, CSV, AVRO, ARROW, PARQUET
+/// [`ExecutionPlan`] that reads one or more files
+///
+/// `DataSourceExec` implements common functionality such as applying
+/// projections, and caching plan properties.
+///
+/// The [`DataSource`] describes where to find the data for this data source
+/// (for example in files or what in memory partitions).
+///
+/// For file based [`DataSource`]s, format specific behavior is implemented in
+/// the [`FileSource`] trait.
+///
+/// [`FileSource`]: crate::file::FileSource
 #[derive(Clone, Debug)]
 pub struct DataSourceExec {
-    source: Arc<dyn DataSource>,
+    /// The source of the data -- for example, `FileScanConfig` or `MemorySourceConfig`
+    data_source: Arc<dyn DataSource>,
+    /// Cached plan properties such as sort order
     cache: PlanProperties,
 }
 
 impl DisplayAs for DataSourceExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-        write!(f, "DataSourceExec: ")?;
-        self.source.fmt_as(t, f)
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "DataSourceExec: ")?;
+            }
+            DisplayFormatType::TreeRender => {}
+        }
+        self.data_source.fmt_as(t, f)
     }
 }
 
@@ -106,7 +158,7 @@ impl ExecutionPlan for DataSourceExec {
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
 
@@ -114,18 +166,18 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         target_partitions: usize,
         config: &ConfigOptions,
-    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        let source = self.source.repartitioned(
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let data_source = self.data_source.repartitioned(
             target_partitions,
             config.optimizer.repartition_file_min_size,
             self.properties().eq_properties.output_ordering(),
         )?;
 
-        if let Some(source) = source {
+        if let Some(source) = data_source {
             let output_partitioning = source.output_partitioning();
             let plan = self
                 .clone()
-                .with_source(source)
+                .with_data_source(source)
                 // Changing source partitioning may invalidate output partitioning. Update it also
                 .with_partitioning(output_partitioning);
             Ok(Some(Arc::new(plan)))
@@ -138,52 +190,101 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
-    ) -> datafusion_common::Result<SendableRecordBatchStream> {
-        self.source.open(partition, context)
+    ) -> Result<SendableRecordBatchStream> {
+        self.data_source.open(partition, context)
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.source.metrics().clone_inner())
+        Some(self.data_source.metrics().clone_inner())
     }
 
-    fn statistics(&self) -> datafusion_common::Result<Statistics> {
-        self.source.statistics()
+    fn statistics(&self) -> Result<Statistics> {
+        self.data_source.statistics()
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition) = partition {
+            let mut statistics = Statistics::new_unknown(&self.schema());
+            if let Some(file_config) =
+                self.data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
+                if let Some(file_group) = file_config.file_groups.get(partition) {
+                    if let Some(stat) = file_group.file_statistics(None) {
+                        statistics = stat.clone();
+                    }
+                }
+            }
+            Ok(statistics)
+        } else {
+            Ok(self.data_source.statistics()?)
+        }
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let mut source = Arc::clone(&self.source);
-        source = source.with_fetch(limit)?;
+        let data_source = self.data_source.with_fetch(limit)?;
         let cache = self.cache.clone();
 
-        Some(Arc::new(Self { source, cache }))
+        Some(Arc::new(Self { data_source, cache }))
     }
 
     fn fetch(&self) -> Option<usize> {
-        self.source.fetch()
+        self.data_source.fetch()
     }
 
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,
-    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.source.try_swapping_with_projection(projection)
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        self.data_source.try_swapping_with_projection(projection)
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Push any remaining filters into our data source
+        let res = self.data_source.try_pushdown_filters(
+            child_pushdown_result.parent_filters.collect_all(),
+            config,
+        )?;
+        match res.updated_node {
+            Some(data_source) => {
+                let mut new_node = self.clone();
+                new_node.data_source = data_source;
+                new_node.cache =
+                    Self::compute_properties(Arc::clone(&new_node.data_source));
+                Ok(FilterPushdownPropagation {
+                    filters: res.filters,
+                    updated_node: Some(Arc::new(new_node)),
+                })
+            }
+            None => Ok(FilterPushdownPropagation {
+                filters: res.filters,
+                updated_node: None,
+            }),
+        }
     }
 }
 
 impl DataSourceExec {
-    pub fn new(source: Arc<dyn DataSource>) -> Self {
-        let cache = Self::compute_properties(Arc::clone(&source));
-        Self { source, cache }
+    pub fn from_data_source(data_source: impl DataSource + 'static) -> Arc<Self> {
+        Arc::new(Self::new(Arc::new(data_source)))
+    }
+
+    pub fn new(data_source: Arc<dyn DataSource>) -> Self {
+        let cache = Self::compute_properties(Arc::clone(&data_source));
+        Self { data_source, cache }
     }
 
     /// Return the source object
-    pub fn source(&self) -> &Arc<dyn DataSource> {
-        &self.source
+    pub fn data_source(&self) -> &Arc<dyn DataSource> {
+        &self.data_source
     }
 
-    pub fn with_source(mut self, source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(Arc::clone(&source));
-        self.source = source;
+    pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
+        self.cache = Self::compute_properties(Arc::clone(&data_source));
+        self.data_source = data_source;
         self
     }
 
@@ -199,12 +300,40 @@ impl DataSourceExec {
         self
     }
 
-    fn compute_properties(source: Arc<dyn DataSource>) -> PlanProperties {
+    fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {
         PlanProperties::new(
-            source.eq_properties(),
-            source.output_partitioning(),
+            data_source.eq_properties(),
+            data_source.output_partitioning(),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+    }
+
+    /// Downcast the `DataSourceExec`'s `data_source` to a specific file source
+    ///
+    /// Returns `None` if
+    /// 1. the datasource is not scanning files (`FileScanConfig`)
+    /// 2. The [`FileScanConfig::file_source`] is not of type `T`
+    pub fn downcast_to_file_source<T: 'static>(&self) -> Option<(&FileScanConfig, &T)> {
+        self.data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .and_then(|file_scan_conf| {
+                file_scan_conf
+                    .file_source()
+                    .as_any()
+                    .downcast_ref::<T>()
+                    .map(|source| (file_scan_conf, source))
+            })
+    }
+}
+
+/// Create a new `DataSourceExec` from a `DataSource`
+impl<S> From<S> for DataSourceExec
+where
+    S: DataSource + 'static,
+{
+    fn from(source: S) -> Self {
+        Self::new(Arc::new(source))
     }
 }

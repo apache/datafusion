@@ -162,6 +162,10 @@ impl DisplayAs for ValuesExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ValuesExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -304,8 +308,10 @@ mod tests {
             data,
         )?;
 
+        #[allow(deprecated)]
+        let stats = values.statistics()?;
         assert_eq!(
-            values.statistics()?,
+            stats,
             Statistics {
                 num_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important

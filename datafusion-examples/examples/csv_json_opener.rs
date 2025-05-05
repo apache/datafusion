@@ -18,21 +18,20 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::datasource::physical_plan::JsonSource;
 use datafusion::{
     assert_batches_eq,
     datasource::{
-        data_source::FileSource,
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
-        physical_plan::{CsvSource, FileScanConfig, FileStream, JsonOpener},
+        physical_plan::{CsvSource, FileSource, FileStream, JsonOpener, JsonSource},
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
     test_util::aggr_test_schema,
 };
 
+use datafusion::datasource::physical_plan::FileScanConfigBuilder;
 use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
@@ -56,14 +55,15 @@ async fn csv_opener() -> Result<()> {
 
     let path = std::path::Path::new(&path).canonicalize()?;
 
-    let scan_config = FileScanConfig::new(
+    let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         Arc::clone(&schema),
         Arc::new(CsvSource::default()),
     )
     .with_projection(Some(vec![12, 0]))
     .with_limit(Some(5))
-    .with_file(PartitionedFile::new(path.display().to_string(), 10));
+    .with_file(PartitionedFile::new(path.display().to_string(), 10))
+    .build();
 
     let config = CsvSource::new(true, b',', b'"')
         .with_comment(Some(b'#'))
@@ -71,7 +71,7 @@ async fn csv_opener() -> Result<()> {
         .with_batch_size(8192)
         .with_projection(&scan_config);
 
-    let opener = config.create_file_opener(Ok(object_store), &scan_config, 0)?;
+    let opener = config.create_file_opener(object_store, &scan_config, 0);
 
     let mut result = vec![];
     let mut stream =
@@ -121,14 +121,15 @@ async fn json_opener() -> Result<()> {
         Arc::new(object_store),
     );
 
-    let scan_config = FileScanConfig::new(
+    let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         schema,
         Arc::new(JsonSource::default()),
     )
     .with_projection(Some(vec![1, 0]))
     .with_limit(Some(5))
-    .with_file(PartitionedFile::new(path.to_string(), 10));
+    .with_file(PartitionedFile::new(path.to_string(), 10))
+    .build();
 
     let mut stream = FileStream::new(
         &scan_config,

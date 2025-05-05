@@ -94,6 +94,10 @@ impl DisplayAs for EmptyExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "EmptyExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -146,6 +150,13 @@ impl ExecutionPlan for EmptyExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         let batch = self
             .data()
             .expect("Create empty RecordBatch should not fail");

@@ -17,7 +17,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
+use super::{
+    utils::character_length_to_sql, utils::date_part_to_sql,
+    utils::sqlite_date_trunc_to_sql, utils::sqlite_from_unixtime_to_sql, Unparser,
+};
 use arrow::datatypes::TimeUnit;
 use datafusion_common::Result;
 use datafusion_expr::Expr;
@@ -313,7 +316,7 @@ impl PostgreSqlDialect {
         }
 
         Ok(ast::Expr::Function(Function {
-            name: ObjectName(vec![Ident {
+            name: ObjectName::from(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
                 span: Span::empty(),
@@ -421,11 +424,11 @@ impl Dialect for MySqlDialect {
     }
 
     fn int64_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName(vec![Ident::new("SIGNED")]), vec![])
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
     }
 
     fn int32_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName(vec![Ident::new("SIGNED")]), vec![])
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
     }
 
     fn timestamp_cast_dtype(
@@ -490,6 +493,8 @@ impl Dialect for SqliteDialect {
             "character_length" => {
                 character_length_to_sql(unparser, self.character_length_style(), args)
             }
+            "from_unixtime" => sqlite_from_unixtime_to_sql(unparser, args),
+            "date_trunc" => sqlite_date_trunc_to_sql(unparser, args),
             _ => Ok(None),
         }
     }
@@ -898,8 +903,8 @@ impl CustomDialectBuilder {
         self
     }
 
-    pub fn with_unnest_as_table_factor(mut self, _unnest_as_table_factor: bool) -> Self {
-        self.unnest_as_table_factor = _unnest_as_table_factor;
+    pub fn with_unnest_as_table_factor(mut self, unnest_as_table_factor: bool) -> Self {
+        self.unnest_as_table_factor = unnest_as_table_factor;
         self
     }
 }
