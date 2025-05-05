@@ -2313,7 +2313,7 @@ fn fetch_right_columns_from_batch_by_idxs(
                 Vec::with_capacity(buffered_indices.len());
 
             let file = BufReader::new(File::open(spill_file.path())?);
-            let reader = StreamReader::try_new(file, None)?;
+            let reader = unsafe {StreamReader::try_new(file, None)?.with_skip_validation(true)};
 
             for batch in reader {
                 batch?.columns().iter().for_each(|column| {
