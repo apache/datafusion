@@ -299,6 +299,7 @@ struct PushdownChecker<'schema> {
     non_primitive_columns: bool,
     /// Does the expression reference any columns that are in the table
     /// schema but not in the file schema?
+    /// This includes partition columns and projected columns.
     projected_columns: bool,
     // Indices into the table schema of the columns required to evaluate the expression
     required_columns: BTreeSet<usize>,
@@ -387,13 +388,12 @@ fn would_column_prevent_pushdown(column_name: &str, table_schema: &Schema) -> bo
 /// Otherwise, true.
 pub fn can_expr_be_pushed_down_with_schemas(
     expr: &datafusion_expr::Expr,
-    _file_schema: &Schema,
-    table_schema: &Schema,
+    file_schema: &Schema,
 ) -> bool {
     let mut can_be_pushed = true;
     expr.apply(|expr| match expr {
         datafusion_expr::Expr::Column(column) => {
-            can_be_pushed &= !would_column_prevent_pushdown(column.name(), table_schema);
+            can_be_pushed &= !would_column_prevent_pushdown(column.name(), file_schema);
             Ok(if can_be_pushed {
                 TreeNodeRecursion::Jump
             } else {
@@ -649,8 +649,6 @@ mod test {
 
     #[test]
     fn nested_data_structures_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
-
         let file_schema = Schema::new(vec![Field::new(
             "list_col",
             DataType::Struct(Fields::empty()),
@@ -659,49 +657,31 @@ mod test {
 
         let expr = col("list_col").is_not_null();
 
-        assert!(!can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-            &table_schema
-        ));
+        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &file_schema,));
     }
 
     #[test]
-    fn projected_columns_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
-
+    fn projected_or_partition_columns_prevent_pushdown() {
         let file_schema =
             Schema::new(vec![Field::new("existing_col", DataType::Int64, true)]);
 
         let expr = col("nonexistent_column").is_null();
 
-        assert!(!can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-            &table_schema
-        ));
+        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &file_schema,));
     }
 
     #[test]
     fn basic_expr_doesnt_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
-
         let file_schema =
             Schema::new(vec![Field::new("string_col", DataType::Utf8, true)]);
 
         let expr = col("string_col").is_null();
 
-        assert!(can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-            &table_schema
-        ));
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &file_schema,));
     }
 
     #[test]
     fn complex_expr_doesnt_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
-
         let file_schema = Schema::new(vec![
             Field::new("string_col", DataType::Utf8, true),
             Field::new("bigint_col", DataType::Int64, true),
@@ -711,23 +691,6 @@ mod test {
             .is_not_null()
             .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)))));
 
-        assert!(can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-            &table_schema
-        ));
-    }
-
-    fn get_basic_table_schema() -> Schema {
-        let testdata = datafusion_common::test_util::parquet_test_data();
-        let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
-            .expect("opening file");
-
-        let reader = SerializedFileReader::new(file).expect("creating reader");
-
-        let metadata = reader.metadata();
-
-        parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
-            .expect("parsing schema")
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &file_schema,));
     }
 }
