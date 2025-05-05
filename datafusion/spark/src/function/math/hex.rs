@@ -93,7 +93,7 @@ impl ScalarUDFImpl for SparkHex {
         arg_types: &[DataType],
     ) -> datafusion_common::Result<Vec<DataType>> {
         if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("expm1", (1, 1), arg_types.len()));
+            return Err(invalid_arg_count_exec_err("hex", (1, 1), arg_types.len()));
         }
         match &arg_types[0] {
             DataType::Int64
