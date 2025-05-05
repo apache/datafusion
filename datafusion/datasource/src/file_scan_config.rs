@@ -48,14 +48,12 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{
     expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
     PhysicalSortExpr,
 };
-use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
-};
+use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
@@ -596,40 +594,29 @@ impl DataSource for FileScanConfig {
 
     fn try_pushdown_filters(
         &self,
-        fd: FilterDescription,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
-        let FilterPushdownResult {
-            support,
-            remaining_description,
-        } = self.file_source.try_pushdown_filters(fd, config)?;
-
-        match support {
-            FilterPushdownSupport::Supported {
-                child_descriptions,
-                op,
-                revisit,
-            } => {
-                let new_data_source = Arc::new(
-                    FileScanConfigBuilder::from(self.clone())
-                        .with_source(op)
-                        .build(),
-                );
-
-                debug_assert!(child_descriptions.is_empty());
-                debug_assert!(!revisit);
-
-                Ok(FilterPushdownResult {
-                    support: FilterPushdownSupport::Supported {
-                        child_descriptions,
-                        op: new_data_source,
-                        revisit,
-                    },
-                    remaining_description,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        let result = self.file_source.try_pushdown_filters(filters, config)?;
+        match result.updated_node {
+            Some(new_file_source) => {
+                let file_scan_config = FileScanConfigBuilder::new(
+                    self.object_store_url.clone(),
+                    Arc::clone(&self.file_schema),
+                    new_file_source,
+                )
+                .build();
+                Ok(FilterPushdownPropagation {
+                    filters: result.filters,
+                    updated_node: Some(Arc::new(file_scan_config) as _),
                 })
             }
-            FilterPushdownSupport::NotSupported => {
-                Ok(filter_pushdown_not_supported(remaining_description))
+            None => {
+                // If the file source does not support filter pushdown, return the original config
+                Ok(FilterPushdownPropagation {
+                    filters: result.filters,
+                    updated_node: None,
+                })
             }
         }
     }
