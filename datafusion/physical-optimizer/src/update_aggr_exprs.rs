@@ -160,10 +160,9 @@ fn try_convert_aggregate_if_better(
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {
-            let aggr_sort_exprs = &aggr_expr
+            let aggr_sort_exprs = aggr_expr
                 .order_bys()
-                .cloned()
-                .unwrap_or_else(|| LexOrdering::empty().clone());
+                .unwrap_or_else(|| LexOrdering::empty());
             let reverse_aggr_sort_exprs = reverse_order_bys(aggr_sort_exprs);
             let aggr_sort_reqs = LexRequirement::from(aggr_sort_exprs.clone());
             let reverse_aggr_req = LexRequirement::from(reverse_aggr_sort_exprs);
