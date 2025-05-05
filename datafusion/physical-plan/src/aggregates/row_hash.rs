@@ -369,10 +369,9 @@ impl SkipAggregationProbe {
 /// The conditions that trigger the blocked groups optimization can be found in
 /// [`maybe_enable_blocked_groups`].
 ///  
-/// [`GroupAccumulator`]
 /// [`group_values`]: Self::group_values
 /// [`accumulators`]: Self::accumulators
-/// [#7065]: https://github.com/apache/datafusion/issues/7065
+/// [#7065]: <https://github.com/apache/datafusion/issues/7065>
 ///
 pub(crate) struct GroupedHashAggregateStream {
     // ========================================================================

@@ -129,7 +129,7 @@ pub(crate) trait GroupValues: Send {
     ///     to locate data in the single `Block`.
     ///
     /// More details can see:
-    /// https://github.com/apache/datafusion/issues/7065
+    /// <https://github.com/apache/datafusion/issues/7065>
     ///
     fn supports_blocked_groups(&self) -> bool {
         false
