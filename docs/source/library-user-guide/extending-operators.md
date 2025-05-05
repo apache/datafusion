@@ -62,6 +62,38 @@ The below example illustrates the example of topK node :
   code:
 
 ```rust
+# use datafusion::common::{
+#     cast::{as_int64_array, as_string_array},
+#     tree_node::Transformed,
+#     types::TypeSignature::Extension,
+#     DataFusionError,
+# };
+# use datafusion::execution::{SessionState, TaskContext};
+# use datafusion::logical_expr::{
+#     FetchType, LogicalPlan, LogicalPlan::Sort, UserDefinedLogicalNode,
+# };
+# use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
+# use datafusion::physical_expr::EquivalenceProperties;
+# use datafusion::physical_plan::{
+#     execution_plan::{Boundedness, EmissionType},
+#     internal_err, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+#     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+# };
+# use datafusion::physical_planner::{
+#     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
+# };
+# use arrow::array::{Int64Array, StringArray};
+# use arrow::datatypes::SchemaRef;
+# use arrow::record_batch::RecordBatch;
+# use async_trait::async_trait;
+# use futures::Stream;
+# use std::{
+#     any::Any,
+#     collections::BTreeMap,
+#     fmt::{self, Debug},
+#     sync::Arc,
+#     task::{Context, Poll},
+# };
 #[derive(Debug)]
 struct TopKQueryPlanner {}
 
