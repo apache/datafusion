@@ -32,11 +32,12 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
 };
 use datafusion_common::config::ConfigOptions;
 use futures::ready;
@@ -226,14 +227,22 @@ impl ExecutionPlan for CoalesceBatchesExec {
         CardinalityEffect::Equal
     }
 
-    fn try_pushdown_filters(
+    fn gather_filters_for_pushdown(
         &self,
-        fd: FilterDescription,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        Ok(filter_pushdown_transparent::<Arc<dyn ExecutionPlan>>(
-            Arc::new(self.clone()),
-            fd,
+    ) -> Result<FilterDescription> {
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::transparent(
+            child_pushdown_result,
         ))
     }
 }
