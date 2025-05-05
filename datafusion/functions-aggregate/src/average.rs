@@ -601,8 +601,8 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed_rows(&mut self.counts);
-        let sums = emit_to.take_needed_rows(&mut self.sums);
+        let counts = emit_to.take_needed(&mut self.counts);
+        let sums = emit_to.take_needed(&mut self.sums);
         let nulls = self.null_state.build(emit_to);
 
         assert_eq!(nulls.len(), sums.len());
@@ -641,10 +641,10 @@ where
         let nulls = self.null_state.build(emit_to);
         let nulls = Some(nulls);
 
-        let counts = emit_to.take_needed_rows(&mut self.counts);
+        let counts = emit_to.take_needed(&mut self.counts);
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
 
-        let sums = emit_to.take_needed_rows(&mut self.sums);
+        let sums = emit_to.take_needed(&mut self.sums);
         let sums = PrimitiveArray::<T>::new(sums.into(), nulls) // zero copy
             .with_data_type(self.sum_data_type.clone());
 

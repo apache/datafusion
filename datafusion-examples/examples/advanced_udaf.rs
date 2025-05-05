@@ -314,8 +314,8 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
 
     /// Generate output, as specified by `emit_to` and update the intermediate state
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed_rows(&mut self.counts);
-        let prods = emit_to.take_needed_rows(&mut self.prods);
+        let counts = emit_to.take_needed(&mut self.counts);
+        let prods = emit_to.take_needed(&mut self.prods);
         let nulls = self.null_state.build(emit_to);
 
         assert_eq!(nulls.len(), prods.len());
@@ -353,10 +353,10 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         let nulls = self.null_state.build(emit_to);
         let nulls = Some(nulls);
 
-        let counts = emit_to.take_needed_rows(&mut self.counts);
+        let counts = emit_to.take_needed(&mut self.counts);
         let counts = UInt32Array::new(counts.into(), nulls.clone()); // zero copy
 
-        let prods = emit_to.take_needed_rows(&mut self.prods);
+        let prods = emit_to.take_needed(&mut self.prods);
         let prods = PrimitiveArray::<Float64Type>::new(prods.into(), nulls) // zero copy
             .with_data_type(self.prod_data_type.clone());
 

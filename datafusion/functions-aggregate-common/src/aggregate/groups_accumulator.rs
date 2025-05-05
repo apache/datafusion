@@ -323,7 +323,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let vec_size_pre = self.states.allocated_size();
 
-        let states = emit_to.take_needed_rows(&mut self.states);
+        let states = emit_to.take_needed(&mut self.states);
 
         let results: Vec<ScalarValue> = states
             .into_iter()
@@ -343,7 +343,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     // filtered_null_mask(opt_filter, &values);
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let vec_size_pre = self.states.allocated_size();
-        let states = emit_to.take_needed_rows(&mut self.states);
+        let states = emit_to.take_needed(&mut self.states);
 
         // each accumulator produces a potential vector of values
         // which we need to form into columns

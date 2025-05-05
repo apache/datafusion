@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::iter;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, BooleanArray, PrimitiveArray};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
@@ -28,7 +27,7 @@ use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::NullStateAdapter;
-use crate::aggregate::groups_accumulator::blocks::{Block, Blocks};
+use crate::aggregate::groups_accumulator::blocks::{Blocks, GeneralBlocks};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -46,7 +45,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
     /// Values per group, stored as the native type
-    values: Blocks<Vec<T::Native>>,
+    values: GeneralBlocks<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -59,16 +58,6 @@ where
 
     /// Function that computes the primitive result
     prim_fn: F,
-
-    /// Block size of current `GroupAccumulator` if exist:
-    ///   - If `None`, it means block optimization is disabled,
-    ///     all `group values`` will be stored in a single `Vec`
-    ///
-    ///   - If `Some(blk_size)`, it means block optimization is enabled,
-    ///     `group values` will be stored in multiple `Vec`s, and each
-    ///     `Vec` if of `blk_size` len, and we call it a `block`
-    ///
-    block_size: Option<usize>,
 }
 
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
@@ -83,7 +72,6 @@ where
             null_state: NullStateAdapter::new(None),
             starting_value: T::default_value(),
             prim_fn,
-            block_size: None,
         }
     }
 
@@ -135,16 +123,7 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = match emit_to {
-            EmitTo::All | EmitTo::First(_) => {
-                emit_to.take_needed_rows(&mut self.values[0])
-            }
-            EmitTo::NextBlock => self
-                .values
-                .pop_block()
-                .expect("should not call emit for empty blocks"),
-        };
-
+        let values = self.values.emit(emit_to);
         let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
@@ -225,7 +204,9 @@ where
     }
 
     fn size(&self) -> usize {
-        self.values.size() + self.null_state.size()
+        let values_cap = self.values.iter().map(|b| b.capacity()).sum::<usize>();
+        let values_size = values_cap * size_of::<T::Native>();
+        values_size + self.null_state.size()
     }
 
     fn supports_blocked_groups(&self) -> bool {
@@ -236,24 +217,7 @@ where
         self.values.clear();
         self.values = Blocks::new(block_size);
         self.null_state = NullStateAdapter::new(block_size);
-        self.block_size = block_size;
 
         Ok(())
-    }
-}
-
-impl<N: ArrowNativeTypeOp> Block for Vec<N> {
-    type T = N;
-
-    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
-        self.extend(iter::repeat_n(default_value, fill_len));
-    }
-
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    fn size(&self) -> usize {
-        self.capacity() * size_of::<N>()
     }
 }

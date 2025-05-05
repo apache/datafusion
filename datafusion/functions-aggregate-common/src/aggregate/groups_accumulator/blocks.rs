@@ -19,9 +19,12 @@
 
 use std::{
     collections::VecDeque,
-    fmt,
+    fmt::Debug,
+    iter,
     ops::{Index, IndexMut},
 };
+
+use datafusion_expr_common::groups_accumulator::EmitTo;
 
 /// Structure used to store aggregation intermediate results in `blocked approach`
 ///
@@ -128,8 +131,8 @@ impl<B: Block> Blocks<B> {
         self.inner.is_empty()
     }
 
-    pub fn size(&self) -> usize {
-        self.inner.iter().map(|b| b.size()).sum::<usize>()
+    pub fn iter(&self) -> impl Iterator<Item = &B> {
+        self.inner.iter()
     }
 
     pub fn clear(&mut self) {
@@ -157,7 +160,7 @@ impl<B: Block> IndexMut<usize> for Blocks<B> {
 /// Many types of aggregation intermediate result exist, and we define an interface
 /// to abstract the necessary behaviors of various intermediate result types.
 ///
-pub trait Block: fmt::Debug {
+pub trait Block: Debug {
     type T: Clone;
 
     fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T);
@@ -167,8 +170,47 @@ pub trait Block: fmt::Debug {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
 
-    fn size(&self) -> usize;
+/// Usually we use `Vec` to represent `Block`, so we define `Blocks<Vec<T>>`
+/// as the `GeneralBlocks<T>`
+pub type GeneralBlocks<T> = Blocks<Vec<T>>;
+
+/// As mentioned in [`GeneralBlocks`], we usually use `Vec` to represent `Block`,
+/// so we implement `Block` trait for `Vec`
+impl<Ty: Clone + Debug> Block for Vec<Ty> {
+    type T = Ty;
+
+    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
+        self.extend(iter::repeat_n(default_value, fill_len));
+    }
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<T: Clone + Debug> GeneralBlocks<T> {
+    pub fn emit(&mut self, emit_to: EmitTo) -> Vec<T> {
+        if matches!(emit_to, EmitTo::NextBlock) {
+            assert!(
+                self.block_size.is_some(),
+                "only support emit next block in blocked groups"
+            );
+            self.inner
+                .pop_front()
+                .expect("should not call emit for empty blocks")
+        } else {
+            // TODO: maybe remove `EmitTo::take_needed` and move the
+            // pattern matching codes here after supporting blocked approach
+            // for all exist accumulators, to avoid matching twice
+            assert!(
+                self.block_size.is_none(),
+                "only support emit all/first in flat groups"
+            );
+            emit_to.take_needed(&mut self.inner[0])
+        }
+    }
 }
 
 #[cfg(test)]
@@ -186,7 +228,6 @@ mod test {
 
         let mut blocks = TestBlocks::new(None);
         assert_eq!(blocks.len(), 0);
-        assert_eq!(blocks.size(), 0);
 
         for _ in 0..2 {
             // Should have single block, 5 block len, all data are 42
@@ -220,7 +261,6 @@ mod test {
 
         let mut blocks = TestBlocks::new(Some(3));
         assert_eq!(blocks.len(), 0);
-        assert_eq!(blocks.size(), 0);
 
         for _ in 0..2 {
             // Should have:

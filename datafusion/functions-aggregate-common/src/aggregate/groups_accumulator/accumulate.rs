@@ -450,10 +450,6 @@ impl Block for BooleanBufferBuilder {
     fn len(&self) -> usize {
         self.len()
     }
-
-    fn size(&self) -> usize {
-        self.capacity()
-    }
 }
 
 impl Blocks<BooleanBufferBuilder> {
@@ -488,6 +484,10 @@ impl Blocks<BooleanBufferBuilder> {
         };
 
         NullBuffer::new(nulls)
+    }
+
+    pub fn size(&self) -> usize {
+        self.iter().map(|b| b.capacity()).sum::<usize>()
     }
 }
 

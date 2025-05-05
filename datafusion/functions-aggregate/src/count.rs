@@ -537,7 +537,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed_rows(&mut self.counts);
+        let counts = emit_to.take_needed(&mut self.counts);
 
         // Count is always non null (null inputs just don't contribute to the overall values)
         let nulls = None;
@@ -548,7 +548,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let counts = emit_to.take_needed_rows(&mut self.counts);
+        let counts = emit_to.take_needed(&mut self.counts);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
     }

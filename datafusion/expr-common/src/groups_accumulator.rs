@@ -17,7 +17,6 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
-use std::collections::VecDeque;
 
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -40,28 +39,6 @@ pub enum EmitTo {
 }
 
 impl EmitTo {
-    /// Remove and return `needed values` from `values`.
-    ///
-    /// Inputs:
-    ///   - `values`, the emitting source.
-    ///   - `is_blocked_groups`, is the `values` organized in `single`
-    ///     or `blocked` approach, more details can see
-    ///     [`GroupsAccumulator::supports_blocked_groups`].
-    ///     
-    ///
-    pub fn take_needed<T>(
-        &self,
-        values: &mut VecDeque<Vec<T>>,
-        is_blocked_groups: bool,
-    ) -> Vec<T> {
-        if is_blocked_groups {
-            self.take_needed_block(values)
-        } else {
-            assert_eq!(values.len(), 1);
-            self.take_needed_rows(values.back_mut().unwrap())
-        }
-    }
-
     /// Removes the number of rows from `v` required to emit the right
     /// number of rows, returning a `Vec` with elements taken, and the
     /// remaining values in `v`.
@@ -70,7 +47,7 @@ impl EmitTo {
     ///
     /// NOTICE: only support emit strategies: `Self::All` and `Self::First`
     ///
-    pub fn take_needed_rows<T>(&self, v: &mut Vec<T>) -> Vec<T> {
+    pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
         match self {
             Self::All => {
                 // Take the entire vector, leave new (empty) vector
@@ -85,20 +62,6 @@ impl EmitTo {
             }
             Self::NextBlock => unreachable!("don't support take block in take_needed"),
         }
-    }
-
-    /// Removes one block required to emit and return it
-    ///
-    /// NOTICE: only support emit strategy `Self::NextBlock`
-    ///
-    fn take_needed_block<T>(&self, blocks: &mut VecDeque<Vec<T>>) -> Vec<T> {
-        assert!(
-            matches!(self, Self::NextBlock),
-            "only support take block in take_needed_block"
-        );
-        blocks
-            .pop_front()
-            .expect("should not call emit for empty blocks")
     }
 }
 
