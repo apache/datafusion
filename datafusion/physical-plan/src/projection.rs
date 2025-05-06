@@ -525,7 +525,7 @@ pub fn remove_unnecessary_projections(
         } else {
             return Ok(Transformed::no(plan));
         };
-    Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
+    Ok(maybe_modified.map_or_else(|| Transformed::no(plan), Transformed::yes))
 }
 
 /// Compare the inputs and outputs of the projection. All expressions must be
