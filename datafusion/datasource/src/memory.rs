@@ -774,8 +774,6 @@ impl MemorySourceConfig {
     ) -> Result<Option<Vec<Vec<RecordBatch>>>> {
         if !self.eq_properties().ordering_satisfy(&output_ordering) {
             Ok(None)
-        } else if self.partitions.len() == 1 {
-            self.repartition_evenly_by_size(target_partitions)
         } else {
             let total_num_batches =
                 self.partitions.iter().map(|b| b.len()).sum::<usize>();
@@ -1298,10 +1296,23 @@ mod tests {
             .try_with_sort_information(sort_information)
     }
 
+    /// Batches of different sizes, with batches ordered by size (100_000, 10_000, 100, 1)
+    /// in the Memtable partition (a.k.a. vector of batches).
     fn memorysrcconfig_1_partition_with_different_sized_batches(
         sort_information: Vec<LexOrdering>,
     ) -> Result<MemorySourceConfig> {
         let partitions = vec![vec![batch(100_000), batch(10_000), batch(100), batch(1)]];
+        MemorySourceConfig::try_new(&partitions, schema(), None)?
+            .try_with_sort_information(sort_information)
+    }
+
+    /// Same as [`memorysrcconfig_1_partition_with_different_sized_batches`],
+    /// but the batches are ordered differently (not by size)
+    /// in the Memtable partition (a.k.a. vector of batches).
+    fn memorysrcconfig_1_partition_with_ordering_not_matching_size(
+        sort_information: Vec<LexOrdering>,
+    ) -> Result<MemorySourceConfig> {
+        let partitions = vec![vec![batch(100_000), batch(1), batch(100), batch(10_000)]];
         MemorySourceConfig::try_new(&partitions, schema(), None)?
             .try_with_sort_information(sort_information)
     }
@@ -1474,9 +1485,14 @@ mod tests {
         assert_partitioning(partitioned_datasrc.clone(), Some(2));
         // Starting = batch(100_000), batch(10_000), batch(100), batch(1).
         // It should have split as p1=batch(100_000), p2=[batch(10_000), batch(100), batch(1)]
-        let repartitioned_raw_batches = mem_src_config
-            .repartition_evenly_by_size(target_partitions)?
-            .unwrap();
+        let partitioned_datasrc = partitioned_datasrc.unwrap();
+        let Some(mem_src_config) = partitioned_datasrc
+            .as_any()
+            .downcast_ref::<MemorySourceConfig>()
+        else {
+            unreachable!()
+        };
+        let repartitioned_raw_batches = mem_src_config.partitions.clone();
         assert_eq!(repartitioned_raw_batches.len(), 2);
         let [ref p1, ref p2] = repartitioned_raw_batches[..] else {
             unreachable!()
@@ -1645,6 +1661,54 @@ mod tests {
         assert_eq!(p3.len(), 2);
         assert_eq!(p3[0].num_rows(), 2_000);
         assert_eq!(p3[1].num_rows(), 20);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_repartition_with_batch_ordering_not_matching_sizing() -> Result<()> {
+        let schema = schema();
+        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }]);
+        let has_sort = vec![sort_key.clone()];
+        let output_ordering = Some(sort_key);
+
+        // src has 1 partition with many batches of lopsided sizes
+        // note that the input vector of batches are not ordered by decreasing size
+        let target_partitions = 2;
+        let mem_src_config =
+            memorysrcconfig_1_partition_with_ordering_not_matching_size(has_sort)?;
+        let partitioned_datasrc = mem_src_config.clone().repartitioned(
+            target_partitions,
+            usize::MAX,
+            output_ordering,
+        )?;
+        assert_partitioning(partitioned_datasrc.clone(), Some(2));
+        // Starting = batch(100_000), batch(1), batch(100), batch(10_000).
+        // It should have split as p1=batch(100_000), p2=[batch(1), batch(100), batch(10_000)]
+        let partitioned_datasrc = partitioned_datasrc.unwrap();
+        let Some(mem_src_config) = partitioned_datasrc
+            .as_any()
+            .downcast_ref::<MemorySourceConfig>()
+        else {
+            unreachable!()
+        };
+        let repartitioned_raw_batches = mem_src_config.partitions.clone();
+        assert_eq!(repartitioned_raw_batches.len(), 2);
+        let [ref p1, ref p2] = repartitioned_raw_batches[..] else {
+            unreachable!()
+        };
+        // p1=batch(100_000)
+        assert_eq!(p1.len(), 1);
+        assert_eq!(p1[0].num_rows(), 100_000);
+        // p2=[batch(1), batch(100), batch(10_000)] -- **this is preserving the partition order**
+        assert_eq!(p2.len(), 3);
+        assert_eq!(p2[0].num_rows(), 1);
+        assert_eq!(p2[1].num_rows(), 100);
+        assert_eq!(p2[2].num_rows(), 10_000);
+
         Ok(())
     }
 }
