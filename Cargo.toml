@@ -104,7 +104,7 @@ arrow-schema = { version = "55.0.0", default-features = false }
 async-trait = "0.1.88"
 bigdecimal = "0.4.8"
 bytes = "1.10"
-chrono = { version = "0.4.38", default-features = false }
+chrono = { version = "0.4.41", default-features = false }
 criterion = "0.5.1"
 ctor = "0.2.9"
 dashmap = "6.0.1"
