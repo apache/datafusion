@@ -19,6 +19,7 @@
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
 mod min_max_bytes;
+mod min_max_generic;
 
 use arrow::array::{
     ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
@@ -56,6 +57,10 @@ use arrow::datatypes::{
 };
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
+use crate::min_max::min_max_generic::{
+    GenericMaxAccumulator, GenericMinAccumulator, GenericSlidingMaxAccumulator,
+    GenericSlidingMinAccumulator,
+};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
@@ -232,7 +237,13 @@ impl AggregateUDFImpl for Max {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MaxAccumulator::try_new(acc_args.return_type)?))
+        if acc_args.return_type.is_nested() {
+            Ok(Box::new(GenericMaxAccumulator::try_new(
+                acc_args.return_type,
+            )?))
+        } else {
+            Ok(Box::new(MaxAccumulator::try_new(acc_args.return_type)?))
+        }
     }
 
     fn aliases(&self) -> &[String] {
@@ -352,7 +363,13 @@ impl AggregateUDFImpl for Max {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMaxAccumulator::try_new(args.return_type)?))
+        if args.return_type.is_nested() {
+            Ok(Box::new(GenericSlidingMaxAccumulator::try_new(
+                args.return_type,
+            )?))
+        } else {
+            Ok(Box::new(SlidingMaxAccumulator::try_new(args.return_type)?))
+        }
     }
 
     fn is_descending(&self) -> Option<bool> {
@@ -1107,7 +1124,13 @@ impl AggregateUDFImpl for Min {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MinAccumulator::try_new(acc_args.return_type)?))
+        if acc_args.return_type.is_nested() {
+            Ok(Box::new(GenericMinAccumulator::try_new(
+                acc_args.return_type,
+            )?))
+        } else {
+            Ok(Box::new(MinAccumulator::try_new(acc_args.return_type)?))
+        }
     }
 
     fn aliases(&self) -> &[String] {
@@ -1227,7 +1250,13 @@ impl AggregateUDFImpl for Min {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMinAccumulator::try_new(args.return_type)?))
+        if args.return_type.is_nested() {
+            Ok(Box::new(GenericSlidingMinAccumulator::try_new(
+                args.return_type,
+            )?))
+        } else {
+            Ok(Box::new(SlidingMinAccumulator::try_new(args.return_type)?))
+        }
     }
 
     fn is_descending(&self) -> Option<bool> {
