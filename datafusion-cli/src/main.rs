@@ -41,10 +41,29 @@ use clap::Parser;
 use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
 use datafusion::execution::disk_manager::DiskManagerConfig;
-use mimalloc::MiMalloc;
 
+// Ensures exactly one feature for memory allocator is enabled
+#[cfg(all(
+    feature = "snmalloc-global-allocator",
+    feature = "mimalloc-global-allocator"
+))]
+compile_error!(
+    "feature \"snmalloc-global-allocator\" and feature \"mimalloc-global-allocator\" cannot be enabled at the same time"
+);
+
+#[cfg(not(any(
+    feature = "snmalloc-global-allocator",
+    feature = "mimalloc-global-allocator"
+)))]
+compile_error!("exactly one of features \"snmalloc-global-allocator\" or \"mimalloc-global-allocator\" must be enabled");
+
+#[cfg(feature = "snmalloc-global-allocator")]
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
+#[cfg(feature = "mimalloc-global-allocator")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]

@@ -31,8 +31,10 @@ rust-version = { workspace = true }
 all-features = true
 
 [features]
-default = []
+default = ["snmalloc-global-allocator"]
 backtrace = ["datafusion/backtrace"]
+snmalloc-global-allocator = ["snmalloc-rs"]
+mimalloc-global-allocator = ["mimalloc"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -55,12 +57,13 @@ datafusion = { workspace = true, features = [
 dirs = "6.0.0"
 env_logger = { workspace = true }
 futures = { workspace = true }
-mimalloc = { version = "0.1", default-features = false }
+mimalloc = { version = "0.1", default-features = false, optional = true }
 object_store = { workspace = true, features = ["aws", "gcp", "http"] }
 parking_lot = { workspace = true }
 parquet = { workspace = true, default-features = false }
 regex = { workspace = true }
 rustyline = "15.0"
+snmalloc-rs = { version = "0.3", optional = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = { workspace = true }
 
