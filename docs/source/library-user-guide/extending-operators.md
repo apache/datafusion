@@ -59,7 +59,7 @@ The following example illustrates the implementation of a `TopK` node:
 
 - This section defines the custom logical plan node `TopKPlanNode`, which represents the `TopK` operation.
 - It includes trait implementations like `UserDefinedLogicalNodeCore` and Debug.
-**Code:**
+  **Code:**
 
 ```rust
 use datafusion::common::{
