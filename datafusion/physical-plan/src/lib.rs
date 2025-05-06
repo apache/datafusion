@@ -92,5 +92,4 @@ pub mod udaf {
 }
 
 pub mod coalesce;
-#[cfg(test)]
 pub mod test;

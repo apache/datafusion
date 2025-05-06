@@ -86,3 +86,7 @@ name = "partial_ordering"
 [[bench]]
 harness = false
 name = "spill_io"
+
+[[bench]]
+harness = false
+name = "sort_merge_join"
