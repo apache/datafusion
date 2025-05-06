@@ -43,9 +43,9 @@ use datafusion_datasource::{
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::filter_pushdown::{
-    FilterPushdownPropagation, PredicateSupports,
-};
+use datafusion_physical_plan::{filter::FilterExec, filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation, PredicateSupport, PredicateSupports
+}, DisplayAs, PlanProperties};
 use datafusion_physical_plan::{
     displayable, metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
 };
@@ -414,4 +414,126 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 
 fn format_lines(s: &str) -> Vec<String> {
     s.trim().split('\n').map(|s| s.to_string()).collect()
+}
+
+#[derive(Debug)]
+pub(crate) struct TestNode {
+    inject_filter: bool,
+    input: Arc<dyn ExecutionPlan>,
+    predicate: Arc<dyn PhysicalExpr>,
+}
+
+impl TestNode {
+    pub fn new(
+        inject_filter: bool,
+        input: Arc<dyn ExecutionPlan>,
+        predicate: Arc<dyn PhysicalExpr>,
+    ) -> Self {
+        Self {
+            inject_filter,
+            input,
+            predicate,
+        }
+    }
+}
+
+impl DisplayAs for TestNode {
+    fn fmt_as(
+        &self,
+        _t: DisplayFormatType,
+        f: &mut Formatter,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "TestInsertExec {{ inject_filter: {} }}",
+            self.inject_filter
+        )
+    }
+}
+
+impl ExecutionPlan for TestNode {
+    fn name(&self) -> &str {
+        "TestInsertExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        self.input.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert!(children.len() == 1);
+        Ok(Arc::new(TestNode::new(
+            self.inject_filter,
+            children[0].clone(),
+            self.predicate.clone(),
+        )))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion_execution::TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
+        unimplemented!("TestInsertExec is a stub for testing.")
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters)
+            .with_self_filter(Arc::clone(&self.predicate)))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        if self.inject_filter {
+            // Add a FilterExec if our own filter was not handled by the child
+
+            // We have 1 child
+            assert_eq!(child_pushdown_result.self_filters.len(), 1);
+            let self_pushdown_result = child_pushdown_result.self_filters[0].clone();
+            // And pushed down 1 filter
+            assert_eq!(self_pushdown_result.len(), 1);
+            let self_pushdown_result = self_pushdown_result.into_inner();
+
+            match &self_pushdown_result[0] {
+                PredicateSupport::Unsupported(filter) => {
+                    // We have a filter to push down
+                    let new_child =
+                        FilterExec::try_new(Arc::clone(filter), Arc::clone(&self.input))?;
+                    let new_self =
+                        TestNode::new(false, Arc::new(new_child), self.predicate.clone());
+                    let mut res =
+                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                    res.updated_node = Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
+                    Ok(res)
+                }
+                PredicateSupport::Supported(_) => {
+                    let res =
+                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                    Ok(res)
+                }
+            }
+        } else {
+            let res = FilterPushdownPropagation::transparent(child_pushdown_result);
+            Ok(res)
+        }
+    }
 }

@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    sync::{Arc, LazyLock},
-};
+use std::sync::{Arc, LazyLock};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::{
@@ -29,7 +26,7 @@ use datafusion::{
     },
     scalar::ScalarValue,
 };
-use datafusion_common::{config::ConfigOptions, Result};
+use datafusion_common::config::ConfigOptions;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{aggregate::AggregateExprBuilder, Partitioning};
@@ -38,15 +35,10 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
     filter::FilterExec,
-    filter_pushdown::{
-        ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
-        PredicateSupport,
-    },
     repartition::RepartitionExec,
-    DisplayAs, ExecutionPlan, PlanProperties,
 };
 
-use util::{OptimizationTest, TestScanBuilder};
+use util::{OptimizationTest, TestNode, TestScanBuilder};
 
 mod util;
 
@@ -295,134 +287,6 @@ fn test_no_pushdown_through_aggregates() {
 /// in an ExectionPlan in combination with support/not support in a DataSource.
 #[test]
 fn test_node_handles_child_pushdown_result() {
-    #[derive(Debug)]
-    struct TestNode {
-        inject_filter: bool,
-        input: Arc<dyn ExecutionPlan>,
-        predicate: Arc<dyn PhysicalExpr>,
-    }
-
-    impl TestNode {
-        fn new(
-            inject_filter: bool,
-            input: Arc<dyn ExecutionPlan>,
-            predicate: Arc<dyn PhysicalExpr>,
-        ) -> Self {
-            Self {
-                inject_filter,
-                input,
-                predicate,
-            }
-        }
-    }
-
-    impl DisplayAs for TestNode {
-        fn fmt_as(
-            &self,
-            _t: datafusion_physical_plan::DisplayFormatType,
-            f: &mut std::fmt::Formatter,
-        ) -> std::fmt::Result {
-            write!(
-                f,
-                "TestInsertExec {{ inject_filter: {} }}",
-                self.inject_filter
-            )
-        }
-    }
-
-    impl ExecutionPlan for TestNode {
-        fn name(&self) -> &str {
-            "TestInsertExec"
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn properties(&self) -> &PlanProperties {
-            self.input.properties()
-        }
-
-        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-            vec![&self.input]
-        }
-
-        fn with_new_children(
-            self: Arc<Self>,
-            children: Vec<Arc<dyn ExecutionPlan>>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            assert!(children.len() == 1);
-            Ok(Arc::new(TestNode::new(
-                self.inject_filter,
-                children[0].clone(),
-                self.predicate.clone(),
-            )))
-        }
-
-        fn execute(
-            &self,
-            _partition: usize,
-            _context: Arc<datafusion_execution::TaskContext>,
-        ) -> Result<datafusion_execution::SendableRecordBatchStream> {
-            unimplemented!("TestInsertExec is a stub for testing.")
-        }
-
-        fn gather_filters_for_pushdown(
-            &self,
-            parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-            _config: &ConfigOptions,
-        ) -> Result<FilterDescription> {
-            Ok(FilterDescription::new_with_child_count(1)
-                .all_parent_filters_supported(parent_filters)
-                .with_self_filter(Arc::clone(&self.predicate)))
-        }
-
-        fn handle_child_pushdown_result(
-            &self,
-            child_pushdown_result: ChildPushdownResult,
-            _config: &ConfigOptions,
-        ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-            if self.inject_filter {
-                // Add a FilterExec if our own filter was not handled by the child
-
-                // We have 1 child
-                assert_eq!(child_pushdown_result.self_filters.len(), 1);
-                let self_pushdown_result = child_pushdown_result.self_filters[0].clone();
-                // And pushed down 1 filter
-                assert_eq!(self_pushdown_result.len(), 1);
-                let self_pushdown_result = self_pushdown_result.into_inner();
-
-                match &self_pushdown_result[0] {
-                    PredicateSupport::Unsupported(filter) => {
-                        // We have a filter to push down
-                        let new_child = FilterExec::try_new(
-                            Arc::clone(filter),
-                            Arc::clone(&self.input),
-                        )?;
-                        let new_self = TestNode::new(
-                            false,
-                            Arc::new(new_child),
-                            self.predicate.clone(),
-                        );
-                        let mut res =
-                            FilterPushdownPropagation::transparent(child_pushdown_result);
-                        res.updated_node =
-                            Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
-                        Ok(res)
-                    }
-                    PredicateSupport::Supported(_) => {
-                        let res =
-                            FilterPushdownPropagation::transparent(child_pushdown_result);
-                        Ok(res)
-                    }
-                }
-            } else {
-                let res = FilterPushdownPropagation::transparent(child_pushdown_result);
-                Ok(res)
-            }
-        }
-    }
-
     // If we set `with_support(true)` + `inject_filter = true` then the filter is pushed down to the DataSource
     // and no FilterExec is created.
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
