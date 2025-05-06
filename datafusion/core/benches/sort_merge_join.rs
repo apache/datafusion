@@ -25,7 +25,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::joins::SortMergeJoinExec;
-use datafusion_physical_plan::test::{build_table_i32, TestMemoryExec};
 use datafusion_physical_plan::ExecutionPlan;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
