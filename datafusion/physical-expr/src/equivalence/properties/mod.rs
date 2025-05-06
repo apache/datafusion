@@ -348,13 +348,13 @@ impl EquivalenceProperties {
                 let expr_properties =
                     equivalent_expr.get_properties(&child_properties)?;
                 if expr_properties.preserves_lex_ordering
-                    && SortProperties::Ordered(leading_ordering_options)
-                        == expr_properties.sort_properties
+                    && expr_properties.sort_properties
+                        == SortProperties::Ordered(leading_ordering_options)
                 {
-                    // Assume existing ordering is `[c ASC, a ASC, b ASC]`. When
-                    // equality `c = f(a, b)` is given, the ordering `[a ASC, b ASC]`,
-                    // implies the ordering `[f(a, b) ASC]`. Thus, we can deduce that
-                    // ordering `[a ASC, b ASC]` is also valid.
+                    // Assume that `[c ASC, a ASC, b ASC]` is among existing
+                    // orderings. If equality `c = f(a, b)` is given, ordering
+                    // `[a ASC, b ASC]` implies the ordering `[c ASC]`. Thus,
+                    // ordering `[a ASC, b ASC]` is also a valid ordering.
                     new_orderings.push(ordering[1..].to_vec());
                     break;
                 }
@@ -365,9 +365,9 @@ impl EquivalenceProperties {
         Ok(())
     }
 
-    /// Updates the ordering equivalence group within assuming that the table
-    /// is re-sorted according to the argument `ordering`. Note that constants
-    /// and equivalence classes are unchanged as they are unaffected by a re-sort.
+    /// Updates the ordering equivalence class within assuming that the table
+    /// is re-sorted according to the argument `ordering`. Note that equivalence
+    /// classes (and constants) do not change as they are unaffected by a re-sort.
     /// If the given ordering is already satisfied, the function does nothing.
     pub fn with_reorder(
         mut self,
@@ -393,19 +393,14 @@ impl EquivalenceProperties {
         self
     }
 
-    /// Checks if the new ordering matches a prefix of the existing ordering
-    /// (considering expression equivalences)
-    fn is_prefix_of(&self, new_order: &LexOrdering, existing: &LexOrdering) -> bool {
-        // Check if new order is longer than existing - can't be a prefix
-        if new_order.len() > existing.len() {
-            return false;
-        }
-
-        // Check if new order matches existing prefix (considering equivalences)
-        new_order.iter().zip(existing).all(|(new, existing)| {
-            self.eq_group.exprs_equal(&new.expr, &existing.expr)
-                && new.options == existing.options
-        })
+    /// Checks if the ordering `given` matches a prefix of the ordering
+    /// `reference` (considering expression equivalences).
+    fn is_prefix_of(&self, given: &LexOrdering, reference: &LexOrdering) -> bool {
+        given.len() <= reference.len()
+            && given.iter().zip(reference).all(|(new, existing)| {
+                self.eq_group.exprs_equal(&new.expr, &existing.expr)
+                    && new.options == existing.options
+            })
     }
 
     /// Normalizes the given sort expressions (i.e. `sort_exprs`) using the
@@ -709,9 +704,9 @@ impl EquivalenceProperties {
     ///       sorted, `atan(x + 1000)` should also be substituted. For now, we
     ///       only consider single-column `CAST` expressions.
     fn substitute_oeq_class(
-        &self,
-        oeq_class: OrderingEquivalenceClass,
+        schema: &SchemaRef,
         mapping: &ProjectionMapping,
+        oeq_class: OrderingEquivalenceClass,
     ) -> OrderingEquivalenceClass {
         let new_orderings = oeq_class.into_iter().flat_map(|order| {
             // Modify/expand existing orderings by substituting sort
@@ -727,7 +722,7 @@ impl EquivalenceProperties {
                     let mut result = vec![];
                     // The sort expression comes from this schema, so the
                     // following call to `unwrap` is safe.
-                    let expr_type = sort_expr.expr.data_type(&self.schema).unwrap();
+                    let expr_type = sort_expr.expr.data_type(schema).unwrap();
                     // TODO: Add one-to-one analysis for ScalarFunctions.
                     for r_expr in referring_exprs {
                         // We check whether this expression is substitutable.
@@ -910,16 +905,21 @@ impl EquivalenceProperties {
     ///
     /// - `mapping`: A reference to the `ProjectionMapping` that defines the
     ///   relationship between source and target expressions.
+    /// - `oeq_class`: The `OrderingEquivalenceClass` containing the orderings
+    ///   to project.
     ///
     /// # Returns
     ///
     /// A vector of `LexOrdering` containing all valid orderings after projection.
-    fn projected_orderings(&self, mapping: &ProjectionMapping) -> Vec<LexOrdering> {
+    fn projected_orderings(
+        &self,
+        mapping: &ProjectionMapping,
+        mut oeq_class: OrderingEquivalenceClass,
+    ) -> OrderingEquivalenceClass {
         // Normalize source expressions in the mapping:
         let mapping = self.normalized_mapping(mapping);
         // Get dependency map for existing orderings:
-        let mut oeq_class = self.normalized_oeq_class();
-        oeq_class = self.substitute_oeq_class(oeq_class, &mapping);
+        oeq_class = Self::substitute_oeq_class(&self.schema, &mapping, oeq_class);
         let dependency_map = self.construct_dependency_map(oeq_class, &mapping);
         let orderings = mapping.iter().flat_map(|(source, targets)| {
             referred_dependencies(&dependency_map, source)
@@ -986,7 +986,8 @@ impl EquivalenceProperties {
         orderings
             .chain(projected_orderings)
             .map(|lex_ordering| lex_ordering.collapse())
-            .collect()
+            .collect::<Vec<_>>()
+            .into()
     }
 
     /// Projects constraints according to the given projection mapping.
@@ -1016,17 +1017,14 @@ impl EquivalenceProperties {
         self.constraints.project(&indices)
     }
 
-    /// Projects the equivalences within according to `mapping`
-    /// and `output_schema`.
+    /// Projects the equivalences within according to `mapping` and
+    /// `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
-        let eq_group = self.eq_group.project(mapping);
-        let oeq_class = self.projected_orderings(mapping).into();
-        let constraints = self.projected_constraints(mapping).unwrap_or_default();
         Self {
+            eq_group: self.eq_group.project(mapping),
+            oeq_class: self.projected_orderings(mapping, self.normalized_oeq_class()),
+            constraints: self.projected_constraints(mapping).unwrap_or_default(),
             schema: output_schema,
-            eq_group,
-            oeq_class,
-            constraints,
         }
     }
 
