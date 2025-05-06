@@ -409,10 +409,10 @@ pub fn parallelize_sorts(
 
         Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
-                // Safe to unwrap, because `CoalescePartitionsExec` has a fetch
-                CoalescePartitionsExec::new(Arc::clone(&requirements.plan))
-                    .with_fetch(fetch)
-                    .unwrap(),
+                Arc::new(
+                    CoalescePartitionsExec::new(Arc::clone(&requirements.plan))
+                        .with_fetch(fetch),
+                ),
                 false,
                 vec![requirements],
             ),
@@ -505,7 +505,7 @@ fn analyze_immediate_sort_removal(
             sort_exec
                 .properties()
                 .output_ordering()
-                .unwrap_or(LexOrdering::empty()),
+                .unwrap_or_else(|| LexOrdering::empty()),
         ) {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1

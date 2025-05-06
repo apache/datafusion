@@ -92,5 +92,5 @@ pub mod udaf {
 }
 
 pub mod coalesce;
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 pub mod test;

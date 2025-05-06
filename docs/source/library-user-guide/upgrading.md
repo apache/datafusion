@@ -19,6 +19,43 @@
 
 # Upgrade Guides
 
+## DataFusion `48.0.0`
+
+### Processing `Field` instead of `DataType` for user defined functions
+
+In order to support metadata handling and extension types, user defined functions are
+now switching to traits which use `Field` rather than a `DataType` and nullability.
+This gives a single interface to both of these parameters and additionally allows
+access to metadata fields, which can be used for extension types.
+
+To upgrade structs which implement `ScalarUDFImpl`, if you have implemented
+`return_type_from_args` you need instead to implement `return_field_from_args`.
+If your functions do not need to handle metadata, this should be straightforward
+repackaging of the output data into a `Field`. The name you specify on the
+field is not important. It will be overwritten during planning. `ReturnInfo`
+has been removed, so you will need to remove all references to it.
+
+`ScalarFunctionArgs` now contains a field called `arg_fields`. You can use this
+to access the metadata associated with the columnar values during invocation.
+
+### Physical Expression return field
+
+To support the changes to user defined functions processing metadata, the
+`PhysicalExpr` trait, which now must specify a return `Field` based on the input
+schema. To upgrade structs which implement `PhysicalExpr` you need to implement
+the `return_field` function. There are numerous examples in the `physical-expr`
+crate.
+
+### `FileFormat::supports_filters_pushdown` replaced with `FileSource::try_pushdown_filters`
+
+To support more general filter pushdown, the `FileFormat::supports_filters_pushdown` was replaced with
+`FileSource::try_pushdown_filters`.
+If you implemented a custom `FileFormat` that uses a custom `FileSource` you will need to implement
+`FileSource::try_pushdown_filters`.
+See `ParquetSource::try_pushdown_filters` for an example of how to implement this.
+
+`FileFormat::supports_filters_pushdown` has been removed.
+
 ## DataFusion `47.0.0`
 
 This section calls out some of the major changes in the `47.0.0` release of DataFusion.
@@ -104,7 +141,7 @@ details.
 [#15123]: https://github.com/apache/datafusion/pull/15123
 [#15027]: https://github.com/apache/datafusion/pull/15027
 
-## `FileScanConfig` --> `FileScanConfigBuilder`
+### `FileScanConfig` --> `FileScanConfigBuilder`
 
 Previously, `FileScanConfig::build()` directly created ExecutionPlans. In
 DataFusion 47.0.0 this has been changed to use `FileScanConfigBuilder`. See
@@ -280,7 +317,7 @@ let mut file_source = ParquetSource::new(parquet_options)
 // Add filter
 if let Some(predicate) = logical_filter {
     if config.enable_parquet_pushdown {
-        file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
+        file_source = file_source.with_predicate(predicate);
     }
 };
 

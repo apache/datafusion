@@ -19,25 +19,25 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{config::ConfigOptions, Result};
-use datafusion_physical_expr::conjunction;
-use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
-    FilterDescription, FilterPushdownResult, FilterPushdownSupport,
+    ChildPushdownResult, FilterPushdownPropagation, PredicateSupport, PredicateSupports,
 };
-use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+
+use itertools::izip;
 
 /// Attempts to recursively push given filters from the top of the tree into leafs.
 ///
 /// # Default Implementation
 ///
-/// The default implementation in [`ExecutionPlan::try_pushdown_filters`] is a no-op
-/// that assumes that:
+/// The default implementation in [`ExecutionPlan::gather_filters_for_pushdown`]
+/// and [`ExecutionPlan::handle_child_pushdown_result`] assumes that:
 ///
-/// * Parent filters can't be passed onto children.
-/// * This node has no filters to contribute.
+/// * Parent filters can't be passed onto children (determined by [`ExecutionPlan::gather_filters_for_pushdown`])
+/// * This node has no filters to contribute (determined by [`ExecutionPlan::gather_filters_for_pushdown`]).
+/// * Any filters that could not be pushed down to the children are marked as unsupported (determined by [`ExecutionPlan::handle_child_pushdown_result`]).
 ///
 /// # Example: Push filter into a `DataSourceExec`
 ///
@@ -240,7 +240,7 @@ use datafusion_physical_plan::ExecutionPlan;
 /// The point here is that:
 /// 1. We cannot push down `sum > 10` through the [`AggregateExec`] node into the `DataSourceExec` node.
 ///    Any filters above the [`AggregateExec`] node are not pushed down.
-///    This is determined by calling [`ExecutionPlan::try_pushdown_filters`] on the [`AggregateExec`] node.
+///    This is determined by calling [`ExecutionPlan::gather_filters_for_pushdown`] on the [`AggregateExec`] node.
 /// 2. We need to keep recursing into the tree so that we can discover the other [`FilterExec`] node and push
 ///    down the `id=1` filter.
 ///
@@ -362,47 +362,29 @@ use datafusion_physical_plan::ExecutionPlan;
 /// [`ProjectionExec`]: datafusion_physical_plan::projection::ProjectionExec
 /// [`AggregateExec`]: datafusion_physical_plan::aggregates::AggregateExec
 #[derive(Debug)]
-pub struct PushdownFilter {}
+pub struct FilterPushdown {}
 
-impl Default for PushdownFilter {
+impl FilterPushdown {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Default for FilterPushdown {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub type FilterDescriptionContext = PlanContext<FilterDescription>;
-
-impl PhysicalOptimizerRule for PushdownFilter {
+impl PhysicalOptimizerRule for FilterPushdown {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let context = FilterDescriptionContext::new_default(plan);
-
-        context
-            .transform_up(|node| {
-                if node.plan.as_any().downcast_ref::<FilterExec>().is_some() {
-                    let initial_plan = Arc::clone(&node.plan);
-                    let mut accept_updated = false;
-                    let updated_node = node.transform_down(|filter_node| {
-                        Self::try_pushdown(filter_node, config, &mut accept_updated)
-                    });
-
-                    if accept_updated {
-                        updated_node
-                    } else {
-                        Ok(Transformed::no(FilterDescriptionContext::new_default(
-                            initial_plan,
-                        )))
-                    }
-                }
-                // Other filter introducing operators extends here
-                else {
-                    Ok(Transformed::no(node))
-                }
-            })
-            .map(|updated| updated.data.plan)
+        Ok(push_down_filters(Arc::clone(&plan), vec![], config)?
+            .updated_node
+            .unwrap_or(plan))
     }
 
     fn name(&self) -> &str {
@@ -414,122 +396,146 @@ impl PhysicalOptimizerRule for PushdownFilter {
     }
 }
 
-impl PushdownFilter {
-    pub fn new() -> Self {
-        Self {}
-    }
+/// Support state of each predicate for the children of the node.
+/// These predicates are coming from the parent node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParentPredicateStates {
+    NoChildren,
+    Unsupported,
+    Supported,
+}
 
-    fn try_pushdown(
-        mut node: FilterDescriptionContext,
-        config: &ConfigOptions,
-        accept_updated: &mut bool,
-    ) -> Result<Transformed<FilterDescriptionContext>> {
-        let initial_description = FilterDescription {
-            filters: node.data.take_description(),
-        };
+fn push_down_filters(
+    node: Arc<dyn ExecutionPlan>,
+    parent_predicates: Vec<Arc<dyn PhysicalExpr>>,
+    config: &ConfigOptions,
+) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+    // If the node has any child, these will be rewritten as supported or unsupported
+    let mut parent_predicates_pushdown_states =
+        vec![ParentPredicateStates::NoChildren; parent_predicates.len()];
+    let mut self_filters_pushdown_supports = vec![];
+    let mut new_children = Vec::with_capacity(node.children().len());
 
-        let FilterPushdownResult {
-            support,
-            remaining_description,
-        } = node
-            .plan
-            .try_pushdown_filters(initial_description, config)?;
+    let children = node.children();
+    let filter_description =
+        node.gather_filters_for_pushdown(parent_predicates.clone(), config)?;
 
-        match support {
-            FilterPushdownSupport::Supported {
-                mut child_descriptions,
-                op,
-                revisit,
-            } => {
-                if revisit {
-                    // This check handles cases where the current operator is entirely removed
-                    // from the plan and replaced with its child. In such cases, to not skip
-                    // over the new node, we need to explicitly re-apply this pushdown logic
-                    // to the new node.
-                    //
-                    // TODO: If TreeNodeRecursion supports a Revisit mechanism in the future,
-                    //       this manual recursion could be removed.
+    for (child, parent_filters, self_filters) in izip!(
+        children,
+        filter_description.parent_filters(),
+        filter_description.self_filters()
+    ) {
+        // Here, `parent_filters` are the predicates which are provided by the parent node of
+        // the current node, and tried to be pushed down over the child which the loop points
+        // currently. `self_filters` are the predicates which are provided by the current node,
+        // and tried to be pushed down over the child similarly.
 
-                    // If the operator is removed, it should not leave any filters as remaining
-                    debug_assert!(remaining_description.filters.is_empty());
-                    // Operators having 2 children cannot be removed
-                    debug_assert_eq!(child_descriptions.len(), 1);
-                    debug_assert_eq!(node.children.len(), 1);
+        let num_self_filters = self_filters.len();
+        let mut parent_supported_predicate_indices = vec![];
+        let mut all_predicates = self_filters;
 
-                    node.plan = op;
-                    node.data = child_descriptions.swap_remove(0);
-                    node.children = node.children.swap_remove(0).children;
-                    Self::try_pushdown(node, config, accept_updated)
-                } else {
-                    if remaining_description.filters.is_empty() {
-                        // Filter can be pushed down safely
-                        node.plan = op;
-                        if node.children.is_empty() {
-                            *accept_updated = true;
-                        } else {
-                            for (child, descr) in
-                                node.children.iter_mut().zip(child_descriptions)
-                            {
-                                child.data = descr;
-                            }
-                        }
-                    } else {
-                        // Filter cannot be pushed down
-                        node = insert_filter_exec(
-                            node,
-                            child_descriptions,
-                            remaining_description,
-                        )?;
+        // Iterate over each predicate coming from the parent
+        for (idx, filter) in parent_filters.into_iter().enumerate() {
+            // Check if we can push this filter down to our child.
+            // These supports are defined in `gather_filters_for_pushdown()`
+            match filter {
+                PredicateSupport::Supported(predicate) => {
+                    // Queue this filter up for pushdown to this child
+                    all_predicates.push(predicate);
+                    parent_supported_predicate_indices.push(idx);
+                    // Mark this filter as supported by our children if no child has marked it as unsupported
+                    if parent_predicates_pushdown_states[idx]
+                        != ParentPredicateStates::Unsupported
+                    {
+                        parent_predicates_pushdown_states[idx] =
+                            ParentPredicateStates::Supported;
                     }
-                    Ok(Transformed::yes(node))
+                }
+                PredicateSupport::Unsupported(_) => {
+                    // Mark as unsupported by our children
+                    parent_predicates_pushdown_states[idx] =
+                        ParentPredicateStates::Unsupported;
                 }
             }
-            FilterPushdownSupport::NotSupported => {
-                if remaining_description.filters.is_empty() {
-                    Ok(Transformed {
-                        data: node,
-                        transformed: false,
-                        tnr: TreeNodeRecursion::Stop,
-                    })
-                } else {
-                    node = insert_filter_exec(
-                        node,
-                        vec![FilterDescription::empty(); 1],
-                        remaining_description,
-                    )?;
-                    Ok(Transformed {
-                        data: node,
-                        transformed: true,
-                        tnr: TreeNodeRecursion::Stop,
-                    })
+        }
+
+        // Any filters that could not be pushed down to a child are marked as not-supported to our parents
+        let result = push_down_filters(Arc::clone(child), all_predicates, config)?;
+
+        if let Some(new_child) = result.updated_node {
+            // If we have a filter pushdown result, we need to update our children
+            new_children.push(new_child);
+        } else {
+            // If we don't have a filter pushdown result, we need to update our children
+            new_children.push(Arc::clone(child));
+        }
+
+        // Our child doesn't know the difference between filters that were passed down
+        // from our parents and filters that the current node injected. We need to de-entangle
+        // this since we do need to distinguish between them.
+        let mut all_filters = result.filters.into_inner();
+        let parent_predicates = all_filters.split_off(num_self_filters);
+        let self_predicates = all_filters;
+        self_filters_pushdown_supports.push(PredicateSupports::new(self_predicates));
+
+        for (idx, result) in parent_supported_predicate_indices
+            .iter()
+            .zip(parent_predicates)
+        {
+            let current_node_state = match result {
+                PredicateSupport::Supported(_) => ParentPredicateStates::Supported,
+                PredicateSupport::Unsupported(_) => ParentPredicateStates::Unsupported,
+            };
+            match (current_node_state, parent_predicates_pushdown_states[*idx]) {
+                (r, ParentPredicateStates::NoChildren) => {
+                    // If we have no result, use the current state from this child
+                    parent_predicates_pushdown_states[*idx] = r;
+                }
+                (ParentPredicateStates::Supported, ParentPredicateStates::Supported) => {
+                    // If the current child and all previous children are supported,
+                    // the filter continues to support it
+                    parent_predicates_pushdown_states[*idx] =
+                        ParentPredicateStates::Supported;
+                }
+                _ => {
+                    // Either the current child or a previous child marked this filter as unsupported
+                    parent_predicates_pushdown_states[*idx] =
+                        ParentPredicateStates::Unsupported;
                 }
             }
         }
     }
-}
-
-fn insert_filter_exec(
-    node: FilterDescriptionContext,
-    mut child_descriptions: Vec<FilterDescription>,
-    remaining_description: FilterDescription,
-) -> Result<FilterDescriptionContext> {
-    let mut new_child_node = node;
-
-    // Filter has one child
-    if !child_descriptions.is_empty() {
-        debug_assert_eq!(child_descriptions.len(), 1);
-        new_child_node.data = child_descriptions.swap_remove(0);
+    // Re-create this node with new children
+    let updated_node = with_new_children_if_necessary(Arc::clone(&node), new_children)?;
+    // Remap the result onto the parent filters as they were given to us.
+    // Any filters that were not pushed down to any children are marked as unsupported.
+    let parent_pushdown_result = PredicateSupports::new(
+        parent_predicates_pushdown_states
+            .into_iter()
+            .zip(parent_predicates)
+            .map(|(state, filter)| match state {
+                ParentPredicateStates::NoChildren => {
+                    PredicateSupport::Unsupported(filter)
+                }
+                ParentPredicateStates::Unsupported => {
+                    PredicateSupport::Unsupported(filter)
+                }
+                ParentPredicateStates::Supported => PredicateSupport::Supported(filter),
+            })
+            .collect(),
+    );
+    // Check what the current node wants to do given the result of pushdown to it's children
+    let mut res = updated_node.handle_child_pushdown_result(
+        ChildPushdownResult {
+            parent_filters: parent_pushdown_result,
+            self_filters: self_filters_pushdown_supports,
+        },
+        config,
+    )?;
+    // Compare pointers for new_node and node, if they are different we must replace
+    // ourselves because of changes in our children.
+    if res.updated_node.is_none() && !Arc::ptr_eq(&updated_node, &node) {
+        res.updated_node = Some(updated_node)
     }
-    let new_plan = Arc::new(FilterExec::try_new(
-        conjunction(remaining_description.filters),
-        Arc::clone(&new_child_node.plan),
-    )?);
-    let new_children = vec![new_child_node];
-    let new_data = FilterDescription::empty();
-
-    Ok(FilterDescriptionContext::new(
-        new_plan,
-        new_data,
-        new_children,
-    ))
+    Ok(res)
 }
