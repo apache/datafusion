@@ -24,6 +24,7 @@ mod enforce_sorting;
 mod join_selection;
 mod limit_pushdown;
 mod limited_distinct_aggregation;
+mod partition_statistics;
 mod projection_pushdown;
 mod push_down_filter;
 mod replace_with_order_preserving_variants;

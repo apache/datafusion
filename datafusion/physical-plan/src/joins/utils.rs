@@ -403,15 +403,12 @@ struct PartialJoinStatistics {
 
 /// Estimate the statistics for the given join's output.
 pub(crate) fn estimate_join_statistics(
-    left: Arc<dyn ExecutionPlan>,
-    right: Arc<dyn ExecutionPlan>,
+    left_stats: Statistics,
+    right_stats: Statistics,
     on: JoinOn,
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
-    let left_stats = left.statistics()?;
-    let right_stats = right.statistics()?;
-
     let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),

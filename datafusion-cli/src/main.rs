@@ -177,13 +177,14 @@ async fn main_inner() -> Result<()> {
 
     // set disk limit
     if let Some(disk_limit) = args.disk_limit {
-        let disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
+        let mut disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
 
-        let disk_manager = Arc::try_unwrap(disk_manager)
-            .expect("DiskManager should be a single instance")
-            .with_max_temp_directory_size(disk_limit.try_into().unwrap())?;
+        DiskManager::set_arc_max_temp_directory_size(
+            &mut disk_manager,
+            disk_limit.try_into().unwrap(),
+        )?;
 
-        let disk_config = DiskManagerConfig::new_existing(Arc::new(disk_manager));
+        let disk_config = DiskManagerConfig::new_existing(disk_manager);
         rt_builder = rt_builder.with_disk_manager(disk_config);
     }
 
@@ -263,6 +264,11 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
     // if the user hasn't specified an explain format in the environment
     if env::var_os("DATAFUSION_EXPLAIN_FORMAT").is_none() {
         config_options.explain.format = String::from("tree");
+    }
+
+    // in the CLI, we want to show NULL values rather the empty strings
+    if env::var_os("DATAFUSION_FORMAT_NULL").is_none() {
+        config_options.format.null = String::from("NULL");
     }
 
     let session_config =

@@ -66,7 +66,7 @@ parquet = { workspace = true, optional = true }
 rand = { workspace = true }
 tempfile = { workspace = true, optional = true }
 tokio = { workspace = true }
-tokio-util = { version = "0.7.14", features = ["io"], optional = true }
+tokio-util = { version = "0.7.15", features = ["io"], optional = true }
 url = { workspace = true }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }

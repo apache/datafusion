@@ -456,6 +456,7 @@ checksum = "7450c76ab7c5a6805be3440dc2e2096010da58f7cab301fdc996a4ee3ee74e49"
 dependencies = [
  "bitflags 2.9.0",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2558,6 +2559,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-spark"
+version = "47.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-functions",
+ "datafusion-macros",
+ "log",
+]
+
+[[package]]
 name = "datafusion-sql"
 version = "47.0.0"
 dependencies = [
@@ -2592,6 +2607,7 @@ dependencies = [
  "chrono",
  "clap 4.5.37",
  "datafusion",
+ "datafusion-spark",
  "env_logger",
  "futures",
  "half",

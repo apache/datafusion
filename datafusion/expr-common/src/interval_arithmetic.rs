@@ -606,7 +606,7 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible data types for logical conjunction"),
+            _ => internal_err!("Incompatible data types for logical disjunction"),
         }
     }
 
@@ -971,6 +971,7 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::Lt => lhs.lt(rhs),
         Operator::LtEq => lhs.lt_eq(rhs),
         Operator::And => lhs.and(rhs),
+        Operator::Or => lhs.or(rhs),
         Operator::Plus => lhs.add(rhs),
         Operator::Minus => lhs.sub(rhs),
         Operator::Multiply => lhs.mul(rhs),

@@ -1,0 +1,20 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "--file"
+    - tests/sql/types_format.sql
+    - "-q"
+---
+success: true
+exit_code: 0
+----- stdout -----
++-----------+
+| Int64(54) |
+| Int64     |
++-----------+
+| 54        |
++-----------+
+
+----- stderr -----

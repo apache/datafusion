@@ -25,12 +25,12 @@ use crate::coalesce_batches::CoalesceBatches;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
+use crate::filter_pushdown::FilterPushdown;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
-use crate::push_down_filter::PushdownFilter;
 use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
@@ -125,7 +125,7 @@ impl PhysicalOptimizer {
             // The FilterPushdown rule tries to push down filters as far as it can.
             // For example, it will push down filtering from a `FilterExec` to
             // a `DataSourceExec`, or from a `TopK`'s current state to a `DataSourceExec`.
-            Arc::new(PushdownFilter::new()),
+            Arc::new(FilterPushdown::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.

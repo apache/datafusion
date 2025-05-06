@@ -94,17 +94,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         let keys = ColumnarValue::Scalar(ScalarValue::List(Arc::new(key_list)));
         let values = ColumnarValue::Scalar(ScalarValue::List(Arc::new(value_list)));
 
-        let return_type = &map_udf()
+        let return_type = map_udf()
             .return_type(&[DataType::Utf8, DataType::Int32])
             .expect("should get return type");
+        let return_field = &Field::new("f", return_type, true);
 
         b.iter(|| {
             black_box(
                 map_udf()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![keys.clone(), values.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", keys.data_type(), true),
+                            &Field::new("a", values.data_type(), true),
+                        ],
                         number_rows: 1,
-                        return_type,
+                        return_field,
                     })
                     .expect("map should work on valid values"),
             );

@@ -69,6 +69,10 @@ fn init() {
     // can choose the old explain format too
     ["--command", "EXPLAIN FORMAT indent SELECT 123"],
 )]
+#[case::change_format_version(
+    "change_format_version",
+    ["--file", "tests/sql/types_format.sql", "-q"],
+)]
 #[test]
 fn cli_quick_test<'a>(
     #[case] snapshot_name: &'a str,

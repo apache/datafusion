@@ -44,11 +44,10 @@ use datafusion_physical_expr::{
     aggregate::AggregateExprBuilder, conjunction, Partitioning,
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use datafusion_physical_optimizer::push_down_filter::PushdownFilter;
+use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
+    FilterPushdownPropagation, PredicateSupports,
 };
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
@@ -154,29 +153,24 @@ impl FileSource for TestSource {
 
     fn try_pushdown_filters(
         &self,
-        mut fd: FilterDescription,
+        mut filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
+    ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         if self.support && config.execution.parquet.pushdown_filters {
             if let Some(internal) = self.predicate.as_ref() {
-                fd.filters.push(Arc::clone(internal));
+                filters.push(Arc::clone(internal));
             }
-            let all_filters = fd.take_description();
-
-            Ok(FilterPushdownResult {
-                support: FilterPushdownSupport::Supported {
-                    child_descriptions: vec![],
-                    op: Arc::new(TestSource {
-                        support: true,
-                        predicate: Some(conjunction(all_filters)),
-                        statistics: self.statistics.clone(), // should be updated in reality
-                    }),
-                    revisit: false,
-                },
-                remaining_description: FilterDescription::empty(),
+            let new_node = Arc::new(TestSource {
+                support: true,
+                predicate: Some(conjunction(filters.clone())),
+                statistics: self.statistics.clone(), // should be updated in reality
+            });
+            Ok(FilterPushdownPropagation {
+                filters: PredicateSupports::all_supported(filters),
+                updated_node: Some(new_node),
             })
         } else {
-            Ok(filter_pushdown_not_supported(fd))
+            Ok(FilterPushdownPropagation::unsupported(filters))
         }
     }
 }
@@ -201,7 +195,7 @@ fn test_pushdown_into_scan() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}, true),
+        OptimizationTest::new(plan, FilterPushdown{}, true),
         @r"
     OptimizationTest:
       input:
@@ -225,7 +219,7 @@ fn test_pushdown_into_scan_with_config_options() {
     insta::assert_snapshot!(
         OptimizationTest::new(
             Arc::clone(&plan),
-            PushdownFilter {},
+            FilterPushdown {},
             false
         ),
         @r"
@@ -244,7 +238,7 @@ fn test_pushdown_into_scan_with_config_options() {
     insta::assert_snapshot!(
         OptimizationTest::new(
             plan,
-            PushdownFilter {},
+            FilterPushdown {},
             true
         ),
         @r"
@@ -269,7 +263,7 @@ fn test_filter_collapse() {
     let plan = Arc::new(FilterExec::try_new(predicate2, filter1).unwrap());
 
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}, true),
+        OptimizationTest::new(plan, FilterPushdown{}, true),
         @r"
     OptimizationTest:
       input:
@@ -278,7 +272,7 @@ fn test_filter_collapse() {
         -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar AND a@0 = foo
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
@@ -288,25 +282,28 @@ fn test_filter_with_projection() {
     let scan = test_scan(true);
     let projection = vec![1, 0];
     let predicate = col_lit_predicate("a", "foo", schema());
-    let plan = Arc::new(
-        FilterExec::try_new(predicate, Arc::clone(&scan))
+    let filter = Arc::new(
+        FilterExec::try_new(Arc::clone(&predicate), Arc::clone(&scan))
             .unwrap()
             .with_projection(Some(projection))
             .unwrap(),
     );
+    let predicate = col_lit_predicate("b", "bar", &filter.schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, filter).unwrap());
 
     // expect the predicate to be pushed down into the DataSource but the FilterExec to be converted to ProjectionExec
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}, true),
+        OptimizationTest::new(plan, FilterPushdown{}, true),
         @r"
     OptimizationTest:
       input:
-        - FilterExec: a@0 = foo, projection=[b@1, a@0]
-        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        - FilterExec: b@0 = bar
+        -   FilterExec: a@0 = foo, projection=[b@1, a@0]
+        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b, a@0 as a]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     ",
     );
 
@@ -320,7 +317,7 @@ fn test_filter_with_projection() {
             .unwrap(),
     );
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{},true),
+        OptimizationTest::new(plan, FilterPushdown{},true),
         @r"
     OptimizationTest:
       input:
@@ -349,7 +346,7 @@ fn test_push_down_through_transparent_nodes() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{},true),
+        OptimizationTest::new(plan, FilterPushdown{},true),
         @r"
     OptimizationTest:
       input:
@@ -362,7 +359,7 @@ fn test_push_down_through_transparent_nodes() {
         Ok:
           - RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=0
           -   CoalesceBatchesExec: target_batch_size=1
-          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar AND a@0 = foo
+          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
@@ -413,7 +410,7 @@ fn test_no_pushdown_through_aggregates() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}, true),
+        OptimizationTest::new(plan, FilterPushdown{}, true),
         @r"
     OptimizationTest:
       input:

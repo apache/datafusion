@@ -18,14 +18,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, Timestamp, Utf8};
 use arrow::datatypes::TimeUnit::Second;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -82,12 +81,12 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         &self.signature
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
         // Length check handled in the signature
         debug_assert!(matches!(args.scalar_arguments.len(), 1 | 2));
 
         if args.scalar_arguments.len() == 1 {
-            Ok(ReturnInfo::new_nullable(Timestamp(Second, None)))
+            Ok(Field::new(self.name(), Timestamp(Second, None), true))
         } else {
             args.scalar_arguments[1]
                 .and_then(|sv| {
@@ -95,10 +94,11 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
                         .flatten()
                         .filter(|s| !s.is_empty())
                         .map(|tz| {
-                            ReturnInfo::new_nullable(Timestamp(
-                                Second,
-                                Some(Arc::from(tz.to_string())),
-                            ))
+                            Field::new(
+                                self.name(),
+                                Timestamp(Second, Some(Arc::from(tz.to_string()))),
+                                true,
+                            )
                         })
                 })
                 .map_or_else(
@@ -114,7 +114,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("call return_type_from_args instead")
+        internal_err!("call return_field_from_args instead")
     }
 
     fn invoke_with_args(
@@ -161,8 +161,8 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
 #[cfg(test)]
 mod test {
     use crate::datetime::from_unixtime::FromUnixtimeFunc;
-    use arrow::datatypes::DataType;
     use arrow::datatypes::TimeUnit::Second;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Int64;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -170,10 +170,12 @@ mod test {
 
     #[test]
     fn test_without_timezone() {
+        let arg_field = Field::new("a", DataType::Int64, true);
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(Int64(Some(1729900800)))],
+            arg_fields: vec![&arg_field],
             number_rows: 1,
-            return_type: &DataType::Timestamp(Second, None),
+            return_field: &Field::new("f", DataType::Timestamp(Second, None), true),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
@@ -187,6 +189,10 @@ mod test {
 
     #[test]
     fn test_with_timezone() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("a", DataType::Utf8, true),
+        ];
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(Int64(Some(1729900800))),
@@ -194,10 +200,12 @@ mod test {
                     "America/New_York".to_string(),
                 ))),
             ],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 2,
-            return_type: &DataType::Timestamp(
-                Second,
-                Some(Arc::from("America/New_York")),
+            return_field: &Field::new(
+                "f",
+                DataType::Timestamp(Second, Some(Arc::from("America/New_York"))),
+                true,
             ),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();

@@ -64,7 +64,15 @@ impl Command {
                 let command_batch = all_commands_info();
                 let schema = command_batch.schema();
                 let num_rows = command_batch.num_rows();
-                print_options.print_batches(schema, &[command_batch], now, num_rows)
+                let task_ctx = ctx.task_ctx();
+                let config = &task_ctx.session_config().options().format;
+                print_options.print_batches(
+                    schema,
+                    &[command_batch],
+                    now,
+                    num_rows,
+                    config,
+                )
             }
             Self::ListTables => {
                 exec_and_print(ctx, print_options, "SHOW TABLES".into()).await

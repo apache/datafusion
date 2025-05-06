@@ -31,8 +31,8 @@ use itertools::Itertools;
 use log::Level::Info;
 use log::{info, log_enabled};
 use sqllogictest::{
-    parse_file, strict_column_validator, AsyncDB, Condition, Normalizer, Record,
-    Validator,
+    parse_file, strict_column_validator, AsyncDB, Condition, MakeConnection, Normalizer,
+    Record, Validator,
 };
 
 #[cfg(feature = "postgres")]
@@ -50,6 +50,7 @@ const TEST_DIRECTORY: &str = "test_files/";
 const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 const SQLITE_PREFIX: &str = "sqlite";
+const ERRS_PER_FILE_LIMIT: usize = 10;
 
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -234,15 +235,45 @@ async fn run_test_file(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-
-    let res = runner
-        .run_file_async(path)
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)));
-
+    let result = run_file_in_runner(path, runner).await;
     pb.finish_and_clear();
+    result
+}
 
-    res
+async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
+    path: PathBuf,
+    mut runner: sqllogictest::Runner<D, M>,
+) -> Result<()> {
+    let path = path.canonicalize()?;
+    let records =
+        parse_file(&path).map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let mut errs = vec![];
+    for record in records.into_iter() {
+        if let Record::Halt { .. } = record {
+            break;
+        }
+        if let Err(err) = runner.run_async(record).await {
+            errs.push(format!("{err}"));
+        }
+    }
+
+    if !errs.is_empty() {
+        let mut msg = format!("{} errors in file {}\n\n", errs.len(), path.display());
+        for (i, err) in errs.iter().enumerate() {
+            if i >= ERRS_PER_FILE_LIMIT {
+                msg.push_str(&format!(
+                    "... other {} errors in {} not shown ...\n\n",
+                    errs.len() - ERRS_PER_FILE_LIMIT,
+                    path.display()
+                ));
+                break;
+            }
+            msg.push_str(&format!("{}. {err}\n\n", i + 1));
+        }
+        return Err(DataFusionError::External(msg.into()));
+    }
+
+    Ok(())
 }
 
 fn get_record_count(path: &PathBuf, label: String) -> u64 {
@@ -308,14 +339,9 @@ async fn run_test_file_with_postgres(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    runner
-        .run_file_async(path)
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
+    let result = run_file_in_runner(path, runner).await;
     pb.finish_and_clear();
-
-    Ok(())
+    result
 }
 
 #[cfg(not(feature = "postgres"))]
