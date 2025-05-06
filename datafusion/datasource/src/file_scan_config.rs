@@ -600,12 +600,9 @@ impl DataSource for FileScanConfig {
         let result = self.file_source.try_pushdown_filters(filters, config)?;
         match result.updated_node {
             Some(new_file_source) => {
-                let file_scan_config = FileScanConfigBuilder::new(
-                    self.object_store_url.clone(),
-                    Arc::clone(&self.file_schema),
-                    new_file_source,
-                )
-                .build();
+                let file_scan_config = FileScanConfigBuilder::from(self.clone())
+                    .with_source(new_file_source)
+                    .build();
                 Ok(FilterPushdownPropagation {
                     filters: result.filters,
                     updated_node: Some(Arc::new(file_scan_config) as _),
