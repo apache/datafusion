@@ -367,22 +367,21 @@ impl EquivalenceProperties {
         mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Self {
-        // Filter out constant expressions as they don't affect ordering:
-        let filtered_exprs = ordering
+        // Normalize the given ordering:
+        let normalized_ordering = ordering
             .into_iter()
             .filter(|expr| self.is_expr_constant(&expr.expr).is_none());
-
-        if let Some(filtered_exprs) = LexOrdering::new(filtered_exprs) {
+        if let Some(normalized_ordering) = LexOrdering::new(normalized_ordering) {
             // Preserve valid suffixes from existing orderings:
-            let oeq_class = mem::take(&mut self.oeq_class);
-            let mut new_orderings = oeq_class
-                .into_iter()
-                .filter(|existing| self.is_prefix_of(&filtered_exprs, existing))
-                .collect::<Vec<_>>();
-            if new_orderings.is_empty() {
-                new_orderings.push(filtered_exprs);
+            let mut orderings: Vec<_> = mem::take(&mut self.oeq_class).into();
+            orderings.retain(|existing| {
+                // Check if the existing ordering is a prefix of the new ordering:
+                self.is_prefix_of(&normalized_ordering, existing)
+            });
+            if orderings.is_empty() {
+                orderings.push(normalized_ordering);
             }
-            self.oeq_class = new_orderings.into();
+            self.oeq_class = OrderingEquivalenceClass::new(orderings);
         }
         self
     }
