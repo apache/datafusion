@@ -430,7 +430,7 @@ mod tests {
     fn test_byte_group_value_builder_overflow() {
         let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
 
-        let large_string = std::iter::repeat('a').take(1024 * 1024).collect::<String>();
+        let large_string = "a".repeat(1024 * 1024);
 
         let array =
             Arc::new(StringArray::from(vec![Some(large_string.as_str())])) as ArrayRef;
