@@ -114,13 +114,6 @@ impl PredicateSupports {
             .collect()
     }
 
-    /// Are all filters marked as [`PredicateSupport::Supported`]?
-    pub fn is_exact(&self) -> bool {
-        self.0
-            .iter()
-            .all(|f| matches!(f, PredicateSupport::Supported(_)))
-    }
-
     pub fn into_inner(self) -> Vec<PredicateSupport> {
         self.0
     }
