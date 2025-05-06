@@ -165,22 +165,6 @@ pub fn assert_analyzer_check_err(
 
 fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
-pub fn assert_optimized_plan_eq(
-    rule: Arc<dyn OptimizerRule + Send + Sync>,
-    plan: LogicalPlan,
-    expected: &str,
-) -> Result<()> {
-    // Apply the rule once
-    let opt_context = OptimizerContext::new().with_max_passes(1);
-
-    let optimizer = Optimizer::with_rules(vec![Arc::clone(&rule)]);
-    let optimized_plan = optimizer.optimize(plan, &opt_context, observe)?;
-    let formatted_plan = format!("{optimized_plan}");
-    assert_eq!(formatted_plan, expected);
-
-    Ok(())
-}
-
 #[macro_export]
 macro_rules! assert_optimized_plan_eq_snapshot {
     (
@@ -240,6 +224,24 @@ pub fn assert_optimized_plan_eq_display_indent(
         .expect("failed to optimize plan");
     let formatted_plan = optimized_plan.display_indent_schema().to_string();
     assert_eq!(formatted_plan, expected);
+}
+
+#[macro_export]
+macro_rules! assert_optimized_plan_eq_display_indent_snapshot {
+    (
+        $rule:expr,
+        $plan:expr,
+        @ $expected:literal $(,)?
+    ) => {{
+        let optimizer = $crate::Optimizer::with_rules(vec![$rule]);
+        let optimized_plan = optimizer
+            .optimize($plan, &$crate::OptimizerContext::new(), |_, _| {})
+            .expect("failed to optimize plan");
+        let formatted_plan = optimized_plan.display_indent_schema();
+        insta::assert_snapshot!(formatted_plan, @ $expected);
+
+        Ok::<(), datafusion_common::DataFusionError>(())
+    }};
 }
 
 pub fn assert_multi_rules_optimized_plan_eq_display_indent(
