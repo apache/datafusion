@@ -92,7 +92,7 @@ fn ceil_floor_return_type_from_args(
                     Err(unsupported_data_type_exec_err(
                         name,
                         format!("Decimal Type must have precision <= {DECIMAL128_MAX_PRECISION} and scale <= {DECIMAL128_MAX_SCALE}").as_str(),
-                        &arg_fields[0].data_type(),
+                        arg_fields[0].data_type(),
                     ))
                 }
             }
@@ -139,7 +139,7 @@ fn ceil_floor_return_type_from_args(
                         Err(unsupported_data_type_exec_err(
                             name,
                             format!("Decimal Type must have precision <= {DECIMAL128_MAX_PRECISION} and scale <= {DECIMAL128_MAX_SCALE}").as_str(),
-                            &arg_fields[0].data_type(),
+                            arg_fields[0].data_type(),
                         ))
                     }
                 }
