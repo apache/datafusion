@@ -280,32 +280,31 @@ impl EquivalenceProperties {
         right: Arc<dyn PhysicalExpr>,
     ) -> Result<()> {
         // Add equal expressions to the state:
-        self.eq_group.add_equal_conditions(Arc::clone(&left), right);
-        // Discover any new orderings:
-        self.discover_new_orderings(left)
+        if self.eq_group.add_equal_conditions(Arc::clone(&left), right) {
+            // Discover any new orderings:
+            self.discover_new_orderings(left)?;
+        }
+        Ok(())
     }
 
     /// Track/register physical expressions with constant values.
     pub fn add_constants(&mut self, constants: impl IntoIterator<Item = ConstExpr>) {
-        let c = constants.into_iter().collect::<Vec<_>>();
-        let constants = c.into_iter();
         // Add the new constant to the equivalence group:
         for constant in constants {
             self.eq_group.add_constant(constant);
         }
-        // Discover any new orderings based on the constants
+        // Discover any new orderings based on the constants:
         for ordering in self.normalized_oeq_class().iter() {
-            self.discover_new_orderings(Arc::clone(&ordering[0].expr))
-                .unwrap();
+            let leading = Arc::clone(&ordering[0].expr);
+            self.discover_new_orderings(leading).unwrap();
         }
     }
 
-    // Discover new valid orderings in light of a new equality.
-    // Accepts a single argument (`expr`) which is used to determine
-    // which orderings should be updated.
-    // When constants or equivalence classes are changed, there may be new orderings
-    // that can be discovered with the new equivalence properties.
-    // For a discussion, see: https://github.com/apache/datafusion/issues/9812
+    /// Discover new valid orderings in light of a new equality. Accepts a single
+    /// argument (`expr`) which is used to determine the orderings to update.
+    /// When constants or equivalence classes change, there may be new orderings
+    /// that can be discovered with the new equivalence properties.
+    /// For a discussion, see: <https://github.com/apache/datafusion/issues/9812>
     fn discover_new_orderings(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         let normalized_expr = self.eq_group().normalize_expr(expr);
         let eq_class = self
@@ -424,7 +423,7 @@ impl EquivalenceProperties {
     /// equivalence group within. Returns a `LexRequirement` instance if the
     /// expressions define a proper lexicographical requirement. For more
     /// details, see [`EquivalenceGroup::normalize_sort_exprs`].
-    fn normalize_sort_requirements(
+    pub fn normalize_sort_requirements(
         &self,
         sort_reqs: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> Option<LexRequirement> {
@@ -470,10 +469,8 @@ impl EquivalenceProperties {
             } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
             let satisfy = match sort_properties {
                 SortProperties::Ordered(options) => {
-                    let sort_expr = PhysicalSortExpr {
-                        expr: Arc::clone(&element.expr),
-                        options,
-                    };
+                    let sort_expr =
+                        PhysicalSortExpr::new(Arc::clone(&element.expr), options);
                     sort_expr.satisfy(&element, schema)
                 }
                 // Singleton expressions satisfies any requirement.
@@ -520,10 +517,8 @@ impl EquivalenceProperties {
             } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
             let satisfy = match sort_properties {
                 SortProperties::Ordered(options) => {
-                    let sort_expr = PhysicalSortExpr {
-                        expr: Arc::clone(&element.expr),
-                        options,
-                    };
+                    let sort_expr =
+                        PhysicalSortExpr::new(Arc::clone(&element.expr), options);
                     sort_expr.satisfy_expr(&element, schema)
                 }
                 // Singleton expressions satisfies any ordering.

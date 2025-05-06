@@ -587,9 +587,10 @@ impl OrderingRequirements {
     /// Creates a new instance from the given alternatives. If an empty list of
     /// alternatives are given, returns `None`.
     pub fn new_alternatives(
-        alternatives: Vec<LexRequirement>,
+        alternatives: impl IntoIterator<Item = LexRequirement>,
         soft: bool,
     ) -> Option<Self> {
+        let alternatives = alternatives.into_iter().collect::<Vec<_>>();
         (!alternatives.is_empty()).then(|| {
             if soft {
                 Self::Soft(alternatives)

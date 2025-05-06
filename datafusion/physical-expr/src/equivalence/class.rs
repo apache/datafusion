@@ -379,14 +379,15 @@ impl EquivalenceGroup {
         }
     }
 
-    /// Adds the equality `left` = `right` to this equivalence group.
-    /// New equality conditions often arise after steps like `Filter(a = b)`,
-    /// `Alias(a, a as b)` etc.
+    /// Adds the equality `left` = `right` to this equivalence group. New
+    /// equality conditions often arise after steps like `Filter(a = b)`,
+    /// `Alias(a, a as b)` etc. Returns whether the given equality was
+    /// material (i.e. it was not already known).
     pub fn add_equal_conditions(
         &mut self,
         left: Arc<dyn PhysicalExpr>,
         right: Arc<dyn PhysicalExpr>,
-    ) {
+    ) -> bool {
         let mut idx = 0;
         let size = self.classes.len();
         let mut first_class = None;
@@ -405,17 +406,20 @@ impl EquivalenceGroup {
             (Some(mut first_idx), Some(mut second_idx)) => {
                 // If the given left and right sides belong to different classes,
                 // we should unify/bridge these classes.
-                if first_idx != second_idx {
-                    // By convention, make sure `second_idx` is larger than `first_idx`.
-                    if first_idx > second_idx {
-                        (first_idx, second_idx) = (second_idx, first_idx);
+                match first_idx.cmp(&second_idx) {
+                    // The equality is already known, return and signal this:
+                    std::cmp::Ordering::Equal => return false,
+                    // Swap indices to ensure `first_idx` is the lesser index.
+                    std::cmp::Ordering::Greater => {
+                        std::mem::swap(&mut first_idx, &mut second_idx);
                     }
-                    // Remove the class at `second_idx` and merge its values with
-                    // the class at `first_idx`. The convention above makes sure
-                    // that `first_idx` is still valid after removing `second_idx`.
-                    let other_class = self.classes.swap_remove(second_idx);
-                    self.classes[first_idx].extend(other_class);
+                    _ => {}
                 }
+                // Remove the class at `second_idx` and merge its values with
+                // the class at `first_idx`. The convention above makes sure
+                // that `first_idx` is still valid after removing `second_idx`.
+                let other_class = self.classes.swap_remove(second_idx);
+                self.classes[first_idx].extend(other_class);
             }
             (Some(group_idx), None) => {
                 // Right side is new, extend left side's class:
@@ -431,6 +435,7 @@ impl EquivalenceGroup {
                 self.classes.push(EquivalenceClass::new([left, right]));
             }
         }
+        true
     }
 
     /// Removes redundant entries from this group.
