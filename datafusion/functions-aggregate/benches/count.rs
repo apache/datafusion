@@ -17,7 +17,10 @@
 
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
-use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
+use arrow::util::bench_util::{
+    create_boolean_array, create_dict_from_values, create_primitive_array,
+    create_string_array_with_len,
+};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::count::Count;
@@ -88,6 +91,17 @@ fn count_benchmark(c: &mut Criterion) {
         "count convert state nulls, filter",
         values,
         Some(&filter),
+    );
+
+    let arr = create_string_array_with_len::<i32>(20, 1.0, 50);
+    let values =
+        Arc::new(create_dict_from_values::<Int32Type>(200_000, 0.8, &arr)) as ArrayRef;
+
+    convert_to_state_bench(
+        c,
+        "count low cardinality dict 20% nulls, no filter",
+        values,
+        None,
     );
 }
 
