@@ -1175,7 +1175,7 @@ pub fn ensure_distribution(
     let target_partitions = config.execution.target_partitions;
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
-    let repartition_datasource_scans = config.optimizer.repartition_datasource_scans;
+    let repartition_file_scans = config.optimizer.repartition_file_scans;
     let batch_size = config.execution.batch_size;
     let should_use_estimates = config
         .execution
@@ -1249,13 +1249,13 @@ pub fn ensure_distribution(
                 // Unless partitioning increases the partition count, it is not beneficial:
                 && child.plan.output_partitioning().partition_count() < target_partitions;
 
-            // When `repartition_datasource_scans` is set, attempt to increase
+            // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
             //
             // If repartitioning is not possible (a.k.a. None is returned from `ExecutionPlan::repartitioned`)
             // then no repartitioning will have occurred. As the default implementation returns None, it is only
             // specific physical plan nodes, such as certain datasources, which are repartitioned.
-            if repartition_datasource_scans && roundrobin_beneficial_stats {
+            if repartition_file_scans && roundrobin_beneficial_stats {
                 if let Some(new_child) =
                     child.plan.repartitioned(target_partitions, config)?
                 {

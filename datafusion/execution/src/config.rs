@@ -307,7 +307,7 @@ impl SessionConfig {
 
     /// Enables or disables the use of repartitioning for file scans
     pub fn with_repartition_file_scans(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_datasource_scans = enabled;
+        self.options.optimizer.repartition_file_scans = enabled;
         self
     }
 

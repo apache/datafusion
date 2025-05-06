@@ -652,7 +652,7 @@ config_namespace! {
         /// repartitioned evenly to the desired number of `target_partitions`. Repartitioning can change
         /// the total number of partitions and batches per partition, but does not slice the initial
         /// record tables provided to the MemTable on creation.
-        pub repartition_datasource_scans: bool, default = true
+        pub repartition_file_scans: bool, default = true
 
         /// Should DataFusion repartition data using the partitions keys to execute window
         /// functions in parallel using the provided `target_partitions` level
