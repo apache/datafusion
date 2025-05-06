@@ -68,9 +68,9 @@ pub fn join_equivalence_properties(
                 // then we should add `a ASC, b ASC` to the ordering equivalences
                 // of the join output.
                 let out_oeq_class = left_oeq_class.join_suffix(&right_oeq_class);
-                result.extend_orderings(out_oeq_class);
+                result.add_orderings(out_oeq_class);
             } else {
-                result.extend_orderings(left_oeq_class);
+                result.add_orderings(left_oeq_class);
             }
         }
         [false, true] => {
@@ -91,9 +91,9 @@ pub fn join_equivalence_properties(
                 // then we should add `b ASC, a ASC` to the ordering equivalences
                 // of the join output.
                 let out_oeq_class = right_oeq_class.join_suffix(&left_oeq_class);
-                result.extend_orderings(out_oeq_class);
+                result.add_orderings(out_oeq_class);
             } else {
-                result.extend_orderings(right_oeq_class);
+                result.add_orderings(right_oeq_class);
             }
         }
         [false, false] => {}
@@ -271,7 +271,7 @@ mod tests {
             &join_type,
             left_columns_len,
         );
-        join_eq_properties.extend_orderings(right_oeq_class);
+        join_eq_properties.add_orderings(right_oeq_class);
         let result = join_eq_properties.oeq_class().clone();
 
         // [x ASC, y ASC], [z ASC, w ASC]

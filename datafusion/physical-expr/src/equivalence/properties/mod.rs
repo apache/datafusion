@@ -228,9 +228,9 @@ impl EquivalenceProperties {
 
     /// Extends this `EquivalenceProperties` with the `other` object.
     pub fn extend(mut self, other: Self) -> Self {
-        self.eq_group.extend(other.eq_group);
-        self.oeq_class.extend(other.oeq_class);
         self.constraints.extend(other.constraints);
+        self.add_equivalence_group(other.eq_group);
+        self.add_orderings(other.oeq_class);
         self
     }
 
@@ -244,12 +244,6 @@ impl EquivalenceProperties {
     /// This method should be used when merging data from different partitions.
     pub fn clear_per_partition_constants(&mut self) {
         self.eq_group.clear_per_partition_constants();
-    }
-
-    /// Extends this `EquivalenceProperties` by adding the orderings inside
-    /// collection `other`.
-    pub fn extend_orderings(&mut self, other: impl IntoIterator<Item = LexOrdering>) {
-        self.oeq_class.extend(other);
     }
 
     /// Adds new orderings into the existing ordering equivalence class.
@@ -361,7 +355,7 @@ impl EquivalenceProperties {
             }
         }
 
-        self.oeq_class.add_orderings(new_orderings);
+        self.add_orderings(new_orderings);
         Ok(())
     }
 
