@@ -808,16 +808,21 @@ impl MemorySourceConfig {
             // order of the partitions & newly created partitions.
             let mut cannot_split_further = Vec::with_capacity(target_partitions);
             for _ in 0..cnt_to_repartition {
+                // triggers loop for the cnt_to_repartition. So if need another 4 partitions, it attempts to split 4 times.
                 loop {
+                    // Take the largest item off the heap, and attempt to split.
                     let Some(to_split) = max_heap.pop() else {
+                        // Nothing left to attempt repartition. Break inner loop.
                         break;
                     };
 
+                    // Split the partition. The new partitions will be ordered with idx and idx+1.
                     let mut new_partitions = to_split.split();
                     if new_partitions.len() > 1 {
                         for new_partition in new_partitions {
                             max_heap.push(new_partition);
                         }
+                        // Successful repartition. Break inner loop, and return to outer `cnt_to_repartition` loop.
                         break;
                     } else {
                         cannot_split_further.push(new_partitions.remove(0));
@@ -828,6 +833,7 @@ impl MemorySourceConfig {
             partitions.extend(cannot_split_further);
 
             // Finally, sort all partitions by the output ordering.
+            // This was the original ordering of the batches within the partition. We are maintaining this ordering.
             partitions.sort_by_key(|p| p.idx);
             let partitions = partitions.into_iter().map(|rep| rep.batches).collect_vec();
 
