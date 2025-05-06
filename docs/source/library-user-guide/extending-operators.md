@@ -349,15 +349,6 @@ impl ExecutionPlan for TopKExec {
 - Contains helper functions like `add_row`, `remove_lowest_value`, and `accumulate_batch` for execution logic.
 
 ```rust
-use futures::Stream;
-use std::task::{Context, Poll};
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use arrow::record_batch::RecordBatch;
-use arrow::array::{Int64Array, StringArray};
-use datafusion::common::cast::{as_int64_array, as_string_array};
-use datafusion::error::Result;
-
 struct TopKReader {
     /// The input to read data from
     input: SendableRecordBatchStream,
