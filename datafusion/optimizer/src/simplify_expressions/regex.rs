@@ -331,7 +331,7 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
         }
         HirKind::Concat(inner) => {
             if let Some(pattern) = partial_anchored_literal_to_like(inner)
-                .or(collect_concat_to_like_string(inner))
+                .or_else(|| collect_concat_to_like_string(inner))
             {
                 return Some(mode.expr(Box::new(left.clone()), pattern));
             }
