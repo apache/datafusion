@@ -19,7 +19,7 @@
 
 # Extending DataFusion's operators: custom LogicalPlan and Execution Plans
 
-This module contains an end to end demonstration of creatinga user defined operator in DataFusion.12 .Specifically, it shows how to define a `TopKNode` that implements `ExtensionPlanNode` that add an OptimizerRule to rewrite a `LogicalPlan` to use that node as a `LogicalPlan`, create an `ExecutionPlan` and finally produce results.
+This module contains an end-to-end demonstration of creating a user-defined operator in DataFusion. Specifically, it shows how to define a `TopKNode` that implements `ExtensionPlanNode`, add an OptimizerRule to rewrite a `LogicalPlan` to use that node, create an `ExecutionPlan`, and finally produce results.
 
 ## TopK Background:
 
@@ -48,57 +48,55 @@ explain SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
 +--------------+----------------------------------------+
 ```
 
-While this plan produces the correct answer, the careful reader will note it fully sorts the input before discarding everythingother than the top 3 elements.
+While this plan produces the correct answer, the careful reader will note it fully sorts the input before discarding everything other than the top 3 elements.
 The same answer can be produced by simply keeping track of the top N elements, reducing the total amount of required buffer memory.
 
 ## Process for Defining Extending Operator
 
-The below example illustrates the example of topK node :
+The following example illustrates the implementation of a `TopK` node:
 
 ### LogicalPlan Node Definition
 
 - This section defines the custom logical plan node `TopKPlanNode`, which represents the `TopK` operation.
 - It includes trait implementations like `UserDefinedLogicalNodeCore` and Debug.
-  code:
+**Code:**
 
 ```rust
-# pub use datafusion::common::{
-#     cast::{as_int64_array, as_string_array},
-#     tree_node::Transformed,
-#     types::TypeSignature::Extension,
-#     DataFusionError,
-# };
-# pub use datafusion::execution::{SessionState, TaskContext};
-# pub use datafusion::logical_expr::{
-#     FetchType, LogicalPlan, LogicalPlan::Sort, UserDefinedLogicalNode,
-# };
-# pub use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
-# pub use datafusion::physical_expr::EquivalenceProperties;
-# pub use datafusion::physical_plan::{
-#     execution_plan::{Boundedness, EmissionType},
-#     internal_err, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-#     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
-# };
-# pub use datafusion::physical_planner::{
-#     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
-# };
-# pub use arrow::array::{Int64Array, StringArray};
-# pub use arrow::datatypes::SchemaRef;
-# pub use arrow::record_batch::RecordBatch;
-# pub use async_trait::async_trait;
-# pub use futures::Stream;
-# pub use std::{
-#     any::Any,
-#     collections::BTreeMap,
-#     fmt::{self, Debug},
-#     sync::Arc,
-#     task::{Context, Poll},
-# };
-#use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream};
-#use datafusion_execution::TaskContext;
-#use std::sync::Arc;
-#use std::collections::BTreeMap;
-#use parquet::file::statistics::Statistics;
+use datafusion::common::{
+    cast::{as_int64_array, as_string_array},
+    tree_node::Transformed,
+    types::TypeSignature::Extension,
+    DataFusionError,
+};
+use datafusion::execution::{SessionState, TaskContext};
+use datafusion::logical_expr::{
+    FetchType, LogicalPlan, LogicalPlan::Sort, UserDefinedLogicalNode,
+};
+use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
+use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_plan::{
+    execution_plan::{Boundedness, EmissionType},
+    internal_err, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+};
+use datafusion::physical_planner::{
+    DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
+};
+use arrow::array::{Int64Array, StringArray};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use async_trait::async_trait;
+use futures::Stream;
+use std::{
+    any::Any,
+    collections::BTreeMap,
+    fmt::{self, Debug},
+    sync::Arc,
+    task::{Context, Poll},
+};
+use datafusion::physical_planner::planner::QueryPlanner;
+
+
 #[derive(Debug)]
 struct TopKQueryPlanner {}
 
@@ -131,6 +129,11 @@ impl QueryPlanner for TopKQueryPlanner {
   code:
 
 ```rust
+use std::sync::Arc;
+use datafusion::logical_expr::{Expr, Extension};
+use datafusion::logical_expr::Limit;
+use datafusion::logical_expr::Sort as LogicalSort;
+use crate::invariant_mock::InvariantMock;
 #[derive(Default, Debug)]
 struct TopKOptimizerRule {
     /// A testing-only hashable fixture.
@@ -195,6 +198,8 @@ impl OptimizerRule for TopKOptimizerRule {
 -The `TopKPlanner` is implemented to map the custom logical plan node (`TopKPlanNode`) to a physical execution plan (`TopKExec`).
 
 ```rust
+use datafusion::logical_expr::UserDefinedLogicalNode;
+
 struct TopKPlanner {}
 
 #[async_trait]
@@ -232,6 +237,12 @@ impl ExtensionPlanner for TopKPlanner {
   code:
 
 ```rust
+use datafusion::physical_plan::{Distribution, ExecutionPlan, PlanProperties};
+use datafusion::execution::TaskContext;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter; // if used instead of a custom stream
+use datafusion::error::Result;
+use datafusion::common::internal_err;
+
 struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
     /// The maximum number of values
@@ -338,6 +349,15 @@ impl ExecutionPlan for TopKExec {
 - Contains helper functions like `add_row`, `remove_lowest_value`, and `accumulate_batch` for execution logic.
 
 ```rust
+use futures::Stream;
+use std::task::{Context, Poll};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use arrow::record_batch::RecordBatch;
+use arrow::array::{Int64Array, StringArray};
+use datafusion::common::cast::{as_int64_array, as_string_array};
+use datafusion::error::Result;
+
 struct TopKReader {
     /// The input to read data from
     input: SendableRecordBatchStream,
