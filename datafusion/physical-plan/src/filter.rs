@@ -554,7 +554,8 @@ impl ExecutionPlan for FilterExec {
                             )
                         })
                         .collect::<Vec<_>>();
-                    Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?) as Arc<dyn ExecutionPlan>)
+                    Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
+                        as Arc<dyn ExecutionPlan>)
                 }
                 None => {
                     // No projection needed, just return the input

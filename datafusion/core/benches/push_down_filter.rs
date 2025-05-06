@@ -107,16 +107,13 @@ fn bench_push_down_filter(c: &mut Criterion) {
     let plan = BenchmarkPlan { plan, config };
     let optimizer = FilterPushdown::new();
 
-    c.bench_function(
-        "push_down_filter",
-        |b| {
-            b.iter(|| {
-                optimizer
-                    .optimize(Arc::clone(&plan.plan), &plan.config)
-                    .unwrap();
-            });
-        },
-    );
+    c.bench_function("push_down_filter", |b| {
+        b.iter(|| {
+            optimizer
+                .optimize(Arc::clone(&plan.plan), &plan.config)
+                .unwrap();
+        });
+    });
 }
 
 // It's a bit absurd that it's this complicated but to generate a flamegraph you can run:
