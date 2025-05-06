@@ -416,8 +416,8 @@ pub async fn from_substrait_sorts(
 pub(crate) mod tests {
     use super::make_renamed_schema;
     use crate::extensions::Extensions;
-    use crate::logical_plan::consumer::DefaultSubstraitConsumer;
-    use datafusion::arrow::datatypes::{DataType, Field};
+    use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::DFSchema;
     use datafusion::error::Result;
     use datafusion::execution::SessionState;
@@ -425,6 +425,10 @@ pub(crate) mod tests {
     use datafusion::sql::TableReference;
     use std::collections::HashMap;
     use std::sync::{Arc, LazyLock};
+    use substrait::proto::expression::literal::LiteralType;
+    use substrait::proto::expression::{Literal, RexType, ScalarFunction};
+    use substrait::proto::function_argument::ArgType;
+    use substrait::proto::{Expression, FunctionArgument};
 
     pub(crate) static TEST_SESSION_STATE: LazyLock<SessionState> =
         LazyLock::new(|| SessionContext::default().state());
@@ -558,6 +562,44 @@ pub(crate) mod tests {
                 false,
             )
         );
+        Ok(())
+    }
+
+    /// Test that large argument lists for binary operations do not crash the consumer
+    #[tokio::test]
+    async fn test_binary_op_large_argument_list() -> Result<()> {
+        // Build substrait extensions (we are using only one function)
+        let mut extensions = Extensions::default();
+        extensions.functions.insert(0, String::from("or:bool_bool"));
+        // Build substrait consumer
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+
+        // Build arguments for the function call, this is basically an OR(true, true, ..., true)
+        let arg = FunctionArgument {
+            arg_type: Some(ArgType::Value(Expression {
+                rex_type: Some(RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::Boolean(true)),
+                })),
+            })),
+        };
+        let arguments = vec![arg; 50000];
+        let func = ScalarFunction {
+            function_reference: 0,
+            arguments,
+            ..Default::default()
+        };
+        // Trivial input schema
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        // Consume the expression and ensure we don't crash
+        let _ = consumer
+            .consume_scalar_function(&func, &df_schema)
+            .await
+            .expect("This should succeed");
+
         Ok(())
     }
 }
