@@ -17,6 +17,7 @@
 
 use super::binary::binary_numeric_coercion;
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
+use arrow::datatypes::Field;
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
@@ -77,19 +78,19 @@ pub fn data_types_with_scalar_udf(
 
 /// Performs type coercion for aggregate function arguments.
 ///
-/// Returns the data types to which each argument must be coerced to
+/// Returns the fields to which each argument must be coerced to
 /// match `signature`.
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
-pub fn data_types_with_aggregate_udf(
-    current_types: &[DataType],
+pub fn fields_with_aggregate_udf(
+    current_fields: &[Field],
     func: &AggregateUDF,
-) -> Result<Vec<DataType>> {
+) -> Result<Vec<Field>> {
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
+    if current_fields.is_empty() && type_signature != &TypeSignature::UserDefined {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
@@ -99,17 +100,29 @@ pub fn data_types_with_aggregate_udf(
             return plan_err!("'{}' does not support zero arguments", func.name());
         }
     }
+    let current_types = current_fields
+        .iter()
+        .map(|f| f.data_type())
+        .cloned()
+        .collect::<Vec<_>>();
 
     let valid_types =
-        get_valid_types_with_aggregate_udf(type_signature, current_types, func)?;
+        get_valid_types_with_aggregate_udf(type_signature, &current_types, func)?;
     if valid_types
         .iter()
-        .any(|data_type| data_type == current_types)
+        .any(|data_type| data_type == &current_types)
     {
-        return Ok(current_types.to_vec());
+        return Ok(current_fields.to_vec());
     }
 
-    try_coerce_types(func.name(), valid_types, current_types, type_signature)
+    let updated_types =
+        try_coerce_types(func.name(), valid_types, &current_types, type_signature)?;
+
+    Ok(current_fields
+        .iter()
+        .zip(updated_types)
+        .map(|(current_field, new_type)| current_field.clone().with_data_type(new_type))
+        .collect())
 }
 
 /// Performs type coercion for window function arguments.
@@ -119,14 +132,14 @@ pub fn data_types_with_aggregate_udf(
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
-pub fn data_types_with_window_udf(
-    current_types: &[DataType],
+pub fn fields_with_window_udf(
+    current_fields: &[Field],
     func: &WindowUDF,
-) -> Result<Vec<DataType>> {
+) -> Result<Vec<Field>> {
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
+    if current_fields.is_empty() && type_signature != &TypeSignature::UserDefined {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
@@ -137,16 +150,28 @@ pub fn data_types_with_window_udf(
         }
     }
 
+    let current_types = current_fields
+        .iter()
+        .map(|f| f.data_type())
+        .cloned()
+        .collect::<Vec<_>>();
     let valid_types =
-        get_valid_types_with_window_udf(type_signature, current_types, func)?;
+        get_valid_types_with_window_udf(type_signature, &current_types, func)?;
     if valid_types
         .iter()
-        .any(|data_type| data_type == current_types)
+        .any(|data_type| data_type == &current_types)
     {
-        return Ok(current_types.to_vec());
+        return Ok(current_fields.to_vec());
     }
 
-    try_coerce_types(func.name(), valid_types, current_types, type_signature)
+    let updated_types =
+        try_coerce_types(func.name(), valid_types, &current_types, type_signature)?;
+
+    Ok(current_fields
+        .iter()
+        .zip(updated_types)
+        .map(|(current_field, new_type)| current_field.clone().with_data_type(new_type))
+        .collect())
 }
 
 /// Performs type coercion for function arguments.

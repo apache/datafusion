@@ -161,7 +161,7 @@ impl AggregateUDFImpl for FirstValue {
             acc_args.ordering_req.is_empty() || self.requirement_satisfied;
 
         FirstValueAccumulator::try_new(
-            acc_args.return_type,
+            acc_args.return_field.data_type(),
             &ordering_dtypes,
             acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
@@ -172,7 +172,7 @@ impl AggregateUDFImpl for FirstValue {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new(
             format_state_name(args.name, "first_value"),
-            args.return_type.clone(),
+            args.return_field.data_type().clone(),
             true,
         )];
         fields.extend(args.ordering_fields.to_vec());
@@ -184,7 +184,7 @@ impl AggregateUDFImpl for FirstValue {
         // TODO: extract to function
         use DataType::*;
         matches!(
-            args.return_type,
+            args.return_field.data_type(),
             Int8 | Int16
                 | Int32
                 | Int64
@@ -225,13 +225,13 @@ impl AggregateUDFImpl for FirstValue {
             Ok(Box::new(FirstPrimitiveGroupsAccumulator::<T>::try_new(
                 args.ordering_req.clone(),
                 args.ignore_nulls,
-                args.return_type,
+                args.return_field.data_type(),
                 &ordering_dtypes,
                 true,
             )?))
         }
 
-        match args.return_type {
+        match args.return_field.data_type() {
             DataType::Int8 => create_accumulator::<Int8Type>(args),
             DataType::Int16 => create_accumulator::<Int16Type>(args),
             DataType::Int32 => create_accumulator::<Int32Type>(args),
@@ -279,7 +279,7 @@ impl AggregateUDFImpl for FirstValue {
             _ => {
                 internal_err!(
                     "GroupsAccumulator not supported for first_value({})",
-                    args.return_type
+                    args.return_field.data_type()
                 )
             }
         }
@@ -1031,7 +1031,7 @@ impl AggregateUDFImpl for LastValue {
             acc_args.ordering_req.is_empty() || self.requirement_satisfied;
 
         LastValueAccumulator::try_new(
-            acc_args.return_type,
+            acc_args.return_field.data_type(),
             &ordering_dtypes,
             acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
@@ -1042,14 +1042,14 @@ impl AggregateUDFImpl for LastValue {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         let StateFieldsArgs {
             name,
-            input_types,
-            return_type: _,
+            input_fields,
+            return_field: _,
             ordering_fields,
             is_distinct: _,
         } = args;
         let mut fields = vec![Field::new(
             format_state_name(name, "last_value"),
-            input_types[0].clone(),
+            input_fields[0].data_type().clone(),
             true,
         )];
         fields.extend(ordering_fields.to_vec());
@@ -1085,7 +1085,7 @@ impl AggregateUDFImpl for LastValue {
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
-            args.return_type,
+            args.return_field.data_type(),
             Int8 | Int16
                 | Int32
                 | Int64
@@ -1125,13 +1125,13 @@ impl AggregateUDFImpl for LastValue {
             Ok(Box::new(FirstPrimitiveGroupsAccumulator::<T>::try_new(
                 args.ordering_req.clone(),
                 args.ignore_nulls,
-                args.return_type,
+                args.return_field.data_type(),
                 &ordering_dtypes,
                 false,
             )?))
         }
 
-        match args.return_type {
+        match args.return_field.data_type() {
             DataType::Int8 => create_accumulator::<Int8Type>(args),
             DataType::Int16 => create_accumulator::<Int16Type>(args),
             DataType::Int32 => create_accumulator::<Int32Type>(args),
@@ -1179,7 +1179,7 @@ impl AggregateUDFImpl for LastValue {
             _ => {
                 internal_err!(
                     "GroupsAccumulator not supported for last_value({})",
-                    args.return_type
+                    args.return_field.data_type()
                 )
             }
         }

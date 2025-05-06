@@ -2457,13 +2457,13 @@ fn roundtrip_window() {
         }
 
         fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-            if let Some(return_type) = field_args.get_input_type(0) {
-                Ok(Field::new(field_args.name(), return_type, true))
+            if let Some(return_field) = field_args.get_input_field(0) {
+                Ok(return_field.with_name(field_args.name()))
             } else {
                 plan_err!(
                     "dummy_udwf expects 1 argument, got {}: {:?}",
-                    field_args.input_types().len(),
-                    field_args.input_types()
+                    field_args.input_fields().len(),
+                    field_args.input_fields()
                 )
             }
         }
