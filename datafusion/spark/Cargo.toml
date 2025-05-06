@@ -44,3 +44,4 @@ datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-macros = { workspace = true }
 log = { workspace = true }
+num = "0.4.3"
