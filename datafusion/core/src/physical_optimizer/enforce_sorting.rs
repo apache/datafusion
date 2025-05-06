@@ -1399,7 +1399,7 @@ mod tests {
 
         Ok(())
     }
-    
+
     #[tokio::test]
     async fn test_remove_unnecessary_spm2() -> Result<()> {
         let schema = create_test_schema()?;

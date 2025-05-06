@@ -185,6 +185,7 @@ where
     offsets: Vec<O>,
     /// Nulls
     nulls: MaybeNullBufferBuilder,
+    max_buffer_size: usize,
 }
 
 impl<O> ByteGroupValueBuilder<O>
@@ -197,6 +198,11 @@ where
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()],
             nulls: MaybeNullBufferBuilder::new(),
+            max_buffer_size: if O::IS_LARGE {
+                i64::MAX as usize
+            } else {
+                i32::MAX as usize
+            },
         }
     }
 
@@ -214,6 +220,13 @@ where
             self.nulls.append(false);
             let value: &[u8] = arr.value(row).as_ref();
             self.buffer.append_slice(value);
+
+            assert!(
+                self.buffer.len() <= self.max_buffer_size,
+                "offset overflow, buffer length is greater than {}",
+                self.max_buffer_size
+            );
+
             self.offsets.push(O::usize_as(self.buffer.len()));
         }
     }
@@ -303,6 +316,7 @@ where
             mut buffer,
             offsets,
             nulls,
+            ..
         } = *self;
 
         let null_buffer = nulls.build();
@@ -835,6 +849,24 @@ mod tests {
     };
 
     use super::{ByteGroupValueBuilder, GroupColumn};
+
+    #[test]
+    #[should_panic]
+    fn test_byte_group_value_builder_overflow() {
+        let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
+
+        let large_string = std::iter::repeat('a').take(1024 * 1024).collect::<String>();
+
+        let array =
+            Arc::new(StringArray::from(vec![Some(large_string.as_str())])) as ArrayRef;
+
+        // Append items until our buffer length is 1 + i32::MAX as usize
+        for _ in 0..2048 {
+            builder.append_val(&array, 0);
+        }
+
+        assert_eq!(builder.value(2047), large_string.as_bytes());
+    }
 
     #[test]
     fn test_take_n() {
