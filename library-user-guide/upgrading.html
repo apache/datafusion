@@ -559,6 +559,21 @@
      Physical Expression return field
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#fileformat-supports-filters-pushdown-replaced-with-filesource-try-pushdown-filters">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       FileFormat::supports_filters_pushdown
+      </span>
+     </code>
+     replaced with
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       FileSource::try_pushdown_filters
+      </span>
+     </code>
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -795,6 +810,15 @@ schema. To upgrade structs which implement <code class="docutils literal notrans
 the <code class="docutils literal notranslate"><span class="pre">return_field</span></code> function. There are numerous examples in the <code class="docutils literal notranslate"><span class="pre">physical-expr</span></code>
 crate.</p>
 </section>
+<section id="fileformat-supports-filters-pushdown-replaced-with-filesource-try-pushdown-filters">
+<h3><code class="docutils literal notranslate"><span class="pre">FileFormat::supports_filters_pushdown</span></code> replaced with <code class="docutils literal notranslate"><span class="pre">FileSource::try_pushdown_filters</span></code><a class="headerlink" href="#fileformat-supports-filters-pushdown-replaced-with-filesource-try-pushdown-filters" title="Link to this heading">¶</a></h3>
+<p>To support more general filter pushdown, the <code class="docutils literal notranslate"><span class="pre">FileFormat::supports_filters_pushdown</span></code> was replaced with
+<code class="docutils literal notranslate"><span class="pre">FileSource::try_pushdown_filters</span></code>.
+If you implemented a custom <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code> that uses a custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> you will need to implement
+<code class="docutils literal notranslate"><span class="pre">FileSource::try_pushdown_filters</span></code>.
+See <code class="docutils literal notranslate"><span class="pre">ParquetSource::try_pushdown_filters</span></code> for an example of how to implement this.</p>
+<p><code class="docutils literal notranslate"><span class="pre">FileFormat::supports_filters_pushdown</span></code> has been removed.</p>
+</section>
 </section>
 <section id="datafusion-47-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">47.0.0</span></code><a class="headerlink" href="#datafusion-47-0-0" title="Link to this heading">¶</a></h2>
@@ -986,7 +1010,7 @@ the following must be changed:</p>
 <span class="c1">// Add filter</span>
 <span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">predicate</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">logical_filter</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="n">config</span><span class="p">.</span><span class="n">enable_parquet_pushdown</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">file_source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">file_source</span><span class="p">.</span><span class="n">with_predicate</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">clone</span><span class="p">(</span><span class="o">&amp;</span><span class="n">file_schema</span><span class="p">),</span><span class="w"> </span><span class="n">predicate</span><span class="p">);</span>
+<span class="w">        </span><span class="n">file_source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">file_source</span><span class="p">.</span><span class="n">with_predicate</span><span class="p">(</span><span class="n">predicate</span><span class="p">);</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">};</span>
 
