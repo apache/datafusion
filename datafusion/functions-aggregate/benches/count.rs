@@ -93,7 +93,7 @@ fn count_benchmark(c: &mut Criterion) {
         Some(&filter),
     );
 
-    let arr = create_string_array_with_len::<i32>(20, 1.0, 50);
+    let arr = create_string_array_with_len::<i32>(20, 0.0, 50);
     let values =
         Arc::new(create_dict_from_values::<Int32Type>(200_000, 0.8, &arr)) as ArrayRef;
 
