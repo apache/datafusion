@@ -183,9 +183,11 @@ pub enum NativeType {
     Map(LogicalFieldRef),
 }
 
+pub const NATIVE_TYPE_PREFIX: &str = "NativeType::";
+
 impl Display for NativeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NativeType::{self:?}")
+        write!(f, "{NATIVE_TYPE_PREFIX}{self:?}")
     }
 }
 
