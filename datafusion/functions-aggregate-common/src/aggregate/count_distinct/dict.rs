@@ -17,8 +17,8 @@
 
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::downcast_dictionary_array;
-use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError};
 use datafusion_expr_common::accumulator::Accumulator;
 
 #[derive(Debug)]
@@ -43,13 +43,12 @@ impl Accumulator for DictionaryCountAccumulator {
                         arrow::compute::filter(
                             dict.values(),
                             &buff
-                        )
+                        ).map_err(|e| arrow_datafusion_err!(e))
                     },
-                    _ => unreachable!()
+                    _ => internal_err!("DictionaryCountAccumulator only supports dictionary arrays")
                 }
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| arrow_datafusion_err!(e))?;
+            .collect::<Result<Vec<_>, _>>()?;
         self.inner.update_batch(values.as_slice())
     }
 
