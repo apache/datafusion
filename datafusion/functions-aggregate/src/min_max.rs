@@ -22,15 +22,16 @@ mod min_max_bytes;
 mod min_max_generic;
 
 use arrow::array::{
-    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
-    LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float16Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
@@ -627,6 +628,10 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
+        DataType::Dictionary(_, _) => {
+            let values = values.as_any_dictionary().values();
+            min_batch(values)?
+        }
         _ => min_max_batch!(values, min),
     })
 }
@@ -669,6 +674,10 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 LargeBinary,
                 max_binary
             )
+        }
+        DataType::Dictionary(_, _) => {
+            let values = values.as_any_dictionary().values();
+            max_batch(values)?
         }
         _ => min_max_batch!(values, max),
     })
@@ -1656,8 +1665,11 @@ make_udaf_expr_and_func!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{
-        IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+    use arrow::{
+        array::DictionaryArray,
+        datatypes::{
+            IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+        },
     };
     use std::sync::Arc;
 
@@ -1883,9 +1895,31 @@ mod tests {
     #[test]
     fn test_get_min_max_return_type_coerce_dictionary() -> Result<()> {
         let data_type =
-            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let result = get_min_max_result_type(&[data_type])?;
-        assert_eq!(result, vec![DataType::Int32]);
+        assert_eq!(result, vec![DataType::Utf8]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_min_max_dictionary() -> Result<()> {
+        let values = StringArray::from(vec!["b", "c", "a", "🦀", "d"]);
+        let keys = Int32Array::from(vec![Some(0), Some(1), Some(2), None, Some(4)]);
+        let dict_array =
+            DictionaryArray::try_new(keys, Arc::new(values) as ArrayRef).unwrap();
+        let dict_array_ref = Arc::new(dict_array) as ArrayRef;
+        let rt_type =
+            get_min_max_result_type(&[dict_array_ref.data_type().clone()])?[0].clone();
+
+        let mut min_acc = MinAccumulator::try_new(&rt_type)?;
+        min_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
+        let min_result = min_acc.evaluate()?;
+        assert_eq!(min_result, ScalarValue::Utf8(Some("a".to_string())));
+
+        let mut max_acc = MaxAccumulator::try_new(&rt_type)?;
+        max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
+        let max_result = max_acc.evaluate()?;
+        assert_eq!(max_result, ScalarValue::Utf8(Some("🦀".to_string())));
         Ok(())
     }
 }
