@@ -198,8 +198,12 @@ impl OptimizerRule for TopKOptimizerRule {
 -The `TopKPlanner` is implemented to map the custom logical plan node (`TopKPlanNode`) to a physical execution plan (`TopKExec`).
 
 ```rust
-use datafusion::logical_expr::UserDefinedLogicalNode;
-
+use std::sync::Arc;
+use async_trait::async_trait;
+use datafusion::execution::{SessionState, TaskContext};
+use datafusion::logical_expr::LogicalPlan;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner, ExtensionPlanner};
 struct TopKPlanner {}
 
 #[async_trait]
