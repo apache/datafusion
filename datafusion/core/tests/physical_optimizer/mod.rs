@@ -26,7 +26,7 @@ mod limit_pushdown;
 mod limited_distinct_aggregation;
 mod partition_statistics;
 mod projection_pushdown;
-mod push_down_filter;
+mod filter_pushdown;
 mod replace_with_order_preserving_variants;
 mod sanity_checker;
 mod test_utils;
