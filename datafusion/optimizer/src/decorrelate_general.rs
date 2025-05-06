@@ -33,7 +33,13 @@ use datafusion_common::tree_node::{
     TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{internal_err, not_impl_err, Column, Result};
-use datafusion_expr::{binary_expr, Expr, JoinType, LogicalPlan};
+use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::select_expr::SelectExpr;
+use datafusion_expr::utils::{conjunction, split_conjunction};
+use datafusion_expr::{
+    binary_expr, BinaryExpr, Cast, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Operator as ExprOperator, Subquery,
+};
 use datafusion_sql::unparser::Unparser;
 use indexmap::map::Entry;
 use indexmap::{IndexMap, IndexSet};
@@ -141,7 +147,7 @@ impl DependentJoin {
             let replacement = replacements.get(col).unwrap();
             self.join_conditions.push(binary_expr(
                 Expr::Column(col.clone()),
-                datafusion_expr::Operator::IsNotDistinctFrom,
+                ExprOperator::IsNotDistinctFrom,
                 Expr::Column(replacement.clone()),
             ));
         }
@@ -178,15 +184,56 @@ struct Unnesting {
     // we can substitute the inner query with inner.column_a=some_other_expr
 }
 
+// TODO: looks like this function can be improved to allow more expr pull up
+fn can_pull_up(expr: &Expr) -> bool {
+    if let Expr::BinaryExpr(BinaryExpr {
+        left,
+        op: ExprOperator::Eq,
+        right,
+    }) = expr
+    {
+        match (left.deref(), right.deref()) {
+            (Expr::Column(_), right) => !right.any_column_refs(),
+            (left, Expr::Column(_)) => !left.any_column_refs(),
+            (Expr::Cast(Cast { expr, .. }), right)
+                if matches!(expr.deref(), Expr::Column(_)) =>
+            {
+                !right.any_column_refs()
+            }
+            (left, Expr::Cast(Cast { expr, .. }))
+                if matches!(expr.deref(), Expr::Column(_)) =>
+            {
+                !left.any_column_refs()
+            }
+            (_, _) => false,
+        }
+    } else {
+        false
+    }
+}
+
 struct SimpleDecorrelationResult {
     // new: Option<LogicalPlan>,
-    // if projectoin pull up happened, each will be tracked, so that later on general decorrelation
+    // if projection pull up happened, each will be tracked, so that later on general decorrelation
     // can rewrite them (a.k.a outer ref column maybe renamed/substituted some where in the parent already
     // because the decorrelation is top-down)
     pulled_up_projections: IndexSet<Expr>,
     pulled_up_predicates: Vec<Expr>,
     // simple decorrelation has eliminated all dependent joins
     finished: bool,
+}
+fn expr_contains_sq(expr: &Expr, sq: &Subquery) -> bool {
+    expr.exists(|e| match e {
+        Expr::InSubquery(isq) => Ok(isq.subquery == *sq),
+        Expr::ScalarSubquery(ssq) => {
+            if let LogicalPlan::Subquery(inner_sq) = ssq.subquery.as_ref() {
+                return Ok(inner_sq.clone() == *sq);
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
+    })
+    .unwrap()
 }
 
 // impl Default for GeneralDecorrelation {
@@ -204,7 +251,6 @@ impl AlgebraIndex {
             LogicalPlan::Projection(_) => true,
             LogicalPlan::Filter(_) => true,
             LogicalPlan::Repartition(_) => true,
-            LogicalPlan::Subquery(_) => true, // TODO: is this true???
             _ => false,
         }
     }
@@ -214,7 +260,17 @@ impl AlgebraIndex {
         loop {
             let child_node = self.nodes.get(&current_node).unwrap();
             if !self.is_linear_operator(&child_node.plan) {
-                return false;
+                match child_node.parent {
+                    None => {
+                        unimplemented!("traversing from descedent to top does not meet expected root")
+                    }
+                    Some(new_parent) => {
+                        if new_parent == *parent {
+                            return true;
+                        }
+                        return false;
+                    }
+                }
             }
             if current_node == *parent {
                 return true;
@@ -222,9 +278,6 @@ impl AlgebraIndex {
             match child_node.parent {
                 None => return true,
                 Some(new_parent) => {
-                    if new_parent == *parent {
-                        return true;
-                    }
                     current_node = new_parent;
                 }
             };
@@ -305,14 +358,41 @@ impl AlgebraIndex {
                 // TODO: try_decorrelate for each of the child
             }
             LogicalPlan::Filter(filter) => {
-                let accessed_from_child = &child_node.access_tracker;
-                for col_access in accessed_from_child {
+                // let accessed_from_child = &child_node.access_tracker;
+                let subquery_filter_exprs: Vec<Expr> =
+                    split_conjunction(&filter.predicate)
+                        .into_iter()
+                        .cloned()
+                        .collect();
+
+                let (pulled_up, kept): (Vec<_>, Vec<_>) = subquery_filter_exprs
+                    .iter()
+                    .cloned()
+                    .partition(|e| e.contains_outer() && can_pull_up(e));
+                // only remove the access tracker if non of the kept expr contains reference to the column
+                // i.e some of the remaining expr still reference to the column and not pullable
+                let removable = kept.iter().all(|e| {
+                    !e.exists(|e| {
+                        if let Expr::Column(col) = e {
+                            return Ok(*col == col_access.col);
+                        }
+                        Ok(false)
+                    })
+                    .unwrap()
+                });
+                if removable {
+                    root_node.access_tracker.remove(col_access);
                     println!(
-                        "checking if col {} can be merged into parent's join filter {}",
-                        col_access.debug(),
-                        root_node.plan
-                    )
+                        "remove {} access from node {:?}",
+                        col_access.col, root_node.id
+                    );
                 }
+                result.pulled_up_predicates.extend(pulled_up);
+                if kept.is_empty() {
+                    self.remove_node(root_node, child_node);
+                    return Ok(true);
+                }
+                filter.predicate = conjunction(kept).unwrap();
             }
 
             // LogicalPlan::Subquery(sq) => {
@@ -408,6 +488,69 @@ impl AlgebraIndex {
             join_conditions: vec![],
         }
     }
+    fn get_subquery_children(
+        &self,
+        parent: &Operator,
+    ) -> Result<(LogicalPlan, Subquery)> {
+        let subquery = parent.children.get(0).unwrap();
+        let sq_node = self.nodes.get(subquery).unwrap();
+        assert!(sq_node.is_subquery_node);
+        let query = sq_node.children.get(0).unwrap();
+        let target_node = self.nodes.get(query).unwrap();
+        // let op = .clone();
+        if let LogicalPlan::Subquery(subquery) = sq_node.plan.clone() {
+            return Ok((target_node.plan.clone(), subquery));
+        } else {
+            internal_err!("")
+        }
+    }
+
+    fn build_join_from_simple_unnest(
+        &self,
+        dependent_join_node: &mut Operator,
+        ret: SimpleDecorrelationResult,
+    ) -> Result<LogicalPlan> {
+        let (subquery_children, subquery) =
+            self.get_subquery_children(dependent_join_node)?;
+        match dependent_join_node.plan {
+            LogicalPlan::Filter(ref mut filter) => {
+                let exprs = split_conjunction(&filter.predicate);
+                let mut kept_predicates: Vec<Expr> = exprs
+                    .into_iter()
+                    .filter(|e| !expr_contains_sq(e, &subquery))
+                    .cloned()
+                    .collect();
+                let new_predicates = ret
+                    .pulled_up_predicates
+                    .iter()
+                    .map(|e| strip_outer_reference(e.clone()));
+                // TODO: some predicate is join predicate, some is just filter
+                // kept_predicates.extend(new_predicates);
+                // filter.predicate = conjunction(kept_predicates).unwrap();
+                // left
+                let mut builder = LogicalPlanBuilder::new(filter.input.deref().clone());
+
+                builder =
+                    builder.join_on(subquery_children, JoinType::Left, new_predicates)?;
+                if !ret.pulled_up_projections.is_empty() {
+                    // TODO: do we need to pull up projection?
+                    // when most of the case they will be eliminated anyway
+                    // builder = builder.project(
+                    //     ret.pulled_up_projections
+                    //         .iter()
+                    //         .map(|e| SelectExpr::Expression(e.clone())),
+                    // )?;
+                }
+                if kept_predicates.len() > 0 {
+                    builder = builder.filter(conjunction(kept_predicates).unwrap())?
+                }
+                builder.build()
+            }
+            _ => {
+                unimplemented!()
+            }
+        }
+    }
 
     fn dependent_join_elimination(
         &mut self,
@@ -424,9 +567,12 @@ impl AlgebraIndex {
         // the left side first
 
         let simple_unnest_result = self.simple_decorrelation(node)?;
-        let new_root = self.nodes.get(&node).unwrap();
+        let mut new_root = self.nodes.get(&node).unwrap().clone();
         if new_root.access_tracker.len() == 0 {
-            unimplemented!("reached");
+            println!("after rewriting================================");
+            println!("{:?}", self);
+            return self
+                .build_join_from_simple_unnest(&mut new_root, simple_unnest_result);
             if parent.is_some() {
                 // for each projection of outer column moved up by simple_decorrelation
                 // replace them with the expr store inside parent.replaces
@@ -515,7 +661,7 @@ impl AlgebraIndex {
         &mut self,
         node_id: usize,
     ) -> Result<SimpleDecorrelationResult> {
-        let mut node = self.nodes.get(&node_id).unwrap().clone();
+        let node = self.nodes.get(&node_id).unwrap().clone();
         let mut all_eliminated = false;
         let mut result = SimpleDecorrelationResult {
             // new: None,
@@ -528,8 +674,8 @@ impl AlgebraIndex {
         // most likely no, because if this is recursive, it is already non-linear anyway
         // and simple decorrleation will stop
         for col_access in node.clone().access_tracker.iter() {
-            println!("here");
             let mut parent_node = self.nodes.get(&node_id).unwrap().clone();
+            println!("{}", col_access.node_id);
             let mut cloned_child_node =
                 self.nodes.get(&col_access.node_id).unwrap().clone();
             let branch_all_eliminated = self.try_simple_unnest_descendent(
@@ -596,7 +742,10 @@ impl AlgebraIndex {
             Err(_) => "".to_string(),
         };
         let (node_color, display_str) = match lp {
-            LogicalPlan::Subquery(_) => ("\x1b[32m", format!("\x1b[1m{}", lp.display())),
+            LogicalPlan::Subquery(sq) => (
+                "\x1b[32m",
+                format!("\x1b[1m{}{}", lp.display(), sq.subquery),
+            ),
             _ => ("\x1b[33m", lp.display().to_string()),
         };
 
@@ -691,7 +840,7 @@ impl AlgebraIndex {
     }
 
     fn mark_column_access(&mut self, child_id: usize, col: &Column) {
-        // iter from bottom to top, the goal is to mark the independen_join node
+        // iter from bottom to top, the goal is to mark the dependent node
         // the current child's access
         let mut stack = self.stack.clone();
         stack.push(child_id);
@@ -763,7 +912,8 @@ struct Operator {
 
     // This field is only set if the node is dependent join node
     // it track which child still accessing which column of
-    access_tracker: HashSet<ColumnAccess>,
+    // the insertion order is top down
+    access_tracker: IndexSet<ColumnAccess>,
 
     is_dependent_join_node: bool,
     is_subquery_node: bool,
@@ -906,7 +1056,7 @@ impl TreeNodeVisitor<'_> for AlgebraIndex {
                 is_subquery_node,
                 is_dependent_join_node,
                 children: vec![],
-                access_tracker: HashSet::new(),
+                access_tracker: IndexSet::new(),
             },
         );
 
