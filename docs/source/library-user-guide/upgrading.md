@@ -46,6 +46,16 @@ schema. To upgrade structs which implement `PhysicalExpr` you need to implement
 the `return_field` function. There are numerous examples in the `physical-expr`
 crate.
 
+### `FileFormat::supports_filters_pushdown` replaced with `FileSource::try_pushdown_filters`
+
+To support more general filter pushdown, the `FileFormat::supports_filters_pushdown` was replaced with
+`FileSource::try_pushdown_filters`.
+If you implemented a custom `FileFormat` that uses a custom `FileSource` you will need to implement
+`FileSource::try_pushdown_filters`.
+See `ParquetSource::try_pushdown_filters` for an example of how to implement this.
+
+`FileFormat::supports_filters_pushdown` has been removed.
+
 ## DataFusion `47.0.0`
 
 This section calls out some of the major changes in the `47.0.0` release of DataFusion.
@@ -307,7 +317,7 @@ let mut file_source = ParquetSource::new(parquet_options)
 // Add filter
 if let Some(predicate) = logical_filter {
     if config.enable_parquet_pushdown {
-        file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
+        file_source = file_source.with_predicate(predicate);
     }
 };
 

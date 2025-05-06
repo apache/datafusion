@@ -42,7 +42,7 @@ impl PredicateSupports {
         Self(pushdowns)
     }
 
-    /// Create a new [`PredicateSupports`] with all filters as supported.
+    /// Create a new [`PredicateSupport`] with all filters as supported.
     pub fn all_supported(filters: Vec<Arc<dyn PhysicalExpr>>) -> Self {
         let pushdowns = filters
             .into_iter()
@@ -51,7 +51,7 @@ impl PredicateSupports {
         Self::new(pushdowns)
     }
 
-    /// Create a new [`PredicateSupports`] with all filters as unsupported.
+    /// Create a new [`PredicateSupport`] with all filters as unsupported.
     pub fn all_unsupported(filters: Vec<Arc<dyn PhysicalExpr>>) -> Self {
         let pushdowns = filters
             .into_iter()
@@ -60,8 +60,9 @@ impl PredicateSupports {
         Self::new(pushdowns)
     }
 
-    /// Transform all filters to supported, returning a new FilterPushdowns.
-    /// This does not modify the original [`PredicateSupports`].
+    /// Transform all filters to supported, returning a new [`PredicateSupports`]
+    /// with all filters as [`PredicateSupport::Supported`].
+    /// This does not modify the original [`PredicateSupport`].
     pub fn make_supported(self) -> Self {
         let pushdowns = self
             .0
@@ -74,8 +75,23 @@ impl PredicateSupports {
         Self::new(pushdowns)
     }
 
+    /// Transform all filters to unsupported, returning a new [`PredicateSupports`]
+    /// with all filters as [`PredicateSupport::Supported`].
+    /// This does not modify the original [`PredicateSupport`].
+    pub fn make_unsupported(self) -> Self {
+        let pushdowns = self
+            .0
+            .into_iter()
+            .map(|f| match f {
+                PredicateSupport::Supported(expr) => PredicateSupport::Unsupported(expr),
+                u @ PredicateSupport::Unsupported(_) => u,
+            })
+            .collect();
+        Self::new(pushdowns)
+    }
+
     /// Collect unsupported filters into a Vec, without removing them from the original
-    /// [`PredicateSupports`].
+    /// [`PredicateSupport`].
     pub fn collect_unsupported(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.0
             .iter()
@@ -96,6 +112,13 @@ impl PredicateSupports {
                 | PredicateSupport::Unsupported(expr) => expr,
             })
             .collect()
+    }
+
+    /// Are all filters marked as [`PredicateSupport::Supported`]?
+    pub fn is_exact(&self) -> bool {
+        self.0
+            .iter()
+            .all(|f| matches!(f, PredicateSupport::Supported(_)))
     }
 
     pub fn into_inner(self) -> Vec<PredicateSupport> {
@@ -187,6 +210,20 @@ impl<T> FilterPushdownPropagation<T> {
             updated_node: None,
         }
     }
+
+    /// Create a new [`FilterPushdownPropagation`] with the specified filter support.
+    pub fn with_filters(filters: PredicateSupports) -> Self {
+        Self {
+            filters,
+            updated_node: None,
+        }
+    }
+
+    /// Bind an updated node to the [`FilterPushdownPropagation`].
+    pub fn with_updated_node(mut self, updated_node: T) -> Self {
+        self.updated_node = Some(updated_node);
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -194,7 +231,7 @@ struct ChildFilterDescription {
     /// Description of which parent filters can be pushed down into this node.
     /// Since we need to transmit filter pushdown results back to this node's parent
     /// we need to track each parent filter for each child, even those that are unsupported / won't be pushed down.
-    /// We do this using a [`PredicateSupports`] which simplifies manipulating supported/unsupported filters.
+    /// We do this using a [`PredicateSupport`] which simplifies manipulating supported/unsupported filters.
     parent_filters: PredicateSupports,
     /// Description of which filters this node is pushing down to its children.
     /// Since this is not transmitted back to the parents we can have variable sized inner arrays
@@ -294,6 +331,16 @@ impl FilterDescription {
     pub fn with_self_filter(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         for child in &mut self.child_filter_descriptions {
             child.self_filters = vec![Arc::clone(&predicate)];
+        }
+        self
+    }
+
+    pub fn with_self_filters_for_children(
+        mut self,
+        filters: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    ) -> Self {
+        for (child, filters) in self.child_filter_descriptions.iter_mut().zip(filters) {
+            child.self_filters = filters;
         }
         self
     }

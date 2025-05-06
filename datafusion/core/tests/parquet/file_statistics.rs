@@ -28,6 +28,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
+use datafusion_common::DFSchema;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::cache::cache_unit::{
     DefaultFileStatisticsCache, DefaultListFilesCache,
@@ -37,6 +38,10 @@ use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{col, lit, Expr};
 
 use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::ExecutionPlan;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -47,21 +52,49 @@ async fn check_stats_precision_with_filter_pushdown() {
 
     let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
     let table = get_listing_table(&table_path, None, &opt).await;
+
     let (_, _, state) = get_cache_runtime_state();
+    let mut options = state.config().options().clone();
+    options.execution.parquet.pushdown_filters = true;
+
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
     assert_eq!(
         exec.partition_statistics(None).unwrap().num_rows,
-        Precision::Exact(8)
+        Precision::Exact(8),
+        "Stats without filter should be exact"
     );
 
-    // Scan with filter pushdown, stats are inexact
-    let filter = Expr::gt(col("id"), lit(1));
+    // This is a filter that cannot be evaluated by the table provider scanning
+    // (it is not a partition filter). Therefore; it will be pushed down to the
+    // source operator after the appropriate optimizer pass.
+    let filter_expr = Expr::gt(col("id"), lit(1));
+    let exec_with_filter = table
+        .scan(&state, None, &[filter_expr.clone()], None)
+        .await
+        .unwrap();
 
-    let exec = table.scan(&state, None, &[filter], None).await.unwrap();
+    let ctx = SessionContext::new();
+    let df_schema = DFSchema::try_from(table.schema()).unwrap();
+    let physical_filter = ctx.create_physical_expr(filter_expr, &df_schema).unwrap();
+
+    let filtered_exec =
+        Arc::new(FilterExec::try_new(physical_filter, exec_with_filter).unwrap())
+            as Arc<dyn ExecutionPlan>;
+
+    let optimized_exec = FilterPushdown::new()
+        .optimize(filtered_exec, &options)
+        .unwrap();
+
+    assert!(
+        optimized_exec.as_any().is::<DataSourceExec>(),
+        "Sanity check that the pushdown did what we expected"
+    );
+    // Scan with filter pushdown, stats are inexact
     assert_eq!(
-        exec.partition_statistics(None).unwrap().num_rows,
-        Precision::Inexact(8)
+        optimized_exec.partition_statistics(None).unwrap().num_rows,
+        Precision::Inexact(8),
+        "Stats after filter pushdown should be inexact"
     );
 }
 
