@@ -538,7 +538,7 @@ impl ExecutionPlan for FilterExec {
         // If we have unhandled filters, we need to create a new FilterExec
         let filter_input = Arc::clone(self.input());
         let new_predicate = conjunction(unhandled_filters);
-        let new_exec = if new_predicate.eq(&lit(true)) {
+        let updated_node = if new_predicate.eq(&lit(true)) {
             // FilterExec is no longer needed, but we may need to leave a projection in place
             match self.projection() {
                 Some(projection_indices) => {
@@ -554,25 +554,37 @@ impl ExecutionPlan for FilterExec {
                             )
                         })
                         .collect::<Vec<_>>();
-                    Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
-                        as Arc<dyn ExecutionPlan>
+                    Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
+                        as Arc<dyn ExecutionPlan>)
                 }
                 None => {
                     // No projection needed, just return the input
-                    filter_input
+                    Some(filter_input)
                 }
             }
+        } else if new_predicate.eq(&self.predicate) {
+            // The new predicate is the same as our current predicate
+            None
         } else {
             // Create a new FilterExec with the new predicate
-            Arc::new(
-                FilterExec::try_new(new_predicate, filter_input)?
-                    .with_default_selectivity(self.default_selectivity())?
-                    .with_projection(self.projection().cloned())?,
-            )
+            let new = FilterExec {
+                predicate: Arc::clone(&new_predicate),
+                input: Arc::clone(&filter_input),
+                metrics: self.metrics.clone(),
+                default_selectivity: self.default_selectivity,
+                cache: Self::compute_properties(
+                    &filter_input,
+                    &new_predicate,
+                    self.default_selectivity,
+                    self.projection.as_ref(),
+                )?,
+                projection: None,
+            };
+            Some(Arc::new(new) as _)
         };
         Ok(FilterPushdownPropagation {
             filters: child_pushdown_result.parent_filters.make_supported(),
-            updated_node: Some(new_exec),
+            updated_node,
         })
     }
 }
