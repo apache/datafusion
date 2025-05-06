@@ -24,9 +24,7 @@ use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
 use super::{ListingTableUrl, PartitionedFile};
 use crate::datasource::{
     create_ordering,
-    file_format::{
-        file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
-    },
+    file_format::{file_compression_type::FileCompressionType, FileFormat},
     physical_plan::FileSinkConfig,
 };
 use crate::execution::context::SessionState;
@@ -37,7 +35,7 @@ use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     config_datafusion_err, config_err, internal_err, plan_err, project_schema,
-    Constraints, DataFusionError, Result, SchemaExt, ToDFSchema,
+    Constraints, DataFusionError, Result, SchemaExt,
 };
 use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
@@ -47,9 +45,8 @@ use datafusion_execution::cache::{
     cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
 };
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, SortExpr, TableProviderFilterPushDown, TableType};
-use datafusion_physical_expr::{create_physical_expr, LexOrdering};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
@@ -937,19 +934,6 @@ impl TableProvider for ListingTable {
             None => {} // no ordering required
         };
 
-        let filters = match conjunction(filters.to_vec()) {
-            Some(expr) => {
-                let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
-                let filters = create_physical_expr(
-                    &expr,
-                    &table_df_schema,
-                    state.execution_props(),
-                )?;
-                Some(filters)
-            }
-            None => None,
-        };
-
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
         else {
@@ -974,7 +958,6 @@ impl TableProvider for ListingTable {
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
                 .build(),
-                filters.as_ref(),
             )
             .await
     }
@@ -995,18 +978,6 @@ impl TableProvider for ListingTable {
                 if can_be_evaluted_for_partition_pruning(&partition_column_names, filter)
                 {
                     // if filter can be handled by partition pruning, it is exact
-                    return Ok(TableProviderFilterPushDown::Exact);
-                }
-
-                // if we can't push it down completely with only the filename-based/path-based
-                // column names, then we should check if we can do parquet predicate pushdown
-                let supports_pushdown = self.options.format.supports_filters_pushdown(
-                    &self.file_schema,
-                    &self.table_schema,
-                    &[filter],
-                )?;
-
-                if supports_pushdown == FilePushdownSupport::Supported {
                     return Ok(TableProviderFilterPushDown::Exact);
                 }
 

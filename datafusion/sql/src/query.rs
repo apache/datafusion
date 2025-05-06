@@ -22,14 +22,15 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::stack::StackGuard;
 use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
-use datafusion_expr::select_expr::SelectExpr;
+
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Distinct, LogicalPlan, LogicalPlanBuilder,
+    CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Offset as SQLOffset, OrderBy, OrderByExpr, OrderByKind, Query,
-    SelectInto, SetExpr,
+    Expr as SQLExpr, Ident, Offset as SQLOffset, OrderBy, OrderByExpr, OrderByKind,
+    Query, SelectInto, SetExpr,
 };
+use sqlparser::tokenizer::Span;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an SQL query/subquery
@@ -158,7 +159,7 @@ fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<Vec<OrderByExpr>> {
 /// Returns the order by expressions from the query with the select expressions.
 pub(crate) fn to_order_by_exprs_with_select(
     order_by: Option<OrderBy>,
-    _select_exprs: Option<&Vec<SelectExpr>>, // TODO: ORDER BY ALL
+    select_exprs: Option<&Vec<Expr>>,
 ) -> Result<Vec<OrderByExpr>> {
     let Some(OrderBy { kind, interpolate }) = order_by else {
         // If no order by, return an empty array.
@@ -168,7 +169,30 @@ pub(crate) fn to_order_by_exprs_with_select(
         return not_impl_err!("ORDER BY INTERPOLATE is not supported");
     }
     match kind {
-        OrderByKind::All(_) => not_impl_err!("ORDER BY ALL is not supported"),
+        OrderByKind::All(order_by_options) => {
+            let Some(exprs) = select_exprs else {
+                return Ok(vec![]);
+            };
+            let order_by_exprs = exprs
+                .iter()
+                .map(|select_expr| match select_expr {
+                    Expr::Column(column) => Ok(OrderByExpr {
+                        expr: SQLExpr::Identifier(Ident {
+                            value: column.name.clone(),
+                            quote_style: None,
+                            span: Span::empty(),
+                        }),
+                        options: order_by_options.clone(),
+                        with_fill: None,
+                    }),
+                    // TODO: Support other types of expressions
+                    _ => not_impl_err!(
+                        "ORDER BY ALL is not supported for non-column expressions"
+                    ),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(order_by_exprs)
+        }
         OrderByKind::Expressions(order_by_exprs) => Ok(order_by_exprs),
     }
 }

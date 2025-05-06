@@ -59,7 +59,6 @@ pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
 pub use row_filter::build_row_filter;
-pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use row_group_filter::RowGroupAccessPlanFilter;
 use source::ParquetSource;
 pub use writer::plan_to_parquet;
@@ -223,8 +222,7 @@ impl ParquetExecBuilder {
         } = self;
         let mut parquet = ParquetSource::new(table_parquet_options);
         if let Some(predicate) = predicate.clone() {
-            parquet = parquet
-                .with_predicate(Arc::clone(&file_scan_config.file_schema), predicate);
+            parquet = parquet.with_predicate(predicate);
         }
         if let Some(metadata_size_hint) = metadata_size_hint {
             parquet = parquet.with_metadata_size_hint(metadata_size_hint)
@@ -244,7 +242,7 @@ impl ParquetExecBuilder {
             inner: DataSourceExec::new(Arc::new(base_config.clone())),
             base_config,
             predicate,
-            pruning_predicate: parquet.pruning_predicate,
+            pruning_predicate: None, // for backwards compat since `ParquetExec` is only for backwards compat anyway
             schema_adapter_factory: parquet.schema_adapter_factory,
             parquet_file_reader_factory: parquet.parquet_file_reader_factory,
             table_parquet_options: parquet.table_parquet_options,

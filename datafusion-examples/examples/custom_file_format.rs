@@ -34,7 +34,7 @@ use datafusion::{
     },
     error::Result,
     execution::session_state::SessionStateBuilder,
-    physical_expr::{LexRequirement, PhysicalExpr},
+    physical_expr_common::sort_expr::LexRequirement,
     physical_plan::ExecutionPlan,
     prelude::SessionContext,
 };
@@ -108,11 +108,8 @@ impl FileFormat for TSVFileFormat {
         &self,
         state: &dyn Session,
         conf: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.csv_file_format
-            .create_physical_plan(state, conf, filters)
-            .await
+        self.csv_file_format.create_physical_plan(state, conf).await
     }
 
     async fn create_writer_physical_plan(

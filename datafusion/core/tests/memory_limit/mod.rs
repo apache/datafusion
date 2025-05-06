@@ -534,11 +534,9 @@ async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
 ) -> Result<SessionContext> {
-    let disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
+    let mut disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
 
-    let disk_manager = Arc::try_unwrap(disk_manager)
-        .expect("DiskManager should be a single instance")
-        .with_max_temp_directory_size(disk_limit)?;
+    DiskManager::set_arc_max_temp_directory_size(&mut disk_manager, disk_limit)?;
 
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_pool(Arc::new(FairSpillPool::new(memory_pool_limit)))
@@ -547,7 +545,7 @@ async fn setup_context(
 
     let runtime = Arc::new(RuntimeEnv {
         memory_pool: runtime.memory_pool.clone(),
-        disk_manager: Arc::new(disk_manager),
+        disk_manager,
         cache_manager: runtime.cache_manager.clone(),
         object_store_registry: runtime.object_store_registry.clone(),
     });
