@@ -25,8 +25,6 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
@@ -42,8 +40,6 @@ use datafusion_common::stats::Precision;
 use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
-use datafusion_expr::{col, lit, Expr, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -56,55 +52,6 @@ use object_store::{
 };
 use object_store::{Attributes, MultipartUpload, PutMultipartOpts, PutPayload};
 use url::Url;
-
-#[tokio::test]
-async fn parquet_partition_pruning_filter() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let table = create_partitioned_alltypes_parquet_table(
-        &ctx,
-        &[
-            "year=2021/month=09/day=09/file.parquet",
-            "year=2021/month=10/day=09/file.parquet",
-            "year=2021/month=10/day=28/file.parquet",
-        ],
-        &[
-            ("year", DataType::Int32),
-            ("month", DataType::Int32),
-            ("day", DataType::Int32),
-        ],
-        "mirror:///",
-        "alltypes_plain.parquet",
-    )
-    .await;
-
-    // The first three filters can be resolved using only the partition columns.
-    let filters = [
-        Expr::eq(col("year"), lit(2021)),
-        Expr::eq(col("month"), lit(10)),
-        Expr::eq(col("day"), lit(28)),
-        Expr::gt(col("id"), lit(1)),
-    ];
-    let exec = table.scan(&ctx.state(), None, &filters, None).await?;
-    let data_source_exec = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    if let Some((_, parquet_config)) =
-        data_source_exec.downcast_to_file_source::<ParquetSource>()
-    {
-        let pred = parquet_config.predicate().unwrap();
-        // Only the last filter should be pushdown to TableScan
-        let expected = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
-            Operator::Gt,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-        ));
-
-        assert!(pred.as_any().is::<BinaryExpr>());
-        let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
-
-        assert_eq!(pred, expected.as_ref());
-    }
-    Ok(())
-}
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
