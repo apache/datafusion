@@ -85,7 +85,7 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     ///
     /// We don't store the hashes as hashing fixed width primitives
     /// is fast enough for this not to benefit performance
-    map: HashTable<usize>,
+    map: HashTable<(usize, u64)>,
     /// The group index of the null value if any
     null_group: Option<usize>,
     /// The values for each group index
@@ -127,15 +127,15 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |g| unsafe { self.values.get_unchecked(*g).is_eq(key) },
-                        |g| unsafe { self.values.get_unchecked(*g).hash(state) },
+                        |&(g, _)| unsafe { self.values.get_unchecked(g).is_eq(key) },
+                        |&(_, h)| h,
                     );
 
                     match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => *o.get(),
+                        hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
                         hashbrown::hash_table::Entry::Vacant(v) => {
                             let g = self.values.len();
-                            v.insert(g);
+                            v.insert((g, hash));
                             self.values.push(key);
                             g
                         }
@@ -181,12 +181,13 @@ where
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }
             EmitTo::First(n) => {
-                self.map.retain(|group_idx| {
+                self.map.retain(|entry| {
                     // Decrement group index by n
+                    let group_idx = entry.0;
                     match group_idx.checked_sub(n) {
                         // Group index was >= n, shift value down
                         Some(sub) => {
-                            *group_idx = sub;
+                            entry.0 = sub;
                             true
                         }
                         // Group index was < n, so remove from table
