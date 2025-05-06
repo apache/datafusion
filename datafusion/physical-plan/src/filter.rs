@@ -569,7 +569,7 @@ impl ExecutionPlan for FilterExec {
             // Create a new FilterExec with the new predicate
             let new = FilterExec {
                 predicate: Arc::clone(&new_predicate),
-                input: filter_input.clone(),
+                input: Arc::clone(&filter_input),
                 metrics: self.metrics.clone(),
                 default_selectivity: self.default_selectivity,
                 cache: Self::compute_properties(
