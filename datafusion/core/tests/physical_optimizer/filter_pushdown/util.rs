@@ -43,11 +43,16 @@ use datafusion_datasource::{
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::{filter::FilterExec, filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPropagation, PredicateSupport, PredicateSupports
-}, DisplayAs, PlanProperties};
 use datafusion_physical_plan::{
     displayable, metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
+};
+use datafusion_physical_plan::{
+    filter::FilterExec,
+    filter_pushdown::{
+        ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+        PredicateSupport, PredicateSupports,
+    },
+    DisplayAs, PlanProperties,
 };
 
 use futures::stream::BoxStream;
@@ -438,11 +443,7 @@ impl TestNode {
 }
 
 impl DisplayAs for TestNode {
-    fn fmt_as(
-        &self,
-        _t: DisplayFormatType,
-        f: &mut Formatter,
-    ) -> std::fmt::Result {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
             "TestInsertExec {{ inject_filter: {} }}",
