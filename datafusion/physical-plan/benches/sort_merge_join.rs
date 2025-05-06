@@ -53,8 +53,7 @@ fn create_test_data() -> SortMergeJoinExec {
     )];
     let sort_options = vec![SortOptions::default(); on.len()];
 
-    SortMergeJoinExec::try_new(left, right, on, None, Inner, sort_options, false)
-        .unwrap()
+    SortMergeJoinExec::try_new(left, right, on, None, Inner, sort_options, false).unwrap()
 }
 
 // `cargo bench --bench sort_merge_join`
@@ -78,19 +77,40 @@ fn bench_spill(c: &mut Criterion) {
 
     group.bench_function("SortMergeJoinExec_spill", |b| {
         b.iter(|| {
-            criterion::black_box(
-                rt.block_on(async {
-                    let stream = sort_merge_join_exec.execute(0, Arc::clone(&task_ctx)).unwrap();
-                    collect(stream).await.unwrap()
-                })
-            )
+            criterion::black_box(rt.block_on(async {
+                let stream = sort_merge_join_exec
+                    .execute(0, Arc::clone(&task_ctx))
+                    .unwrap();
+                collect(stream).await.unwrap()
+            }))
         })
     });
     group.finish();
 
-    assert!(sort_merge_join_exec.metrics().unwrap().spill_count().unwrap() > 0);
-    assert!(sort_merge_join_exec.metrics().unwrap().spilled_bytes().unwrap() > 0);
-    assert!(sort_merge_join_exec.metrics().unwrap().spilled_rows().unwrap() > 0);
+    assert!(
+        sort_merge_join_exec
+            .metrics()
+            .unwrap()
+            .spill_count()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        sort_merge_join_exec
+            .metrics()
+            .unwrap()
+            .spilled_bytes()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        sort_merge_join_exec
+            .metrics()
+            .unwrap()
+            .spilled_rows()
+            .unwrap()
+            > 0
+    );
 }
 
 criterion_group!(benches, bench_spill);
