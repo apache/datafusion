@@ -409,6 +409,22 @@ mod tests {
     use datafusion_physical_expr::binary_map::OutputType;
 
     use super::GroupColumn;
+    
+    #[test]
+    fn test_byte_group_value_builder_overflow() {
+        let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
+        
+        let large_string = std::iter::repeat('a').take(1024 * 1024).collect::<String>();
+        
+        let array = Arc::new(StringArray::from(vec![Some(large_string.as_str())])) as ArrayRef;
+        
+        // Append items until our buffer length is 1 + i32::MAX as usize 
+        for _ in 0..2048 {
+            builder.append_val(&array, 0);
+        }
+
+        assert_eq!(builder.value(2047), large_string.as_bytes());
+    }
 
     #[test]
     fn test_byte_take_n() {
