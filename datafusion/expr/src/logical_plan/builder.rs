@@ -501,6 +501,21 @@ impl LogicalPlanBuilder {
         if table_scan.filters.is_empty() {
             if let Some(p) = table_scan.source.get_logical_plan() {
                 let sub_plan = p.into_owned();
+
+                if let Some(proj) = table_scan.projection {
+                    let projection_exprs = proj
+                        .into_iter()
+                        .map(|i| {
+                            Expr::Column(Column::from(
+                                sub_plan.schema().qualified_field(i),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    return Self::new(sub_plan)
+                        .project(projection_exprs)?
+                        .alias(table_scan.table_name);
+                }
+
                 // Ensures that the reference to the inlined table remains the
                 // same, meaning we don't have to change any of the parent nodes
                 // that reference this table.
@@ -1122,12 +1137,24 @@ impl LogicalPlanBuilder {
         for (l, r) in &on {
             if self.plan.schema().has_column(l)
                 && right.schema().has_column(r)
-                && can_hash(self.plan.schema().field_from_column(l)?.data_type())
+                && can_hash(
+                    datafusion_common::ExprSchema::field_from_column(
+                        self.plan.schema(),
+                        l,
+                    )?
+                    .data_type(),
+                )
             {
                 join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
             } else if self.plan.schema().has_column(l)
                 && right.schema().has_column(r)
-                && can_hash(self.plan.schema().field_from_column(r)?.data_type())
+                && can_hash(
+                    datafusion_common::ExprSchema::field_from_column(
+                        self.plan.schema(),
+                        r,
+                    )?
+                    .data_type(),
+                )
             {
                 join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));
             } else {

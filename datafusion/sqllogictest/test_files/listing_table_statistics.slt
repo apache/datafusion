@@ -1,0 +1,47 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test file with different schema order but generating correct statistics for table
+statement ok
+COPY (SELECT * FROM values (1, 'a'), (2, 'b') t(int_col, str_col)) to 'test_files/scratch/table/1.parquet';
+
+statement ok
+COPY (SELECT * FROM values ('c', 3), ('d', -1) t(str_col, int_col)) to 'test_files/scratch/table/2.parquet';
+
+statement ok
+set datafusion.execution.collect_statistics = true;
+
+statement ok
+set datafusion.explain.show_statistics = true;
+
+statement ok
+create external table t stored as parquet location 'test_files/scratch/table';
+
+query TT
+explain format indent select * from t;
+----
+logical_plan TableScan: t projection=[int_col, str_col]
+physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/table/2.parquet]]}, projection=[int_col, str_col], file_type=parquet, statistics=[Rows=Exact(4), Bytes=Exact(288), [(Col[0]: Min=Exact(Int64(-1)) Max=Exact(Int64(3)) Null=Exact(0)),(Col[1]: Min=Exact(Utf8View("a")) Max=Exact(Utf8View("d")) Null=Exact(0))]]
+
+statement ok
+drop table t;
+
+statement ok
+set datafusion.execution.collect_statistics = false;
+
+statement ok
+set datafusion.explain.show_statistics = false;

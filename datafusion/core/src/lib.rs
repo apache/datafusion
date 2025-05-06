@@ -22,7 +22,18 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
-#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+//
+// Eliminate unnecessary function calls(some may be not cheap) due to `xxx_or`
+// for performance. Also avoid abusing `xxx_or_else` for readability:
+// https://github.com/apache/datafusion/issues/15802
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::clone_on_ref_ptr,
+        clippy::or_fun_call,
+        clippy::unnecessary_lazy_evaluations
+    )
+)]
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
@@ -300,14 +311,17 @@
 //! ```
 //!
 //! A [`TableProvider`] provides information for planning and
-//! an [`ExecutionPlan`]s for execution. DataFusion includes [`ListingTable`]
-//! which supports reading several common file formats, and you can support any
-//! new file format by implementing the [`TableProvider`] trait. See also:
+//! an [`ExecutionPlan`]s for execution. DataFusion includes [`ListingTable`],
+//! a [`TableProvider`] which reads individual files or directories of files
+//! ("partitioned datasets") of several common file formats. Uses can add
+//! support for new file formats by implementing the [`TableProvider`]
+//! trait.
 //!
-//! 1. [`ListingTable`]: Reads data from Parquet, JSON, CSV, or AVRO
-//!    files.  Supports single files or multiple files with HIVE style
-//!    partitioning, optional compression, directly reading from remote
-//!    object store and more.
+//! See also:
+//!
+//! 1. [`ListingTable`]: Reads data from one or more Parquet, JSON, CSV, or AVRO
+//!    files supporting HIVE style partitioning, optional compression, directly
+//!    reading from remote object store and more.
 //!
 //! 2. [`MemTable`]: Reads data from in memory [`RecordBatch`]es.
 //!

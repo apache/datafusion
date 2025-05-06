@@ -178,7 +178,7 @@ impl FileOpener for ParquetOpener {
 
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
-                &predicate,
+                predicate.as_ref(),
                 &physical_file_schema,
                 &predicate_creation_errors,
             );
@@ -390,8 +390,8 @@ pub(crate) fn build_page_pruning_predicate(
     ))
 }
 
-fn build_pruning_predicates(
-    predicate: &Option<Arc<dyn PhysicalExpr>>,
+pub(crate) fn build_pruning_predicates(
+    predicate: Option<&Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
 ) -> (

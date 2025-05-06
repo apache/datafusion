@@ -33,22 +33,32 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
+    ChildPushdownResult, FilterPushdownPropagation,
 };
 
-/// Common behaviors in Data Sources for both from Files and Memory.
+/// A source of data, typically a list of files or memory
+///
+/// This trait provides common behaviors for abstract sources of data. It has
+/// two common implementations:
+///
+/// 1. [`FileScanConfig`]: lists of files
+/// 2. [`MemorySourceConfig`]: in memory list of `RecordBatch`
+///
+/// File format specific behaviors are defined by [`FileSource`]
 ///
 /// # See Also
-/// * [`DataSourceExec`] for physical plan implementation
-/// * [`FileSource`] for file format implementations (Parquet, Json, etc)
+/// * [`FileSource`] for file format specific implementations (Parquet, Json, etc)
+/// * [`DataSourceExec`]: The [`ExecutionPlan`] that reads from a `DataSource`
 ///
 /// # Notes
+///
 /// Requires `Debug` to assist debugging
 ///
+/// [`FileScanConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html
+/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest//datafusion/datasource/memory/struct.MemorySourceConfig.html
 /// [`FileSource`]: crate::file::FileSource
 pub trait DataSource: Send + Sync + Debug {
     fn open(
@@ -93,24 +103,28 @@ pub trait DataSource: Send + Sync + Debug {
         _projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
     /// Try to push down filters into this DataSource.
-    /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
+    /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
+    ///
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
     fn try_pushdown_filters(
         &self,
-        fd: FilterDescription,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
-        Ok(filter_pushdown_not_supported(fd))
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        Ok(FilterPushdownPropagation::unsupported(filters))
     }
 }
 
-/// [`ExecutionPlan`] handles different file formats like JSON, CSV, AVRO, ARROW, PARQUET
+/// [`ExecutionPlan`] that reads one or more files
 ///
-/// `DataSourceExec` implements common functionality such as applying projections,
-/// and caching plan properties.
+/// `DataSourceExec` implements common functionality such as applying
+/// projections, and caching plan properties.
 ///
-/// The [`DataSource`] trait describes where to find the data for this data
-/// source (for example what files or what in memory partitions). Format
-/// specifics are implemented with the [`FileSource`] trait.
+/// The [`DataSource`] describes where to find the data for this data source
+/// (for example in files or what in memory partitions).
+///
+/// For file based [`DataSource`]s, format specific behavior is implemented in
+/// the [`FileSource`] trait.
 ///
 /// [`FileSource`]: crate::file::FileSource
 #[derive(Clone, Debug)]
@@ -201,6 +215,24 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.statistics()
     }
 
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition) = partition {
+            let mut statistics = Statistics::new_unknown(&self.schema());
+            if let Some(file_config) =
+                self.data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
+                if let Some(file_group) = file_config.file_groups.get(partition) {
+                    if let Some(stat) = file_group.file_statistics(None) {
+                        statistics = stat.clone();
+                    }
+                }
+            }
+            Ok(statistics)
+        } else {
+            Ok(self.data_source.statistics()?)
+        }
+    }
+
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = self.cache.clone();
@@ -219,39 +251,31 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.try_swapping_with_projection(projection)
     }
 
-    fn try_pushdown_filters(
+    fn handle_child_pushdown_result(
         &self,
-        fd: FilterDescription,
+        child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        let FilterPushdownResult {
-            support,
-            remaining_description,
-        } = self.data_source.try_pushdown_filters(fd, config)?;
-
-        match support {
-            FilterPushdownSupport::Supported {
-                child_descriptions,
-                op,
-                revisit,
-            } => {
-                let new_exec = Arc::new(DataSourceExec::new(op));
-
-                debug_assert!(child_descriptions.is_empty());
-                debug_assert!(!revisit);
-
-                Ok(FilterPushdownResult {
-                    support: FilterPushdownSupport::Supported {
-                        child_descriptions,
-                        op: new_exec,
-                        revisit,
-                    },
-                    remaining_description,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Push any remaining filters into our data source
+        let res = self.data_source.try_pushdown_filters(
+            child_pushdown_result.parent_filters.collect_all(),
+            config,
+        )?;
+        match res.updated_node {
+            Some(data_source) => {
+                let mut new_node = self.clone();
+                new_node.data_source = data_source;
+                new_node.cache =
+                    Self::compute_properties(Arc::clone(&new_node.data_source));
+                Ok(FilterPushdownPropagation {
+                    filters: res.filters,
+                    updated_node: Some(Arc::new(new_node)),
                 })
             }
-            FilterPushdownSupport::NotSupported => {
-                Ok(filter_pushdown_not_supported(remaining_description))
-            }
+            None => Ok(FilterPushdownPropagation {
+                filters: res.filters,
+                updated_node: None,
+            }),
         }
     }
 }
