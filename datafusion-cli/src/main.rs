@@ -177,13 +177,14 @@ async fn main_inner() -> Result<()> {
 
     // set disk limit
     if let Some(disk_limit) = args.disk_limit {
-        let disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
+        let mut disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
 
-        let disk_manager = Arc::try_unwrap(disk_manager)
-            .expect("DiskManager should be a single instance")
-            .with_max_temp_directory_size(disk_limit.try_into().unwrap())?;
+        DiskManager::set_arc_max_temp_directory_size(
+            &mut disk_manager,
+            disk_limit.try_into().unwrap(),
+        )?;
 
-        let disk_config = DiskManagerConfig::new_existing(Arc::new(disk_manager));
+        let disk_config = DiskManagerConfig::new_existing(disk_manager);
         rt_builder = rt_builder.with_disk_manager(disk_config);
     }
 
