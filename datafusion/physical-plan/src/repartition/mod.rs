@@ -41,7 +41,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::take_arrays;
+use arrow::compute;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
@@ -292,30 +292,37 @@ impl BatchPartitioner {
                     // Finished building index-arrays for output partitions
                     timer.done();
 
-                    // Borrowing partitioner timer to prevent moving `self` to closure
-                    let partitioner_timer = &self.timer;
-                    let it = indices
+                    let indices = indices
                         .into_iter()
                         .enumerate()
                         .filter_map(|(partition, indices)| {
                             let indices: PrimitiveArray<UInt32Type> = indices.into();
                             (!indices.is_empty()).then_some((partition, indices))
                         })
-                        .map(move |(partition, indices)| {
-                            // Tracking time required for repartitioned batches construction
-                            let _timer = partitioner_timer.timer();
+                        .collect::<Vec<_>>();
 
-                            // Produce batches based on indices
-                            let columns = take_arrays(batch.columns(), &indices, None)?;
+                    let mut output_batch_columns = (0..indices.len())
+                        .map(|_| Vec::with_capacity(batch.num_columns()))
+                        .collect::<Vec<_>>();
 
-                            let mut options = RecordBatchOptions::new();
-                            options = options.with_row_count(Some(indices.len()));
+                    for column in batch.columns() {
+                        for (index, (_, indices)) in indices.iter().enumerate() {
+                            output_batch_columns[index]
+                                .push(compute::take(column, indices, None)?);
+                        }
+                    }
+
+                    let it = output_batch_columns
+                        .into_iter()
+                        .zip(indices.into_iter())
+                        .map(move |(columns, (partition, indices))| {
+                            let options = RecordBatchOptions::new()
+                                .with_row_count(Some(indices.len()));
                             let batch = RecordBatch::try_new_with_options(
                                 batch.schema(),
                                 columns,
                                 &options,
-                            )
-                            .unwrap();
+                            )?;
 
                             Ok((partition, batch))
                         });
