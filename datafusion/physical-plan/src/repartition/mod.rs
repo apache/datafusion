@@ -315,8 +315,6 @@ impl BatchPartitioner {
                         }
                     }
 
-                    // Finished building index-arrays for output partitions
-                    timer.done();
 
                     let mut output_batch_columns = (0..partition_indices.len())
                         .map(|_| Vec::with_capacity(batch.num_columns()))
@@ -329,6 +327,8 @@ impl BatchPartitioner {
                                 .push(compute::take(column, indices, None)?);
                         }
                     }
+
+                    timer.done();
 
                     let it = output_batch_columns
                         .into_iter()
