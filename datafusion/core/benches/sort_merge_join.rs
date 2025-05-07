@@ -53,7 +53,7 @@ fn create_smj_exec(array_len: usize, batch_size: usize) -> SortMergeJoinExec {
         })
         .collect::<Vec<_>>();
     let datasource_exec =
-        MemorySourceConfig::try_new_exec(&vec![batches], Arc::clone(&schema), None)
+        MemorySourceConfig::try_new_exec(&[batches], Arc::clone(&schema), None)
             .unwrap();
 
     let on = vec![(
@@ -81,7 +81,7 @@ fn bench_spill(c: &mut Criterion) {
 
         // create a session context. enable spilling
         let runtime_env = RuntimeEnvBuilder::new()
-            .with_memory_limit(1024 * 1, 1.0) // Set memory limit to 1MB
+            .with_memory_limit(1024, 1.0) // Set memory limit to 1KB
             .with_disk_manager(DiskManagerConfig::NewOs) // Enable DiskManager to allow spilling
             .build_arc()
             .unwrap();
