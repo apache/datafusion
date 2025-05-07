@@ -289,9 +289,17 @@ impl BatchPartitioner {
 
                     let mut cum_histogram = vec![0; *partitions];
 
-                    for hash in hash_buffer.iter_mut() {
-                        *hash %= *partitions as u64;
-                        cum_histogram[*hash as usize] += 1;
+                    if partitions.is_power_of_two() {
+                        for hash in hash_buffer.iter_mut() {
+                            // modulo bit trick: a % (2^k) == a & (2^k - 1)
+                            *hash &= *partitions as u64 - 1;
+                            cum_histogram[*hash as usize] += 1;
+                        }
+                    } else {
+                        for hash in hash_buffer.iter_mut() {
+                            *hash %= *partitions as u64;
+                            cum_histogram[*hash as usize] += 1;
+                        }
                     }
 
                     for idx in 1..cum_histogram.len() {
