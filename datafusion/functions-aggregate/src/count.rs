@@ -19,6 +19,7 @@ use ahash::RandomState;
 use arrow::array::{ArrowPrimitiveType, ListArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion_common::cast::{as_list_array, as_primitive_array};
+use datafusion_common::hash_utils::HashValue;
 use datafusion_common::stats::Precision;
 use datafusion_expr::expr::WindowFunction;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
@@ -29,7 +30,6 @@ use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::mem::{size_of, size_of_val};
 use std::ops::BitAnd;
 use std::sync::Arc;
@@ -395,6 +395,15 @@ impl AggregateUDFImpl for Count {
                 >::new(data_type.clone())),
                 DataType::UInt64 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
                     UInt64Type,
+                >::new(data_type.clone())),
+                DataType::Float32 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    Float32Type,
+                >::new(data_type.clone())),
+                DataType::Float64 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    Float64Type,
+                >::new(data_type.clone())),
+                DataType::Float16 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    Float16Type,
                 >::new(data_type.clone())),
                 DataType::Decimal128(_, _) => Box::new(
                     PrimitiveDistinctCountGroupsAccumulator::<Decimal128Type>::new(
@@ -857,7 +866,7 @@ impl Accumulator for DistinctCountAccumulator {
 pub struct PrimitiveDistinctCountGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
-    T::Native: Eq + Hash,
+    T::Native: PartialEq + HashValue,
 {
     /// One HashSet per group to track distinct values
     distinct_sets: Vec<HashTable<(T::Native, u64)>>,
@@ -868,7 +877,7 @@ where
 impl<T> PrimitiveDistinctCountGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
-    T::Native: Eq + Hash,
+    T::Native: PartialEq + HashValue,
 {
     pub fn new(data_type: DataType) -> Self {
         Self {
@@ -887,7 +896,7 @@ where
 
     fn add_value_to_set(&mut self, val: T::Native, group_idx: usize) {
         // let val = data[row_idx];
-        let hash = self.random_state.hash_one(val);
+        let hash = val.hash_one(&self.random_state);
         let entry =
             self.distinct_sets[group_idx].entry(hash, |&(v, _)| val == v, |&(_, h)| h);
         if let Entry::Vacant(v) = entry {
@@ -899,7 +908,7 @@ where
 impl<T> GroupsAccumulator for PrimitiveDistinctCountGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send + Debug,
-    T::Native: Eq + Hash,
+    T::Native: PartialEq + HashValue,
 {
     fn update_batch(
         &mut self,
