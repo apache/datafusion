@@ -1051,15 +1051,15 @@ mod tests {
             distinct_count: datafusion_common::stats::Precision::Exact(distinct_count),
             min_value: min_value.map_or_else(
                 || datafusion_common::stats::Precision::Absent,
-                |v| datafusion_common::stats::Precision::Exact(v),
+                datafusion_common::stats::Precision::Exact,
             ),
             max_value: max_value.map_or_else(
                 || datafusion_common::stats::Precision::Absent,
-                |v| datafusion_common::stats::Precision::Exact(v),
+                datafusion_common::stats::Precision::Exact,
             ),
             sum_value: sum_value.map_or_else(
                 || datafusion_common::stats::Precision::Absent,
-                |v| datafusion_common::stats::Precision::Exact(v),
+                datafusion_common::stats::Precision::Exact,
             ),
         }
     }
