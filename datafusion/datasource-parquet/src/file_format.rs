@@ -31,9 +31,7 @@ use datafusion_datasource::write::{
     get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
 
-use datafusion_datasource::file_format::{
-    FileFormat, FileFormatFactory, FilePushdownSupport,
-};
+use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::compute::sum;
@@ -54,15 +52,12 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::Accumulator;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
-use crate::can_expr_be_pushed_down_with_schemas;
 use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -413,28 +408,15 @@ impl FileFormat for ParquetFormat {
         &self,
         _state: &dyn Session,
         conf: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut predicate = None;
         let mut metadata_size_hint = None;
 
-        // If enable pruning then combine the filters to build the predicate.
-        // If disable pruning then set the predicate to None, thus readers
-        // will not prune data based on the statistics.
-        if self.enable_pruning() {
-            if let Some(pred) = filters.cloned() {
-                predicate = Some(pred);
-            }
-        }
         if let Some(metadata) = self.metadata_size_hint() {
             metadata_size_hint = Some(metadata);
         }
 
         let mut source = ParquetSource::new(self.options.clone());
 
-        if let Some(predicate) = predicate {
-            source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
-        }
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
@@ -459,27 +441,6 @@ impl FileFormat for ParquetFormat {
         let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
-    }
-
-    fn supports_filters_pushdown(
-        &self,
-        file_schema: &Schema,
-        table_schema: &Schema,
-        filters: &[&Expr],
-    ) -> Result<FilePushdownSupport> {
-        if !self.options().global.pushdown_filters {
-            return Ok(FilePushdownSupport::NoSupport);
-        }
-
-        let all_supported = filters.iter().all(|filter| {
-            can_expr_be_pushed_down_with_schemas(filter, file_schema, table_schema)
-        });
-
-        Ok(if all_supported {
-            FilePushdownSupport::Supported
-        } else {
-            FilePushdownSupport::NotSupportedForFilter
-        })
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {

@@ -75,7 +75,7 @@ latency).
 
 Here are some example systems built using DataFusion:
 
-- Specialized Analytical Database systems such as [HoraeDB] and more general Apache Spark like system such a [Ballista].
+- Specialized Analytical Database systems such as [HoraeDB] and more general Apache Spark like system such as [Ballista]
 - New query language engines such as [prql-query] and accelerators such as [VegaFusion]
 - Research platform for new Database Systems, such as [Flock]
 - SQL support to another library, such as [dask sql]
