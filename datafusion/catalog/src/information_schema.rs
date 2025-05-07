@@ -30,7 +30,7 @@ use arrow::{
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
-use datafusion_common::types::{NativeType, NATIVE_TYPE_PREFIX};
+use datafusion_common::types::NativeType;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
@@ -478,13 +478,7 @@ fn get_udwf_args_and_return_types(
 
 #[inline]
 fn remove_native_type_prefix(native_type: NativeType) -> String {
-    // native_type.to_string() is like "NATIVE_TYPE_PREFIX + native_type"
-    // here is safe to unwrap directly
-    native_type
-        .to_string()
-        .strip_prefix(NATIVE_TYPE_PREFIX)
-        .unwrap()
-        .to_string()
+    format!("{native_type:?}")
 }
 
 #[async_trait]
