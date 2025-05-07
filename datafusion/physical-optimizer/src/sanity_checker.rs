@@ -43,6 +43,7 @@ use itertools::izip;
 ///    are not satisfied by their children.
 /// 2. Plans that use pipeline-breaking operators on infinite input(s),
 ///    it is impossible to execute such queries (they will never generate output nor finish)
+/// 3. Plans that produce filtered batches but their children do not consume them.
 #[derive(Default, Debug)]
 pub struct SanityCheckPlan {}
 
@@ -104,6 +105,26 @@ pub fn check_finiteness_requirements(
     }
 }
 
+/// This function checks if the plan produces filtered batches and if its
+/// children consume them. If not, it returns an error.
+pub fn check_filtered_batch_handle(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    if plan.output_filtered_batches() {
+        for child in plan.children() {
+            if child.requried_filtered_input() {
+                return plan_err!(
+                    "Plan {:?} prodouces filtered batches but its child {:?} won't consume them",
+                    plan,
+                    child
+                );
+            }
+        }
+    }
+
+    Ok(Transformed::no(plan))
+}
+
 /// This function returns whether a given symmetric hash join is amenable to
 /// data pruning. For this to be possible, it needs to have a filter where
 /// all involved [`PhysicalExpr`]s, [`Operator`]s and data types support
@@ -129,6 +150,7 @@ pub fn check_plan_sanity(
     optimizer_options: &OptimizerOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     check_finiteness_requirements(Arc::clone(&plan), optimizer_options)?;
+    check_filtered_batch_handle(Arc::clone(&plan))?;
 
     for ((idx, child), sort_req, dist_req) in izip!(
         plan.children().into_iter().enumerate(),
