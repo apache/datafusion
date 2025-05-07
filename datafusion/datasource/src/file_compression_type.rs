@@ -19,7 +19,7 @@
 
 use std::str::FromStr;
 
-use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::{external_datafusion_err, DataFusionError, Result};
 
 use datafusion_common::parsers::CompressionTypeVariant::{self, *};
 use datafusion_common::GetExt;
@@ -231,7 +231,7 @@ impl FileCompressionType {
             #[cfg(feature = "compression")]
             ZSTD => match ZstdDecoder::new(r) {
                 Ok(decoder) => Box::new(decoder),
-                Err(e) => return Err(DataFusionError::External(Box::new(e))),
+                Err(e) => return Err(external_datafusion_err!(e)),
             },
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
