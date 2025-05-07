@@ -103,7 +103,7 @@ mod tests {
     use crate::push_down_limit::PushDownLimit;
     use datafusion_expr::test::function_stub::sum;
 
-    macro_rules! assert_optimized_plan_equal {
+    macro_rules! assert_optimized_plan_eq {
         (
             $plan:expr,
             @ $expected:literal $(,)?
@@ -146,7 +146,7 @@ mod tests {
             .limit(0, Some(0))?
             .build()?;
         // No aggregate / scan / limit
-        assert_optimized_plan_equal!(
+        assert_optimized_plan_eq!(
             plan,
             @ r"EmptyRelation"
         )
@@ -165,7 +165,7 @@ mod tests {
             .build()?;
 
         // Left side is removed
-        assert_optimized_plan_equal!(
+        assert_optimized_plan_eq!(
             plan,
             @ r"
         Union
@@ -226,7 +226,7 @@ mod tests {
             .limit(0, Some(1))?
             .build()?;
 
-        assert_optimized_plan_equal!(
+        assert_optimized_plan_eq!(
             plan,
             @ r"
         Limit: skip=0, fetch=1
@@ -248,7 +248,7 @@ mod tests {
             .limit(3, Some(1))?
             .build()?;
 
-        assert_optimized_plan_equal!(
+        assert_optimized_plan_eq!(
             plan,
             @ r"
         Limit: skip=3, fetch=1
@@ -274,7 +274,7 @@ mod tests {
             .limit(3, Some(1))?
             .build()?;
 
-        assert_optimized_plan_equal!(
+        assert_optimized_plan_eq!(
             plan,
             @ r"
         Limit: skip=3, fetch=1
@@ -294,7 +294,7 @@ mod tests {
             .limit(0, None)?
             .build()?;
 
-        assert_optimized_plan_equal!(
+        assert_optimized_plan_eq!(
             plan,
             @ r"
         Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]
