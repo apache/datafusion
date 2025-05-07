@@ -107,7 +107,7 @@ mod tests {
         let meta = ObjectMeta {
             location,
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len() as usize,
+            size: metadata.len(),
             e_tag: None,
             version: None,
         };
@@ -264,6 +264,13 @@ mod tests {
             new_columns.push(extra_column);
 
             Ok(RecordBatch::try_new(schema, new_columns).unwrap())
+        }
+
+        fn map_column_statistics(
+            &self,
+            _file_col_statistics: &[datafusion_common::ColumnStatistics],
+        ) -> datafusion_common::Result<Vec<datafusion_common::ColumnStatistics>> {
+            unimplemented!()
         }
     }
 }

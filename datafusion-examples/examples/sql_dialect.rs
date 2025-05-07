@@ -17,10 +17,10 @@
 
 use std::fmt::Display;
 
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::sql::{
     parser::{CopyToSource, CopyToStatement, DFParser, DFParserBuilder, Statement},
-    sqlparser::{keywords::Keyword, parser::ParserError, tokenizer::Token},
+    sqlparser::{keywords::Keyword, tokenizer::Token},
 };
 
 /// This example demonstrates how to use the DFParser to parse a statement in a custom way
@@ -62,7 +62,7 @@ impl<'a> MyParser<'a> {
 
     /// This is the entry point to our parser -- it handles `COPY` statements specially
     /// but otherwise delegates to the existing DataFusion parser.
-    pub fn parse_statement(&mut self) -> Result<MyStatement, ParserError> {
+    pub fn parse_statement(&mut self) -> Result<MyStatement, DataFusionError> {
         if self.is_copy() {
             self.df_parser.parser.next_token(); // COPY
             let df_statement = self.df_parser.parse_copy()?;

@@ -24,7 +24,7 @@
 use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::plan_err;
+use datafusion_common::{plan_err, ColumnStatistics};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -96,6 +96,12 @@ pub trait SchemaAdapter: Send + Sync {
 pub trait SchemaMapper: Debug + Send + Sync {
     /// Adapts a `RecordBatch` to match the `table_schema`
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;
+
+    /// Adapts file-level column `Statistics` to match the `table_schema`
+    fn map_column_statistics(
+        &self,
+        file_col_statistics: &[ColumnStatistics],
+    ) -> datafusion_common::Result<Vec<ColumnStatistics>>;
 }
 
 /// Default  [`SchemaAdapterFactory`] for mapping schemas.
@@ -351,5 +357,127 @@ impl SchemaMapper for SchemaMapping {
         let schema = Arc::clone(&self.projected_table_schema);
         let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
         Ok(record_batch)
+    }
+
+    /// Adapts file-level column `Statistics` to match the `table_schema`
+    fn map_column_statistics(
+        &self,
+        file_col_statistics: &[ColumnStatistics],
+    ) -> datafusion_common::Result<Vec<ColumnStatistics>> {
+        let mut table_col_statistics = vec![];
+
+        // Map the statistics for each field in the file schema to the corresponding field in the
+        // table schema, if a field is not present in the file schema, we need to fill it with `ColumnStatistics::new_unknown`
+        for (_, file_col_idx) in self
+            .projected_table_schema
+            .fields()
+            .iter()
+            .zip(&self.field_mappings)
+        {
+            if let Some(file_col_idx) = file_col_idx {
+                table_col_statistics.push(
+                    file_col_statistics
+                        .get(*file_col_idx)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+            } else {
+                table_col_statistics.push(ColumnStatistics::new_unknown());
+            }
+        }
+
+        Ok(table_col_statistics)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{stats::Precision, Statistics};
+
+    use super::*;
+
+    #[test]
+    fn test_schema_mapping_map_statistics_basic() {
+        // Create table schema (a, b, c)
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+        ]));
+
+        // Create file schema (b, a) - different order, missing c
+        let file_schema = Schema::new(vec![
+            Field::new("b", DataType::Utf8, true),
+            Field::new("a", DataType::Int32, true),
+        ]);
+
+        // Create SchemaAdapter
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&table_schema),
+        };
+
+        // Get mapper and projection
+        let (mapper, projection) = adapter.map_schema(&file_schema).unwrap();
+
+        // Should project columns 0,1 from file
+        assert_eq!(projection, vec![0, 1]);
+
+        // Create file statistics
+        let mut file_stats = Statistics::default();
+
+        // Statistics for column b (index 0 in file)
+        let b_stats = ColumnStatistics {
+            null_count: Precision::Exact(5),
+            ..Default::default()
+        };
+
+        // Statistics for column a (index 1 in file)
+        let a_stats = ColumnStatistics {
+            null_count: Precision::Exact(10),
+            ..Default::default()
+        };
+
+        file_stats.column_statistics = vec![b_stats, a_stats];
+
+        // Map statistics
+        let table_col_stats = mapper
+            .map_column_statistics(&file_stats.column_statistics)
+            .unwrap();
+
+        // Verify stats
+        assert_eq!(table_col_stats.len(), 3);
+        assert_eq!(table_col_stats[0].null_count, Precision::Exact(10)); // a from file idx 1
+        assert_eq!(table_col_stats[1].null_count, Precision::Exact(5)); // b from file idx 0
+        assert_eq!(table_col_stats[2].null_count, Precision::Absent); // c (unknown)
+    }
+
+    #[test]
+    fn test_schema_mapping_map_statistics_empty() {
+        // Create schemas
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&table_schema),
+        };
+        let (mapper, _) = adapter.map_schema(&file_schema).unwrap();
+
+        // Empty file statistics
+        let file_stats = Statistics::default();
+        let table_col_stats = mapper
+            .map_column_statistics(&file_stats.column_statistics)
+            .unwrap();
+
+        // All stats should be unknown
+        assert_eq!(table_col_stats.len(), 2);
+        assert_eq!(table_col_stats[0], ColumnStatistics::new_unknown(),);
+        assert_eq!(table_col_stats[1], ColumnStatistics::new_unknown(),);
     }
 }

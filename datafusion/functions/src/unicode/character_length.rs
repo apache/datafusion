@@ -17,7 +17,7 @@
 
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveBuilder,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveArray,
     StringArrayType,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
@@ -131,46 +131,64 @@ where
     T::Native: OffsetSizeTrait,
     V: StringArrayType<'a>,
 {
-    let mut builder = PrimitiveBuilder::<T>::with_capacity(array.len());
-
     // String characters are variable length encoded in UTF-8, counting the
     // number of chars requires expensive decoding, however checking if the
     // string is ASCII only is relatively cheap.
     // If strings are ASCII only, count bytes instead.
     let is_array_ascii_only = array.is_ascii();
-    if array.null_count() == 0 {
+    let array = if array.null_count() == 0 {
         if is_array_ascii_only {
-            for i in 0..array.len() {
-                let value = array.value(i);
-                builder.append_value(T::Native::usize_as(value.len()));
-            }
+            let values: Vec<_> = (0..array.len())
+                .map(|i| {
+                    let value = array.value(i);
+                    T::Native::usize_as(value.len())
+                })
+                .collect();
+            PrimitiveArray::<T>::new(values.into(), None)
         } else {
-            for i in 0..array.len() {
-                let value = array.value(i);
-                builder.append_value(T::Native::usize_as(value.chars().count()));
-            }
+            let values: Vec<_> = (0..array.len())
+                .map(|i| {
+                    let value = array.value(i);
+                    if value.is_ascii() {
+                        T::Native::usize_as(value.len())
+                    } else {
+                        T::Native::usize_as(value.chars().count())
+                    }
+                })
+                .collect();
+            PrimitiveArray::<T>::new(values.into(), None)
         }
     } else if is_array_ascii_only {
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                builder.append_null();
-            } else {
-                let value = array.value(i);
-                builder.append_value(T::Native::usize_as(value.len()));
-            }
-        }
+        let values: Vec<_> = (0..array.len())
+            .map(|i| {
+                if array.is_null(i) {
+                    T::default_value()
+                } else {
+                    let value = array.value(i);
+                    T::Native::usize_as(value.len())
+                }
+            })
+            .collect();
+        PrimitiveArray::<T>::new(values.into(), array.nulls().cloned())
     } else {
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                builder.append_null();
-            } else {
-                let value = array.value(i);
-                builder.append_value(T::Native::usize_as(value.chars().count()));
-            }
-        }
-    }
+        let values: Vec<_> = (0..array.len())
+            .map(|i| {
+                if array.is_null(i) {
+                    T::default_value()
+                } else {
+                    let value = array.value(i);
+                    if value.is_ascii() {
+                        T::Native::usize_as(value.len())
+                    } else {
+                        T::Native::usize_as(value.chars().count())
+                    }
+                }
+            })
+            .collect();
+        PrimitiveArray::<T>::new(values.into(), array.nulls().cloned())
+    };
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(array))
 }
 
 #[cfg(test)]

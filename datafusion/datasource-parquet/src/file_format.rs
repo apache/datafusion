@@ -24,9 +24,18 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
+use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::write::{
+    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
+};
+
+use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
@@ -38,28 +47,18 @@ use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_format::{
-    FileFormat, FileFormatFactory, FilePushdownSupport,
-};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
-use datafusion_datasource::write::demux::DemuxedStreamReceiver;
-use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::Accumulator;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
-use crate::can_expr_be_pushed_down_with_schemas;
-use crate::source::ParquetSource;
+use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -76,11 +75,13 @@ use parquet::arrow::arrow_writer::{
 };
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
+use parquet::basic::Type;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
+use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
@@ -268,6 +269,15 @@ impl ParquetFormat {
         self.options.global.binary_as_string = binary_as_string;
         self
     }
+
+    pub fn coerce_int96(&self) -> Option<String> {
+        self.options.global.coerce_int96.clone()
+    }
+
+    pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
+        self.options.global.coerce_int96 = time_unit;
+        self
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
@@ -291,9 +301,10 @@ async fn fetch_schema_with_location(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    coerce_int96: Option<TimeUnit>,
 ) -> Result<(Path, Schema)> {
     let loc_path = file.location.clone();
-    let schema = fetch_schema(store, file, metadata_size_hint).await?;
+    let schema = fetch_schema(store, file, metadata_size_hint, coerce_int96).await?;
     Ok((loc_path, schema))
 }
 
@@ -324,12 +335,17 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
+        let coerce_int96 = match self.coerce_int96() {
+            Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
+            None => None,
+        };
         let mut schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
                 fetch_schema_with_location(
                     store.as_ref(),
                     object,
                     self.metadata_size_hint(),
+                    coerce_int96,
                 )
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -392,19 +408,9 @@ impl FileFormat for ParquetFormat {
         &self,
         _state: &dyn Session,
         conf: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut predicate = None;
         let mut metadata_size_hint = None;
 
-        // If enable pruning then combine the filters to build the predicate.
-        // If disable pruning then set the predicate to None, thus readers
-        // will not prune data based on the statistics.
-        if self.enable_pruning() {
-            if let Some(pred) = filters.cloned() {
-                predicate = Some(pred);
-            }
-        }
         if let Some(metadata) = self.metadata_size_hint() {
             metadata_size_hint = Some(metadata);
         }
@@ -417,6 +423,7 @@ impl FileFormat for ParquetFormat {
         if let Some(predicate) = predicate {
             source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
         }
+
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
@@ -441,27 +448,6 @@ impl FileFormat for ParquetFormat {
         let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
-    }
-
-    fn supports_filters_pushdown(
-        &self,
-        file_schema: &Schema,
-        table_schema: &Schema,
-        filters: &[&Expr],
-    ) -> Result<FilePushdownSupport> {
-        if !self.options().global.pushdown_filters {
-            return Ok(FilePushdownSupport::NoSupport);
-        }
-
-        let all_supported = filters.iter().all(|filter| {
-            can_expr_be_pushed_down_with_schemas(filter, file_schema, table_schema)
-        });
-
-        Ok(if all_supported {
-            FilePushdownSupport::Supported
-        } else {
-            FilePushdownSupport::NotSupportedForFilter
-        })
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {
@@ -563,6 +549,46 @@ pub fn apply_file_schema_type_coercions(
 
             // If no transformation is needed, keep the original field
             Arc::clone(field)
+        })
+        .collect();
+
+    Some(Schema::new_with_metadata(
+        transformed_fields,
+        file_schema.metadata.clone(),
+    ))
+}
+
+/// Coerces the file schema's Timestamps to the provided TimeUnit if Parquet schema contains INT96.
+pub fn coerce_int96_to_resolution(
+    parquet_schema: &SchemaDescriptor,
+    file_schema: &Schema,
+    time_unit: &TimeUnit,
+) -> Option<Schema> {
+    let mut transform = false;
+    let parquet_fields: HashMap<_, _> = parquet_schema
+        .columns()
+        .iter()
+        .map(|f| {
+            let dt = f.physical_type();
+            if dt.eq(&Type::INT96) {
+                transform = true;
+            }
+            (f.name(), dt)
+        })
+        .collect();
+
+    if !transform {
+        return None;
+    }
+
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(|field| match parquet_fields.get(field.name().as_str()) {
+            Some(Type::INT96) => {
+                field_with_new_type(field, DataType::Timestamp(*time_unit, None))
+            }
+            _ => Arc::clone(field),
         })
         .collect();
 
@@ -738,10 +764,7 @@ impl<'a> ObjectStoreFetch<'a> {
 }
 
 impl MetadataFetch for ObjectStoreFetch<'_> {
-    fn fetch(
-        &mut self,
-        range: Range<usize>,
-    ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
         async {
             self.store
                 .get_range(&self.meta.location, range)
@@ -778,6 +801,7 @@ async fn fetch_schema(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    coerce_int96: Option<TimeUnit>,
 ) -> Result<Schema> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
     let file_metadata = metadata.file_metadata();
@@ -785,6 +809,11 @@ async fn fetch_schema(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
+    let schema = coerce_int96
+        .and_then(|time_unit| {
+            coerce_int96_to_resolution(file_metadata.schema_descr(), &schema, &time_unit)
+        })
+        .unwrap_or(schema);
     Ok(schema)
 }
 
@@ -1043,9 +1072,18 @@ impl ParquetSink {
         &self,
         location: &Path,
         object_store: Arc<dyn ObjectStore>,
+        context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
     ) -> Result<AsyncArrowWriter<BufWriter>> {
-        let buf_writer = BufWriter::new(object_store, location.clone());
+        let buf_writer = BufWriter::with_capacity(
+            object_store,
+            location.clone(),
+            context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size,
+        );
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
@@ -1101,6 +1139,7 @@ impl FileSink for ParquetSink {
                     .create_async_arrow_writer(
                         &path,
                         Arc::clone(&object_store),
+                        context,
                         parquet_props.clone(),
                     )
                     .await?;
@@ -1119,14 +1158,21 @@ impl FileSink for ParquetSink {
                     Ok((path, file_metadata))
                 });
             } else {
-                let writer = create_writer(
+                let writer = ObjectWriterBuilder::new(
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
                     &path,
                     Arc::clone(&object_store),
                 )
-                .await?;
+                .with_buffer_size(Some(
+                    context
+                        .session_config()
+                        .options()
+                        .execution
+                        .objectstore_writer_buffer_size,
+                ))
+                .build()?;
                 let schema = get_writer_schema(&self.config);
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();
