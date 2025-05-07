@@ -847,10 +847,17 @@ mod tests {
         location_builder.append_value("San Francisco");
         location_builder.append_value("New York");
 
+        // Create timestamp array
         let timestamp_array = TimestampMillisecondArray::from(vec![
             Some(1640995200000), // 2022-01-01
             Some(1641081600000), // 2022-01-02
         ]);
+
+        // Create data type with UTC timezone to match the schema
+        let timestamp_type = Timestamp(Millisecond, Some("UTC".into()));
+
+        // Cast the timestamp array to include the timezone metadata
+        let timestamp_array = cast(&timestamp_array, &timestamp_type)?;
 
         let info_struct = StructArray::from(vec![
             (
@@ -858,12 +865,8 @@ mod tests {
                 Arc::new(location_builder.finish()) as Arc<dyn Array>,
             ),
             (
-                Arc::new(Field::new(
-                    "timestamp_utc",
-                    Timestamp(Millisecond, Some("UTC".into())),
-                    true,
-                )),
-                Arc::new(timestamp_array),
+                Arc::new(Field::new("timestamp_utc", timestamp_type, true)),
+                timestamp_array,
             ),
         ]);
 
