@@ -36,6 +36,7 @@ workspace = true
 
 [features]
 force_hash_collisions = []
+bench = []
 
 [lib]
 name = "datafusion_physical_plan"
@@ -86,3 +87,8 @@ name = "partial_ordering"
 [[bench]]
 harness = false
 name = "spill_io"
+
+[[bench]]
+harness = false
+name = "sort_preserving_merge"
+required-features = ["bench"]

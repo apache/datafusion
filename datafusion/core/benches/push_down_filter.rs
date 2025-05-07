@@ -18,7 +18,7 @@
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, BytesMut};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::config::ConfigOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -105,20 +105,19 @@ fn bench_push_down_filter(c: &mut Criterion) {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     let plan = BenchmarkPlan { plan, config };
+    let optimizer = FilterPushdown::new();
 
-    c.bench_with_input(
-        BenchmarkId::new("push_down_filter", plan.clone()),
-        &plan,
-        |b, plan| {
-            b.iter(|| {
-                let optimizer = FilterPushdown::new();
-                optimizer
-                    .optimize(Arc::clone(&plan.plan), &plan.config)
-                    .unwrap();
-            });
-        },
-    );
+    c.bench_function("push_down_filter", |b| {
+        b.iter(|| {
+            optimizer
+                .optimize(Arc::clone(&plan.plan), &plan.config)
+                .unwrap();
+        });
+    });
 }
 
+// It's a bit absurd that it's this complicated but to generate a flamegraph you can run:
+// `cargo flamegraph -p datafusion --bench push_down_filter --flamechart --root --profile profiling --freq 1000 -- --bench`
+// See https://github.com/flamegraph-rs/flamegraph
 criterion_group!(benches, bench_push_down_filter);
 criterion_main!(benches);
