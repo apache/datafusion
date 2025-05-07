@@ -3290,7 +3290,7 @@ mod test {
             Field::new("B", DataType::Int32, true),
         ]));
 
-        let source = Arc::new(LogicalTableSource::new(schema.clone()));
+        let source = Arc::new(LogicalTableSource::new(Arc::clone(&schema)));
 
         // Simulate: SELECT * FROM my_table WHERE $1 IN (SELECT A FROM my_table WHERE B > 3);
         let placeholder = Expr::Placeholder(Placeholder {
@@ -3308,7 +3308,7 @@ mod test {
         let subquery_scan = LogicalPlan::TableScan(TableScan {
             table_name: TableReference::from("my_table"),
             source,
-            projected_schema: Arc::new(DFSchema::try_from(schema.clone())?),
+            projected_schema: Arc::new(DFSchema::try_from(Arc::clone(&schema))?),
             projection: None,
             filters: vec![subquery_filter.clone()],
             fetch: None,

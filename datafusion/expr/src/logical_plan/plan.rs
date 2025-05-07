@@ -4043,7 +4043,7 @@ mod tests {
     #[test]
     fn test_resolved_placeholder_limit() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("A", DataType::Int32, true)]));
-        let source = Arc::new(LogicalTableSource::new(schema.clone()));
+        let source = Arc::new(LogicalTableSource::new(Arc::clone(&schema)));
 
         let placeholder_value = "$1";
 
@@ -4057,7 +4057,7 @@ mod tests {
             input: Arc::new(LogicalPlan::TableScan(TableScan {
                 table_name: TableReference::from("my_table"),
                 source,
-                projected_schema: Arc::new(DFSchema::try_from(schema.clone())?),
+                projected_schema: Arc::new(DFSchema::try_from(Arc::clone(&schema))?),
                 projection: None,
                 filters: vec![],
                 fetch: None,
