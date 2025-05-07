@@ -192,6 +192,7 @@ enum BatchPartitionerState {
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
         hash_buffer: Vec<u64>,
+        indices_buffer: Vec<u32>,
     },
     RoundRobin {
         num_partitions: usize,
@@ -216,7 +217,8 @@ impl BatchPartitioner {
                 num_partitions,
                 // Use fixed random hash
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
-                hash_buffer: vec![],
+                hash_buffer: Vec::new(),
+                indices_buffer: Vec::new(),
             },
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
         };
@@ -267,6 +269,7 @@ impl BatchPartitioner {
                     exprs,
                     num_partitions: partitions,
                     hash_buffer,
+                    indices_buffer,
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
@@ -281,7 +284,9 @@ impl BatchPartitioner {
 
                     create_hashes(&arrays, random_state, hash_buffer)?;
 
-                    let mut indices = Vec::from_iter(0..batch.num_rows() as u32);
+                    indices_buffer.clear();
+                    indices_buffer.resize(batch.num_rows(), 0);
+
                     let mut cum_histogram = vec![0; *partitions];
 
                     for hash in hash_buffer.iter_mut() {
@@ -297,12 +302,14 @@ impl BatchPartitioner {
                     for idx in (0..batch.num_rows()).rev() {
                         let partition = hash_buffer[idx] as usize;
                         cum_histogram[partition] -= 1;
-                        indices[cum_histogram[partition]] = idx as u32;
+                        indices_buffer[cum_histogram[partition]] = idx as u32;
                     }
 
                     // The cumulative histogram now stores the start of the index range for each partition:
                     // The indices for partition $i will be stored at indices[cum_histogram[i]..cum_histogram[i + 1]]
-                    let indices: UInt32Array = indices.into();
+                    //
+                    // Temporarily taking the indices_buffer and will give it back later (pinky promise).
+                    let indices: UInt32Array = std::mem::take(indices_buffer).into();
 
                     // We now slice up indices by partition so we can use the `take` kernel
                     let mut partition_indices = Vec::with_capacity(*partitions);
@@ -320,26 +327,38 @@ impl BatchPartitioner {
                         }
                     }
 
-                    let mut output_batch_columns = (0..partition_indices.len())
-                        .map(|_| Vec::with_capacity(batch.num_columns()))
+                    // Vector of (partition, partition_length, partition columns) -- the data needed to construct
+                    // an output batch for a partition.
+                    let mut output_batches = partition_indices
+                        .iter()
+                        .map(|(partition, indices)| {
+                            (*partition, indices.len(), Vec::new())
+                        })
                         .collect::<Vec<_>>();
 
                     for column in batch.columns() {
                         for (index, (_, indices)) in partition_indices.iter().enumerate()
                         {
-                            output_batch_columns[index]
+                            output_batches[index]
+                                .2
                                 .push(compute::take(column, indices, None)?);
                         }
                     }
 
+                    // Release references to the indices buffer so we can put it back into the partitioner's state
+                    drop(partition_indices);
+
+                    // Put back indices buffer -- This wont fail because we are in control of all references to the underlying buffers
+                    *indices_buffer =
+                        indices.into_parts().1.into_inner().into_vec().unwrap();
+
+                    // Assume the rest of the function is trivial
                     timer.done();
 
-                    let it = output_batch_columns
-                        .into_iter()
-                        .zip(partition_indices.into_iter())
-                        .map(move |(columns, (partition, indices))| {
-                            let options = RecordBatchOptions::new()
-                                .with_row_count(Some(indices.len()));
+                    let it = output_batches.into_iter().map(
+                        move |(partition, length, columns)| {
+                            let options =
+                                RecordBatchOptions::new().with_row_count(Some(length));
                             let batch = RecordBatch::try_new_with_options(
                                 batch.schema(),
                                 columns,
@@ -347,7 +366,8 @@ impl BatchPartitioner {
                             )?;
 
                             Ok((partition, batch))
-                        });
+                        },
+                    );
 
                     Box::new(it)
                 }
