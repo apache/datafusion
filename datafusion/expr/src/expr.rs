@@ -1790,6 +1790,7 @@ impl Expr {
                             &Expr::Column(Column {
                                 relation: None,
                                 name: first_field.name().clone(),
+                                spans: Spans::new(),
                             }),
                             schema,
                         )?;
@@ -3326,6 +3327,7 @@ mod test {
                 schema: projected_schema,
             })),
             outer_ref_columns: vec![],
+            spans: Spans::new(),
         };
 
         let in_subquery = Expr::InSubquery(InSubquery {
