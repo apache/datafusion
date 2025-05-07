@@ -1335,7 +1335,7 @@ async fn test_sort_merge_join_complex_order_by() -> Result<()> {
     ];
     // can not push down the sort requirements, need to add SortExec
     let expected_optimized = [
-        "SortExec: expr=[col_b@3 ASC, col_a@2 ASC], preserve_partitioning=[false]",
+        "SortExec: expr=[col_b@3 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
         "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
@@ -1359,14 +1359,13 @@ async fn test_sort_merge_join_complex_order_by() -> Result<()> {
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet",
     ];
-    // can not push down the sort requirements, need to add SortExec
+    // Can push down the sort requirements since col_a = nullable_col
     let expected_optimized = [
-        "SortExec: expr=[nullable_col@0 ASC, col_b@3 ASC, col_a@2 ASC], preserve_partitioning=[false]",
-        "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
-        "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
-        "    SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet",
+        "SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
+        "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+        "  SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 

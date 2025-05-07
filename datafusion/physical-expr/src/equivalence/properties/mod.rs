@@ -204,26 +204,7 @@ impl EquivalenceProperties {
 
     /// Returns the output ordering of the properties.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let mut sort_exprs: Vec<_> = self.oeq_class.output_ordering()?.into();
-        // Prune out constant expressions:
-        sort_exprs.retain(|sort_expr| {
-            self.eq_group
-                .get_equivalence_class(&sort_expr.expr)
-                .is_none_or(|cls| cls.constant.is_none())
-        });
-        LexOrdering::new(sort_exprs)
-    }
-
-    /// Returns the normalized version of the ordering equivalence class within.
-    /// Normalization removes constants and duplicates as well as standardizing
-    /// expressions according to the equivalence group within.
-    pub fn normalized_oeq_class(&self) -> OrderingEquivalenceClass {
-        self.oeq_class
-            .iter()
-            .cloned()
-            .filter_map(|ordering| self.normalize_sort_exprs(ordering))
-            .collect::<Vec<_>>()
-            .into()
+        self.oeq_class.output_ordering()
     }
 
     /// Extends this `EquivalenceProperties` with the `other` object.
@@ -251,7 +232,12 @@ impl EquivalenceProperties {
         &mut self,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) {
-        self.oeq_class.add_orderings(orderings);
+        // TODO: Normalize `orderings` before adding:
+        self.oeq_class.add_orderings(
+            orderings
+                .into_iter()
+                .map(|o| self.eq_group.normalize_sort_exprs(o)),
+        );
     }
 
     /// Adds a single ordering to the existing ordering equivalence class.
@@ -263,6 +249,13 @@ impl EquivalenceProperties {
     /// equivalence group within.
     pub fn add_equivalence_group(&mut self, other_eq_group: EquivalenceGroup) {
         self.eq_group.extend(other_eq_group);
+        // TODO: Renormalize the orderings after adding new equivalences:
+        let oeq_class = mem::take(&mut self.oeq_class);
+        self.oeq_class = OrderingEquivalenceClass::new(
+            oeq_class
+                .into_iter()
+                .map(|o| self.eq_group.normalize_sort_exprs(o)),
+        );
     }
 
     /// Adds a new equality condition into the existing equivalence group.
@@ -275,6 +268,13 @@ impl EquivalenceProperties {
     ) -> Result<()> {
         // Add equal expressions to the state:
         if self.eq_group.add_equal_conditions(Arc::clone(&left), right) {
+            // TODO: Renormalize the orderings after adding the new equality:
+            let oeq_class = mem::take(&mut self.oeq_class);
+            self.oeq_class = OrderingEquivalenceClass::new(
+                oeq_class
+                    .into_iter()
+                    .map(|o| self.eq_group.normalize_sort_exprs(o)),
+            );
             // Discover any new orderings:
             self.discover_new_orderings(left)?;
         }
@@ -287,8 +287,15 @@ impl EquivalenceProperties {
         for constant in constants {
             self.eq_group.add_constant(constant);
         }
+        // TODO: Renormalize the orderings after adding new constants:
+        let oeq_class = mem::take(&mut self.oeq_class);
+        self.oeq_class = OrderingEquivalenceClass::new(
+            oeq_class
+                .into_iter()
+                .map(|o| self.eq_group.normalize_sort_exprs(o)),
+        );
         // Discover any new orderings based on the constants:
-        for ordering in self.normalized_oeq_class().iter() {
+        for ordering in self.oeq_class.clone() {
             let leading = Arc::clone(&ordering[0].expr);
             self.discover_new_orderings(leading).unwrap();
         }
@@ -300,16 +307,17 @@ impl EquivalenceProperties {
     /// that can be discovered with the new equivalence properties.
     /// For a discussion, see: <https://github.com/apache/datafusion/issues/9812>
     fn discover_new_orderings(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        let normalized_expr = self.eq_group().normalize_expr(expr);
+        let normalized_expr = self.eq_group.normalize_expr(expr);
         let eq_class = self
             .eq_group
-            .iter()
-            .find(|class| class.contains(&normalized_expr))
-            .map(|class| class.clone().into())
-            .unwrap_or_else(|| vec![Arc::clone(&normalized_expr)]);
+            .get_equivalence_class(&normalized_expr)
+            .map_or_else(
+                || vec![Arc::clone(&normalized_expr)],
+                |class| class.clone().into(),
+            );
 
         let mut new_orderings = vec![];
-        for ordering in self.normalized_oeq_class() {
+        for ordering in self.oeq_class.iter() {
             if !ordering[0].expr.eq(&normalized_expr) {
                 continue;
             }
@@ -367,11 +375,8 @@ impl EquivalenceProperties {
         mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Self {
-        // Normalize the given ordering:
-        let normalized_ordering = ordering
-            .into_iter()
-            .filter(|expr| self.is_expr_constant(&expr.expr).is_none());
-        if let Some(normalized_ordering) = LexOrdering::new(normalized_ordering) {
+        // Normalize the given ordering and process:
+        if let Some(normalized_ordering) = self.normalize_sort_exprs(ordering) {
             // Preserve valid suffixes from existing orderings:
             let mut orderings: Vec<_> = mem::take(&mut self.oeq_class).into();
             orderings.retain(|existing| {
@@ -1013,12 +1018,22 @@ impl EquivalenceProperties {
     /// Projects the equivalences within according to `mapping` and
     /// `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
-        Self {
+        let mut proj_eqp = Self {
             eq_group: self.eq_group.project(mapping),
-            oeq_class: self.projected_orderings(mapping, self.normalized_oeq_class()),
+            oeq_class: self.projected_orderings(mapping, self.oeq_class.clone()),
             constraints: self.projected_constraints(mapping).unwrap_or_default(),
             schema: output_schema,
-        }
+        };
+        // TODO: Remove renormalization after fixing `projected_orderings` to
+        //       take the new eq. group as an argument and emit normalized
+        //       orderings.
+        proj_eqp.oeq_class = OrderingEquivalenceClass::new(
+            proj_eqp
+                .oeq_class
+                .into_iter()
+                .map(|o| proj_eqp.eq_group.normalize_sort_exprs(o)),
+        );
+        proj_eqp
     }
 
     /// Returns the longest (potentially partial) permutation satisfying the
@@ -1281,7 +1296,7 @@ fn update_properties(
     let normalized_expr = eq_properties
         .eq_group
         .normalize_expr(Arc::clone(&node.expr));
-    let oeq_class = eq_properties.normalized_oeq_class();
+    let oeq_class = &eq_properties.oeq_class;
     if eq_properties.is_expr_constant(&normalized_expr).is_some()
         || oeq_class.is_expr_partial_const(&normalized_expr)
     {

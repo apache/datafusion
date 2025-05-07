@@ -512,22 +512,20 @@ mod tests {
         let col_c_expr = col("c", &schema)?;
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
 
-        eq_properties.add_equal_conditions(col_a_expr, Arc::clone(&col_c_expr))?;
+        eq_properties
+            .add_equal_conditions(Arc::clone(&col_a_expr), Arc::clone(&col_c_expr))?;
         eq_properties.add_orderings([
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_b_expr))],
-            vec![PhysicalSortExpr::new_default(Arc::clone(&col_c_expr))],
+            vec![PhysicalSortExpr::new_default(col_c_expr)],
         ]);
 
         let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
         expected_eqs.add_orderings([
-            vec![PhysicalSortExpr::new_default(Arc::clone(&col_b_expr))],
-            vec![PhysicalSortExpr::new_default(Arc::clone(&col_c_expr))],
+            vec![PhysicalSortExpr::new_default(col_b_expr)],
+            vec![PhysicalSortExpr::new_default(col_a_expr)],
         ]);
 
-        let oeq_class = eq_properties.oeq_class().clone();
-        let expected = expected_eqs.oeq_class();
-        assert!(oeq_class.eq(expected));
-
+        assert!(eq_properties.oeq_class().eq(expected_eqs.oeq_class()));
         Ok(())
     }
 
@@ -540,33 +538,21 @@ mod tests {
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
         ]);
-        let col_a = &col("a", &schema)?;
-        let col_b = &col("b", &schema)?;
-        let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let required_columns = [Arc::clone(&col_b), Arc::clone(&col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
         eq_properties.add_ordering([
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("b", 1)),
-                options: sort_options_not,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("a", 0)),
-                options: sort_options,
-            },
+            PhysicalSortExpr::new(Arc::new(Column::new("b", 1)), sort_options_not),
+            PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), sort_options),
         ]);
         let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
             vec![
-                PhysicalSortExpr {
-                    expr: Arc::clone(col_b),
-                    options: sort_options_not
-                },
-                PhysicalSortExpr {
-                    expr: Arc::clone(col_a),
-                    options: sort_options
-                }
+                PhysicalSortExpr::new(col_b, sort_options_not),
+                PhysicalSortExpr::new(col_a, sort_options),
             ]
         );
 
@@ -575,24 +561,18 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let col_a = &col("a", &schema)?;
-        let col_b = &col("b", &schema)?;
-        let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let required_columns = [Arc::clone(&col_b), Arc::clone(&col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
         eq_properties.add_orderings([
-            vec![PhysicalSortExpr {
-                expr: Arc::new(Column::new("c", 2)),
-                options: sort_options,
-            }],
+            vec![PhysicalSortExpr::new(
+                Arc::new(Column::new("c", 2)),
+                sort_options,
+            )],
             vec![
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("b", 1)),
-                    options: sort_options_not,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("a", 0)),
-                    options: sort_options,
-                },
+                PhysicalSortExpr::new(Arc::new(Column::new("b", 1)), sort_options_not),
+                PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), sort_options),
             ],
         ]);
         let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
@@ -600,14 +580,8 @@ mod tests {
         assert_eq!(
             result,
             vec![
-                PhysicalSortExpr {
-                    expr: Arc::clone(col_b),
-                    options: sort_options_not
-                },
-                PhysicalSortExpr {
-                    expr: Arc::clone(col_a),
-                    options: sort_options
-                }
+                PhysicalSortExpr::new(col_b, sort_options_not),
+                PhysicalSortExpr::new(col_a, sort_options),
             ]
         );
 
@@ -624,18 +598,9 @@ mod tests {
 
         // not satisfied orders
         eq_properties.add_ordering([
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("b", 1)),
-                options: sort_options_not,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("c", 2)),
-                options: sort_options,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("a", 0)),
-                options: sort_options,
-            },
+            PhysicalSortExpr::new(Arc::new(Column::new("b", 1)), sort_options_not),
+            PhysicalSortExpr::new(Arc::new(Column::new("c", 2)), sort_options),
+            PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), sort_options),
         ]);
         let (_, idxs) = eq_properties.find_longest_permutation(&required_columns);
         assert_eq!(idxs, vec![0]);
@@ -653,49 +618,35 @@ mod tests {
         ]);
 
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
-        let col_a = &col("a", &schema)?;
-        let col_b = &col("b", &schema)?;
-        let col_c = &col("c", &schema)?;
-        let col_d = &col("d", &schema)?;
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let col_d = col("d", &schema)?;
         let option_asc = SortOptions {
             descending: false,
             nulls_first: false,
         };
         // b=a (e.g they are aliases)
-        eq_properties.add_equal_conditions(Arc::clone(col_b), Arc::clone(col_a))?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_b), Arc::clone(&col_a))?;
         // [b ASC], [d ASC]
         eq_properties.add_orderings([
-            vec![PhysicalSortExpr {
-                expr: Arc::clone(col_b),
-                options: option_asc,
-            }],
-            vec![PhysicalSortExpr {
-                expr: Arc::clone(col_d),
-                options: option_asc,
-            }],
+            vec![PhysicalSortExpr::new(Arc::clone(&col_b), option_asc)],
+            vec![PhysicalSortExpr::new(Arc::clone(&col_d), option_asc)],
         ]);
 
         let test_cases = vec![
             // d + b
             (
-                Arc::new(BinaryExpr::new(
-                    Arc::clone(col_d),
-                    Operator::Plus,
-                    Arc::clone(col_b),
-                )) as _,
+                Arc::new(BinaryExpr::new(col_d, Operator::Plus, Arc::clone(&col_b))) as _,
                 SortProperties::Ordered(option_asc),
             ),
             // b
-            (Arc::clone(col_b), SortProperties::Ordered(option_asc)),
+            (col_b, SortProperties::Ordered(option_asc)),
             // a
-            (Arc::clone(col_a), SortProperties::Ordered(option_asc)),
+            (Arc::clone(&col_a), SortProperties::Ordered(option_asc)),
             // a + c
             (
-                Arc::new(BinaryExpr::new(
-                    Arc::clone(col_a),
-                    Operator::Plus,
-                    Arc::clone(col_c),
-                )),
+                Arc::new(BinaryExpr::new(col_a, Operator::Plus, col_c)),
                 SortProperties::Unordered,
             ),
         ];
@@ -736,7 +687,7 @@ mod tests {
             Arc::clone(col_a),
             Operator::Plus,
             Arc::clone(col_d),
-        )) as Arc<dyn PhysicalExpr>;
+        )) as _;
 
         let option_asc = SortOptions {
             descending: false,
@@ -748,14 +699,8 @@ mod tests {
         };
         // [d ASC, h DESC] also satisfies schema.
         eq_properties.add_ordering([
-            PhysicalSortExpr {
-                expr: Arc::clone(col_d),
-                options: option_asc,
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(col_h),
-                options: option_desc,
-            },
+            PhysicalSortExpr::new(Arc::clone(col_d), option_asc),
+            PhysicalSortExpr::new(Arc::clone(col_h), option_desc),
         ]);
         let test_cases = vec![
             // TEST CASE 1
@@ -980,12 +925,8 @@ mod tests {
             Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
         ]));
         let base_properties = EquivalenceProperties::new(Arc::clone(&schema))
-            .with_reorder(["a", "b", "c"].into_iter().map(|c| PhysicalSortExpr {
-                expr: col(c, schema.as_ref()).unwrap(),
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                },
+            .with_reorder(["a", "b", "c"].into_iter().map(|c| {
+                PhysicalSortExpr::new_default(col(c, schema.as_ref()).unwrap())
             }));
 
         struct TestCase {
@@ -999,17 +940,14 @@ mod tests {
         let col_a = col("a", schema.as_ref())?;
         let col_b = col("b", schema.as_ref())?;
         let col_c = col("c", schema.as_ref())?;
-        let cast_c = Arc::new(CastExpr::new(col_c, DataType::Date32, None));
+        let cast_c = Arc::new(CastExpr::new(col_c, DataType::Date32, None)) as _;
 
         let cases = vec![
             TestCase {
                 name: "(a, b, c) -> (c)",
                 // b is constant, so it should be removed from the sort order
                 constants: vec![Arc::clone(&col_b)],
-                equal_conditions: vec![[
-                    Arc::clone(&cast_c) as Arc<dyn PhysicalExpr>,
-                    Arc::clone(&col_a),
-                ]],
+                equal_conditions: vec![[Arc::clone(&cast_c), Arc::clone(&col_a)]],
                 sort_columns: &["c"],
                 should_satisfy_ordering: true,
             },
@@ -1019,10 +957,7 @@ mod tests {
                 name: "(a, b, c) -> (c)",
                 // b is constant, so it should be removed from the sort order
                 constants: vec![col_b],
-                equal_conditions: vec![[
-                    Arc::clone(&col_a),
-                    Arc::clone(&cast_c) as Arc<dyn PhysicalExpr>,
-                ]],
+                equal_conditions: vec![[Arc::clone(&col_a), Arc::clone(&cast_c)]],
                 sort_columns: &["c"],
                 should_satisfy_ordering: true,
             },
@@ -1031,10 +966,7 @@ mod tests {
                 // b is not constant anymore
                 constants: vec![],
                 // a and c are still compatible, but this is irrelevant since the original ordering is (a, b, c)
-                equal_conditions: vec![[
-                    Arc::clone(&cast_c) as Arc<dyn PhysicalExpr>,
-                    Arc::clone(&col_a),
-                ]],
+                equal_conditions: vec![[Arc::clone(&cast_c), Arc::clone(&col_a)]],
                 sort_columns: &["c"],
                 should_satisfy_ordering: false,
             },
@@ -1205,18 +1137,18 @@ mod tests {
         ]);
 
         // Add equality condition c = concat(a, b)
-        eq_properties.add_equal_conditions(col_c, Arc::clone(&a_concat_b))?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_c), a_concat_b)?;
 
         let orderings = eq_properties.oeq_class();
 
-        let expected_ordering1 = [PhysicalSortExpr::new_default(a_concat_b).asc()].into();
+        let expected_ordering1 = [PhysicalSortExpr::new_default(col_c).asc()].into();
         let expected_ordering2 = [
             PhysicalSortExpr::new_default(col_a).asc(),
             PhysicalSortExpr::new_default(col_b).asc(),
         ]
         .into();
 
-        // The ordering should be [concat(a, b) ASC] and [a ASC, b ASC]
+        // The ordering should be [c ASC] and [a ASC, b ASC]
         assert_eq!(orderings.len(), 2);
         assert!(orderings.contains(&expected_ordering1));
         assert!(orderings.contains(&expected_ordering2));
@@ -1264,14 +1196,8 @@ mod tests {
         eq_properties.add_constants([ConstExpr::from(Arc::clone(&col_a))]);
 
         let sort_exprs = vec![
-            PhysicalSortExpr {
-                expr: col_a,
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
-                options: SortOptions::default(),
-            },
+            PhysicalSortExpr::new_default(col_a),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)),
         ];
 
         let result = eq_properties.with_reorder(sort_exprs);
@@ -1302,25 +1228,13 @@ mod tests {
 
         // Initial ordering: [a ASC, b DESC, c ASC]
         eq_properties.add_ordering([
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: asc,
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
-                options: desc,
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_c),
-                options: asc,
-            },
+            PhysicalSortExpr::new(Arc::clone(&col_a), asc),
+            PhysicalSortExpr::new(Arc::clone(&col_b), desc),
+            PhysicalSortExpr::new(Arc::clone(&col_c), asc),
         ]);
 
         // New ordering: [a ASC]
-        let new_order = vec![PhysicalSortExpr {
-            expr: Arc::clone(&col_a),
-            options: asc,
-        }];
+        let new_order = vec![PhysicalSortExpr::new(Arc::clone(&col_a), asc)];
 
         let result = eq_properties.with_reorder(new_order);
 
@@ -1350,25 +1264,14 @@ mod tests {
         // Make a and b equivalent
         eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_b))?;
 
-        let asc = SortOptions::default();
-
         // Initial ordering: [a ASC, c ASC]
         eq_properties.add_ordering([
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: asc,
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_c),
-                options: asc,
-            },
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)),
+            PhysicalSortExpr::new_default(Arc::clone(&col_c)),
         ]);
 
         // New ordering: [b ASC]
-        let new_order = vec![PhysicalSortExpr {
-            expr: Arc::clone(&col_b),
-            options: asc,
-        }];
+        let new_order = vec![PhysicalSortExpr::new_default(Arc::clone(&col_b))];
 
         let result = eq_properties.with_reorder(new_order);
 
@@ -1376,6 +1279,7 @@ mod tests {
         assert_eq!(result.oeq_class().len(), 1);
 
         // Verify orderings
+        let asc = SortOptions::default();
         let ordering = result.oeq_class().iter().next().unwrap();
         assert_eq!(ordering.len(), 2);
         assert!(ordering[0].expr.eq(&col_a) || ordering[0].expr.eq(&col_b));
@@ -1430,8 +1334,6 @@ mod tests {
         let col_d = col("d", &schema)?;
         let col_e = col("e", &schema)?;
 
-        let asc = SortOptions::default();
-
         // Constants: c is constant
         eq_properties.add_constants([ConstExpr::from(Arc::clone(&col_c))]);
 
@@ -1441,31 +1343,16 @@ mod tests {
         // Orderings: [d ASC, a ASC], [e ASC]
         eq_properties.add_orderings([
             vec![
-                PhysicalSortExpr {
-                    expr: Arc::clone(&col_d),
-                    options: asc,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::clone(&col_a),
-                    options: asc,
-                },
+                PhysicalSortExpr::new_default(Arc::clone(&col_d)),
+                PhysicalSortExpr::new_default(Arc::clone(&col_a)),
             ],
-            vec![PhysicalSortExpr {
-                expr: Arc::clone(&col_e),
-                options: asc,
-            }],
+            vec![PhysicalSortExpr::new_default(Arc::clone(&col_e))],
         ]);
 
         // Initial ordering: [b ASC, c ASC]
         let new_order = vec![
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
-                options: asc,
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_c),
-                options: asc,
-            },
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)),
+            PhysicalSortExpr::new_default(Arc::clone(&col_c)),
         ];
 
         let result = eq_properties.with_reorder(new_order);
@@ -1476,6 +1363,7 @@ mod tests {
         assert_eq!(ordering.len(), 2);
 
         // First expression should be either b or d (they're equivalent)
+        let asc = SortOptions::default();
         assert!(
             ordering[0].expr.eq(&col_b) || ordering[0].expr.eq(&col_d),
             "Expected b or d as first expression, got {:?}",
@@ -1591,9 +1479,8 @@ mod tests {
                 .iter()
                 .map(|cols| {
                     cols.iter()
-                        .map(|col_name| PhysicalSortExpr {
-                            expr: col(col_name, schema).unwrap(),
-                            options: SortOptions::default(),
+                        .map(|col_name| {
+                            PhysicalSortExpr::new_default(col(col_name, schema).unwrap())
                         })
                         .collect::<Vec<_>>()
                 })
@@ -1603,9 +1490,8 @@ mod tests {
                 .iter()
                 .map(|cols| {
                     cols.iter()
-                        .map(|col_name| PhysicalSortExpr {
-                            expr: col(col_name, schema).unwrap(),
-                            options: SortOptions::default(),
+                        .map(|col_name| {
+                            PhysicalSortExpr::new_default(col(col_name, schema).unwrap())
                         })
                         .collect::<Vec<_>>()
                 })

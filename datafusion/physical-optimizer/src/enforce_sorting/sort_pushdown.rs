@@ -28,6 +28,7 @@ use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
@@ -280,24 +281,23 @@ fn pushdown_requirement_to_children(
         Ok(Some(vec![Some(parent_required); plan.children().len()]))
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         let left_columns_len = smj.left().schema().fields().len();
-        let parent_required_expr = LexOrdering::from(parent_required.first().clone());
-        match expr_source_side(&parent_required_expr, smj.join_type(), left_columns_len) {
-            Some(JoinSide::Left) => try_pushdown_requirements_to_join(
+        let parent_ordering = LexOrdering::from(parent_required.first().clone());
+        let eqp = smj.properties().equivalence_properties();
+        match expr_source_side(eqp, parent_ordering, smj.join_type(), left_columns_len) {
+            Some((JoinSide::Left, ordering)) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required.into_single(),
-                &parent_required_expr,
+                ordering,
                 JoinSide::Left,
             ),
-            Some(JoinSide::Right) => {
+            Some((JoinSide::Right, mut ordering)) => {
                 let right_offset =
                     smj.schema().fields.len() - smj.right().schema().fields.len();
-                let new_right_required =
-                    shift_right_required(parent_required.first().clone(), right_offset)?;
-                let new_right_required_expr = LexOrdering::from(new_right_required);
+                ordering = shift_right_ordering(ordering, right_offset)?;
                 try_pushdown_requirements_to_join(
                     smj,
                     parent_required.into_single(),
-                    &new_right_required_expr,
+                    ordering,
                     JoinSide::Right,
                 )
             }
@@ -395,7 +395,7 @@ fn determine_children_requirement(
 fn try_pushdown_requirements_to_join(
     smj: &SortMergeJoinExec,
     parent_required: LexRequirement,
-    sort_expr: &LexOrdering,
+    ordering: LexOrdering,
     push_side: JoinSide,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
     let mut smj_required_orderings = smj.required_input_ordering();
@@ -406,7 +406,7 @@ fn try_pushdown_requirements_to_join(
                 .left()
                 .equivalence_properties()
                 .clone()
-                .with_reorder(sort_expr.clone());
+                .with_reorder(ordering.clone());
             let Some(left_requirement) = smj_required_orderings.swap_remove(0) else {
                 return Ok(None);
             };
@@ -416,14 +416,14 @@ fn try_pushdown_requirements_to_join(
                 return Ok(None);
             }
             // After re-ordering requirement is still satisfied
-            (Some(sort_expr), smj.right().output_ordering())
+            (Some(&ordering), smj.right().output_ordering())
         }
         JoinSide::Right => {
             let right_eq_properties = smj
                 .right()
                 .equivalence_properties()
                 .clone()
-                .with_reorder(sort_expr.clone());
+                .with_reorder(ordering.clone());
 
             let Some(right_requirement) = smj_required_orderings.swap_remove(1) else {
                 return Ok(None);
@@ -434,7 +434,7 @@ fn try_pushdown_requirements_to_join(
                 return Ok(None);
             }
             // After re-ordering requirement is still satisfied
-            (smj.left().output_ordering(), Some(sort_expr))
+            (smj.left().output_ordering(), Some(&ordering))
         }
         JoinSide::None => return Ok(None),
     };
@@ -457,7 +457,7 @@ fn try_pushdown_requirements_to_join(
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();
-        let new_req = Some(OrderingRequirements::from(sort_expr.clone()));
+        let new_req = Some(OrderingRequirements::from(ordering));
         match push_side {
             JoinSide::Left => {
                 required_input_ordering[0] = new_req;
@@ -472,62 +472,85 @@ fn try_pushdown_requirements_to_join(
 }
 
 fn expr_source_side(
-    required_exprs: &LexOrdering,
+    eqp: &EquivalenceProperties,
+    mut ordering: LexOrdering,
     join_type: JoinType,
     left_columns_len: usize,
-) -> Option<JoinSide> {
+) -> Option<(JoinSide, LexOrdering)> {
+    // TODO: Handle the case where a prefix of the ordering comes from the left
+    //       and a suffix from the right.
     match join_type {
         JoinType::Inner
         | JoinType::Left
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftMark => {
-            let all_column_sides = required_exprs
-                .iter()
-                .filter_map(|r| {
-                    r.expr.as_any().downcast_ref::<Column>().map(|col| {
-                        if col.index() < left_columns_len {
-                            JoinSide::Left
-                        } else {
-                            JoinSide::Right
+            let eq_group = eqp.eq_group();
+            let mut right_ordering = ordering.clone();
+            let (mut valid_left, mut valid_right) = (true, true);
+            for (left, right) in ordering.iter_mut().zip(right_ordering.iter_mut()) {
+                let col = left.expr.as_any().downcast_ref::<Column>()?;
+                let eq_class = eq_group.get_equivalence_class(&left.expr);
+                if col.index() < left_columns_len {
+                    if valid_right {
+                        valid_right = eq_class.is_some_and(|cls| {
+                            for expr in cls.iter() {
+                                if expr
+                                    .as_any()
+                                    .downcast_ref::<Column>()
+                                    .is_some_and(|c| c.index() >= left_columns_len)
+                                {
+                                    right.expr = Arc::clone(expr);
+                                    return true;
+                                }
+                            }
+                            false
+                        });
+                    }
+                } else if valid_left {
+                    valid_left = eq_class.is_some_and(|cls| {
+                        for expr in cls.iter() {
+                            if expr
+                                .as_any()
+                                .downcast_ref::<Column>()
+                                .is_some_and(|c| c.index() < left_columns_len)
+                            {
+                                left.expr = Arc::clone(expr);
+                                return true;
+                            }
                         }
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            // If the exprs are all coming from one side, the requirements can be pushed down
-            if all_column_sides.len() != required_exprs.len() {
-                None
-            } else if all_column_sides
-                .iter()
-                .all(|side| matches!(side, JoinSide::Left))
-            {
-                Some(JoinSide::Left)
-            } else if all_column_sides
-                .iter()
-                .all(|side| matches!(side, JoinSide::Right))
-            {
-                Some(JoinSide::Right)
+                        false
+                    });
+                };
+                if !(valid_left || valid_right) {
+                    return None;
+                }
+            }
+            if valid_left {
+                Some((JoinSide::Left, ordering))
+            } else if valid_right {
+                Some((JoinSide::Right, right_ordering))
             } else {
+                // TODO: Handle the case where we can push down to both sides.
                 None
             }
         }
-        JoinType::LeftSemi | JoinType::LeftAnti => required_exprs
+        JoinType::LeftSemi | JoinType::LeftAnti => ordering
             .iter()
-            .all(|e| e.expr.as_any().downcast_ref::<Column>().is_some())
-            .then_some(JoinSide::Left),
-        JoinType::RightSemi | JoinType::RightAnti => required_exprs
+            .all(|e| e.expr.as_any().is::<Column>())
+            .then_some((JoinSide::Left, ordering)),
+        JoinType::RightSemi | JoinType::RightAnti => ordering
             .iter()
-            .all(|e| e.expr.as_any().downcast_ref::<Column>().is_some())
-            .then_some(JoinSide::Right),
+            .all(|e| e.expr.as_any().is::<Column>())
+            .then_some((JoinSide::Right, ordering)),
     }
 }
 
-fn shift_right_required(
-    mut parent_required: LexRequirement,
+fn shift_right_ordering(
+    mut parent_ordering: LexOrdering,
     left_columns_len: usize,
-) -> Result<LexRequirement> {
-    for req in parent_required.iter_mut() {
+) -> Result<LexOrdering> {
+    for req in parent_ordering.iter_mut() {
         let Some(col) = req.expr.as_any().downcast_ref::<Column>() else {
             return plan_err!(
                 "Expect to shift all the parent required column indexes for SortMergeJoin"
@@ -536,7 +559,7 @@ fn shift_right_required(
         let offset = col.index() - left_columns_len;
         req.expr = Arc::new(Column::new(col.name(), offset));
     }
-    Ok(parent_required)
+    Ok(parent_ordering)
 }
 
 /// Handles the custom pushdown of parent-required sorting requirements down to
