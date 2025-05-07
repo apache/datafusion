@@ -1018,6 +1018,13 @@ impl ExecutionPlan for AggregateExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
     }
+
+    fn requried_filtered_input(&self) -> bool {
+        match self.mode() {
+            AggregateMode::FinalPartitioned(HashPartitionMode::SelectionBitmap) => true,
+            _ => false,
+        }
+    }
 }
 
 fn create_schema(

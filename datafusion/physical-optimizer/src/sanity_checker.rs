@@ -110,13 +110,15 @@ pub fn check_finiteness_requirements(
 pub fn check_filtered_batch_handle(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    if plan.output_filtered_batches() {
+    if plan.requried_filtered_input() {
         for child in plan.children() {
-            if child.requried_filtered_input() {
+            if !child.output_filtered_batches() {
+                let plan_str = get_plan_string(&plan);
+                let child_str = get_plan_string(&child);
                 return plan_err!(
-                    "Plan {:?} prodouces filtered batches but its child {:?} won't consume them",
-                    plan,
-                    child
+                    "Plan {:?} required filtered batches but its child {:?} won't produce them",
+                    plan_str,
+                    child_str
                 );
             }
         }

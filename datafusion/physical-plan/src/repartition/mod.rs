@@ -652,6 +652,13 @@ impl ExecutionPlan for RepartitionExec {
         Self::maintains_input_order_helper(self.input(), self.preserve_order)
     }
 
+    fn output_filtered_batches(&self) -> bool {
+        match self.partitioning() {
+            Partitioning::HashSelectionBitmap(_, _) => true,
+            _ => false,
+        }
+    }
+
     fn execute(
         &self,
         partition: usize,
