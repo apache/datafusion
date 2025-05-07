@@ -778,6 +778,227 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_adapt_struct_with_added_nested_fields() -> Result<()> {
+        // Create test schemas
+        let (file_schema, table_schema) = create_test_schemas_with_nested_fields();
+
+        // Create batch with test data
+        let batch = create_test_batch_with_struct_data(&file_schema)?;
+
+        // Create adapter and apply it
+        let mapped_batch =
+            adapt_batch_with_nested_schema_adapter(&file_schema, &table_schema, batch)?;
+
+        // Verify the results
+        verify_adapted_batch_with_nested_fields(&mapped_batch, &table_schema)?;
+
+        Ok(())
+    }
+
+    /// Create file and table schemas for testing nested field evolution
+    fn create_test_schemas_with_nested_fields() -> (SchemaRef, SchemaRef) {
+        // Create file schema with just location and timestamp_utc
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "info",
+            DataType::Struct(
+                vec![
+                    Field::new("location", DataType::Utf8, true),
+                    Field::new(
+                        "timestamp_utc",
+                        DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+
+        // Create table schema with additional nested reason field
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "info",
+            DataType::Struct(
+                vec![
+                    Field::new("location", DataType::Utf8, true),
+                    Field::new(
+                        "timestamp_utc",
+                        DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                        true,
+                    ),
+                    Field::new(
+                        "reason",
+                        DataType::Struct(
+                            vec![
+                                Field::new("_level", DataType::Float64, true),
+                                Field::new(
+                                    "details",
+                                    DataType::Struct(
+                                        vec![
+                                            Field::new("rurl", DataType::Utf8, true),
+                                            Field::new("s", DataType::Float64, true),
+                                            Field::new("t", DataType::Utf8, true),
+                                        ]
+                                        .into(),
+                                    ),
+                                    true,
+                                ),
+                            ]
+                            .into(),
+                        ),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+
+        (file_schema, table_schema)
+    }
+
+    /// Create a test RecordBatch with struct data matching the file schema
+    fn create_test_batch_with_struct_data(
+        file_schema: &SchemaRef,
+    ) -> Result<RecordBatch> {
+        let mut location_builder = StringBuilder::new();
+        location_builder.append_value("San Francisco");
+        location_builder.append_value("New York");
+
+        let timestamp_array = TimestampMillisecondArray::from(vec![
+            Some(1640995200000), // 2022-01-01
+            Some(1641081600000), // 2022-01-02
+        ]);
+
+        let info_struct = StructArray::from(vec![
+            (
+                Arc::new(Field::new("location", DataType::Utf8, true)),
+                Arc::new(location_builder.finish()) as Arc<dyn Array>,
+            ),
+            (
+                Arc::new(Field::new(
+                    "timestamp_utc",
+                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                    true,
+                )),
+                Arc::new(timestamp_array),
+            ),
+        ]);
+
+        Ok(RecordBatch::try_new(
+            Arc::clone(file_schema),
+            vec![Arc::new(info_struct)],
+        )?)
+    }
+
+    /// Apply the nested schema adapter to the batch
+    fn adapt_batch_with_nested_schema_adapter(
+        file_schema: &SchemaRef,
+        table_schema: &SchemaRef,
+        batch: RecordBatch,
+    ) -> Result<RecordBatch> {
+        let adapter = NestedStructSchemaAdapter::new(
+            Arc::clone(table_schema),
+            Arc::clone(table_schema),
+        );
+
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
+        mapper.map_batch(batch)
+    }
+
+    /// Verify the adapted batch has the expected structure and data
+    fn verify_adapted_batch_with_nested_fields(
+        mapped_batch: &RecordBatch,
+        table_schema: &SchemaRef,
+    ) -> Result<()> {
+        // Verify the mapped batch structure and data
+        assert_eq!(mapped_batch.schema(), *table_schema);
+        assert_eq!(mapped_batch.num_rows(), 2);
+
+        // Extract and verify the info struct column
+        let info_col = mapped_batch.column(0);
+        let info_array = info_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected info column to be a StructArray");
+
+        // Verify the original fields are preserved
+        verify_preserved_fields(info_array)?;
+
+        // Verify the reason field exists with correct structure
+        verify_reason_field_structure(info_array)?;
+
+        Ok(())
+    }
+
+    /// Verify the original fields from file schema are preserved in the adapted batch
+    fn verify_preserved_fields(info_array: &StructArray) -> Result<()> {
+        // Verify location field
+        let location_col = info_array
+            .column_by_name("location")
+            .expect("Expected location field in struct");
+        let location_array = location_col
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("Expected location to be a StringArray");
+
+        // Verify the location values are preserved
+        assert_eq!(location_array.value(0), "San Francisco");
+        assert_eq!(location_array.value(1), "New York");
+
+        // Verify timestamp field
+        let timestamp_col = info_array
+            .column_by_name("timestamp_utc")
+            .expect("Expected timestamp_utc field in struct");
+        let timestamp_array = timestamp_col
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .expect("Expected timestamp_utc to be a TimestampMillisecondArray");
+
+        assert_eq!(timestamp_array.value(0), 1640995200000);
+        assert_eq!(timestamp_array.value(1), 1641081600000);
+
+        Ok(())
+    }
+
+    /// Verify the added reason field structure and null values
+    fn verify_reason_field_structure(info_array: &StructArray) -> Result<()> {
+        // Verify the reason field exists and is null
+        let reason_col = info_array
+            .column_by_name("reason")
+            .expect("Expected reason field in struct");
+        let reason_array = reason_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected reason to be a StructArray");
+
+        // Verify reason has correct structure
+        assert_eq!(reason_array.fields().size(), 2);
+        assert!(reason_array.column_by_name("_level").is_some());
+        assert!(reason_array.column_by_name("details").is_some());
+
+        // Verify details field has correct nested structure
+        let details_col = reason_array
+            .column_by_name("details")
+            .expect("Expected details field in reason struct");
+        let details_array = details_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected details to be a StructArray");
+
+        assert_eq!(details_array.fields().size(), 3);
+        assert!(details_array.column_by_name("rurl").is_some());
+        assert!(details_array.column_by_name("s").is_some());
+        assert!(details_array.column_by_name("t").is_some());
+
+        // Verify all added fields are null
+        for i in 0..2 {
+            assert!(reason_array.is_null(i), "reason field should be null");
+        }
+
+        Ok(())
+    }
+
     // ================================
     // Data Mapping Tests
     // ================================
@@ -1020,7 +1241,7 @@ mod tests {
         );
 
         // Map schema and get mapper
-        let (mapper, projection) = adapter.map_schema(file_schema.as_ref())?;
+        let (mapper, _projection) = adapter.map_schema(file_schema.as_ref())?;
 
         // Create file column statistics
         let file_stats = vec![ColumnStatistics {
@@ -1174,7 +1395,7 @@ mod tests {
             Arc::clone(&table_schema),
         );
 
-        let (mapper, projection) = adapter.map_schema(file_schema.as_ref())?;
+        let (mapper, _projection) = adapter.map_schema(file_schema.as_ref())?;
 
         // Create file column statistics
         let file_stats = vec![
