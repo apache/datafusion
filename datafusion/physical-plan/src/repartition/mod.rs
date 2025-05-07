@@ -40,9 +40,9 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use arrow::array::{RecordBatch, RecordBatchOptions, UInt32Array};
 use arrow::compute;
-use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
@@ -281,32 +281,50 @@ impl BatchPartitioner {
 
                     create_hashes(&arrays, random_state, hash_buffer)?;
 
-                    let mut indices: Vec<_> = (0..*partitions)
-                        .map(|_| Vec::with_capacity(batch.num_rows()))
-                        .collect();
+                    let mut indices = Vec::from_iter(0..batch.num_rows() as u32);
+                    let mut cum_histogram = vec![0; *partitions];
 
-                    for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize].push(index as u32);
+                    for hash in hash_buffer.iter_mut() {
+                        *hash %= *partitions as u64;
+                        cum_histogram[*hash as usize] += 1;
+                    }
+
+                    for idx in 1..cum_histogram.len() {
+                        cum_histogram[idx] += cum_histogram[idx - 1];
+                    }
+
+                    indices.sort_unstable_by_key(|idx| hash_buffer[*idx as usize]);
+
+                    // The cumulative histogram now stores the ends of the index range for each partition:
+                    // The indices for partition $i will be stored at indices[hist[i - 1]..hist[i]]
+                    let indices: UInt32Array = indices.into();
+
+                    // We now slice up indices by partition so we can use the `take` kernel
+                    let mut partition_indices = Vec::with_capacity(*partitions);
+                    for partition in 0..*partitions {
+                        let end = cum_histogram[partition];
+                        let start = if partition == 0 {
+                            0
+                        } else {
+                            cum_histogram[partition - 1]
+                        };
+
+                        if start != end {
+                            partition_indices
+                                .push((partition, indices.slice(start, end - start)));
+                        }
                     }
 
                     // Finished building index-arrays for output partitions
                     timer.done();
 
-                    let indices = indices
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(partition, indices)| {
-                            let indices: PrimitiveArray<UInt32Type> = indices.into();
-                            (!indices.is_empty()).then_some((partition, indices))
-                        })
-                        .collect::<Vec<_>>();
-
-                    let mut output_batch_columns = (0..indices.len())
+                    let mut output_batch_columns = (0..partition_indices.len())
                         .map(|_| Vec::with_capacity(batch.num_columns()))
                         .collect::<Vec<_>>();
 
                     for column in batch.columns() {
-                        for (index, (_, indices)) in indices.iter().enumerate() {
+                        for (index, (_, indices)) in partition_indices.iter().enumerate()
+                        {
                             output_batch_columns[index]
                                 .push(compute::take(column, indices, None)?);
                         }
@@ -314,7 +332,7 @@ impl BatchPartitioner {
 
                     let it = output_batch_columns
                         .into_iter()
-                        .zip(indices.into_iter())
+                        .zip(partition_indices.into_iter())
                         .map(move |(columns, (partition, indices))| {
                             let options = RecordBatchOptions::new()
                                 .with_row_count(Some(indices.len()));
