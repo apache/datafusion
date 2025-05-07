@@ -20,7 +20,7 @@ use std::{any::Any, sync::Arc};
 use arrow::{
     array::{ArrayRef, ArrowNativeTypeOp, AsArray},
     datatypes::{
-        DataType, Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type,
+        DataType, Decimal128Type, Field, Float32Type, Float64Type, Int16Type, Int32Type,
         Int64Type, Int8Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     },
 };
@@ -67,11 +67,7 @@ fn ceil_floor_coerce_types(name: &str, arg_types: &[DataType]) -> Result<Vec<Dat
     }
 }
 
-#[allow(dead_code)]
-fn ceil_floor_return_type_from_args(
-    name: &str,
-    args: ReturnFieldArgs,
-) -> Result<DataType> {
+fn ceil_floor_return_field_from_args(name: &str, args: ReturnFieldArgs) -> Result<Field> {
     let arg_fields = args.arg_fields;
     let scalar_arguments = args.scalar_arguments;
     let return_type = if arg_fields.len() == 1 {
@@ -161,7 +157,7 @@ fn ceil_floor_return_type_from_args(
     } else {
         Err(invalid_arg_count_exec_err(name, (1, 2), arg_fields.len()))
     }?;
-    Ok(return_type)
+    Ok(Field::new(name.to_string(), return_type, true))
 }
 
 fn ceil_floor_coerce_first_arg(name: &str, arg_type: &DataType) -> Result<DataType> {
@@ -244,6 +240,10 @@ impl ScalarUDFImpl for SparkCeil {
         ))
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+        ceil_floor_return_field_from_args("ceil", args)
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let arg_len = args.args.len();
         let target_scale = if arg_len == 1 {
@@ -307,6 +307,10 @@ impl ScalarUDFImpl for SparkFloor {
             "floor",
             "`return_type` should not be called, call `return_type_from_args` instead",
         ))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+        ceil_floor_return_field_from_args("floor", args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
