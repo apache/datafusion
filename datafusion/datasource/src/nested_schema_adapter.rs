@@ -1,6 +1,7 @@
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // for additional information regarding copyright ownership.  The ASF licenses this file to you under the Apache License, Version 2.0 (the
+// for additional information regarding copyright ownership.  The ASF licenses this file to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
@@ -19,7 +20,7 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
-use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{DataType::Struct, Field, Fields, Schema, SchemaRef};
 use datafusion_common::{ColumnStatistics, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -68,7 +69,7 @@ impl NestedStructSchemaAdapterFactory {
         schema
             .fields()
             .iter()
-            .any(|field| matches!(field.data_type(), DataType::Struct(_)))
+            .any(|field| matches!(field.data_type(), Struct(_)))
     }
 
     /// Create an appropriate schema adapter based on schema characteristics.
@@ -120,15 +121,12 @@ fn adapt_fields(source_fields: &Fields, target_fields: &Fields) -> Vec<Field> {
             Some(source_field) => {
                 match (source_field.data_type(), target_field.data_type()) {
                     // Recursively adapt nested struct fields
-                    (
-                        DataType::Struct(source_children),
-                        DataType::Struct(target_children),
-                    ) => {
+                    (Struct(source_children), Struct(target_children)) => {
                         let adapted_children =
                             adapt_fields(source_children, target_children);
                         adapted_fields.push(Field::new(
                             target_field.name(),
-                            DataType::Struct(adapted_children.into()),
+                            Struct(adapted_children.into()),
                             target_field.is_nullable(),
                         ));
                     }
@@ -338,7 +336,7 @@ impl SchemaMapper for NestedStructSchemaMapping {
 /// Adapt a column to match the target field type, handling nested structs specially
 fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {
-        DataType::Struct(target_fields) => {
+        Struct(target_fields) => {
             // For struct arrays, we need to handle them specially
             if let Some(struct_array) = source_col.as_any().downcast_ref::<StructArray>()
             {
@@ -385,10 +383,12 @@ fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{
-        Array, Int32Array, StringBuilder, StructArray, TimestampMillisecondArray,
+    use arrow::array::{Array, StringBuilder, StructArray, TimestampMillisecondArray};
+    use arrow::datatypes::{
+        DataType::{Boolean, Float64, Int16, Int32, Int64, List, Timestamp, Utf8},
+        TimeUnit::Millisecond,
     };
-    use arrow::datatypes::{DataType, TimeUnit};
+    use datafusion_common::ScalarValue;
 
     // ================================
     // Schema Creation Helper Functions
@@ -397,13 +397,9 @@ mod tests {
     /// Helper function to create a flat schema without nested fields
     fn create_flat_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("user", DataType::Utf8, true),
-            Field::new(
-                "timestamp",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
+            Field::new("id", Int32, false),
+            Field::new("user", Utf8, true),
+            Field::new("timestamp", Timestamp(Millisecond, None), true),
         ]))
     }
 
@@ -411,18 +407,14 @@ mod tests {
     fn create_nested_schema() -> SchemaRef {
         // Define user_info struct fields to reuse for list of structs
         let user_info_fields: Vec<Field> = vec![
-            Field::new("name", DataType::Utf8, true), // will map from "user" field
-            Field::new(
-                "created_at",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ), // will map from "timestamp" field
+            Field::new("name", Utf8, true), // will map from "user" field
+            Field::new("created_at", Timestamp(Millisecond, None), true), // will map from "timestamp" field
             Field::new(
                 "settings",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("theme", DataType::Utf8, true),
-                        Field::new("notifications", DataType::Boolean, true),
+                        Field::new("theme", Utf8, true),
+                        Field::new("notifications", Boolean, true),
                     ]
                     .into(),
                 ),
@@ -431,14 +423,14 @@ mod tests {
         ];
 
         // Create the user_info struct type
-        let user_info_struct_type = DataType::Struct(user_info_fields.into());
+        let user_info_struct_type = Struct(user_info_fields.into());
 
         Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             // Add a list of user_info structs (without the individual user_info field)
             Field::new(
                 "user_infos",
-                DataType::List(Arc::new(Field::new("item", user_info_struct_type, true))),
+                List(Arc::new(Field::new("item", user_info_struct_type, true))),
                 true,
             ),
         ]))
@@ -461,12 +453,8 @@ mod tests {
     /// Helper function to create the additionalInfo field with or without the reason subfield
     fn create_additional_info_field(with_reason: bool) -> Field {
         let mut field_children = vec![
-            Field::new("location", DataType::Utf8, true),
-            Field::new(
-                "timestamp_utc",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
+            Field::new("location", Utf8, true),
+            Field::new("timestamp_utc", Timestamp(Millisecond, None), true),
         ];
 
         // Add the reason field if requested (for target schema)
@@ -474,28 +462,24 @@ mod tests {
             field_children.push(create_reason_field());
         }
 
-        Field::new(
-            "additionalInfo",
-            DataType::Struct(field_children.into()),
-            true,
-        )
+        Field::new("additionalInfo", Struct(field_children.into()), true)
     }
 
     /// Helper function to create the reason nested field with its details subfield
     fn create_reason_field() -> Field {
         Field::new(
             "reason",
-            DataType::Struct(
+            Struct(
                 vec![
-                    Field::new("_level", DataType::Float64, true),
+                    Field::new("_level", Float64, true),
                     // Inline the details field creation
                     Field::new(
                         "details",
-                        DataType::Struct(
+                        Struct(
                             vec![
-                                Field::new("rurl", DataType::Utf8, true),
-                                Field::new("s", DataType::Float64, true),
-                                Field::new("t", DataType::Utf8, true),
+                                Field::new("rurl", Utf8, true),
+                                Field::new("s", Float64, true),
+                                Field::new("t", Utf8, true),
                             ]
                             .into(),
                         ),
@@ -535,14 +519,14 @@ mod tests {
     fn test_map_schema() -> Result<()> {
         // Create test schemas with schema evolution scenarios
         let source_schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
+            Field::new("id", Int32, false),
+            Field::new("name", Utf8, true),
             Field::new(
                 "metadata",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("modified", DataType::Utf8, true),
+                        Field::new("created", Utf8, true),
+                        Field::new("modified", Utf8, true),
                     ]
                     .into(),
                 ),
@@ -552,21 +536,21 @@ mod tests {
 
         // Target schema has additional fields
         let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
+            Field::new("id", Int32, false),
+            Field::new("name", Utf8, true),
             Field::new(
                 "metadata",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("modified", DataType::Utf8, true),
-                        Field::new("version", DataType::Int64, true), // Added field
+                        Field::new("created", Utf8, true),
+                        Field::new("modified", Utf8, true),
+                        Field::new("version", Int64, true), // Added field
                     ]
                     .into(),
                 ),
                 true,
             ),
-            Field::new("description", DataType::Utf8, true), // Added field
+            Field::new("description", Utf8, true), // Added field
         ]));
 
         let adapter =
@@ -599,7 +583,7 @@ mod tests {
             "Description field should exist in adapted schema"
         );
 
-        if let DataType::Struct(fields) = adapted
+        if let Struct(fields) = adapted
             .field(adapted.index_of("metadata").unwrap())
             .data_type()
         {
@@ -623,19 +607,19 @@ mod tests {
     fn test_adapter_factory_selection() -> Result<()> {
         // Test schemas for adapter selection logic
         let simple_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
-            Field::new("age", DataType::Int16, true),
+            Field::new("id", Int32, false),
+            Field::new("name", Utf8, true),
+            Field::new("age", Int16, true),
         ]));
 
         let nested_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             Field::new(
                 "metadata",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("modified", DataType::Utf8, true),
+                        Field::new("created", Utf8, true),
+                        Field::new("modified", Utf8, true),
                     ]
                     .into(),
                 ),
@@ -645,12 +629,12 @@ mod tests {
 
         // Source schema with missing field
         let source_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             Field::new(
                 "metadata",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("created", DataType::Utf8, true),
+                        Field::new("created", Utf8, true),
                         // "modified" field is missing
                     ]
                     .into(),
@@ -719,17 +703,17 @@ mod tests {
         if let Ok(idx) = adapted.index_of("user_infos") {
             let user_infos_field = adapted.field(idx);
             assert!(
-                matches!(user_infos_field.data_type(), DataType::List(_)),
+                matches!(user_infos_field.data_type(), List(_)),
                 "user_infos field should be a List type"
             );
 
-            if let DataType::List(list_field) = user_infos_field.data_type() {
+            if let List(list_field) = user_infos_field.data_type() {
                 assert!(
-                    matches!(list_field.data_type(), DataType::Struct(_)),
+                    matches!(list_field.data_type(), Struct(_)),
                     "List items should be Struct type"
                 );
 
-                if let DataType::Struct(fields) = list_field.data_type() {
+                if let Struct(fields) = list_field.data_type() {
                     assert_eq!(fields.len(), 3, "List item structs should have 3 fields");
                     assert!(
                         fields.iter().any(|f| f.name() == "settings"),
@@ -740,9 +724,7 @@ mod tests {
                     if let Some(settings_field) =
                         fields.iter().find(|f| f.name() == "settings")
                     {
-                        if let DataType::Struct(settings_fields) =
-                            settings_field.data_type()
-                        {
+                        if let Struct(settings_fields) = settings_field.data_type() {
                             assert_eq!(
                                 settings_fields.len(),
                                 2,
@@ -777,179 +759,481 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_adapt_struct_with_added_nested_fields() -> Result<()> {
+        // Create test schemas
+        let (file_schema, table_schema) = create_test_schemas_with_nested_fields();
+
+        // Create batch with test data
+        let batch = create_test_batch_with_struct_data(&file_schema)?;
+
+        // Create adapter and apply it
+        let mapped_batch =
+            adapt_batch_with_nested_schema_adapter(&file_schema, &table_schema, batch)?;
+
+        // Verify the results
+        verify_adapted_batch_with_nested_fields(&mapped_batch, &table_schema)?;
+
+        Ok(())
+    }
+
+    /// Create file and table schemas for testing nested field evolution
+    fn create_test_schemas_with_nested_fields() -> (SchemaRef, SchemaRef) {
+        // Create file schema with just location and timestamp_utc
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "info",
+            Struct(
+                vec![
+                    Field::new("location", Utf8, true),
+                    Field::new(
+                        "timestamp_utc",
+                        Timestamp(Millisecond, Some("UTC".into())),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+
+        // Create table schema with additional nested reason field
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "info",
+            Struct(
+                vec![
+                    Field::new("location", Utf8, true),
+                    Field::new(
+                        "timestamp_utc",
+                        Timestamp(Millisecond, Some("UTC".into())),
+                        true,
+                    ),
+                    Field::new(
+                        "reason",
+                        Struct(
+                            vec![
+                                Field::new("_level", Float64, true),
+                                Field::new(
+                                    "details",
+                                    Struct(
+                                        vec![
+                                            Field::new("rurl", Utf8, true),
+                                            Field::new("s", Float64, true),
+                                            Field::new("t", Utf8, true),
+                                        ]
+                                        .into(),
+                                    ),
+                                    true,
+                                ),
+                            ]
+                            .into(),
+                        ),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+
+        (file_schema, table_schema)
+    }
+
+    /// Create a test RecordBatch with struct data matching the file schema
+    fn create_test_batch_with_struct_data(
+        file_schema: &SchemaRef,
+    ) -> Result<RecordBatch> {
+        let mut location_builder = StringBuilder::new();
+        location_builder.append_value("San Francisco");
+        location_builder.append_value("New York");
+
+        // Create timestamp array
+        let timestamp_array = TimestampMillisecondArray::from(vec![
+            Some(1640995200000), // 2022-01-01
+            Some(1641081600000), // 2022-01-02
+        ]);
+
+        // Create data type with UTC timezone to match the schema
+        let timestamp_type = Timestamp(Millisecond, Some("UTC".into()));
+
+        // Cast the timestamp array to include the timezone metadata
+        let timestamp_array = cast(&timestamp_array, &timestamp_type)?;
+
+        let info_struct = StructArray::from(vec![
+            (
+                Arc::new(Field::new("location", Utf8, true)),
+                Arc::new(location_builder.finish()) as Arc<dyn Array>,
+            ),
+            (
+                Arc::new(Field::new("timestamp_utc", timestamp_type, true)),
+                timestamp_array,
+            ),
+        ]);
+
+        Ok(RecordBatch::try_new(
+            Arc::clone(file_schema),
+            vec![Arc::new(info_struct)],
+        )?)
+    }
+
+    /// Apply the nested schema adapter to the batch
+    fn adapt_batch_with_nested_schema_adapter(
+        file_schema: &SchemaRef,
+        table_schema: &SchemaRef,
+        batch: RecordBatch,
+    ) -> Result<RecordBatch> {
+        let adapter = NestedStructSchemaAdapter::new(
+            Arc::clone(table_schema),
+            Arc::clone(table_schema),
+        );
+
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
+        mapper.map_batch(batch)
+    }
+
+    /// Verify the adapted batch has the expected structure and data
+    fn verify_adapted_batch_with_nested_fields(
+        mapped_batch: &RecordBatch,
+        table_schema: &SchemaRef,
+    ) -> Result<()> {
+        // Verify the mapped batch structure and data
+        assert_eq!(mapped_batch.schema(), *table_schema);
+        assert_eq!(mapped_batch.num_rows(), 2);
+
+        // Extract and verify the info struct column
+        let info_col = mapped_batch.column(0);
+        let info_array = info_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected info column to be a StructArray");
+
+        // Verify the original fields are preserved
+        verify_preserved_fields(info_array)?;
+
+        // Verify the reason field exists with correct structure
+        verify_reason_field_structure(info_array)?;
+
+        Ok(())
+    }
+
+    /// Verify the original fields from file schema are preserved in the adapted batch
+    fn verify_preserved_fields(info_array: &StructArray) -> Result<()> {
+        // Verify location field
+        let location_col = info_array
+            .column_by_name("location")
+            .expect("Expected location field in struct");
+        let location_array = location_col
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("Expected location to be a StringArray");
+
+        // Verify the location values are preserved
+        assert_eq!(location_array.value(0), "San Francisco");
+        assert_eq!(location_array.value(1), "New York");
+
+        // Verify timestamp field
+        let timestamp_col = info_array
+            .column_by_name("timestamp_utc")
+            .expect("Expected timestamp_utc field in struct");
+        let timestamp_array = timestamp_col
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .expect("Expected timestamp_utc to be a TimestampMillisecondArray");
+
+        assert_eq!(timestamp_array.value(0), 1640995200000);
+        assert_eq!(timestamp_array.value(1), 1641081600000);
+
+        Ok(())
+    }
+
+    /// Verify the added reason field structure and null values
+    fn verify_reason_field_structure(info_array: &StructArray) -> Result<()> {
+        // Verify the reason field exists and is null
+        let reason_col = info_array
+            .column_by_name("reason")
+            .expect("Expected reason field in struct");
+        let reason_array = reason_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected reason to be a StructArray");
+
+        // Verify reason has correct structure
+        assert_eq!(reason_array.fields().len(), 2);
+        assert!(reason_array.column_by_name("_level").is_some());
+        assert!(reason_array.column_by_name("details").is_some());
+
+        // Verify details field has correct nested structure
+        let details_col = reason_array
+            .column_by_name("details")
+            .expect("Expected details field in reason struct");
+        let details_array = details_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected details to be a StructArray");
+
+        assert_eq!(details_array.fields().len(), 3);
+        assert!(details_array.column_by_name("rurl").is_some());
+        assert!(details_array.column_by_name("s").is_some());
+        assert!(details_array.column_by_name("t").is_some());
+
+        // Verify all added fields are null
+        for i in 0..2 {
+            assert!(reason_array.is_null(i), "reason field should be null");
+        }
+
+        Ok(())
+    }
+
     // ================================
     // Data Mapping Tests
     // ================================
 
-    #[test]
-    fn test_schema_mapping_map_batch() -> Result<()> {
-        // Test batch mapping with schema evolution
-        let source_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new(
-                "metadata",
-                DataType::Struct(
-                    vec![Field::new("created", DataType::Utf8, true)].into(),
-                ),
-                true,
-            ),
-        ]));
-
-        let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new(
-                "metadata",
-                DataType::Struct(
-                    vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("version", DataType::Int64, true), // Added field
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-            Field::new("status", DataType::Utf8, true), // Added field
-        ]));
-
-        // Create a record batch with source data
-        let mut created_builder = StringBuilder::new();
-        created_builder.append_value("2023-01-01");
-
-        let metadata = StructArray::from(vec![(
-            Arc::new(Field::new("created", DataType::Utf8, true)),
-            Arc::new(created_builder.finish()) as Arc<dyn Array>,
-        )]);
-
-        let batch = RecordBatch::try_new(
-            source_schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1])), Arc::new(metadata)],
-        )?;
-
-        // Create mapping and map batch
-        let field_mappings = vec![Some(0), Some(1), None]; // id, metadata, status (missing)
-        let mapping =
-            NestedStructSchemaMapping::new(target_schema.clone(), field_mappings);
-        let mapped_batch = mapping.map_batch(batch)?;
-
-        // Verify mapped batch
-        assert_eq!(
-            mapped_batch.schema(),
-            target_schema,
-            "Mapped batch should have target schema"
-        );
-        assert_eq!(
-            mapped_batch.num_columns(),
-            3,
-            "Mapped batch should have 3 columns"
-        );
-
-        // Check metadata struct column
-        if let DataType::Struct(fields) = mapped_batch.schema().field(1).data_type() {
+    // Helper function to verify column statistics match expected values
+    fn verify_column_statistics(
+        stats: &ColumnStatistics,
+        expected_null_count: Option<usize>,
+        expected_distinct_count: Option<usize>,
+        expected_min: Option<ScalarValue>,
+        expected_max: Option<ScalarValue>,
+        expected_sum: Option<ScalarValue>,
+    ) {
+        if let Some(count) = expected_null_count {
             assert_eq!(
-                fields.len(),
-                2,
-                "Metadata should have both created and version fields"
-            );
-            assert_eq!(
-                fields[0].name(),
-                "created",
-                "First field should be 'created'"
-            );
-            assert_eq!(
-                fields[1].name(),
-                "version",
-                "Second field should be 'version'"
+                stats.null_count,
+                datafusion_common::stats::Precision::Exact(count),
+                "Null count should match expected value"
             );
         }
 
-        // Check added status column has nulls
-        let status_col = mapped_batch.column(2);
-        assert_eq!(status_col.len(), 1, "Status column should have 1 row");
-        assert!(status_col.is_null(0), "Status column value should be null");
+        if let Some(count) = expected_distinct_count {
+            assert_eq!(
+                stats.distinct_count,
+                datafusion_common::stats::Precision::Exact(count),
+                "Distinct count should match expected value"
+            );
+        }
+
+        if let Some(min) = expected_min {
+            assert_eq!(
+                stats.min_value,
+                datafusion_common::stats::Precision::Exact(min),
+                "Min value should match expected value"
+            );
+        }
+
+        if let Some(max) = expected_max {
+            assert_eq!(
+                stats.max_value,
+                datafusion_common::stats::Precision::Exact(max),
+                "Max value should match expected value"
+            );
+        }
+
+        if let Some(sum) = expected_sum {
+            assert_eq!(
+                stats.sum_value,
+                datafusion_common::stats::Precision::Exact(sum),
+                "Sum value should match expected value"
+            );
+        }
+    }
+
+    // Helper to create test column statistics
+    fn create_test_column_statistics(
+        null_count: usize,
+        distinct_count: usize,
+        min_value: Option<ScalarValue>,
+        max_value: Option<ScalarValue>,
+        sum_value: Option<ScalarValue>,
+    ) -> ColumnStatistics {
+        ColumnStatistics {
+            null_count: datafusion_common::stats::Precision::Exact(null_count),
+            distinct_count: datafusion_common::stats::Precision::Exact(distinct_count),
+            min_value: min_value.map_or_else(
+                || datafusion_common::stats::Precision::Absent,
+                |v| datafusion_common::stats::Precision::Exact(v),
+            ),
+            max_value: max_value.map_or_else(
+                || datafusion_common::stats::Precision::Absent,
+                |v| datafusion_common::stats::Precision::Exact(v),
+            ),
+            sum_value: sum_value.map_or_else(
+                || datafusion_common::stats::Precision::Absent,
+                |v| datafusion_common::stats::Precision::Exact(v),
+            ),
+        }
+    }
+
+    #[test]
+    fn test_map_column_statistics_basic() -> Result<()> {
+        // Test statistics mapping with a simple schema
+        let file_schema = create_basic_nested_schema();
+        let table_schema = create_deep_nested_schema();
+
+        let adapter = NestedStructSchemaAdapter::new(
+            Arc::clone(&table_schema),
+            Arc::clone(&table_schema),
+        );
+
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
+
+        // Create test statistics for additionalInfo column
+        let file_stats = vec![create_test_column_statistics(
+            5,
+            100,
+            Some(ScalarValue::Utf8(Some("min_value".to_string()))),
+            Some(ScalarValue::Utf8(Some("max_value".to_string()))),
+            Some(ScalarValue::Utf8(Some("sum_value".to_string()))),
+        )];
+
+        // Map statistics
+        let table_stats = mapper.map_column_statistics(&file_stats)?;
+
+        // Verify count and content
+        assert_eq!(
+            table_stats.len(),
+            1,
+            "Should have stats for one struct column"
+        );
+        verify_column_statistics(
+            &table_stats[0],
+            Some(5),
+            Some(100),
+            Some(ScalarValue::Utf8(Some("min_value".to_string()))),
+            Some(ScalarValue::Utf8(Some("max_value".to_string()))),
+            Some(ScalarValue::Utf8(Some("sum_value".to_string()))),
+        );
 
         Ok(())
     }
 
     #[test]
-    fn test_adapt_column_with_nested_struct() -> Result<()> {
-        // Test adapting a column with nested struct fields
-        let source_schema = create_basic_nested_schema();
-        let target_schema = create_deep_nested_schema();
+    fn test_map_column_statistics_empty() -> Result<()> {
+        // Test statistics mapping with empty input
+        let file_schema = create_basic_nested_schema();
+        let table_schema = create_deep_nested_schema();
 
-        // Create batch with additionalInfo data
-        let mut location_builder = StringBuilder::new();
-        location_builder.append_value("USA");
-
-        let additional_info = StructArray::from(vec![
-            (
-                Arc::new(Field::new("location", DataType::Utf8, true)),
-                Arc::new(location_builder.finish()) as Arc<dyn Array>,
-            ),
-            (
-                Arc::new(Field::new(
-                    "timestamp_utc",
-                    DataType::Timestamp(TimeUnit::Millisecond, None),
-                    true,
-                )),
-                Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-            ),
-        ]);
-
-        let batch =
-            RecordBatch::try_new(source_schema.clone(), vec![Arc::new(additional_info)])?;
-
-        // Map batch through adapter
-        let adapter =
-            NestedStructSchemaAdapter::new(target_schema.clone(), target_schema.clone());
-        let (mapper, _) = adapter.map_schema(&source_schema)?;
-        let mapped_batch = mapper.map_batch(batch)?;
-
-        // Verify mapped batch structure
-        assert_eq!(
-            mapped_batch.schema().fields().len(),
-            1,
-            "Should only have additionalInfo field"
+        let adapter = NestedStructSchemaAdapter::new(
+            Arc::clone(&table_schema),
+            Arc::clone(&table_schema),
         );
 
-        // Verify additionalInfo structure
-        let mapped_batch_schema = mapped_batch.schema();
-        let info_field = mapped_batch_schema.field(0);
-        if let DataType::Struct(fields) = info_field.data_type() {
-            assert_eq!(fields.len(), 3, "additionalInfo should have 3 fields");
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
 
-            // Check the reason field structure
-            if let Some(reason_field) = fields.iter().find(|f| f.name() == "reason") {
-                if let DataType::Struct(reason_fields) = reason_field.data_type() {
-                    assert_eq!(reason_fields.len(), 2, "reason should have 2 fields");
+        // Test with missing statistics
+        let empty_stats = vec![];
+        let mapped_empty_stats = mapper.map_column_statistics(&empty_stats)?;
 
-                    // Verify details field
-                    if let Some(details_field) =
-                        reason_fields.iter().find(|f| f.name() == "details")
-                    {
-                        if let DataType::Struct(details_fields) =
-                            details_field.data_type()
-                        {
-                            assert_eq!(
-                                details_fields.len(),
-                                3,
-                                "details should have 3 fields"
-                            );
-                            assert!(
-                                details_fields.iter().any(|f| f.name() == "rurl"),
-                                "details should have rurl field"
-                            );
-                        }
-                    } else {
-                        panic!("details field missing in reason struct");
-                    }
-                }
-            } else {
-                panic!("reason field missing in additionalInfo struct");
-            }
-        }
+        assert_eq!(
+            mapped_empty_stats.len(),
+            1,
+            "Should have stats for one column even with empty input"
+        );
 
-        // Verify data length
-        assert_eq!(mapped_batch.column(0).len(), 1, "Should have 1 row");
+        assert_eq!(
+            mapped_empty_stats[0],
+            ColumnStatistics::new_unknown(),
+            "Empty input should result in unknown statistics"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_column_statistics_multiple_columns() -> Result<()> {
+        // Create schemas with multiple columns
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", Int32, false),
+            Field::new(
+                "additionalInfo",
+                Struct(
+                    vec![
+                        Field::new("location", Utf8, true),
+                        Field::new(
+                            "timestamp_utc",
+                            Timestamp(Millisecond, Some("UTC".into())),
+                            true,
+                        ),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+        ]));
+
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("id", Int32, false),
+            Field::new(
+                "additionalInfo",
+                Struct(
+                    vec![
+                        Field::new("location", Utf8, true),
+                        Field::new(
+                            "timestamp_utc",
+                            Timestamp(Millisecond, Some("UTC".into())),
+                            true,
+                        ),
+                        Field::new(
+                            "reason",
+                            Struct(vec![Field::new("_level", Float64, true)].into()),
+                            true,
+                        ),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+            Field::new("status", Utf8, true), // Extra column in table schema
+        ]));
+
+        // Create adapter and mapping
+        let adapter = NestedStructSchemaAdapter::new(
+            Arc::clone(&table_schema),
+            Arc::clone(&table_schema),
+        );
+
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
+
+        // Create file column statistics
+        let file_stats = vec![
+            create_test_column_statistics(
+                0,
+                100,
+                Some(ScalarValue::Int32(Some(1))),
+                Some(ScalarValue::Int32(Some(100))),
+                Some(ScalarValue::Int32(Some(5100))),
+            ),
+            create_test_column_statistics(10, 50, None, None, None),
+        ];
+
+        // Map statistics
+        let table_stats = mapper.map_column_statistics(&file_stats)?;
+
+        // Verify mapped statistics
+        assert_eq!(
+            table_stats.len(),
+            3,
+            "Should have stats for all 3 columns in table schema"
+        );
+
+        // Verify ID column stats
+        verify_column_statistics(
+            &table_stats[0],
+            Some(0),
+            Some(100),
+            Some(ScalarValue::Int32(Some(1))),
+            Some(ScalarValue::Int32(Some(100))),
+            Some(ScalarValue::Int32(Some(5100))),
+        );
+
+        // Verify additionalInfo column stats
+        verify_column_statistics(&table_stats[1], Some(10), Some(50), None, None, None);
+
+        // Verify status column has unknown stats
+        assert_eq!(
+            table_stats[2],
+            ColumnStatistics::new_unknown(),
+            "Missing column should have unknown statistics"
+        );
 
         Ok(())
     }

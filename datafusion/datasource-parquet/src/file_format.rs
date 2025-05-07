@@ -420,10 +420,6 @@ impl FileFormat for ParquetFormat {
         // preserve conf schema adapter factory in source
         preserve_conf_schema_adapter_factory(&conf, &mut source);
 
-        if let Some(predicate) = predicate {
-            source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
-        }
-
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
