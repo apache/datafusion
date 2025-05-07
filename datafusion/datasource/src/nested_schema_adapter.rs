@@ -19,7 +19,7 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
-use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{DataType::Struct, Field, Fields, Schema, SchemaRef};
 use datafusion_common::{ColumnStatistics, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ impl NestedStructSchemaAdapterFactory {
         schema
             .fields()
             .iter()
-            .any(|field| matches!(field.data_type(), DataType::Struct(_)))
+            .any(|field| matches!(field.data_type(), Struct(_)))
     }
 
     /// Create an appropriate schema adapter based on schema characteristics.
@@ -120,15 +120,12 @@ fn adapt_fields(source_fields: &Fields, target_fields: &Fields) -> Vec<Field> {
             Some(source_field) => {
                 match (source_field.data_type(), target_field.data_type()) {
                     // Recursively adapt nested struct fields
-                    (
-                        DataType::Struct(source_children),
-                        DataType::Struct(target_children),
-                    ) => {
+                    (Struct(source_children), Struct(target_children)) => {
                         let adapted_children =
                             adapt_fields(source_children, target_children);
                         adapted_fields.push(Field::new(
                             target_field.name(),
-                            DataType::Struct(adapted_children.into()),
+                            Struct(adapted_children.into()),
                             target_field.is_nullable(),
                         ));
                     }
@@ -338,7 +335,7 @@ impl SchemaMapper for NestedStructSchemaMapping {
 /// Adapt a column to match the target field type, handling nested structs specially
 fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {
-        DataType::Struct(target_fields) => {
+        Struct(target_fields) => {
             // For struct arrays, we need to handle them specially
             if let Some(struct_array) = source_col.as_any().downcast_ref::<StructArray>()
             {
@@ -388,7 +385,10 @@ mod tests {
     use arrow::array::{
         Array, Int32Array, StringBuilder, StructArray, TimestampMillisecondArray,
     };
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{
+        DataType::{Boolean, Float64, Int16, Int32, Int64, List, Timestamp, Utf8},
+        TimeUnit::Millisecond,
+    };
     use datafusion_common::ScalarValue;
 
     // ================================
@@ -398,13 +398,9 @@ mod tests {
     /// Helper function to create a flat schema without nested fields
     fn create_flat_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("user", DataType::Utf8, true),
-            Field::new(
-                "timestamp",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
+            Field::new("id", Int32, false),
+            Field::new("user", Utf8, true),
+            Field::new("timestamp", Timestamp(Millisecond, None), true),
         ]))
     }
 
@@ -412,18 +408,14 @@ mod tests {
     fn create_nested_schema() -> SchemaRef {
         // Define user_info struct fields to reuse for list of structs
         let user_info_fields: Vec<Field> = vec![
-            Field::new("name", DataType::Utf8, true), // will map from "user" field
-            Field::new(
-                "created_at",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ), // will map from "timestamp" field
+            Field::new("name", Utf8, true), // will map from "user" field
+            Field::new("created_at", Timestamp(Millisecond, None), true), // will map from "timestamp" field
             Field::new(
                 "settings",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("theme", DataType::Utf8, true),
-                        Field::new("notifications", DataType::Boolean, true),
+                        Field::new("theme", Utf8, true),
+                        Field::new("notifications", Boolean, true),
                     ]
                     .into(),
                 ),
@@ -432,14 +424,14 @@ mod tests {
         ];
 
         // Create the user_info struct type
-        let user_info_struct_type = DataType::Struct(user_info_fields.into());
+        let user_info_struct_type = Struct(user_info_fields.into());
 
         Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             // Add a list of user_info structs (without the individual user_info field)
             Field::new(
                 "user_infos",
-                DataType::List(Arc::new(Field::new("item", user_info_struct_type, true))),
+                List(Arc::new(Field::new("item", user_info_struct_type, true))),
                 true,
             ),
         ]))
@@ -462,12 +454,8 @@ mod tests {
     /// Helper function to create the additionalInfo field with or without the reason subfield
     fn create_additional_info_field(with_reason: bool) -> Field {
         let mut field_children = vec![
-            Field::new("location", DataType::Utf8, true),
-            Field::new(
-                "timestamp_utc",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
+            Field::new("location", Utf8, true),
+            Field::new("timestamp_utc", Timestamp(Millisecond, None), true),
         ];
 
         // Add the reason field if requested (for target schema)
@@ -475,28 +463,24 @@ mod tests {
             field_children.push(create_reason_field());
         }
 
-        Field::new(
-            "additionalInfo",
-            DataType::Struct(field_children.into()),
-            true,
-        )
+        Field::new("additionalInfo", Struct(field_children.into()), true)
     }
 
     /// Helper function to create the reason nested field with its details subfield
     fn create_reason_field() -> Field {
         Field::new(
             "reason",
-            DataType::Struct(
+            Struct(
                 vec![
-                    Field::new("_level", DataType::Float64, true),
+                    Field::new("_level", Float64, true),
                     // Inline the details field creation
                     Field::new(
                         "details",
-                        DataType::Struct(
+                        Struct(
                             vec![
-                                Field::new("rurl", DataType::Utf8, true),
-                                Field::new("s", DataType::Float64, true),
-                                Field::new("t", DataType::Utf8, true),
+                                Field::new("rurl", Utf8, true),
+                                Field::new("s", Float64, true),
+                                Field::new("t", Utf8, true),
                             ]
                             .into(),
                         ),
@@ -536,14 +520,14 @@ mod tests {
     fn test_map_schema() -> Result<()> {
         // Create test schemas with schema evolution scenarios
         let source_schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
+            Field::new("id", Int32, false),
+            Field::new("name", Utf8, true),
             Field::new(
                 "metadata",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("modified", DataType::Utf8, true),
+                        Field::new("created", Utf8, true),
+                        Field::new("modified", Utf8, true),
                     ]
                     .into(),
                 ),
@@ -553,21 +537,21 @@ mod tests {
 
         // Target schema has additional fields
         let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
+            Field::new("id", Int32, false),
+            Field::new("name", Utf8, true),
             Field::new(
                 "metadata",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("modified", DataType::Utf8, true),
-                        Field::new("version", DataType::Int64, true), // Added field
+                        Field::new("created", Utf8, true),
+                        Field::new("modified", Utf8, true),
+                        Field::new("version", Int64, true), // Added field
                     ]
                     .into(),
                 ),
                 true,
             ),
-            Field::new("description", DataType::Utf8, true), // Added field
+            Field::new("description", Utf8, true), // Added field
         ]));
 
         let adapter =
@@ -600,7 +584,7 @@ mod tests {
             "Description field should exist in adapted schema"
         );
 
-        if let DataType::Struct(fields) = adapted
+        if let Struct(fields) = adapted
             .field(adapted.index_of("metadata").unwrap())
             .data_type()
         {
@@ -624,19 +608,19 @@ mod tests {
     fn test_adapter_factory_selection() -> Result<()> {
         // Test schemas for adapter selection logic
         let simple_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
-            Field::new("age", DataType::Int16, true),
+            Field::new("id", Int32, false),
+            Field::new("name", Utf8, true),
+            Field::new("age", Int16, true),
         ]));
 
         let nested_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             Field::new(
                 "metadata",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("modified", DataType::Utf8, true),
+                        Field::new("created", Utf8, true),
+                        Field::new("modified", Utf8, true),
                     ]
                     .into(),
                 ),
@@ -646,12 +630,12 @@ mod tests {
 
         // Source schema with missing field
         let source_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             Field::new(
                 "metadata",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("created", DataType::Utf8, true),
+                        Field::new("created", Utf8, true),
                         // "modified" field is missing
                     ]
                     .into(),
@@ -720,17 +704,17 @@ mod tests {
         if let Ok(idx) = adapted.index_of("user_infos") {
             let user_infos_field = adapted.field(idx);
             assert!(
-                matches!(user_infos_field.data_type(), DataType::List(_)),
+                matches!(user_infos_field.data_type(), List(_)),
                 "user_infos field should be a List type"
             );
 
-            if let DataType::List(list_field) = user_infos_field.data_type() {
+            if let List(list_field) = user_infos_field.data_type() {
                 assert!(
-                    matches!(list_field.data_type(), DataType::Struct(_)),
+                    matches!(list_field.data_type(), Struct(_)),
                     "List items should be Struct type"
                 );
 
-                if let DataType::Struct(fields) = list_field.data_type() {
+                if let Struct(fields) = list_field.data_type() {
                     assert_eq!(fields.len(), 3, "List item structs should have 3 fields");
                     assert!(
                         fields.iter().any(|f| f.name() == "settings"),
@@ -741,9 +725,7 @@ mod tests {
                     if let Some(settings_field) =
                         fields.iter().find(|f| f.name() == "settings")
                     {
-                        if let DataType::Struct(settings_fields) =
-                            settings_field.data_type()
-                        {
+                        if let Struct(settings_fields) = settings_field.data_type() {
                             assert_eq!(
                                 settings_fields.len(),
                                 2,
@@ -801,12 +783,12 @@ mod tests {
         // Create file schema with just location and timestamp_utc
         let file_schema = Arc::new(Schema::new(vec![Field::new(
             "info",
-            DataType::Struct(
+            Struct(
                 vec![
-                    Field::new("location", DataType::Utf8, true),
+                    Field::new("location", Utf8, true),
                     Field::new(
                         "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                        Timestamp(Millisecond, Some("UTC".into())),
                         true,
                     ),
                 ]
@@ -818,26 +800,26 @@ mod tests {
         // Create table schema with additional nested reason field
         let table_schema = Arc::new(Schema::new(vec![Field::new(
             "info",
-            DataType::Struct(
+            Struct(
                 vec![
-                    Field::new("location", DataType::Utf8, true),
+                    Field::new("location", Utf8, true),
                     Field::new(
                         "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                        Timestamp(Millisecond, Some("UTC".into())),
                         true,
                     ),
                     Field::new(
                         "reason",
-                        DataType::Struct(
+                        Struct(
                             vec![
-                                Field::new("_level", DataType::Float64, true),
+                                Field::new("_level", Float64, true),
                                 Field::new(
                                     "details",
-                                    DataType::Struct(
+                                    Struct(
                                         vec![
-                                            Field::new("rurl", DataType::Utf8, true),
-                                            Field::new("s", DataType::Float64, true),
-                                            Field::new("t", DataType::Utf8, true),
+                                            Field::new("rurl", Utf8, true),
+                                            Field::new("s", Float64, true),
+                                            Field::new("t", Utf8, true),
                                         ]
                                         .into(),
                                     ),
@@ -872,13 +854,13 @@ mod tests {
 
         let info_struct = StructArray::from(vec![
             (
-                Arc::new(Field::new("location", DataType::Utf8, true)),
+                Arc::new(Field::new("location", Utf8, true)),
                 Arc::new(location_builder.finish()) as Arc<dyn Array>,
             ),
             (
                 Arc::new(Field::new(
                     "timestamp_utc",
-                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                    Timestamp(Millisecond, Some("UTC".into())),
                     true,
                 )),
                 Arc::new(timestamp_array),
@@ -973,7 +955,7 @@ mod tests {
             .expect("Expected reason to be a StructArray");
 
         // Verify reason has correct structure
-        assert_eq!(reason_array.fields().size(), 2);
+        assert_eq!(reason_array.fields().len(), 2);
         assert!(reason_array.column_by_name("_level").is_some());
         assert!(reason_array.column_by_name("details").is_some());
 
@@ -986,7 +968,7 @@ mod tests {
             .downcast_ref::<StructArray>()
             .expect("Expected details to be a StructArray");
 
-        assert_eq!(details_array.fields().size(), 3);
+        assert_eq!(details_array.fields().len(), 3);
         assert!(details_array.column_by_name("rurl").is_some());
         assert!(details_array.column_by_name("s").is_some());
         assert!(details_array.column_by_name("t").is_some());
@@ -1007,30 +989,28 @@ mod tests {
     fn test_schema_mapping_map_batch() -> Result<()> {
         // Test batch mapping with schema evolution
         let source_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             Field::new(
                 "metadata",
-                DataType::Struct(
-                    vec![Field::new("created", DataType::Utf8, true)].into(),
-                ),
+                Struct(vec![Field::new("created", Utf8, true)].into()),
                 true,
             ),
         ]));
 
         let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             Field::new(
                 "metadata",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("version", DataType::Int64, true), // Added field
+                        Field::new("created", Utf8, true),
+                        Field::new("version", Int64, true), // Added field
                     ]
                     .into(),
                 ),
                 true,
             ),
-            Field::new("status", DataType::Utf8, true), // Added field
+            Field::new("status", Utf8, true), // Added field
         ]));
 
         // Create a record batch with source data
@@ -1038,7 +1018,7 @@ mod tests {
         created_builder.append_value("2023-01-01");
 
         let metadata = StructArray::from(vec![(
-            Arc::new(Field::new("created", DataType::Utf8, true)),
+            Arc::new(Field::new("created", Utf8, true)),
             Arc::new(created_builder.finish()) as Arc<dyn Array>,
         )]);
 
@@ -1066,7 +1046,7 @@ mod tests {
         );
 
         // Check metadata struct column
-        if let DataType::Struct(fields) = mapped_batch.schema().field(1).data_type() {
+        if let Struct(fields) = mapped_batch.schema().field(1).data_type() {
             assert_eq!(
                 fields.len(),
                 2,
@@ -1104,13 +1084,13 @@ mod tests {
 
         let additional_info = StructArray::from(vec![
             (
-                Arc::new(Field::new("location", DataType::Utf8, true)),
+                Arc::new(Field::new("location", Utf8, true)),
                 Arc::new(location_builder.finish()) as Arc<dyn Array>,
             ),
             (
                 Arc::new(Field::new(
                     "timestamp_utc",
-                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    Timestamp(Millisecond, None),
                     true,
                 )),
                 Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
@@ -1136,21 +1116,19 @@ mod tests {
         // Verify additionalInfo structure
         let mapped_batch_schema = mapped_batch.schema();
         let info_field = mapped_batch_schema.field(0);
-        if let DataType::Struct(fields) = info_field.data_type() {
+        if let Struct(fields) = info_field.data_type() {
             assert_eq!(fields.len(), 3, "additionalInfo should have 3 fields");
 
             // Check the reason field structure
             if let Some(reason_field) = fields.iter().find(|f| f.name() == "reason") {
-                if let DataType::Struct(reason_fields) = reason_field.data_type() {
+                if let Struct(reason_fields) = reason_field.data_type() {
                     assert_eq!(reason_fields.len(), 2, "reason should have 2 fields");
 
                     // Verify details field
                     if let Some(details_field) =
                         reason_fields.iter().find(|f| f.name() == "details")
                     {
-                        if let DataType::Struct(details_fields) =
-                            details_field.data_type()
-                        {
+                        if let Struct(details_fields) = details_field.data_type() {
                             assert_eq!(
                                 details_fields.len(),
                                 3,
@@ -1181,12 +1159,12 @@ mod tests {
         // Create file schema with struct fields
         let file_schema = Arc::new(Schema::new(vec![Field::new(
             "additionalInfo",
-            DataType::Struct(
+            Struct(
                 vec![
-                    Field::new("location", DataType::Utf8, true),
+                    Field::new("location", Utf8, true),
                     Field::new(
                         "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                        Timestamp(Millisecond, Some("UTC".into())),
                         true,
                     ),
                 ]
@@ -1198,26 +1176,26 @@ mod tests {
         // Create table schema with additional nested struct field
         let table_schema = Arc::new(Schema::new(vec![Field::new(
             "additionalInfo",
-            DataType::Struct(
+            Struct(
                 vec![
-                    Field::new("location", DataType::Utf8, true),
+                    Field::new("location", Utf8, true),
                     Field::new(
                         "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                        Timestamp(Millisecond, Some("UTC".into())),
                         true,
                     ),
                     Field::new(
                         "reason",
-                        DataType::Struct(
+                        Struct(
                             vec![
-                                Field::new("_level", DataType::Float64, true),
+                                Field::new("_level", Float64, true),
                                 Field::new(
                                     "details",
-                                    DataType::Struct(
+                                    Struct(
                                         vec![
-                                            Field::new("rurl", DataType::Utf8, true),
-                                            Field::new("s", DataType::Float64, true),
-                                            Field::new("t", DataType::Utf8, true),
+                                            Field::new("rurl", Utf8, true),
+                                            Field::new("s", Float64, true),
+                                            Field::new("t", Utf8, true),
                                         ]
                                         .into(),
                                     ),
@@ -1322,18 +1300,15 @@ mod tests {
 
         // Create file schema with an ID column and a struct column
         let file_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             Field::new(
                 "additionalInfo",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("location", DataType::Utf8, true),
+                        Field::new("location", Utf8, true),
                         Field::new(
                             "timestamp_utc",
-                            DataType::Timestamp(
-                                TimeUnit::Millisecond,
-                                Some("UTC".into()),
-                            ),
+                            Timestamp(Millisecond, Some("UTC".into())),
                             true,
                         ),
                     ]
@@ -1345,32 +1320,29 @@ mod tests {
 
         // Create table schema with an extra field in struct and extra column
         let table_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", Int32, false),
             Field::new(
                 "additionalInfo",
-                DataType::Struct(
+                Struct(
                     vec![
-                        Field::new("location", DataType::Utf8, true),
+                        Field::new("location", Utf8, true),
                         Field::new(
                             "timestamp_utc",
-                            DataType::Timestamp(
-                                TimeUnit::Millisecond,
-                                Some("UTC".into()),
-                            ),
+                            Timestamp(Millisecond, Some("UTC".into())),
                             true,
                         ),
                         Field::new(
                             "reason",
-                            DataType::Struct(
+                            Struct(
                                 vec![
-                                    Field::new("_level", DataType::Float64, true),
+                                    Field::new("_level", Float64, true),
                                     Field::new(
                                         "details",
-                                        DataType::Struct(
+                                        Struct(
                                             vec![
-                                                Field::new("rurl", DataType::Utf8, true),
-                                                Field::new("s", DataType::Float64, true),
-                                                Field::new("t", DataType::Utf8, true),
+                                                Field::new("rurl", Utf8, true),
+                                                Field::new("s", Float64, true),
+                                                Field::new("t", Utf8, true),
                                             ]
                                             .into(),
                                         ),
@@ -1386,7 +1358,7 @@ mod tests {
                 ),
                 true,
             ),
-            Field::new("status", DataType::Utf8, true), // Extra column in table schema
+            Field::new("status", Utf8, true), // Extra column in table schema
         ]));
 
         // Create adapter and mapping
