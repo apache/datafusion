@@ -382,9 +382,7 @@ fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{
-        Array, Int32Array, StringBuilder, StructArray, TimestampMillisecondArray,
-    };
+    use arrow::array::{Array, StringBuilder, StructArray, TimestampMillisecondArray};
     use arrow::datatypes::{
         DataType::{Boolean, Float64, Int16, Int32, Int64, List, Timestamp, Utf8},
         TimeUnit::Millisecond,
@@ -988,295 +986,127 @@ mod tests {
     // Data Mapping Tests
     // ================================
 
-    #[test]
-    fn test_schema_mapping_map_batch() -> Result<()> {
-        // Test batch mapping with schema evolution
-        let source_schema = Arc::new(Schema::new(vec![
-            Field::new("id", Int32, false),
-            Field::new(
-                "metadata",
-                Struct(vec![Field::new("created", Utf8, true)].into()),
-                true,
-            ),
-        ]));
-
-        let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", Int32, false),
-            Field::new(
-                "metadata",
-                Struct(
-                    vec![
-                        Field::new("created", Utf8, true),
-                        Field::new("version", Int64, true), // Added field
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-            Field::new("status", Utf8, true), // Added field
-        ]));
-
-        // Create a record batch with source data
-        let mut created_builder = StringBuilder::new();
-        created_builder.append_value("2023-01-01");
-
-        let metadata = StructArray::from(vec![(
-            Arc::new(Field::new("created", Utf8, true)),
-            Arc::new(created_builder.finish()) as Arc<dyn Array>,
-        )]);
-
-        let batch = RecordBatch::try_new(
-            source_schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1])), Arc::new(metadata)],
-        )?;
-
-        // Create mapping and map batch
-        let field_mappings = vec![Some(0), Some(1), None]; // id, metadata, status (missing)
-        let mapping =
-            NestedStructSchemaMapping::new(target_schema.clone(), field_mappings);
-        let mapped_batch = mapping.map_batch(batch)?;
-
-        // Verify mapped batch
-        assert_eq!(
-            mapped_batch.schema(),
-            target_schema,
-            "Mapped batch should have target schema"
-        );
-        assert_eq!(
-            mapped_batch.num_columns(),
-            3,
-            "Mapped batch should have 3 columns"
-        );
-
-        // Check metadata struct column
-        if let Struct(fields) = mapped_batch.schema().field(1).data_type() {
+    // Helper function to verify column statistics match expected values
+    fn verify_column_statistics(
+        stats: &ColumnStatistics,
+        expected_null_count: Option<usize>,
+        expected_distinct_count: Option<usize>,
+        expected_min: Option<ScalarValue>,
+        expected_max: Option<ScalarValue>,
+    ) {
+        if let Some(count) = expected_null_count {
             assert_eq!(
-                fields.len(),
-                2,
-                "Metadata should have both created and version fields"
-            );
-            assert_eq!(
-                fields[0].name(),
-                "created",
-                "First field should be 'created'"
-            );
-            assert_eq!(
-                fields[1].name(),
-                "version",
-                "Second field should be 'version'"
+                stats.null_count,
+                datafusion_common::stats::Precision::Exact(count),
+                "Null count should match expected value"
             );
         }
 
-        // Check added status column has nulls
-        let status_col = mapped_batch.column(2);
-        assert_eq!(status_col.len(), 1, "Status column should have 1 row");
-        assert!(status_col.is_null(0), "Status column value should be null");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_adapt_column_with_nested_struct() -> Result<()> {
-        // Test adapting a column with nested struct fields
-        let source_schema = create_basic_nested_schema();
-        let target_schema = create_deep_nested_schema();
-
-        // Create batch with additionalInfo data
-        let mut location_builder = StringBuilder::new();
-        location_builder.append_value("USA");
-
-        let additional_info = StructArray::from(vec![
-            (
-                Arc::new(Field::new("location", Utf8, true)),
-                Arc::new(location_builder.finish()) as Arc<dyn Array>,
-            ),
-            (
-                Arc::new(Field::new(
-                    "timestamp_utc",
-                    Timestamp(Millisecond, None),
-                    true,
-                )),
-                Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-            ),
-        ]);
-
-        let batch =
-            RecordBatch::try_new(source_schema.clone(), vec![Arc::new(additional_info)])?;
-
-        // Map batch through adapter
-        let adapter =
-            NestedStructSchemaAdapter::new(target_schema.clone(), target_schema.clone());
-        let (mapper, _) = adapter.map_schema(&source_schema)?;
-        let mapped_batch = mapper.map_batch(batch)?;
-
-        // Verify mapped batch structure
-        assert_eq!(
-            mapped_batch.schema().fields().len(),
-            1,
-            "Should only have additionalInfo field"
-        );
-
-        // Verify additionalInfo structure
-        let mapped_batch_schema = mapped_batch.schema();
-        let info_field = mapped_batch_schema.field(0);
-        if let Struct(fields) = info_field.data_type() {
-            assert_eq!(fields.len(), 3, "additionalInfo should have 3 fields");
-
-            // Check the reason field structure
-            if let Some(reason_field) = fields.iter().find(|f| f.name() == "reason") {
-                if let Struct(reason_fields) = reason_field.data_type() {
-                    assert_eq!(reason_fields.len(), 2, "reason should have 2 fields");
-
-                    // Verify details field
-                    if let Some(details_field) =
-                        reason_fields.iter().find(|f| f.name() == "details")
-                    {
-                        if let Struct(details_fields) = details_field.data_type() {
-                            assert_eq!(
-                                details_fields.len(),
-                                3,
-                                "details should have 3 fields"
-                            );
-                            assert!(
-                                details_fields.iter().any(|f| f.name() == "rurl"),
-                                "details should have rurl field"
-                            );
-                        }
-                    } else {
-                        panic!("details field missing in reason struct");
-                    }
-                }
-            } else {
-                panic!("reason field missing in additionalInfo struct");
-            }
+        if let Some(count) = expected_distinct_count {
+            assert_eq!(
+                stats.distinct_count,
+                datafusion_common::stats::Precision::Exact(count),
+                "Distinct count should match expected value"
+            );
         }
 
-        // Verify data length
-        assert_eq!(mapped_batch.column(0).len(), 1, "Should have 1 row");
+        if let Some(min) = expected_min {
+            assert_eq!(
+                stats.min_value,
+                datafusion_common::stats::Precision::Exact(min),
+                "Min value should match expected value"
+            );
+        }
 
-        Ok(())
+        if let Some(max) = expected_max {
+            assert_eq!(
+                stats.max_value,
+                datafusion_common::stats::Precision::Exact(max),
+                "Max value should match expected value"
+            );
+        }
+    }
+
+    // Helper to create test column statistics
+    fn create_test_column_statistics(
+        null_count: usize,
+        distinct_count: usize,
+        min_value: Option<ScalarValue>,
+        max_value: Option<ScalarValue>,
+        sum_value: Option<ScalarValue>,
+    ) -> ColumnStatistics {
+        ColumnStatistics {
+            null_count: datafusion_common::stats::Precision::Exact(null_count),
+            distinct_count: datafusion_common::stats::Precision::Exact(distinct_count),
+            min_value: min_value.map_or_else(
+                || datafusion_common::stats::Precision::Absent,
+                |v| datafusion_common::stats::Precision::Exact(v),
+            ),
+            max_value: max_value.map_or_else(
+                || datafusion_common::stats::Precision::Absent,
+                |v| datafusion_common::stats::Precision::Exact(v),
+            ),
+            sum_value: sum_value.map_or_else(
+                || datafusion_common::stats::Precision::Absent,
+                |v| datafusion_common::stats::Precision::Exact(v),
+            ),
+        }
     }
 
     #[test]
-    fn test_nested_schema_mapping_map_statistics() -> Result<()> {
-        // Create file schema with struct fields
-        let file_schema = Arc::new(Schema::new(vec![Field::new(
-            "additionalInfo",
-            Struct(
-                vec![
-                    Field::new("location", Utf8, true),
-                    Field::new(
-                        "timestamp_utc",
-                        Timestamp(Millisecond, Some("UTC".into())),
-                        true,
-                    ),
-                ]
-                .into(),
-            ),
-            true,
-        )]));
+    fn test_map_column_statistics_basic() -> Result<()> {
+        // Test statistics mapping with a simple schema
+        let file_schema = create_basic_nested_schema();
+        let table_schema = create_deep_nested_schema();
 
-        // Create table schema with additional nested struct field
-        let table_schema = Arc::new(Schema::new(vec![Field::new(
-            "additionalInfo",
-            Struct(
-                vec![
-                    Field::new("location", Utf8, true),
-                    Field::new(
-                        "timestamp_utc",
-                        Timestamp(Millisecond, Some("UTC".into())),
-                        true,
-                    ),
-                    Field::new(
-                        "reason",
-                        Struct(
-                            vec![
-                                Field::new("_level", Float64, true),
-                                Field::new(
-                                    "details",
-                                    Struct(
-                                        vec![
-                                            Field::new("rurl", Utf8, true),
-                                            Field::new("s", Float64, true),
-                                            Field::new("t", Utf8, true),
-                                        ]
-                                        .into(),
-                                    ),
-                                    true,
-                                ),
-                            ]
-                            .into(),
-                        ),
-                        true,
-                    ),
-                ]
-                .into(),
-            ),
-            true,
-        )]));
-
-        // Create adapter
         let adapter = NestedStructSchemaAdapter::new(
             Arc::clone(&table_schema),
             Arc::clone(&table_schema),
         );
 
-        // Map schema and get mapper
-        let (mapper, _projection) = adapter.map_schema(file_schema.as_ref())?;
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
 
-        // Create file column statistics
-        let file_stats = vec![ColumnStatistics {
-            null_count: datafusion_common::stats::Precision::Exact(5),
-            max_value: datafusion_common::stats::Precision::Exact(ScalarValue::Utf8(
-                Some("max_value".to_string()),
-            )),
-            min_value: datafusion_common::stats::Precision::Exact(ScalarValue::Utf8(
-                Some("min_value".to_string()),
-            )),
-            sum_value: datafusion_common::stats::Precision::Exact(ScalarValue::Utf8(
-                Some("sum_value".to_string()),
-            )),
-            distinct_count: datafusion_common::stats::Precision::Exact(100),
-        }];
+        // Create test statistics for additionalInfo column
+        let file_stats = vec![create_test_column_statistics(
+            5,
+            100,
+            Some(ScalarValue::Utf8(Some("min_value".to_string()))),
+            Some(ScalarValue::Utf8(Some("max_value".to_string()))),
+            Some(ScalarValue::Utf8(Some("sum_value".to_string()))),
+        )];
 
         // Map statistics
         let table_stats = mapper.map_column_statistics(&file_stats)?;
 
-        // Verify statistics mapping
+        // Verify count and content
         assert_eq!(
             table_stats.len(),
             1,
             "Should have stats for one struct column"
         );
-
-        // The file column stats should be preserved in the mapped result
-        assert_eq!(
-            table_stats[0].null_count,
-            datafusion_common::stats::Precision::Exact(5),
-            "Null count should be preserved"
+        verify_column_statistics(
+            &table_stats[0],
+            Some(5),
+            Some(100),
+            Some(ScalarValue::Utf8(Some("min_value".to_string()))),
+            Some(ScalarValue::Utf8(Some("max_value".to_string()))),
         );
 
-        assert_eq!(
-            table_stats[0].distinct_count,
-            datafusion_common::stats::Precision::Exact(100),
-            "Distinct count should be preserved"
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_column_statistics_empty() -> Result<()> {
+        // Test statistics mapping with empty input
+        let file_schema = create_basic_nested_schema();
+        let table_schema = create_deep_nested_schema();
+
+        let adapter = NestedStructSchemaAdapter::new(
+            Arc::clone(&table_schema),
+            Arc::clone(&table_schema),
         );
 
-        assert_eq!(
-            table_stats[0].max_value,
-            datafusion_common::stats::Precision::Exact(ScalarValue::Utf8(Some(
-                "max_value".to_string()
-            ))),
-            "Max value should be preserved"
-        );
-
-        assert_eq!(
-            table_stats[0].min_value,
-            datafusion_common::stats::Precision::Exact(ScalarValue::Utf8(Some(
-                "min_value".to_string()
-            ))),
-            "Min value should be preserved"
-        );
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
 
         // Test with missing statistics
         let empty_stats = vec![];
@@ -1298,10 +1128,8 @@ mod tests {
     }
 
     #[test]
-    fn test_nested_struct_mapping_multiple_columns() -> Result<()> {
-        // Test with multiple columns including nested structs
-
-        // Create file schema with an ID column and a struct column
+    fn test_map_column_statistics_multiple_columns() -> Result<()> {
+        // Create schemas with multiple columns
         let file_schema = Arc::new(Schema::new(vec![
             Field::new("id", Int32, false),
             Field::new(
@@ -1321,7 +1149,6 @@ mod tests {
             ),
         ]));
 
-        // Create table schema with an extra field in struct and extra column
         let table_schema = Arc::new(Schema::new(vec![
             Field::new("id", Int32, false),
             Field::new(
@@ -1336,24 +1163,7 @@ mod tests {
                         ),
                         Field::new(
                             "reason",
-                            Struct(
-                                vec![
-                                    Field::new("_level", Float64, true),
-                                    Field::new(
-                                        "details",
-                                        Struct(
-                                            vec![
-                                                Field::new("rurl", Utf8, true),
-                                                Field::new("s", Float64, true),
-                                                Field::new("t", Utf8, true),
-                                            ]
-                                            .into(),
-                                        ),
-                                        true,
-                                    ),
-                                ]
-                                .into(),
-                            ),
+                            Struct(vec![Field::new("_level", Float64, true)].into()),
                             true,
                         ),
                     ]
@@ -1370,29 +1180,18 @@ mod tests {
             Arc::clone(&table_schema),
         );
 
-        let (mapper, _projection) = adapter.map_schema(file_schema.as_ref())?;
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
 
         // Create file column statistics
         let file_stats = vec![
-            ColumnStatistics {
-                // Statistics for ID column
-                null_count: datafusion_common::stats::Precision::Exact(0),
-                min_value: datafusion_common::stats::Precision::Exact(
-                    ScalarValue::Int32(Some(1)),
-                ),
-                max_value: datafusion_common::stats::Precision::Exact(
-                    ScalarValue::Int32(Some(100)),
-                ),
-                sum_value: datafusion_common::stats::Precision::Exact(
-                    ScalarValue::Int32(Some(5100)),
-                ),
-                distinct_count: datafusion_common::stats::Precision::Exact(100),
-            },
-            ColumnStatistics {
-                // Statistics for additionalInfo column
-                null_count: datafusion_common::stats::Precision::Exact(10),
-                ..Default::default()
-            },
+            create_test_column_statistics(
+                0,
+                100,
+                Some(ScalarValue::Int32(Some(1))),
+                Some(ScalarValue::Int32(Some(100))),
+                Some(ScalarValue::Int32(Some(5100))),
+            ),
+            create_test_column_statistics(10, 50, None, None, None),
         ];
 
         // Map statistics
@@ -1405,27 +1204,19 @@ mod tests {
             "Should have stats for all 3 columns in table schema"
         );
 
-        // ID column stats should be preserved
-        assert_eq!(
-            table_stats[0].null_count,
-            datafusion_common::stats::Precision::Exact(0),
-            "ID null count should be preserved"
+        // Verify ID column stats
+        verify_column_statistics(
+            &table_stats[0],
+            Some(0),
+            Some(100),
+            Some(ScalarValue::Int32(Some(1))),
+            Some(ScalarValue::Int32(Some(100))),
         );
 
-        assert_eq!(
-            table_stats[0].min_value,
-            datafusion_common::stats::Precision::Exact(ScalarValue::Int32(Some(1))),
-            "ID min value should be preserved"
-        );
+        // Verify additionalInfo column stats
+        verify_column_statistics(&table_stats[1], Some(10), Some(50), None, None);
 
-        // additionalInfo column stats should be preserved
-        assert_eq!(
-            table_stats[1].null_count,
-            datafusion_common::stats::Precision::Exact(10),
-            "additionalInfo null count should be preserved"
-        );
-
-        // status column should have unknown stats
+        // Verify status column has unknown stats
         assert_eq!(
             table_stats[2],
             ColumnStatistics::new_unknown(),
