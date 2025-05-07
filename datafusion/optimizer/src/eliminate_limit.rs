@@ -125,7 +125,10 @@ mod tests {
             @ $expected:literal $(,)?
         ) => {{
             let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
-            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PushDownLimit::new()), Arc::new(EliminateLimit::new())];
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![
+                Arc::new(PushDownLimit::new()),
+                Arc::new(EliminateLimit::new())
+                ];
             assert_optimized_plan_eq_snapshot!(
                 optimizer_ctx,
                 rules,
