@@ -99,29 +99,20 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
     }
 }
 
-pub fn assert_analyzed_plan_eq(
-    rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    plan: LogicalPlan,
-    expected: &str,
-) -> Result<()> {
-    let options = ConfigOptions::default();
-    assert_analyzed_plan_with_config_eq(options, rule, plan, expected)?;
+#[macro_export]
+macro_rules! assert_analyzed_plan_with_config_eq_snapshot {
+    (
+        $options:expr,
+        $rule:expr,
+        $plan:expr,
+        @ $expected:literal $(,)?
+    ) => {{
+    let analyzed_plan = $crate::Analyzer::with_rules(vec![$rule]).execute_and_check($plan, &$options, |_, _| {})?;
 
-    Ok(())
-}
+    insta::assert_snapshot!(analyzed_plan, @ $expected);
 
-pub fn assert_analyzed_plan_with_config_eq(
-    options: ConfigOptions,
-    rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    plan: LogicalPlan,
-    expected: &str,
-) -> Result<()> {
-    let analyzed_plan =
-        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
-    let formatted_plan = format!("{analyzed_plan}");
-    assert_eq!(formatted_plan, expected);
-
-    Ok(())
+    Ok::<(), datafusion_common::DataFusionError>(())
+    }};
 }
 
 pub fn assert_analyzer_check_err(
