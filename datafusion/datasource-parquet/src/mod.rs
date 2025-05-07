@@ -19,8 +19,6 @@
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
-//! [`ParquetExec`] FileSource for reading Parquet files
-
 pub mod access_plan;
 pub mod file_format;
 mod metrics;
