@@ -293,20 +293,25 @@ impl BatchPartitioner {
                         cum_histogram[idx] += cum_histogram[idx - 1];
                     }
 
-                    indices.sort_unstable_by_key(|idx| hash_buffer[*idx as usize]);
+                    // *basically* counting sort
+                    for idx in (0..batch.num_rows()).rev() {
+                        let partition = hash_buffer[idx] as usize;
+                        cum_histogram[partition] -= 1;
+                        indices[cum_histogram[partition]] = idx as u32;
+                    }
 
-                    // The cumulative histogram now stores the ends of the index range for each partition:
-                    // The indices for partition $i will be stored at indices[hist[i - 1]..hist[i]]
+                    // The cumulative histogram now stores the start of the index range for each partition:
+                    // The indices for partition $i will be stored at indices[cum_histogram[i]..cum_histogram[i + 1]]
                     let indices: UInt32Array = indices.into();
 
                     // We now slice up indices by partition so we can use the `take` kernel
                     let mut partition_indices = Vec::with_capacity(*partitions);
                     for partition in 0..*partitions {
-                        let end = cum_histogram[partition];
-                        let start = if partition == 0 {
-                            0
+                        let start = cum_histogram[partition];
+                        let end = if partition == *partitions - 1 {
+                            indices.len()
                         } else {
-                            cum_histogram[partition - 1]
+                            cum_histogram[partition + 1]
                         };
 
                         if start != end {
@@ -314,7 +319,6 @@ impl BatchPartitioner {
                                 .push((partition, indices.slice(start, end - start)));
                         }
                     }
-
 
                     let mut output_batch_columns = (0..partition_indices.len())
                         .map(|_| Vec::with_capacity(batch.num_columns()))
