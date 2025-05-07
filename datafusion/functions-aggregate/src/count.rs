@@ -18,6 +18,7 @@
 use ahash::RandomState;
 use arrow::array::{ArrowPrimitiveType, ListArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::datatypes::{IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType};
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::hash_utils::HashValue;
 use datafusion_common::stats::Precision;
@@ -462,6 +463,17 @@ impl AggregateUDFImpl for Count {
                         data_type.clone(),
                     ),
                 ),
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                        IntervalYearMonthType,
+                    >::new(data_type.clone()))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                        IntervalMonthDayNanoType,
+                    >::new(data_type.clone()))
+                }
+
                 _ => unimplemented!("COUNT DISTINCT for {data_type:?}"),
             });
         }
