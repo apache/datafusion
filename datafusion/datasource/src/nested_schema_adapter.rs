@@ -993,6 +993,7 @@ mod tests {
         expected_distinct_count: Option<usize>,
         expected_min: Option<ScalarValue>,
         expected_max: Option<ScalarValue>,
+        expected_sum: Option<ScalarValue>,
     ) {
         if let Some(count) = expected_null_count {
             assert_eq!(
@@ -1023,6 +1024,14 @@ mod tests {
                 stats.max_value,
                 datafusion_common::stats::Precision::Exact(max),
                 "Max value should match expected value"
+            );
+        }
+
+        if let Some(sum) = expected_sum {
+            assert_eq!(
+                stats.sum_value,
+                datafusion_common::stats::Precision::Exact(sum),
+                "Sum value should match expected value"
             );
         }
     }
@@ -1090,6 +1099,7 @@ mod tests {
             Some(100),
             Some(ScalarValue::Utf8(Some("min_value".to_string()))),
             Some(ScalarValue::Utf8(Some("max_value".to_string()))),
+            Some(ScalarValue::Utf8(Some("sum_value".to_string()))),
         );
 
         Ok(())
@@ -1211,10 +1221,11 @@ mod tests {
             Some(100),
             Some(ScalarValue::Int32(Some(1))),
             Some(ScalarValue::Int32(Some(100))),
+            Some(ScalarValue::Int32(Some(5100))),
         );
 
         // Verify additionalInfo column stats
-        verify_column_statistics(&table_stats[1], Some(10), Some(50), None, None);
+        verify_column_statistics(&table_stats[1], Some(10), Some(50), None, None, None);
 
         // Verify status column has unknown stats
         assert_eq!(
