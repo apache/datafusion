@@ -1,8 +1,6 @@
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
+// for additional information regarding copyright ownership.  The ASF licenses this file to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
@@ -22,7 +20,7 @@
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use datafusion_common::Result;
+use datafusion_common::{ColumnStatistics, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -299,6 +297,40 @@ impl SchemaMapper for NestedStructSchemaMapping {
         let schema = Arc::clone(&self.projected_table_schema);
         let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
         Ok(record_batch)
+    }
+
+    /// Adapts file-level column `Statistics` to match the `table_schema`
+    ///
+    /// Maps statistics from the file schema to the projected table schema using field mappings.
+    /// For fields not present in the file schema, uses unknown statistics.
+    fn map_column_statistics(
+        &self,
+        file_col_statistics: &[ColumnStatistics],
+    ) -> Result<Vec<ColumnStatistics>> {
+        let mut table_col_statistics = vec![];
+
+        // Map statistics for each field based on field_mappings
+        for (_, file_col_idx) in self
+            .projected_table_schema
+            .fields()
+            .iter()
+            .zip(&self.field_mappings)
+        {
+            if let Some(file_col_idx) = file_col_idx {
+                // Use statistics from file if available, otherwise default
+                table_col_statistics.push(
+                    file_col_statistics
+                        .get(*file_col_idx)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+            } else {
+                // Field doesn't exist in file schema, use unknown statistics
+                table_col_statistics.push(ColumnStatistics::new_unknown());
+            }
+        }
+
+        Ok(table_col_statistics)
     }
 }
 
