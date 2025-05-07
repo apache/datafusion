@@ -136,6 +136,19 @@ fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 #[macro_export]
 macro_rules! assert_optimized_plan_eq_snapshot {
     (
+        $optimizer_context:expr,
+        $rules:expr,
+        $plan:expr,
+        @ $expected:literal $(,)?
+    ) => {{
+    let optimizer = $crate::Optimizer::with_rules($rules);
+    let optimized_plan = optimizer.optimize($plan, &$optimizer_context, |_, _| {})?;
+    insta::assert_snapshot!(optimized_plan, @ $expected);
+
+    Ok::<(), datafusion_common::DataFusionError>(())
+    }};
+
+    (
         $rule:expr,
         $plan:expr,
         @ $expected:literal $(,)?
