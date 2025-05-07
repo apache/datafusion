@@ -16,13 +16,20 @@
 // under the License.
 
 use ahash::RandomState;
+use arrow::array::{ArrowPrimitiveType, ListArray};
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::stats::Precision;
 use datafusion_expr::expr::WindowFunction;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
+use hashbrown::hash_table::Entry;
+use hashbrown::HashTable;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::mem::{size_of, size_of_val};
 use std::ops::BitAnd;
 use std::sync::Arc;
@@ -347,15 +354,108 @@ impl AggregateUDFImpl for Count {
         // groups accumulator only supports `COUNT(c1)`, not
         // `COUNT(c1, c2)`, etc
         if args.is_distinct {
-            return false;
+            return args.exprs.len() == 1
+                && args.exprs[0].data_type(args.schema).unwrap().is_primitive();
         }
         args.exprs.len() == 1
     }
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        if args.is_distinct {
+            if args.exprs.len() > 1 {
+                return not_impl_err!("COUNT DISTINCT with multiple arguments");
+            }
+
+            let data_type = &args.exprs[0].data_type(args.schema)?;
+            return Ok(match data_type {
+                // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
+                DataType::Int8 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    Int8Type,
+                >::new(data_type.clone())),
+                DataType::Int16 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    Int16Type,
+                >::new(data_type.clone())),
+                DataType::Int32 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    Int32Type,
+                >::new(data_type.clone())),
+                DataType::Int64 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    Int64Type,
+                >::new(data_type.clone())),
+                DataType::UInt8 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    UInt8Type,
+                >::new(data_type.clone())),
+                DataType::UInt16 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    UInt16Type,
+                >::new(data_type.clone())),
+                DataType::UInt32 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    UInt32Type,
+                >::new(data_type.clone())),
+                DataType::UInt64 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    UInt64Type,
+                >::new(data_type.clone())),
+                DataType::Decimal128(_, _) => Box::new(
+                    PrimitiveDistinctCountGroupsAccumulator::<Decimal128Type>::new(
+                        data_type.clone(),
+                    ),
+                ),
+                DataType::Decimal256(_, _) => Box::new(
+                    PrimitiveDistinctCountGroupsAccumulator::<Decimal256Type>::new(
+                        data_type.clone(),
+                    ),
+                ),
+
+                DataType::Date32 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    Date32Type,
+                >::new(data_type.clone())),
+                DataType::Date64 => Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                    Date64Type,
+                >::new(data_type.clone())),
+                DataType::Time32(TimeUnit::Millisecond) => {
+                    Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                        Time32MillisecondType,
+                    >::new(data_type.clone()))
+                }
+                DataType::Time32(TimeUnit::Second) => Box::new(
+                    PrimitiveDistinctCountGroupsAccumulator::<Time32SecondType>::new(
+                        data_type.clone(),
+                    ),
+                ),
+                DataType::Time64(TimeUnit::Microsecond) => {
+                    Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                        Time64MicrosecondType,
+                    >::new(data_type.clone()))
+                }
+                DataType::Time64(TimeUnit::Nanosecond) => {
+                    Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                        Time64NanosecondType,
+                    >::new(data_type.clone()))
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                        TimestampMicrosecondType,
+                    >::new(data_type.clone()))
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                        TimestampMillisecondType,
+                    >::new(data_type.clone()))
+                }
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    Box::new(PrimitiveDistinctCountGroupsAccumulator::<
+                        TimestampNanosecondType,
+                    >::new(data_type.clone()))
+                }
+                DataType::Timestamp(TimeUnit::Second, _) => Box::new(
+                    PrimitiveDistinctCountGroupsAccumulator::<TimestampSecondType>::new(
+                        data_type.clone(),
+                    ),
+                ),
+                _ => unimplemented!("COUNT DISTINCT for {data_type:?}"),
+            });
+        }
         // instantiate specialized accumulator
         Ok(Box::new(CountGroupsAccumulator::new()))
     }
@@ -751,7 +851,234 @@ impl Accumulator for DistinctCountAccumulator {
         }
     }
 }
+/// A specialized GroupsAccumulator for count distinct operations with primitive types
+/// This is more efficient than the general DistinctCountGroupsAccumulator for primitive types
+#[derive(Debug)]
+pub struct PrimitiveDistinctCountGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+    T::Native: Eq + Hash,
+{
+    /// One HashSet per group to track distinct values
+    distinct_sets: Vec<HashTable<(T::Native, u64)>>,
+    data_type: DataType,
+    random_state: RandomState,
+}
 
+impl<T> PrimitiveDistinctCountGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+    T::Native: Eq + Hash,
+{
+    pub fn new(data_type: DataType) -> Self {
+        Self {
+            distinct_sets: vec![],
+            data_type,
+            random_state: RandomState::new(),
+        }
+    }
+
+    fn ensure_sets(&mut self, total_num_groups: usize) {
+        if self.distinct_sets.len() < total_num_groups {
+            self.distinct_sets
+                .resize_with(total_num_groups, HashTable::default);
+        }
+    }
+
+    fn add_value_to_set(&mut self, val: T::Native, group_idx: usize) {
+        // let val = data[row_idx];
+        let hash = self.random_state.hash_one(val);
+        let entry =
+            self.distinct_sets[group_idx].entry(hash, |&(v, _)| val == v, |&(_, h)| h);
+        if let Entry::Vacant(v) = entry {
+            v.insert((val, hash));
+        }
+    }
+}
+
+impl<T> GroupsAccumulator for PrimitiveDistinctCountGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send + Debug,
+    T::Native: Eq + Hash,
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "COUNT DISTINCT expects a single argument");
+        self.ensure_sets(total_num_groups);
+
+        let array = as_primitive_array::<T>(&values[0])?;
+        let data = array.values();
+
+        // Implement a manual iteration rather than using accumulate_indices with a closure
+        // that needs row_index
+        match (array.logical_nulls(), opt_filter) {
+            (None, None) => {
+                // No nulls, no filter - process all rows
+                for (row_idx, &group_idx) in group_indices.iter().enumerate() {
+                    self.add_value_to_set(data[row_idx], group_idx);
+                }
+            }
+            (Some(nulls), None) => {
+                // Has nulls, no filter
+                for (row_idx, (&group_idx, is_valid)) in
+                    group_indices.iter().zip(nulls.iter()).enumerate()
+                {
+                    if is_valid {
+                        self.add_value_to_set(data[row_idx], group_idx);
+                    }
+                }
+            }
+            (None, Some(filter)) => {
+                // No nulls, has filter
+                for (row_idx, (&group_idx, filter_value)) in
+                    group_indices.iter().zip(filter.iter()).enumerate()
+                {
+                    if let Some(true) = filter_value {
+                        self.add_value_to_set(data[row_idx], group_idx);
+                    }
+                }
+            }
+            (Some(nulls), Some(filter)) => {
+                // Has nulls and filter
+                let iter = filter
+                    .iter()
+                    .zip(group_indices.iter())
+                    .zip(nulls.iter())
+                    .enumerate();
+
+                for (row_idx, ((filter_value, &group_idx), is_valid)) in iter {
+                    if is_valid && filter_value == Some(true) {
+                        self.add_value_to_set(data[row_idx], group_idx);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let distinct_sets = emit_to.take_needed(&mut self.distinct_sets);
+
+        let counts = distinct_sets
+            .iter()
+            .map(|set| set.len() as i64)
+            .collect::<Vec<_>>();
+
+        Ok(Arc::new(Int64Array::from(counts)))
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        _opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(
+            values.len(),
+            1,
+            "COUNT DISTINCT merge expects a single state array"
+        );
+        self.ensure_sets(total_num_groups);
+
+        let list_array = as_list_array(&values[0])?;
+
+        // For each group in the incoming batch
+        for (i, &group_idx) in group_indices.iter().enumerate() {
+            if i < list_array.len() {
+                let inner_array = list_array.value(i);
+                if !inner_array.is_empty() {
+                    // Get the primitive array from the list and extend our set with its values
+                    let primitive_array = as_primitive_array::<T>(&inner_array)?;
+                    for v in primitive_array.values() {
+                        self.add_value_to_set(*v, group_idx);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let distinct_sets = emit_to.take_needed(&mut self.distinct_sets);
+
+        let mut offsets = Vec::with_capacity(distinct_sets.len() + 1);
+        offsets.push(0);
+        let mut values =
+            Vec::with_capacity(distinct_sets.iter().map(|set| set.len()).sum());
+
+        // Create the values array by flattening all sets
+        for set in distinct_sets {
+            values.extend(set.into_iter().map(|x| x.0));
+            offsets.push(values.len() as i32);
+        }
+        // Create the primitive array from the flattened values
+        let values_array = Arc::new(
+            PrimitiveArray::<T>::new(values.into(), None)
+                .with_data_type(self.data_type.clone()),
+        ) as ArrayRef;
+
+        // Create list array with the offsets
+        let offset_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets));
+        let list_array = ListArray::new(
+            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
+            offset_buffer,
+            values_array,
+            None,
+        );
+
+        Ok(vec![Arc::new(list_array) as _])
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        // For a single distinct value per row, create a list array with that value
+        assert_eq!(values.len(), 1, "COUNT DISTINCT expects a single argument");
+        let values = ArrayRef::clone(&values[0]);
+
+        let offsets =
+            OffsetBuffer::new(ScalarBuffer::from_iter(0..values.len() as i32 + 1));
+        let nulls = filtered_null_mask(opt_filter, &values);
+        let list_array = ListArray::new(
+            Arc::new(Field::new_list_field(values.data_type().clone(), true)),
+            offsets,
+            values,
+            nulls,
+        );
+
+        Ok(vec![Arc::new(list_array)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        let mut total_size = std::mem::size_of::<Self>();
+
+        // Size of vector container
+        total_size += std::mem::size_of::<Vec<HashSet<T::Native, RandomState>>>();
+
+        // Size of actual sets and their contents
+        for set in &self.distinct_sets {
+            let set_size = std::mem::size_of::<HashSet<T::Native, RandomState>>()
+                + set.capacity() * std::mem::size_of::<T::Native>();
+            total_size += set_size;
+        }
+
+        total_size
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
