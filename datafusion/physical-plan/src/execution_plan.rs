@@ -221,14 +221,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 
     /// Returns `true` if this `ExecutionPlan` require the input batch with the
-    /// [`repartition::SELECTION_FIELD_NAME`] column which is a bitmap to indicate
+    /// [`crate::repartition::SELECTION_FIELD_NAME`] column which is a bitmap to indicate
     /// which rows are selected for the current partition.
     fn requried_filtered_input(&self) -> bool {
         false
     }
 
     /// Returns `true` if this `ExecutionPlan` will produce a filtered output with the
-    /// [`repartition::SELECTION_FIELD_NAME`] column which is a bitmap to indicate
+    /// [`crate::repartition::SELECTION_FIELD_NAME`] column which is a bitmap to indicate
     /// which rows are selected for the current partition.
     fn output_filtered_batches(&self) -> bool {
         false
