@@ -24,3 +24,17 @@ query T
 SELECT hex(1234::INT);
 ----
 4D2
+
+query T
+SELECT hex(a) from VALUES (1234::INT), (NULL), (456::INT) AS t(a);
+----
+4D2
+NULL
+1C8
+
+query T
+SELECT hex(a) from VALUES ('foo'), (NULL), ('foobarbaz') AS t(a);
+----
+666F6F
+NULL
+666F6F62617262617A
