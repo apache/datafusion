@@ -1133,7 +1133,7 @@ mod test {
         }};
     }
 
-    pub fn assert_type_coercion_error(
+    fn assert_type_coercion_error(
         plan: LogicalPlan,
         expected_substr: &str,
     ) -> Result<()> {
