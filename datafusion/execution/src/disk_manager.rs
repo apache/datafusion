@@ -32,6 +32,93 @@ use crate::memory_pool::human_readable_size;
 
 const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 
+/// Builder pattern for the [DiskManager] structure
+#[derive(Clone, Debug)]
+pub struct DiskManagerBuilder {
+    /// The storage mode of the disk manager
+    mode: DiskManagerMode,
+    /// The maximum amount of data (in bytes) stored inside the temporary directories.
+    /// Default to 100GB
+    max_temp_directory_size: u64,
+}
+
+impl Default for DiskManagerBuilder {
+    fn default() -> Self {
+        Self {
+            mode: DiskManagerMode::OsTmpDirectory,
+            max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+        }
+    }
+}
+
+impl DiskManagerBuilder {
+    pub fn set_mode(&mut self, mode: DiskManagerMode) {
+        self.mode = mode;
+    }
+
+    pub fn with_mode(mut self, mode: DiskManagerMode) -> Self {
+        self.set_mode(mode);
+        self
+    }
+
+    pub fn set_max_temp_directory_size(&mut self, value: u64) {
+        self.max_temp_directory_size = value;
+    }
+
+    pub fn with_max_temp_directory_size(mut self, value: u64) -> Self {
+        self.set_max_temp_directory_size(value);
+        self
+    }
+
+    /// Create a DiskManager given the builder
+    pub fn build(self) -> Result<DiskManager> {
+        match self.mode {
+            DiskManagerMode::OsTmpDirectory => Ok(DiskManager {
+                local_dirs: Mutex::new(Some(vec![])),
+                max_temp_directory_size: self.max_temp_directory_size,
+                used_disk_space: Arc::new(AtomicU64::new(0)),
+            }),
+            DiskManagerMode::Directories(conf_dirs) => {
+                let local_dirs = create_local_dirs(conf_dirs)?;
+                debug!(
+                    "Created local dirs {:?} as DataFusion working directory",
+                    local_dirs
+                );
+                Ok(DiskManager {
+                    local_dirs: Mutex::new(Some(local_dirs)),
+                    max_temp_directory_size: self.max_temp_directory_size,
+                    used_disk_space: Arc::new(AtomicU64::new(0)),
+                })
+            }
+            DiskManagerMode::Disabled => Ok(DiskManager {
+                local_dirs: Mutex::new(None),
+                max_temp_directory_size: self.max_temp_directory_size,
+                used_disk_space: Arc::new(AtomicU64::new(0)),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum DiskManagerMode {
+    /// Create a new [DiskManager] that creates temporary files within
+    /// a temporary directory chosen by the OS
+    OsTmpDirectory,
+
+    /// Create a new [DiskManager] that creates temporary files within
+    /// the specified directories
+    Directories(Vec<PathBuf>),
+
+    /// Disable disk manager, attempts to create temporary files will error
+    Disabled,
+}
+
+impl Default for DiskManagerMode {
+    fn default() -> Self {
+        Self::OsTmpDirectory
+    }
+}
+
 /// Configuration for temporary disk access
 #[derive(Debug, Clone)]
 pub enum DiskManagerConfig {
@@ -91,6 +178,11 @@ pub struct DiskManager {
 }
 
 impl DiskManager {
+    /// Creates a builder for [DiskManager]
+    pub fn builder() -> DiskManagerBuilder {
+        DiskManagerBuilder::default()
+    }
+
     /// Create a DiskManager given the configuration
     pub fn try_new(config: DiskManagerConfig) -> Result<Arc<Self>> {
         match config {
