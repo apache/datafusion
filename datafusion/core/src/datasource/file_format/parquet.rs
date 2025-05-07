@@ -1085,7 +1085,7 @@ mod tests {
         let format = state
             .get_file_format_factory("parquet")
             .map(|factory| factory.create(state, &Default::default()).unwrap())
-            .unwrap_or(Arc::new(ParquetFormat::new()));
+            .unwrap_or_else(|| Arc::new(ParquetFormat::new()));
 
         scan_format(
             state, &*format, None, &testdata, file_name, projection, limit,

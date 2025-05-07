@@ -28,7 +28,7 @@ use super::{
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPropagation, PredicateSupport,
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
@@ -64,6 +64,7 @@ use datafusion_physical_expr::{
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
+use itertools::Itertools;
 use log::trace;
 
 const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
@@ -459,7 +460,10 @@ impl ExecutionPlan for FilterExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        let self_filter = Arc::clone(&self.predicate);
+        let self_filter = split_conjunction(&self.predicate)
+            .into_iter()
+            .cloned()
+            .collect_vec();
 
         let parent_filters = if let Some(projection_indices) = self.projection.as_ref() {
             // We need to invert the projection on any referenced columns in the filter
@@ -503,42 +507,30 @@ impl ExecutionPlan for FilterExec {
 
         Ok(FilterDescription::new_with_child_count(1)
             .all_parent_filters_supported(parent_filters)
-            .with_self_filter(self_filter))
+            .with_self_filters_for_children(vec![self_filter]))
     }
 
     fn handle_child_pushdown_result(
         &self,
-        mut child_pushdown_result: ChildPushdownResult,
+        child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // We absorb any parent filters that were not handled by our children
+        let mut unhandled_filters =
+            child_pushdown_result.parent_filters.collect_unsupported();
         assert_eq!(
             child_pushdown_result.self_filters.len(),
             1,
             "FilterExec should only have one child"
         );
-        assert_eq!(
-            child_pushdown_result.self_filters[0].len(),
-            1,
-            "FilterExec produces only one filter"
-        );
-
-        // We absorb any parent filters that were not handled by our children
-        let mut unhandled_filters =
-            child_pushdown_result.parent_filters.collect_unsupported();
-
-        let self_filters = child_pushdown_result
-            .self_filters
-            .swap_remove(0)
-            .into_inner()
-            .swap_remove(0);
-        if let PredicateSupport::Unsupported(expr) = self_filters {
-            unhandled_filters.push(expr);
-        }
+        let unsupported_self_filters =
+            child_pushdown_result.self_filters[0].collect_unsupported();
+        unhandled_filters.extend(unsupported_self_filters);
 
         // If we have unhandled filters, we need to create a new FilterExec
         let filter_input = Arc::clone(self.input());
         let new_predicate = conjunction(unhandled_filters);
-        let new_exec = if new_predicate.eq(&lit(true)) {
+        let updated_node = if new_predicate.eq(&lit(true)) {
             // FilterExec is no longer needed, but we may need to leave a projection in place
             match self.projection() {
                 Some(projection_indices) => {
@@ -554,25 +546,37 @@ impl ExecutionPlan for FilterExec {
                             )
                         })
                         .collect::<Vec<_>>();
-                    Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
-                        as Arc<dyn ExecutionPlan>
+                    Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
+                        as Arc<dyn ExecutionPlan>)
                 }
                 None => {
                     // No projection needed, just return the input
-                    filter_input
+                    Some(filter_input)
                 }
             }
+        } else if new_predicate.eq(&self.predicate) {
+            // The new predicate is the same as our current predicate
+            None
         } else {
             // Create a new FilterExec with the new predicate
-            Arc::new(
-                FilterExec::try_new(new_predicate, filter_input)?
-                    .with_default_selectivity(self.default_selectivity())?
-                    .with_projection(self.projection().cloned())?,
-            )
+            let new = FilterExec {
+                predicate: Arc::clone(&new_predicate),
+                input: Arc::clone(&filter_input),
+                metrics: self.metrics.clone(),
+                default_selectivity: self.default_selectivity,
+                cache: Self::compute_properties(
+                    &filter_input,
+                    &new_predicate,
+                    self.default_selectivity,
+                    self.projection.as_ref(),
+                )?,
+                projection: None,
+            };
+            Some(Arc::new(new) as _)
         };
         Ok(FilterPushdownPropagation {
             filters: child_pushdown_result.parent_filters.make_supported(),
-            updated_node: Some(new_exec),
+            updated_node,
         })
     }
 }

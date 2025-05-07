@@ -22,7 +22,6 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type},
 };
 use datafusion::physical_expr::LexRequirement;
-use datafusion::physical_expr::PhysicalExpr;
 use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
@@ -112,11 +111,8 @@ impl FileFormat for TSVFileFormat {
         &self,
         state: &dyn Session,
         conf: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.csv_file_format
-            .create_physical_plan(state, conf, filters)
-            .await
+        self.csv_file_format.create_physical_plan(state, conf).await
     }
 
     async fn create_writer_physical_plan(
