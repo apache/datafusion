@@ -1,0 +1,119 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query R
+SELECT floor(-0.1);
+----
+-1
+
+query R
+SELECT floor(5);
+----
+5
+
+query R
+SELECT floor(5.4);
+----
+5
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from \[Float64, Int64\] to the signature Uniform\(1, \[Float64, Float32\]\) failed
+SELECT floor(3.1411, -3);
+
+query R
+SELECT floor(3.1411, 3);
+----
+3
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from \[Float64, Int64\] to the signature Uniform\(1, \[Float64, Float32\]\) failed
+SELECT floor(3345.1, -2);
+
+query R
+SELECT floor(-12.345, 1);
+----
+-13
+
+query R
+SELECT floor(CAST(5 as TINYINT), 1);
+----
+5
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from \[Int8, Int64\] to the signature Uniform\(1, \[Float64, Float32\]\) failed
+SELECT floor(CAST(5 as TINYINT), -4);
+
+query R
+SELECT floor(CAST(5 as SMALLINT), 1);
+----
+5
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from \[Int16, Int64\] to the signature Uniform\(1, \[Float64, Float32\]\) failed
+SELECT floor(CAST(5 as SMALLINT), -6);
+
+query R
+SELECT floor(CAST(5 as INT), 1);
+----
+5
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from \[Int32, Int64\] to the signature Uniform\(1, \[Float64, Float32\]\) failed
+SELECT floor(CAST(5 as INT), -11);
+
+query R
+SELECT floor(CAST(5 as BIGINT), 1);
+----
+5
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from \[Int64, Int64\] to the signature Uniform\(1, \[Float64, Float32\]\) failed
+SELECT floor(CAST(5 as BIGINT), -21);
+
+query R
+SELECT floor(CAST(5 as FLOAT), 1);
+----
+5
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from \[Float32, Int64\] to the signature Uniform\(1, \[Float64, Float32\]\) failed
+SELECT floor(CAST(5 as FLOAT), -15);
+
+query R
+SELECT floor(CAST(5 as DOUBLE), 1);
+----
+5
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from \[Float64, Int64\] to the signature Uniform\(1, \[Float64, Float32\]\) failed
+SELECT floor(CAST(5 as DOUBLE), -31);
+
+query R
+SELECT floor(CAST(5 as DECIMAL(5, 2)), 1);
+----
+5
+
+query R
+SELECT floor(CAST(5 as DECIMAL(5, 2)));
+----
+5
+
+query error
+SELECT floor(5.4, -1);
+----
+DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from [Float64, Int64] to the signature Uniform(1, [Float64, Float32]) failed
+
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'floor' function: coercion from \[Int64, Int64\] to the signature Uniform\(1, \[Float64, Float32\]\) failed
+SELECT floor(5, -1);
+
+query R
+SELECT floor(5, 0);
+----
+5
