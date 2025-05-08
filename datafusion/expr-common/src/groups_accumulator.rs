@@ -64,6 +64,64 @@ impl EmitTo {
     }
 }
 
+/// Emitting context used in blocked management
+#[derive(Debug, Default)]
+pub struct EmitBlocksContext {
+    /// Mark if it is during blocks emitting, if so states can't
+    /// be updated until all blocks are emitted
+    pub emitting: bool,
+
+    /// Idx of next emitted block
+    pub next_emit_block: usize,
+
+    /// Number of blocks needed to emit
+    pub num_blocks: usize,
+}
+
+impl EmitBlocksContext {
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    pub fn start_emit(&mut self, num_blocks: usize) {
+        self.emitting = true;
+        self.num_blocks = num_blocks;
+    }
+
+    #[inline]
+    pub fn emitting(&self) -> bool {
+        self.emitting
+    }
+
+    #[inline]
+    pub fn all_emitted(&self) -> bool {
+        self.next_emit_block == self.num_blocks
+    }
+
+    #[inline]
+    pub fn cur_emit_block(&self) -> usize {
+        assert!(self.emitting, "must start emit first");
+        self.next_emit_block
+    }
+
+    #[inline]
+    pub fn advance_emit_block(&mut self) {
+        assert!(self.emitting, "must start emit first");
+        if self.next_emit_block < self.num_blocks {
+            self.next_emit_block += 1;
+        }
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.emitting = false;
+        self.next_emit_block = 0;
+        self.num_blocks = 0;
+    }
+}
+
 /// `GroupsAccumulator` implements a single aggregate (e.g. AVG) and
 /// stores the state for *all* groups internally.
 ///
