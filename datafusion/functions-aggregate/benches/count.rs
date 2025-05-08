@@ -22,13 +22,15 @@ use arrow::util::bench_util::{
     create_string_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
+use datafusion_expr::{
+    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, GroupsAccumulator,
+};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
 
-fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
+fn prepare_group_accumulator() -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int32, true)]));
     let accumulator_args = AccumulatorArgs {
         return_type: &DataType::Int64,
@@ -47,13 +49,34 @@ fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
         .unwrap()
 }
 
+fn prepare_accumulator() -> Box<dyn Accumulator> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "f",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )]));
+    let accumulator_args = AccumulatorArgs {
+        return_type: &DataType::Int64,
+        schema: &schema,
+        ignore_nulls: false,
+        ordering_req: &LexOrdering::default(),
+        is_reversed: false,
+        name: "COUNT(f)",
+        is_distinct: true,
+        exprs: &[col("f", &schema).unwrap()],
+    };
+    let count_fn = Count::new();
+
+    count_fn.accumulator(accumulator_args).unwrap()
+}
+
 fn convert_to_state_bench(
     c: &mut Criterion,
     name: &str,
     values: ArrayRef,
     opt_filter: Option<&BooleanArray>,
 ) {
-    let accumulator = prepare_accumulator();
+    let accumulator = prepare_group_accumulator();
     c.bench_function(name, |b| {
         b.iter(|| {
             black_box(
@@ -97,12 +120,13 @@ fn count_benchmark(c: &mut Criterion) {
     let values =
         Arc::new(create_dict_from_values::<Int32Type>(200_000, 0.8, &arr)) as ArrayRef;
 
-    convert_to_state_bench(
-        c,
-        "count low cardinality dict 20% nulls, no filter",
-        values,
-        None,
-    );
+    let mut accumulator = prepare_accumulator();
+    c.bench_function("count low cardinality dict 20% nulls, no filter", |b| {
+        b.iter(|| {
+            #[allow(clippy::unit_arg)]
+            black_box(accumulator.update_batch(&[values.clone()]).unwrap())
+        })
+    });
 }
 
 criterion_group!(benches, count_benchmark);

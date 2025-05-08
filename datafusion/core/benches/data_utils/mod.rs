@@ -22,8 +22,7 @@ use arrow::array::{
     ArrayRef, Float32Array, Float64Array, RecordBatch, StringArray, StringViewBuilder,
     UInt64Array,
 };
-use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
-use arrow::util::bench_util::{create_dict_from_values, create_string_array_with_len};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
@@ -69,12 +68,6 @@ pub fn create_schema() -> Schema {
         // range of values such that there are a few distinct values, but they
         // are repeated often.
         Field::new("u64_narrow", DataType::UInt64, false),
-        // same as u64_wide but with dictionary encoding
-        Field::new(
-            "utf8_dict_narrow",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            false,
-        ),
     ])
 }
 
@@ -135,11 +128,6 @@ fn create_record_batch(
         .map(|_| rng.gen_range(0_u64..10))
         .collect::<Vec<_>>();
 
-    // dict values
-    let dict_values = create_string_array_with_len::<i32>(20, 0.0, 50);
-    // 20 values repeated many times
-    let dict = create_dict_from_values::<Int32Type>(batch_size, 1.0, &dict_values);
-
     RecordBatch::try_new(
         schema,
         vec![
@@ -148,7 +136,6 @@ fn create_record_batch(
             Arc::new(Float64Array::from(values)),
             Arc::new(UInt64Array::from(integer_values_wide)),
             Arc::new(UInt64Array::from(integer_values_narrow)),
-            Arc::new(dict),
         ],
     )
     .unwrap()

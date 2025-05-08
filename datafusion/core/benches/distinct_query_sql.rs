@@ -108,10 +108,6 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
             )
         })
     });
-
-    group.bench_function("distinct_narrow_dict", |b| {
-        b.iter(|| query(ctx.clone(), &rt, "SELECT DISTINCT utf8_dict_narrow FROM t"))
-    });
     group.finish();
 }
 
