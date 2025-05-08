@@ -34,10 +34,7 @@ pub use avro::{AvroExec, AvroSource};
 #[cfg(feature = "parquet")]
 pub use datafusion_datasource_parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
-#[allow(deprecated)]
-pub use datafusion_datasource_parquet::{
-    ParquetExec, ParquetExecBuilder, ParquetFileMetrics, ParquetFileReaderFactory,
-};
+pub use datafusion_datasource_parquet::{ParquetFileMetrics, ParquetFileReaderFactory};
 
 #[allow(deprecated)]
 pub use arrow_file::ArrowExec;
