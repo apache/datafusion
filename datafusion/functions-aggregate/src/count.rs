@@ -760,13 +760,63 @@ impl Accumulator for DistinctCountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::NullArray;
+    use arrow::array::{Int32Array, NullArray};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use datafusion_expr::function::AccumulatorArgs;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr::LexOrdering;
+    use std::sync::Arc;
 
     #[test]
     fn count_accumulator_nulls() -> Result<()> {
         let mut accumulator = CountAccumulator::new();
         accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_dictionary() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "dict_col",
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Utf8),
+                )),
+            ),
+            true,
+        )]));
+
+        // Using Count UDAF's accumulator
+        let count = Count::new();
+        let expr = Arc::new(Column::new("dict_col", 0));
+        let args = AccumulatorArgs {
+            schema: &schema,
+            exprs: &[expr],
+            is_distinct: true,
+            name: "count",
+            ignore_nulls: false,
+            is_reversed: false,
+            return_type: &DataType::Int64,
+            ordering_req: &LexOrdering::default(),
+        };
+
+        let inner_dict = arrow::array::DictionaryArray::<Int32Type>::from_iter([
+            "a", "b", "c", "d", "a", "b",
+        ]);
+
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 3, 1]);
+        let dict_of_dict = arrow::array::DictionaryArray::<Int32Type>::try_new(
+            keys,
+            Arc::new(inner_dict),
+        )?;
+
+        let mut acc = count.accumulator(args)?;
+        acc.update_batch(&[Arc::new(dict_of_dict)])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(4)));
+
         Ok(())
     }
 }
