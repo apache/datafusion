@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::distributions::{Alphanumeric, Uniform};
+use rand::distr::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
 use rand::Rng;
 
@@ -54,21 +54,21 @@ fn data() -> (StringArray, StringArray, Int64Array) {
         dist: Uniform::new(-4, 5),
         test: |x: &i64| x != &0,
     };
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut strings: Vec<String> = vec![];
     let mut delimiters: Vec<String> = vec![];
     let mut counts: Vec<i64> = vec![];
 
     for _ in 0..1000 {
-        let length = rng.gen_range(20..50);
+        let length = rng.random_range(20..50);
         let text: String = (&mut rng)
             .sample_iter(&Alphanumeric)
             .take(length)
             .map(char::from)
             .collect();
-        let char = rng.gen_range(0..text.len());
+        let char = rng.random_range(0..text.len());
         let delimiter = &text.chars().nth(char).unwrap();
-        let count = rng.sample(&dist);
+        let count = rng.sample(dist.dist.unwrap());
 
         strings.push(text);
         delimiters.push(delimiter.to_string());
