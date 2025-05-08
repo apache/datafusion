@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
+use crate::common::{MockContextProvider, MockSessionState};
 use arrow::datatypes::{TimeUnit::Nanosecond, *};
-use common::MockContextProvider;
 use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
 };
@@ -39,7 +39,7 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
-use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
+use crate::common::{CustomExprPlanner, CustomTypePlanner};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
@@ -3254,7 +3254,10 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
     let state = MockSessionState::default().with_aggregate_function(sum_udaf());
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: common::MockMacroCatalog::default(),
+    };
     let planner = SqlToRel::new(&context);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -3304,7 +3307,10 @@ fn logical_plan_with_dialect_and_options(
         .with_window_function(rank_udwf())
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: common::MockMacroCatalog::default(),
+    };
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -5231,7 +5237,10 @@ fn test_no_functions_registered() {
     let options = ParserOptions::default();
     let dialect = &GenericDialect {};
     let state = MockSessionState::default();
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: common::MockMacroCatalog::default(),
+    };
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result.unwrap();
@@ -5252,7 +5261,10 @@ fn test_custom_type_plan() -> Result<()> {
     let options = ParserOptions::default();
     let dialect = &GenericDialect {};
     let state = MockSessionState::default();
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: common::MockMacroCatalog::default(),
+    };
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result.unwrap();
@@ -5269,7 +5281,10 @@ fn test_custom_type_plan() -> Result<()> {
             .with_scalar_function(make_array_udf())
             .with_expr_planner(Arc::new(CustomExprPlanner {}))
             .with_type_planner(Arc::new(CustomTypePlanner {}));
-        let context = MockContextProvider { state };
+        let context = MockContextProvider {
+            state,
+            macro_catalog: common::MockMacroCatalog::default(),
+        };
         let planner = SqlToRel::new_with_options(&context, options);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result.unwrap();

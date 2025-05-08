@@ -19,17 +19,22 @@ use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::{sync::Arc, vec};
+use std::sync::{Arc, Mutex};
+use std::vec;
 
 use arrow::datatypes::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{plan_err, DFSchema, GetExt, Result, TableReference};
+use datafusion_common::{
+    plan_err, DFSchema, GetExt, MacroCatalog, MacroDefinition, Result, TableReference,
+};
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
 use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource, WindowUDF};
 use datafusion_functions_nested::expr_fn::make_array;
+use datafusion_sql::macro_context::MacroContextProvider;
 use datafusion_sql::planner::ContextProvider;
 
+#[allow(dead_code)]
 struct MockCsvType {}
 
 impl GetExt for MockCsvType {
@@ -51,6 +56,7 @@ impl Display for MockCsvType {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
@@ -61,22 +67,26 @@ pub(crate) struct MockSessionState {
 }
 
 impl MockSessionState {
+    #[allow(dead_code)]
     pub fn with_expr_planner(mut self, expr_planner: Arc<dyn ExprPlanner>) -> Self {
         self.expr_planners.push(expr_planner);
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_type_planner(mut self, type_planner: Arc<dyn TypePlanner>) -> Self {
         self.type_planner = Some(type_planner);
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_scalar_function(mut self, scalar_function: Arc<ScalarUDF>) -> Self {
         self.scalar_functions
             .insert(scalar_function.name().to_string(), scalar_function);
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_aggregate_function(
         mut self,
         aggregate_function: Arc<AggregateUDF>,
@@ -89,6 +99,7 @@ impl MockSessionState {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_window_function(mut self, window_function: Arc<WindowUDF>) -> Self {
         self.window_functions
             .insert(window_function.name().to_string(), window_function);
@@ -96,8 +107,73 @@ impl MockSessionState {
     }
 }
 
+#[derive(Default)]
+#[allow(dead_code)]
 pub(crate) struct MockContextProvider {
     pub(crate) state: MockSessionState,
+    pub(crate) macro_catalog: MockMacroCatalog,
+}
+
+#[derive(Debug, Default)]
+#[allow(dead_code)]
+pub(crate) struct MockMacroCatalog {
+    macros: Mutex<HashMap<String, Arc<MacroDefinition>>>,
+}
+
+impl Clone for MockMacroCatalog {
+    fn clone(&self) -> Self {
+        MockMacroCatalog::default()
+    }
+}
+
+impl MacroCatalog for MockMacroCatalog {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn macro_exists(&self, name: &str) -> bool {
+        self.macros.lock().unwrap().contains_key(name)
+    }
+
+    fn get_macro(&self, name: &str) -> Result<Arc<MacroDefinition>> {
+        let macros = self.macros.lock().unwrap();
+        if let Some(def) = macros.get(name) {
+            Ok(Arc::clone(def))
+        } else {
+            plan_err!("No macro named '{}' exists", name)
+        }
+    }
+
+    fn register_macro(
+        &self,
+        name: &str,
+        definition: Arc<MacroDefinition>,
+        replace: bool,
+    ) -> Result<()> {
+        let mut macros = self.macros.lock().unwrap();
+
+        if !replace && macros.contains_key(name) {
+            return plan_err!(
+                "Macro '{}' already exists and replace flag is false",
+                name
+            );
+        }
+
+        macros.insert(name.to_string(), definition);
+        Ok(())
+    }
+
+    fn drop_macro(&self, name: &str) -> Result<Option<Arc<MacroDefinition>>> {
+        let mut macros = self.macros.lock().unwrap();
+        let removed = macros.remove(name);
+        Ok(removed)
+    }
+}
+
+impl MacroContextProvider for MockContextProvider {
+    fn macro_catalog(&self) -> Result<Arc<dyn MacroCatalog>> {
+        Ok(Arc::new(self.macro_catalog.clone()))
+    }
 }
 
 impl ContextProvider for MockContextProvider {
@@ -285,11 +361,13 @@ impl ContextProvider for MockContextProvider {
     }
 }
 
+#[allow(dead_code)]
 struct EmptyTable {
     table_schema: SchemaRef,
 }
 
 impl EmptyTable {
+    #[allow(dead_code)]
     fn new(table_schema: SchemaRef) -> Self {
         Self { table_schema }
     }

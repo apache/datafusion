@@ -29,7 +29,10 @@ fn do_query(sql: &'static str) -> DataFusionError {
         .parse_statement()
         .expect("unable to parse query");
     let state = MockSessionState::default();
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: crate::common::MockMacroCatalog::default(),
+    };
     let sql_to_rel = SqlToRel::new(&context);
     sql_to_rel
         .sql_statement_to_plan(statement)

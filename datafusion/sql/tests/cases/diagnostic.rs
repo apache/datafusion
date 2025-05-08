@@ -40,7 +40,10 @@ fn do_query(sql: &'static str) -> Diagnostic {
     };
     let state = MockSessionState::default()
         .with_scalar_function(Arc::new(string::concat().as_ref().clone()));
-    let context = MockContextProvider { state };
+    let context = MockContextProvider {
+        state,
+        macro_catalog: crate::common::MockMacroCatalog::default(),
+    };
     let sql_to_rel = SqlToRel::new_with_options(&context, options);
     match sql_to_rel.statement_to_plan(statement) {
         Ok(_) => panic!("expected error"),
