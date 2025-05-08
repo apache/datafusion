@@ -27,9 +27,8 @@ pub mod parquet;
 #[cfg(feature = "avro")]
 pub mod avro;
 
-#[allow(deprecated)]
 #[cfg(feature = "avro")]
-pub use avro::{AvroExec, AvroSource};
+pub use avro::AvroSource;
 
 #[cfg(feature = "parquet")]
 pub use datafusion_datasource_parquet::source::ParquetSource;
