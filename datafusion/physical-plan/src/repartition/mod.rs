@@ -653,10 +653,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn output_filtered_batches(&self) -> bool {
-        match self.partitioning() {
-            Partitioning::HashSelectionBitmap(_, _) => true,
-            _ => false,
-        }
+        matches!(self.partitioning(),Partitioning::HashSelectionBitmap(_, _))
     }
 
     fn execute(

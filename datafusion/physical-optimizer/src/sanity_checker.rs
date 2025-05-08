@@ -114,7 +114,7 @@ pub fn check_filtered_batch_handle(
         for child in plan.children() {
             if !child.output_filtered_batches() {
                 let plan_str = get_plan_string(&plan);
-                let child_str = get_plan_string(&child);
+                let child_str = get_plan_string(child);
                 return plan_err!(
                     "Plan {:?} required filtered batches but its child {:?} won't produce them",
                     plan_str,
