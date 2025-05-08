@@ -321,7 +321,7 @@ fn parse_default_value(
     unparsed
         .filter(|v| !v.data_type().is_null())
         .map(|v| v.cast_to(&expr_type))
-        .unwrap_or(ScalarValue::try_from(expr_type))
+        .unwrap_or_else(|| ScalarValue::try_from(expr_type))
 }
 
 #[derive(Debug)]

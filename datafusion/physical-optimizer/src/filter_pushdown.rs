@@ -414,7 +414,7 @@ fn push_down_filters(
     let mut parent_predicates_pushdown_states =
         vec![ParentPredicateStates::NoChildren; parent_predicates.len()];
     let mut self_filters_pushdown_supports = vec![];
-    let mut new_children = vec![];
+    let mut new_children = Vec::with_capacity(node.children().len());
 
     let children = node.children();
     let filter_description =
