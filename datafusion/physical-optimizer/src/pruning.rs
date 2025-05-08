@@ -1449,7 +1449,7 @@ fn build_predicate_expression(
     if is_always_false(expr) {
         // Shouldn't return `unhandled_hook.handle(expr)`
         // Because it will transfer false to true.
-        return expr.clone();
+        return Arc::clone(expr);
     }
     // predicate expression can only be a binary expression
     let expr_any = expr.as_any();
@@ -3605,12 +3605,10 @@ mod tests {
 
         prune_with_expr(
             // false
-            // constant literals that do NOT refer to any columns are currently not evaluated at all, hence the result is
-            // "all true"
             lit(false),
             &schema,
             &statistics,
-            &[true, true, true, true, true],
+            &[false, false, false, false, false],
         );
     }
 
