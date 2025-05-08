@@ -712,7 +712,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?;
 
                 //Get inferred data_types from the plan if it is empty in the prepare statement
-                let data_types = match data_types.is_empty() {
+                let data_types = if data_types.is_empty() {
                     true => {
                         let mut data_types: Vec<DataType> = plan
                             .get_parameter_types()?
