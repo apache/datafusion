@@ -164,7 +164,7 @@ macro_rules! context {
 #[derive(Debug)]
 pub enum SchemaError {
     /// Schema contains a (possibly) qualified and unqualified field with same unqualified name
-    AmbiguousReference { field: Column },
+    AmbiguousReference { field: Box<Column> },
     /// Schema contains duplicate qualified field name
     DuplicateQualifiedField {
         qualifier: Box<TableReference>,

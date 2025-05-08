@@ -229,7 +229,7 @@ impl DFSchema {
         for (qualifier, name) in qualified_names {
             if unqualified_names.contains(name) {
                 return _schema_err!(SchemaError::AmbiguousReference {
-                    field: Column::new(Some(qualifier.clone()), name)
+                    field: Box::new(Column::new(Some(qualifier.clone()), name))
                 });
             }
         }
@@ -489,7 +489,7 @@ impl DFSchema {
                     Ok((fields_without_qualifier[0].0, fields_without_qualifier[0].1))
                 } else {
                     _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column::new_unqualified(name.to_string(),),
+                        field: Box::new(Column::new_unqualified(name.to_string(),)),
                     })
                 }
             }

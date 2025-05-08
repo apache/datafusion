@@ -2499,16 +2499,20 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
-                    field:
-                        Column {
-                            relation: Some(TableReference::Bare { table }),
-                            name,
-                            spans: _,
-                        },
-                },
+                SchemaError::AmbiguousReference { field },
                 _,
             )) => {
+                let Column {
+                    relation: Some(TableReference::Bare { table }),
+                    name,
+                    spans: _,
+                } = *field
+                else {
+                    return plan_err!(
+                        "SchemaError::AmbiguousReference should contain relation"
+                    );
+                };
+
                 assert_eq!(*"employee_csv", *table);
                 assert_eq!("id", &name);
                 Ok(())

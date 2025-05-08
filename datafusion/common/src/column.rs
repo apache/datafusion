@@ -262,7 +262,7 @@ impl Column {
 
                     // If not due to USING columns then due to ambiguous column name
                     return _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column::new_unqualified(&self.name),
+                        field: Box::new(Column::new_unqualified(&self.name)),
                     })
                     .map_err(|err| {
                         let mut diagnostic = Diagnostic::new_error(
