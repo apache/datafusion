@@ -18,9 +18,7 @@
 use ahash::RandomState;
 use arrow::array::{ArrowPrimitiveType, ListArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{
-    IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
-};
+use arrow::datatypes::{IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType};
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::hash_utils::HashValue;
 use datafusion_common::stats::Precision;
