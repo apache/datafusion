@@ -1784,6 +1784,7 @@ impl Expr {
                     let fields = subquery_schema.fields();
 
                     // only supports subquery with exactly 1 field
+                    // https://github.com/apache/datafusion/blob/main/datafusion/sql/src/expr/subquery.rs#L120
                     if let [first_field] = &fields[..] {
                         rewrite_placeholder(
                             expr.as_mut(),
