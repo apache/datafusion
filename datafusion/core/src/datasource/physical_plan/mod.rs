@@ -48,9 +48,6 @@ pub use json::NdJsonExec;
 
 pub use json::{JsonOpener, JsonSource};
 
-#[allow(deprecated)]
-pub use csv::{CsvExec, CsvExecBuilder};
-
 pub use csv::{CsvOpener, CsvSource};
 pub use datafusion_datasource::file::FileSource;
 pub use datafusion_datasource::file_groups::FileGroup;
