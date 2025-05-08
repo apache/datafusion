@@ -17,6 +17,7 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
+use crate::ordering::InputOrderMode;
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{not_impl_err, Result};
 
@@ -106,6 +107,15 @@ impl EmitTo {
 /// [`Accumulator`]: crate::accumulator::Accumulator
 /// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
 pub trait GroupsAccumulator: Send {
+    /// Called with metadata about the groups that will be processed.
+    ///
+    /// This will be called either right after initialization or after [`Self::state`], [`Self::evaluate`] consumed all the groups.
+    ///
+    /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
+    fn register_metadata(&mut self, _metadata: GroupsAccumulatorMetadata) -> Result<()> {
+        Ok(())
+    }
+
     /// Updates the accumulator's state from its arguments, encoded as
     /// a vector of [`ArrayRef`]s.
     ///
@@ -250,4 +260,38 @@ pub trait GroupsAccumulator: Send {
     /// This function is called once per batch, so it should be `O(n)` to
     /// compute, not `O(num_groups)`
     fn size(&self) -> usize;
+}
+
+/// Metadata for [`GroupsAccumulator`] with some execution time information so you can optimize your implementation.
+///
+/// This is not exhaustive so we can add more metadata in the future without breaking.
+///
+/// In order to create a new [`GroupsAccumulatorMetadata`] you can use [`GroupsAccumulatorMetadata::default()`].
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct GroupsAccumulatorMetadata {
+    /// Thr ordering of the group indices
+    ///
+    /// For example if this equals to [`InputOrderMode::Sorted`] it means that if you get the following group indices in [`GroupsAccumulator::update_batch`]/[`GroupsAccumulator::merge_batch`]
+    /// ```text
+    /// [1, 1, 1, 1, 1, 2, 2, 3]
+    /// ```
+    ///
+    /// You can be sure that you will never get another group with index 1 or 2 (until call to [`GroupsAccumulator::state`]/[`GroupsAccumulator::evaluate`] which will shift the group indices).
+    /// However, you might get another group with index 3 in the future.
+    ///
+    /// Possible optimizations you can do in your implementation when the group indices are sorted are:
+    /// 1. Only track the current group state
+    /// 2. Have a builder that is ready to be built by call to [`Self::state`]/[`Self::evaluate`]
+    ///
+    pub group_indices_ordering: InputOrderMode,
+}
+
+impl Default for GroupsAccumulatorMetadata {
+    fn default() -> Self {
+        Self {
+            // No assumptions about the ordering of the group indices
+            group_indices_ordering: InputOrderMode::Linear,
+        }
+    }
 }
