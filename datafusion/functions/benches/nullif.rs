@@ -17,7 +17,7 @@
 
 extern crate criterion;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
@@ -33,14 +33,22 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("abcd".to_string()))),
             ColumnarValue::Array(array),
         ];
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         c.bench_function(&format!("nullif scalar array: {}", size), |b| {
             b.iter(|| {
                 black_box(
                     nullif
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args.clone(),
+                            arg_fields: arg_fields.clone(),
                             number_rows: size,
-                            return_type: &DataType::Utf8,
+                            return_field: &Field::new("f", DataType::Utf8, true),
                         })
                         .unwrap(),
                 )

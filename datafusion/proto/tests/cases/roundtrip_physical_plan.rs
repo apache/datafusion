@@ -66,6 +66,7 @@ use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
@@ -709,7 +710,7 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
 }
 
 #[test]
-fn roundtrip_coalesce_with_fetch() -> Result<()> {
+fn roundtrip_coalesce_batches_with_fetch() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -721,6 +722,22 @@ fn roundtrip_coalesce_with_fetch() -> Result<()> {
 
     roundtrip_test(Arc::new(
         CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
+            .with_fetch(Some(10)),
+    ))
+}
+
+#[test]
+fn roundtrip_coalesce_partitions_with_fetch() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    roundtrip_test(Arc::new(CoalescePartitionsExec::new(Arc::new(
+        EmptyExec::new(schema.clone()),
+    ))))?;
+
+    roundtrip_test(Arc::new(
+        CoalescePartitionsExec::new(Arc::new(EmptyExec::new(schema)))
             .with_fetch(Some(10)),
     ))
 }
@@ -739,9 +756,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let mut options = TableParquetOptions::new();
     options.global.pushdown_filters = true;
 
-    let file_source = Arc::new(
-        ParquetSource::new(options).with_predicate(Arc::clone(&file_schema), predicate),
-    );
+    let file_source = Arc::new(ParquetSource::new(options).with_predicate(predicate));
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -800,10 +815,8 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         inner: Arc::new(Column::new("col", 1)),
     });
 
-    let file_source = Arc::new(
-        ParquetSource::default()
-            .with_predicate(Arc::clone(&file_schema), custom_predicate_expr),
-    );
+    let file_source =
+        Arc::new(ParquetSource::default().with_predicate(custom_predicate_expr));
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -968,7 +981,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         "dummy",
         fun_def,
         vec![col("a", &schema)?],
-        DataType::Int64,
+        Field::new("f", DataType::Int64, true),
     );
 
     let project =
@@ -1096,7 +1109,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        DataType::Int64,
+        Field::new("f", DataType::Int64, true),
     ));
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1198,7 +1211,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        DataType::Int64,
+        Field::new("f", DataType::Int64, true),
     ));
 
     let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(

@@ -1297,7 +1297,24 @@ impl ExecutionPlan for SortExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if !self.preserve_partitioning() {
+            return self.input.partition_statistics(None)?.with_fetch(
+                self.schema(),
+                self.fetch,
+                0,
+                1,
+            );
+        }
+        self.input.partition_statistics(partition)?.with_fetch(
+            self.schema(),
+            self.fetch,
+            0,
+            1,
+        )
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

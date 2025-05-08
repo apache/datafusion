@@ -506,7 +506,7 @@ impl PartialOrd for ScalarValue {
             }
             (List(_), _) | (LargeList(_), _) | (FixedSizeList(_), _) => None,
             (Struct(struct_arr1), Struct(struct_arr2)) => {
-                partial_cmp_struct(struct_arr1, struct_arr2)
+                partial_cmp_struct(struct_arr1.as_ref(), struct_arr2.as_ref())
             }
             (Struct(_), _) => None,
             (Map(map_arr1), Map(map_arr2)) => partial_cmp_map(map_arr1, map_arr2),
@@ -597,8 +597,12 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     let arr1 = first_array_for_list(arr1);
     let arr2 = first_array_for_list(arr2);
 
-    let lt_res = arrow::compute::kernels::cmp::lt(&arr1, &arr2).ok()?;
-    let eq_res = arrow::compute::kernels::cmp::eq(&arr1, &arr2).ok()?;
+    let min_length = arr1.len().min(arr2.len());
+    let arr1_trimmed = arr1.slice(0, min_length);
+    let arr2_trimmed = arr2.slice(0, min_length);
+
+    let lt_res = arrow::compute::kernels::cmp::lt(&arr1_trimmed, &arr2_trimmed).ok()?;
+    let eq_res = arrow::compute::kernels::cmp::eq(&arr1_trimmed, &arr2_trimmed).ok()?;
 
     for j in 0..lt_res.len() {
         if lt_res.is_valid(j) && lt_res.value(j) {
@@ -609,10 +613,23 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
         }
     }
 
-    Some(Ordering::Equal)
+    Some(arr1.len().cmp(&arr2.len()))
 }
 
-fn partial_cmp_struct(s1: &Arc<StructArray>, s2: &Arc<StructArray>) -> Option<Ordering> {
+fn flatten<'a>(array: &'a StructArray, columns: &mut Vec<&'a ArrayRef>) {
+    for i in 0..array.num_columns() {
+        let column = array.column(i);
+        if let Some(nested_struct) = column.as_any().downcast_ref::<StructArray>() {
+            // If it's a nested struct, recursively expand
+            flatten(nested_struct, columns);
+        } else {
+            // If it's a primitive type, add directly
+            columns.push(column);
+        }
+    }
+}
+
+pub fn partial_cmp_struct(s1: &StructArray, s2: &StructArray) -> Option<Ordering> {
     if s1.len() != s2.len() {
         return None;
     }
@@ -621,9 +638,15 @@ fn partial_cmp_struct(s1: &Arc<StructArray>, s2: &Arc<StructArray>) -> Option<Or
         return None;
     }
 
-    for col_index in 0..s1.num_columns() {
-        let arr1 = s1.column(col_index);
-        let arr2 = s2.column(col_index);
+    let mut expanded_columns1 = Vec::with_capacity(s1.num_columns());
+    let mut expanded_columns2 = Vec::with_capacity(s2.num_columns());
+
+    flatten(s1, &mut expanded_columns1);
+    flatten(s2, &mut expanded_columns2);
+
+    for col_index in 0..expanded_columns1.len() {
+        let arr1 = expanded_columns1[col_index];
+        let arr2 = expanded_columns2[col_index];
 
         let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
         let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
@@ -3411,6 +3434,58 @@ impl ScalarValue {
                 .map(|sv| sv.size() - size_of_val(sv))
                 .sum::<usize>()
     }
+
+    /// Performs a deep clone of the ScalarValue, creating new copies of all nested data structures.
+    /// This is different from the standard `clone()` which may share data through `Arc`.
+    /// Aggregation functions like `max` will cost a lot of memory if the data is not cloned.
+    pub fn force_clone(&self) -> Self {
+        match self {
+            // Complex types need deep clone of their contents
+            ScalarValue::List(array) => {
+                let array = copy_array_data(&array.to_data());
+                let new_array = ListArray::from(array);
+                ScalarValue::List(Arc::new(new_array))
+            }
+            ScalarValue::LargeList(array) => {
+                let array = copy_array_data(&array.to_data());
+                let new_array = LargeListArray::from(array);
+                ScalarValue::LargeList(Arc::new(new_array))
+            }
+            ScalarValue::FixedSizeList(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                let new_array = FixedSizeListArray::from(array);
+                ScalarValue::FixedSizeList(Arc::new(new_array))
+            }
+            ScalarValue::Struct(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                let new_array = StructArray::from(array);
+                ScalarValue::Struct(Arc::new(new_array))
+            }
+            ScalarValue::Map(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                let new_array = MapArray::from(array);
+                ScalarValue::Map(Arc::new(new_array))
+            }
+            ScalarValue::Union(Some((type_id, value)), fields, mode) => {
+                let new_value = Box::new(value.force_clone());
+                ScalarValue::Union(Some((*type_id, new_value)), fields.clone(), *mode)
+            }
+            ScalarValue::Union(None, fields, mode) => {
+                ScalarValue::Union(None, fields.clone(), *mode)
+            }
+            ScalarValue::Dictionary(key_type, value) => {
+                let new_value = Box::new(value.force_clone());
+                ScalarValue::Dictionary(key_type.clone(), new_value)
+            }
+            _ => self.clone(),
+        }
+    }
+}
+
+pub fn copy_array_data(data: &ArrayData) -> ArrayData {
+    let mut copy = MutableArrayData::new(vec![&data], true, data.len());
+    copy.extend(0, 0, data.len());
+    copy.freeze()
 }
 
 macro_rules! impl_scalar {
@@ -4752,6 +4827,57 @@ mod tests {
                 ])]),
             ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(2),
+                    Some(3),
+                    Some(4),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
     }
 
     #[test]

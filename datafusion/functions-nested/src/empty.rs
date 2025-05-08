@@ -18,13 +18,14 @@
 //! [`ScalarUDFImpl`] definitions for array_empty function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{ArrayRef, BooleanArray, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::{
     DataType,
     DataType::{Boolean, FixedSizeList, LargeList, List},
 };
 use datafusion_common::cast::as_generic_list_array;
-use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -71,7 +72,7 @@ impl Default for ArrayEmpty {
 impl ArrayEmpty {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::arrays(1, None, Volatility::Immutable),
             aliases: vec!["array_empty".to_string(), "list_empty".to_string()],
         }
     }
@@ -89,13 +90,8 @@ impl ScalarUDFImpl for ArrayEmpty {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Boolean,
-            _ => {
-                return plan_err!("The array_empty function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Boolean)
     }
 
     fn invoke_with_args(
@@ -117,21 +113,25 @@ impl ScalarUDFImpl for ArrayEmpty {
 /// Array_empty SQL function
 pub fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_empty", args)?;
-
-    let array_type = array.data_type();
-    match array_type {
+    match array.data_type() {
         List(_) => general_array_empty::<i32>(array),
         LargeList(_) => general_array_empty::<i64>(array),
-        _ => exec_err!("array_empty does not support type '{array_type:?}'."),
+        FixedSizeList(_, size) => {
+            let values = if *size == 0 {
+                BooleanBuffer::new_set(array.len())
+            } else {
+                BooleanBuffer::new_unset(array.len())
+            };
+            Ok(Arc::new(BooleanArray::new(values, array.nulls().cloned())))
+        }
+        arg_type => exec_err!("array_empty does not support type {arg_type}"),
     }
 }
 
 fn general_array_empty<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
-    let array = as_generic_list_array::<O>(array)?;
-
-    let builder = array
+    let result = as_generic_list_array::<O>(array)?
         .iter()
         .map(|arr| arr.map(|arr| arr.is_empty()))
         .collect::<BooleanArray>();
-    Ok(Arc::new(builder))
+    Ok(Arc::new(result))
 }
