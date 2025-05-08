@@ -15,25 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{udf::FFI_ScalarUDF, udtf::FFI_TableFunction};
+use crate::{udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF, udtf::FFI_TableFunction};
 use datafusion::{
     catalog::TableFunctionImpl,
     functions::math::{abs::AbsFunc, random::RandomFunc},
+    functions_aggregate::{stddev::Stddev, sum::Sum},
     functions_table::generate_series::RangeFunc,
-    logical_expr::ScalarUDF,
+    logical_expr::{AggregateUDF, ScalarUDF},
 };
 
 use std::sync::Arc;
 
 pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
     let udf: Arc<ScalarUDF> = Arc::new(AbsFunc::new().into());
-
     udf.into()
+}
+
+pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
+    let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
+    udaf.into()
+}
+
+pub(crate) extern "C" fn create_ffi_stddev_func() -> FFI_AggregateUDF {
+    let udaf: Arc<AggregateUDF> = Arc::new(Stddev::new().into());
+    udaf.into()
 }
 
 pub(crate) extern "C" fn create_ffi_random_func() -> FFI_ScalarUDF {
     let udf: Arc<ScalarUDF> = Arc::new(RandomFunc::new().into());
-
     udf.into()
 }
 

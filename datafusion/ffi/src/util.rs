@@ -20,7 +20,7 @@ use abi_stable::std_types::RVec;
 use arrow::datatypes::Field;
 use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
 
-/// This macro is a helpful conversion utility to conver from an abi_stable::RResult to a
+/// This macro is a helpful conversion utility to convert from an abi_stable::RResult to a
 /// DataFusion result.
 #[macro_export]
 macro_rules! df_result {
