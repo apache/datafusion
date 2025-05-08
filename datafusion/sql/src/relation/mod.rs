@@ -162,7 +162,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
 
-        let optimized_plan = optimize_subquery_sort(plan)?.data;
+        let optimized_plan =
+            optimize_subquery_sort(plan, self.options.enable_eliminate_subquery_sort)?
+                .data;
         if let Some(alias) = alias {
             self.apply_table_alias(optimized_plan, alias)
         } else {
@@ -226,7 +228,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
-fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+fn optimize_subquery_sort(
+    plan: LogicalPlan,
+    enalbe_eliminate: bool,
+) -> Result<Transformed<LogicalPlan>> {
     // When initializing subqueries, we examine sort options since they might be unnecessary.
     // They are only important if the subquery result is affected by the ORDER BY statement,
     // which can happen when we have:
@@ -241,7 +246,7 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
         }
         match c {
             LogicalPlan::Sort(s) => {
-                if !has_limit {
+                if !has_limit && enalbe_eliminate {
                     has_limit = false;
                     return Ok(Transformed::yes(s.input.as_ref().clone()));
                 }

@@ -271,6 +271,9 @@ config_namespace! {
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
         pub recursion_limit: usize, default = 50
+
+        // Whether removing sorting in subqueries without LIMIT/OFFSET.
+        pub enable_eliminate_subquery_sort: bool, default = true
     }
 }
 

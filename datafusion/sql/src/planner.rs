@@ -54,6 +54,8 @@ pub struct ParserOptions {
     pub collect_spans: bool,
     /// Whether `VARCHAR` is mapped to `Utf8View` during SQL planning.
     pub map_varchar_to_utf8view: bool,
+    /// Whether removing sorting in subqueries without LIMIT/OFFSET.
+    pub enable_eliminate_subquery_sort: bool,
 }
 
 impl ParserOptions {
@@ -75,6 +77,7 @@ impl ParserOptions {
             map_varchar_to_utf8view: false,
             enable_options_value_normalization: false,
             collect_spans: false,
+            enable_eliminate_subquery_sort: true,
         }
     }
 
@@ -147,6 +150,7 @@ impl From<&SqlParserOptions> for ParserOptions {
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
+            enable_eliminate_subquery_sort: options.enable_eliminate_subquery_sort,
         }
     }
 }
