@@ -27,7 +27,7 @@ use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
-use datafusion_expr_common::groups_accumulator::EmitTo;
+use datafusion_expr_common::groups_accumulator::{EmitBlocksContext, EmitTo};
 
 use crate::aggregate::groups_accumulator::blocks::{Block, Blocks};
 use crate::aggregate::groups_accumulator::group_index_operations::{
@@ -72,18 +72,8 @@ pub struct NullState<O: GroupIndexOperations> {
 
     block_size: Option<usize>,
 
-    emit_context: Option<EmitBlocksContext>,
-
     /// phantom data for required type `<O>`
     _phantom: PhantomData<O>,
-}
-
-#[derive(Debug)]
-struct EmitBlocksContext {
-    next_emit_block_id: usize,
-    last_block_len: usize,
-    num_blocks: usize,
-    buffer: BooleanBuffer,
 }
 
 impl<O: GroupIndexOperations> NullState<O> {
@@ -186,7 +176,8 @@ impl<O: GroupIndexOperations> NullState<O> {
                     .for_each(|((&group_index, new_value), is_valid)| {
                         if is_valid {
                             let block_id = O::get_block_id(group_index, block_size);
-                            let block_offset = O::get_block_offset(group_index, block_size);
+                            let block_offset =
+                                O::get_block_offset(group_index, block_size);
                             seen_values.set_bit(group_index, false);
                             value_fn(block_id, block_offset, new_value);
                         }
@@ -203,7 +194,8 @@ impl<O: GroupIndexOperations> NullState<O> {
                     .for_each(|((&group_index, new_value), filter_value)| {
                         if let Some(true) = filter_value {
                             let block_id = O::get_block_id(group_index, block_size);
-                            let block_offset = O::get_block_offset(group_index, block_size);
+                            let block_offset =
+                                O::get_block_offset(group_index, block_size);
                             seen_values.set_bit(group_index, false);
                             value_fn(block_id, block_offset, new_value);
                         }
@@ -220,7 +212,8 @@ impl<O: GroupIndexOperations> NullState<O> {
                         if let Some(true) = filter_value {
                             if let Some(new_value) = new_value {
                                 let block_id = O::get_block_id(group_index, block_size);
-                                let block_offset = O::get_block_offset(group_index, block_size);
+                                let block_offset =
+                                    O::get_block_offset(group_index, block_size);
                                 seen_values.set_bit(group_index, false);
                                 value_fn(block_id, block_offset, new_value);
                             }
@@ -264,6 +257,7 @@ impl NullStateAdapter {
         }
     }
 
+    #[inline]
     pub fn accumulate<T, F>(
         &mut self,
         group_indices: &[usize],
@@ -293,6 +287,7 @@ impl NullStateAdapter {
         }
     }
 
+    #[inline]
     pub fn accumulate_boolean<F>(
         &mut self,
         group_indices: &[usize],
@@ -321,6 +316,7 @@ impl NullStateAdapter {
         }
     }
 
+    #[inline]
     pub fn build(&mut self, emit_to: EmitTo) -> NullBuffer {
         match self {
             NullStateAdapter::Flat(null_state) => null_state.build(emit_to),
@@ -328,6 +324,7 @@ impl NullStateAdapter {
         }
     }
 
+    #[inline]
     pub fn size(&self) -> usize {
         match self {
             NullStateAdapter::Flat(null_state) => null_state.size(),
@@ -411,7 +408,6 @@ impl Default for FlatNullState {
         Self {
             seen_values: BooleanBufferBuilder::new(0),
             block_size: None,
-            emit_context: None,
             _phantom: PhantomData,
         }
     }
@@ -460,25 +456,87 @@ impl FlatNullState {
 ///
 /// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
 ///
-pub type BlockedNullState = NullState<BlockedGroupIndexOperations>;
+#[derive(Debug)]
+pub struct BlockedNullState {
+    inner: NullState<BlockedGroupIndexOperations>,
+    emit_ctx: NullsEmitContext,
+}
 
-impl BlockedNullState {
-    pub fn new(block_size: usize) -> Self {
-        Self {
-            seen_values: BooleanBufferBuilder::new(0),
-            block_size: Some(block_size),
-            emit_context: None,
-            _phantom: PhantomData {},
-        }
+#[derive(Debug, Default)]
+struct NullsEmitContext {
+    base_ctx: EmitBlocksContext,
+    last_block_len: usize,
+    buffer: Option<BooleanBuffer>,
+}
+
+impl NullsEmitContext {
+    fn new() -> Self {
+        Self::default()
     }
 }
 
 impl BlockedNullState {
-    pub fn build(&mut self) -> NullBuffer {
-        let block_size = self.block_size.unwrap();
+    pub fn new(block_size: usize) -> Self {
+        let inner = NullState {
+            seen_values: BooleanBufferBuilder::new(0),
+            block_size: Some(block_size),
+            _phantom: PhantomData {},
+        };
 
-        if self.emit_context.is_none() {
-            let buffer = self.seen_values.finish();
+        let emit_ctx = NullsEmitContext::new();
+
+        Self { inner, emit_ctx }
+    }
+
+    #[inline]
+    pub fn accumulate<T, F>(
+        &mut self,
+        group_indices: &[usize],
+        values: &PrimitiveArray<T>,
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+        value_fn: F,
+    ) where
+        T: ArrowPrimitiveType + Send,
+        F: FnMut(usize, usize, T::Native) + Send,
+    {
+        assert!(!self.emit_ctx.base_ctx.emitting());
+        self.inner.accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            value_fn,
+        );
+    }
+
+    #[inline]
+    pub fn accumulate_boolean<F>(
+        &mut self,
+        group_indices: &[usize],
+        values: &BooleanArray,
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+        value_fn: F,
+    ) where
+        F: FnMut(usize, usize, bool) + Send,
+    {
+        assert!(!self.emit_ctx.base_ctx.emitting());
+        self.inner.accumulate_boolean(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            value_fn,
+        );
+    }
+
+    pub fn build(&mut self) -> NullBuffer {
+        let block_size = self.inner.block_size.unwrap();
+
+        if !self.emit_ctx.base_ctx.emitting() {
+            // Init needed contexts
+            let buffer = self.inner.seen_values.finish();
             let num_blocks = buffer.len().div_ceil(block_size);
             let mut last_block_len = buffer.len() % block_size;
             last_block_len = if last_block_len > 0 {
@@ -486,29 +544,48 @@ impl BlockedNullState {
             } else {
                 usize::MAX
             };
+            self.emit_ctx.buffer = Some(buffer);
+            self.emit_ctx.last_block_len = last_block_len;
 
-            self.emit_context = Some(EmitBlocksContext {
-                next_emit_block_id: 0,
-                last_block_len,
-                num_blocks,
-                buffer,
-            });
+            // Start emit
+            self.emit_ctx.base_ctx.start_emit(num_blocks);
         }
 
-        let emit_context = self.emit_context.as_mut().unwrap();
-        let cur_emit_block_id = emit_context.next_emit_block_id;
-        emit_context.next_emit_block_id += 1;
+        // Get current emit block idx
+        let emit_block_id = self.emit_ctx.base_ctx.cur_emit_block();
+        // And then we advance the block idx
+        self.emit_ctx.base_ctx.advance_emit_block();
 
-        assert!(cur_emit_block_id < emit_context.num_blocks);
-        let slice_offset = cur_emit_block_id * block_size;
-        let slice_len = if cur_emit_block_id == emit_context.num_blocks - 1 {
-            cmp::min(emit_context.last_block_len, block_size)
+        // Process and generate the emit block
+        let buffer = self.emit_ctx.buffer.as_ref().unwrap();
+        let slice_offset = emit_block_id * block_size;
+        let slice_len = if self.emit_ctx.base_ctx.all_emitted() {
+            cmp::min(self.emit_ctx.last_block_len, block_size)
         } else {
             block_size
         };
+        let emit_block = buffer.slice(slice_offset, slice_len);
 
-        let emit_block = emit_context.buffer.slice(slice_offset, slice_len);
+        // Finally we check if all blocks emitted, if so, we reset the
+        // emit context to allow new updates
+        if self.emit_ctx.base_ctx.all_emitted() {
+            self.emit_ctx.base_ctx.reset();
+            self.emit_ctx.buffer = None;
+            self.emit_ctx.last_block_len = 0;
+        }
+
         NullBuffer::new(emit_block)
+    }
+
+    fn size(&self) -> usize {
+        self.inner.size()
+            + size_of::<NullsEmitContext>()
+            + self
+                .emit_ctx
+                .buffer
+                .as_ref()
+                .map(|b| b.len() / 8)
+                .unwrap_or_default()
     }
 }
 
