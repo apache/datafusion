@@ -5098,6 +5098,28 @@ FROM d WHERE column1 IS NOT NULL;
 statement ok
 drop table d;
 
+statement ok
+create table dn as values
+  (arrow_cast(10, 'Duration(Second)'), 'a', 1),
+  (arrow_cast(20, 'Duration(Second)'), 'a', 2),
+  (NULL, 'b', 1),
+  (arrow_cast(40, 'Duration(Second)'), 'b', 2),
+  (arrow_cast(50, 'Duration(Second)'), 'c', 1),
+  (NULL, 'c', 2);
+
+query T?I
+SELECT column2, avg(column1), column3 FROM dn GROUP BY column2, column3 ORDER BY column2, column3;
+----
+a 0 days 0 hours 0 mins 10 secs 1
+a 0 days 0 hours 0 mins 20 secs 2
+b NULL 1
+b 0 days 0 hours 0 mins 40 secs 2
+c 0 days 0 hours 0 mins 50 secs 1
+c NULL 2
+
+statement ok
+drop table dn;
+
 # Prepare the table with dictionary values for testing
 statement ok
 CREATE TABLE value(x bigint) AS VALUES (1), (2), (3), (1), (3), (4), (5), (2);
