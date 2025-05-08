@@ -53,8 +53,7 @@ fn create_smj_exec(array_len: usize, batch_size: usize) -> SortMergeJoinExec {
         })
         .collect::<Vec<_>>();
     let datasource_exec =
-        MemorySourceConfig::try_new_exec(&[batches], Arc::clone(&schema), None)
-            .unwrap();
+        MemorySourceConfig::try_new_exec(&[batches], Arc::clone(&schema), None).unwrap();
 
     let on = vec![(
         Arc::new(Column::new_with_schema("b1", &schema).unwrap()) as _,
