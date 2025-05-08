@@ -18,6 +18,7 @@
 //! [`GeneralPullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
 
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::ops::Deref;
@@ -28,6 +29,7 @@ use crate::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use crate::utils::has_all_column_refs;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
+use arrow::compute::kernels::cmp::eq;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
     TreeNodeRewriter, TreeNodeVisitor,
@@ -37,8 +39,8 @@ use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
-    binary_expr, BinaryExpr, Cast, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Operator as ExprOperator, Subquery,
+    binary_expr, col, expr_fn, BinaryExpr, Cast, Expr, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Operator as ExprOperator, Subquery,
 };
 use datafusion_sql::unparser::Unparser;
 use indexmap::map::Entry;
@@ -46,12 +48,16 @@ use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 use log::Log;
 
-pub struct AlgebraIndex {
+pub struct DependentJoinTracker {
     root: Option<usize>,
+    // each logical plan traversal will assign it a integer id
     current_id: usize,
-    nodes: IndexMap<usize, Operator>, // column_
-    // TODO: use a different identifier for a node, instead of the whole logical plan obj
+    // each newly visted operator is inserted inside this map for tracking
+    nodes: IndexMap<usize, Operator>,
+    // all the node ids from root to the current node
+    // this is used during traversal only
     stack: Vec<usize>,
+    // track for each column, the nodes/logical plan that reference to its within the tree
     accessed_columns: IndexMap<Column, Vec<ColumnAccess>>,
 }
 
@@ -186,12 +192,15 @@ struct Unnesting {
 
 // TODO: looks like this function can be improved to allow more expr pull up
 fn can_pull_up(expr: &Expr) -> bool {
-    if let Expr::BinaryExpr(BinaryExpr {
-        left,
-        op: ExprOperator::Eq,
-        right,
-    }) = expr
-    {
+    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
+        match op {
+            ExprOperator::Eq
+            | ExprOperator::Gt
+            | ExprOperator::Lt
+            | ExprOperator::GtEq
+            | ExprOperator::LtEq => {}
+            _ => return false,
+        }
         match (left.deref(), right.deref()) {
             (Expr::Column(_), right) => !right.any_column_refs(),
             (left, Expr::Column(_)) => !left.any_column_refs(),
@@ -219,21 +228,88 @@ struct SimpleDecorrelationResult {
     // because the decorrelation is top-down)
     pulled_up_projections: IndexSet<Expr>,
     pulled_up_predicates: Vec<Expr>,
-    // simple decorrelation has eliminated all dependent joins
-    finished: bool,
 }
-fn expr_contains_sq(expr: &Expr, sq: &Subquery) -> bool {
-    expr.exists(|e| match e {
-        Expr::InSubquery(isq) => Ok(isq.subquery == *sq),
-        Expr::ScalarSubquery(ssq) => {
-            if let LogicalPlan::Subquery(inner_sq) = ssq.subquery.as_ref() {
-                return Ok(inner_sq.clone() == *sq);
+
+fn transform_subquery_to_join_expr(
+    expr: &Expr,
+    sq: &Subquery,
+    replace_columns: &[Expr],
+) -> Result<(bool, Option<Expr>)> {
+    let mut transformed_expr = None;
+    if replace_columns.len() != 1 {
+        for expr in replace_columns {
+            println!("{}", expr)
+        }
+        return internal_err!("result of in subquery should only involve one column");
+    }
+    let found_sq = expr.exists(|e| match e {
+        Expr::InSubquery(isq) => {
+            if replace_columns.len() != 1 {
+                println!("{:?}", replace_columns);
+                return internal_err!(
+                    "result of in subquery should only involve one column"
+                );
             }
-            Ok(false)
+            if isq.subquery == *sq {
+                if isq.negated {
+                    transformed_expr = Some(binary_expr(
+                        *isq.expr.clone(),
+                        ExprOperator::NotEq,
+                        replace_columns[0].clone(),
+                    ));
+                    return Ok(true);
+                }
+
+                transformed_expr = Some(binary_expr(
+                    *isq.expr.clone(),
+                    ExprOperator::NotEq,
+                    replace_columns[0].clone(),
+                ));
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            let (exist, transformed) =
+                transform_subquery_to_join_expr(left.as_ref(), sq, replace_columns)?;
+            if !exist {
+                let (right_exist, transformed_right) =
+                    transform_subquery_to_join_expr(right.as_ref(), sq, replace_columns)?;
+                if !right_exist {
+                    return Ok(false);
+                }
+                // TODO: exist query won't have any transformed expr,
+                // meaning this query is not supported `where bool_col = exists(subquery)`
+                transformed_expr = Some(binary_expr(
+                    *left.clone(),
+                    op.clone(),
+                    transformed_right.unwrap(),
+                ));
+                return Ok(true);
+            }
+            // TODO: exist query won't have any transformed expr,
+            // meaning this query is not supported `where bool_col = exists(subquery)`
+            transformed_expr = Some(binary_expr(
+                transformed.unwrap(),
+                op.clone(),
+                *right.clone(),
+            ));
+            return Ok(true);
+        }
+        Expr::ScalarSubquery(ssq) => {
+            unimplemented!(
+                "we need to store map between scalarsubquery and replaced_expr later on"
+            );
+            if let LogicalPlan::Subquery(inner_sq) = ssq.subquery.as_ref() {
+                if inner_sq.clone() == *sq {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
         }
         _ => Ok(false),
-    })
-    .unwrap()
+    })?;
+    return Ok((found_sq, transformed_expr));
 }
 
 // impl Default for GeneralDecorrelation {
@@ -243,7 +319,7 @@ fn expr_contains_sq(expr: &Expr, sq: &Subquery) -> bool {
 //         };
 //     }
 // }
-impl AlgebraIndex {
+impl DependentJoinTracker {
     fn is_linear_operator(&self, plan: &LogicalPlan) -> bool {
         match plan {
             LogicalPlan::Limit(_) => true,
@@ -284,7 +360,7 @@ impl AlgebraIndex {
         }
     }
     fn remove_node(&mut self, parent: &mut Operator, node: &mut Operator) {
-        let next_children = node.children.get(0).unwrap();
+        let next_children = node.children.first().unwrap();
         let next_children_node = self.nodes.swap_remove(next_children).unwrap();
         // let next_children_node = self.nodes.get_mut(next_children).unwrap();
         *node = next_children_node;
@@ -293,25 +369,24 @@ impl AlgebraIndex {
     // decorrelate all descendant(recursively) with simple unnesting
     // returns true if all children were eliminated
     // TODO(impl me)
-    fn try_simple_unnest_descendent(
+    fn try_simple_decorrelate_descendent(
         &mut self,
         root_node: &mut Operator,
         child_node: &mut Operator,
         col_access: &ColumnAccess,
         result: &mut SimpleDecorrelationResult,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         // unnest children first
         // println!("decorrelating {} from {}", child, root);
 
         if !self.is_linear_path(&root_node.id, &child_node.id) {
             // TODO:
-            return Ok(false);
+            return Ok(());
         }
 
         // TODO: inplace update
         // let mut child_node = self.nodes.swap_remove(child).unwrap().clone();
         // let mut root_node = self.nodes.swap_remove(root).unwrap();
-        println!("child node is {}", child_node.plan);
 
         match &mut child_node.plan {
             LogicalPlan::Projection(proj) => {
@@ -344,7 +419,7 @@ impl AlgebraIndex {
                     // all expr of this node is pulled up, fully remove this node from the tree
                     if proj.expr.len() == pulled_up_expr.len() {
                         self.remove_node(root_node, child_node);
-                        return Ok(true);
+                        return Ok(());
                     }
 
                     let new_proj = proj
@@ -369,6 +444,7 @@ impl AlgebraIndex {
                     .iter()
                     .cloned()
                     .partition(|e| e.contains_outer() && can_pull_up(e));
+
                 // only remove the access tracker if non of the kept expr contains reference to the column
                 // i.e some of the remaining expr still reference to the column and not pullable
                 let removable = kept.iter().all(|e| {
@@ -381,16 +457,12 @@ impl AlgebraIndex {
                     .unwrap()
                 });
                 if removable {
-                    root_node.access_tracker.remove(col_access);
-                    println!(
-                        "remove {} access from node {:?}",
-                        col_access.col, root_node.id
-                    );
+                    root_node.access_tracker.swap_remove(col_access);
                 }
                 result.pulled_up_predicates.extend(pulled_up);
                 if kept.is_empty() {
                     self.remove_node(root_node, child_node);
-                    return Ok(true);
+                    return Ok(());
                 }
                 filter.predicate = conjunction(kept).unwrap();
             }
@@ -412,16 +484,15 @@ impl AlgebraIndex {
                 // )
             }
         };
-        // self.nodes.insert(*root, root_node);
-        // self.nodes.insert(*child, child_node);
-        Ok(false)
+
+        Ok(())
     }
 
     fn unnest(
         &mut self,
         node_id: usize,
         unnesting: &mut Unnesting,
-        outer_refs_from_parent: HashSet<Column>,
+        outer_refs_from_parent: IndexSet<Column>,
     ) -> Result<LogicalPlan> {
         unimplemented!()
         // if unnesting.info.parent.is_some() {
@@ -439,7 +510,7 @@ impl AlgebraIndex {
     fn right(&self, node: &Operator) -> &Operator {
         assert_eq!(2, node.children.len());
         // during the building of the tree, the subquery (right node) is always traversed first
-        let node_id = node.children.get(0).unwrap();
+        let node_id = node.children.first().unwrap();
         return self.nodes.get(node_id).unwrap();
     }
     fn left(&self, node: &Operator) -> &Operator {
@@ -473,7 +544,7 @@ impl AlgebraIndex {
         //     replaces: IndexMap::new(),
         // };
 
-        self.dependent_join_elimination(node.id, &unnesting_info, HashSet::new())
+        self.dependent_join_elimination(node.id, &unnesting_info, IndexSet::new())
     }
 
     fn column_accesses(&self, node_id: usize) -> Vec<&ColumnAccess> {
@@ -515,32 +586,50 @@ impl AlgebraIndex {
         match dependent_join_node.plan {
             LogicalPlan::Filter(ref mut filter) => {
                 let exprs = split_conjunction(&filter.predicate);
-                let mut kept_predicates: Vec<Expr> = exprs
-                    .into_iter()
-                    .filter(|e| !expr_contains_sq(e, &subquery))
+                let mut join_exprs = vec![];
+                let mut kept_predicates = vec![];
+                // maybe we also need to collect join columns here
+                let pulled_projection: Vec<Expr> = ret
+                    .pulled_up_projections
+                    .iter()
                     .cloned()
+                    .map(strip_outer_reference)
                     .collect();
+                for expr in exprs.into_iter() {
+                    // exist query may not have any transformed expr
+                    // i.e where exists(suquery) => semi join
+                    let (transformed, maybe_transformed_expr) =
+                        transform_subquery_to_join_expr(
+                            expr,
+                            &subquery,
+                            &pulled_projection,
+                        )?;
+                    if maybe_transformed_expr.is_some() {
+                        join_exprs.push(maybe_transformed_expr.unwrap());
+                    }
+                    if !transformed {
+                        kept_predicates.push(expr.clone())
+                    }
+                }
+
                 let new_predicates = ret
                     .pulled_up_predicates
                     .iter()
                     .map(|e| strip_outer_reference(e.clone()));
+                join_exprs.extend(new_predicates);
                 // TODO: some predicate is join predicate, some is just filter
                 // kept_predicates.extend(new_predicates);
                 // filter.predicate = conjunction(kept_predicates).unwrap();
                 // left
                 let mut builder = LogicalPlanBuilder::new(filter.input.deref().clone());
 
-                builder =
-                    builder.join_on(subquery_children, JoinType::Left, new_predicates)?;
-                if !ret.pulled_up_projections.is_empty() {
-                    // TODO: do we need to pull up projection?
-                    // when most of the case they will be eliminated anyway
-                    // builder = builder.project(
-                    //     ret.pulled_up_projections
-                    //         .iter()
-                    //         .map(|e| SelectExpr::Expression(e.clone())),
-                    // )?;
-                }
+                builder = builder.join_on(
+                    subquery_children,
+                    // TODO: join type based on filter condition
+                    JoinType::LeftSemi,
+                    join_exprs,
+                )?;
+
                 if kept_predicates.len() > 0 {
                     builder = builder.filter(conjunction(kept_predicates).unwrap())?
                 }
@@ -556,7 +645,7 @@ impl AlgebraIndex {
         &mut self,
         node: usize,
         unnesting: &UnnestingInfo,
-        outer_refs_from_parent: HashSet<Column>,
+        outer_refs_from_parent: IndexSet<Column>,
     ) -> Result<LogicalPlan> {
         let parent = unnesting.parent.clone();
         let operator = self.nodes.get(&node).unwrap();
@@ -587,7 +676,7 @@ impl AlgebraIndex {
         if parent.is_some() {
             // i.e exists (where inner.col_a = outer_col.b and other_nested_subquery...)
 
-            let mut outer_ref_from_left = HashSet::new();
+            let mut outer_ref_from_left = IndexSet::new();
             let left = join.left.clone();
             for col_from_parent in outer_refs_from_parent.iter() {
                 if left
@@ -619,7 +708,7 @@ impl AlgebraIndex {
             },
             replaces: IndexMap::new(),
         };
-        let mut accesses: HashSet<Column> = self
+        let mut accesses: IndexSet<Column> = self
             .column_accesses(node)
             .iter()
             .map(|a| a.col.clone())
@@ -656,40 +745,45 @@ impl AlgebraIndex {
         // })
         // .expect("traversal is infallible");
     }
+    fn get_node_uncheck(&self, node_id: &usize) -> Operator {
+        self.nodes.get(node_id).unwrap().clone()
+    }
 
     fn simple_decorrelation(
         &mut self,
         node_id: usize,
     ) -> Result<SimpleDecorrelationResult> {
-        let node = self.nodes.get(&node_id).unwrap().clone();
+        let node = self.get_node_uncheck(&node_id);
         let mut all_eliminated = false;
         let mut result = SimpleDecorrelationResult {
             // new: None,
             pulled_up_projections: IndexSet::new(),
             pulled_up_predicates: vec![],
-            finished: false,
         };
-        // only iter with direct child
-        // TODO: confirm if this needs to happen also with descendant
-        // most likely no, because if this is recursive, it is already non-linear anyway
-        // and simple decorrleation will stop
-        for col_access in node.clone().access_tracker.iter() {
-            let mut parent_node = self.nodes.get(&node_id).unwrap().clone();
-            println!("{}", col_access.node_id);
-            let mut cloned_child_node =
-                self.nodes.get(&col_access.node_id).unwrap().clone();
-            let branch_all_eliminated = self.try_simple_unnest_descendent(
+
+        let accesses_bottom_up = node.access_tracker.clone().sorted_by(|a, b| {
+            if a.node_id < b.node_id {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        });
+
+        for col_access in accesses_bottom_up {
+            // create two copy because of
+            let mut parent_node = self.get_node_uncheck(&node_id);
+            let mut descendent = self.get_node_uncheck(&col_access.node_id);
+            self.try_simple_decorrelate_descendent(
                 &mut parent_node,
-                &mut cloned_child_node,
-                col_access,
+                &mut descendent,
+                &col_access,
                 &mut result,
             )?;
+            // TODO: find a nicer way to do in-place update
             self.nodes.insert(node_id, parent_node.clone());
-            self.nodes.insert(col_access.node_id, cloned_child_node);
-            all_eliminated = all_eliminated || branch_all_eliminated;
+            self.nodes.insert(col_access.node_id, descendent);
         }
 
-        result.finished = all_eliminated;
         Ok(result)
     }
     fn build(&mut self, root: &LogicalPlan) -> Result<()> {
@@ -698,7 +792,7 @@ impl AlgebraIndex {
         Ok(())
     }
 }
-impl fmt::Debug for AlgebraIndex {
+impl fmt::Debug for DependentJoinTracker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "GeneralDecorrelation Tree:")?;
         if let Some(root_op) = &self.root {
@@ -710,7 +804,7 @@ impl fmt::Debug for AlgebraIndex {
     }
 }
 
-impl AlgebraIndex {
+impl DependentJoinTracker {
     fn fmt_operator(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -770,12 +864,6 @@ impl AlgebraIndex {
             }
         }
 
-        let accessing_string = op
-            .potential_accesses
-            .iter()
-            .map(|c| c.debug())
-            .collect::<Vec<_>>()
-            .join(", ");
         let accessed_by_string = op
             .access_tracker
             .iter()
@@ -783,11 +871,7 @@ impl AlgebraIndex {
             .collect::<Vec<_>>()
             .join(", ");
         // Now print the Operator details
-        writeln!(
-            f,
-            "acccessing: {}, accessed_by: {}",
-            accessing_string, accessed_by_string,
-        )?;
+        writeln!(f, "accessed_by: {}", accessed_by_string,)?;
         let len = op.children.len();
 
         // Recursively print children if Operator has children
@@ -822,7 +906,7 @@ impl AlgebraIndex {
     // because the column providers are visited after column-accessor
     // function visit_with_subqueries always visit the subquery before visiting the other child
     // we can always infer the LCA inside this function, by getting the deepest common parent
-    fn conclude_lca_for_column(&mut self, child_id: usize, col: &Column) {
+    fn conclude_lowest_dependent_join_node(&mut self, child_id: usize, col: &Column) {
         if let Some(accesses) = self.accessed_columns.get(col) {
             for access in accesses.iter() {
                 let mut cur_stack = self.stack.clone();
@@ -830,6 +914,7 @@ impl AlgebraIndex {
                 // this is a dependen join node
                 let lca_node = Self::lca_from_stack(&cur_stack, &access.stack);
                 let node = self.nodes.get_mut(&lca_node).unwrap();
+                println!("inserting {}", access.node_id);
                 node.access_tracker.insert(ColumnAccess {
                     col: col.clone(),
                     node_id: access.node_id,
@@ -864,9 +949,9 @@ impl AlgebraIndex {
     }
 }
 
-impl Default for AlgebraIndex {
+impl Default for DependentJoinTracker {
     fn default() -> Self {
-        return AlgebraIndex {
+        return DependentJoinTracker {
             root: None,
             current_id: 0,
             nodes: IndexMap::new(),
@@ -899,16 +984,6 @@ struct Operator {
     id: usize,
     plan: LogicalPlan,
     parent: Option<usize>,
-    // Note if the current node is a Subquery
-    // at the first time this node is visited,
-    // the set of accesses columns are not sufficient
-    // (i.e) some where deep down the ast another recursive subquery
-    // exists and also referencing some columns belongs to the outer part
-    // of the subquery
-    // Thus, on discovery of new subquery, we must
-    // add the accesses columns to the ancestor nodes which are Subquery
-    potential_accesses: HashSet<ColumnUsage>,
-    provides: HashSet<ColumnUsage>,
 
     // This field is only set if the node is dependent join node
     // it track which child still accessing which column of
@@ -947,7 +1022,7 @@ fn print(a: &Expr) -> Result<()> {
     Ok(())
 }
 
-impl TreeNodeVisitor<'_> for AlgebraIndex {
+impl TreeNodeVisitor<'_> for DependentJoinTracker {
     type Node = LogicalPlan;
     fn f_down(&mut self, node: &LogicalPlan) -> Result<TreeNodeRecursion> {
         self.current_id += 1;
@@ -958,83 +1033,45 @@ impl TreeNodeVisitor<'_> for AlgebraIndex {
         let mut is_dependent_join_node = false;
         // for each node, find which column it is accessing, which column it is providing
         // Set of columns current node access
-        let (accesses, provides): (HashSet<ColumnUsage>, HashSet<ColumnUsage>) =
-            match node {
-                LogicalPlan::Filter(f) => {
-                    if contains_subquery(&f.predicate) {
+        match node {
+            LogicalPlan::Filter(f) => {
+                if contains_subquery(&f.predicate) {
+                    is_dependent_join_node = true;
+                }
+                f.predicate.outer_column_refs().into_iter().for_each(|f| {
+                    self.mark_column_access(self.current_id, f);
+                });
+            }
+            LogicalPlan::TableScan(tbl_scan) => {
+                tbl_scan.projected_schema.columns().iter().for_each(|col| {
+                    self.conclude_lowest_dependent_join_node(self.current_id, &col);
+                });
+            }
+            // TODO
+            // 1.handle subquery inside projection
+            // 2.projection also provide some new columns
+            // 3.if within projection exists multiple subquery, how does this work
+            LogicalPlan::Projection(proj) => {
+                let mut outer_cols = HashSet::new();
+                for expr in &proj.expr {
+                    if contains_subquery(expr) {
                         is_dependent_join_node = true;
+                        break;
                     }
-                    let outer_col_refs: HashSet<ColumnUsage> = f
-                        .predicate
-                        .outer_column_refs()
-                        .into_iter()
-                        .map(|f| {
-                            self.mark_column_access(self.current_id, f);
-                            ColumnUsage::Outer(f.clone())
-                        })
-                        .collect();
-
-                    (outer_col_refs, HashSet::new())
+                    expr.add_outer_column_refs(&mut outer_cols);
                 }
-                LogicalPlan::TableScan(tbl_scan) => {
-                    let provided_columns: HashSet<ColumnUsage> = tbl_scan
-                        .projected_schema
-                        .columns()
-                        .into_iter()
-                        .map(|col| {
-                            self.conclude_lca_for_column(self.current_id, &col);
-                            ColumnUsage::Own(col)
-                        })
-                        .collect();
-                    (HashSet::new(), provided_columns)
-                }
-                LogicalPlan::Aggregate(_) => (HashSet::new(), HashSet::new()),
-                LogicalPlan::EmptyRelation(_) => (HashSet::new(), HashSet::new()),
-                LogicalPlan::Limit(_) => (HashSet::new(), HashSet::new()),
-                // TODO
-                // 1.handle subquery inside projection
-                // 2.projection also provide some new columns
-                // 3.if within projection exists multiple subquery, how does this work
-                LogicalPlan::Projection(proj) => {
-                    let mut outer_cols = HashSet::new();
-                    for expr in &proj.expr {
-                        if contains_subquery(expr) {
-                            is_dependent_join_node = true;
-                            break;
-                        }
-                        expr.add_outer_column_refs(&mut outer_cols);
-                    }
-                    (
-                        outer_cols
-                            .into_iter()
-                            .map(|c| {
-                                self.mark_column_access(self.current_id, c);
-                                ColumnUsage::Outer(c.clone())
-                            })
-                            .collect(),
-                        HashSet::new(),
-                    )
-                }
-                LogicalPlan::Subquery(subquery) => {
-                    is_subquery_node = true;
-                    // TODO: once we detect the subquery
-                    let accessed = subquery
-                        .outer_ref_columns
-                        .iter()
-                        .filter_map(|f| match f {
-                            Expr::Column(col) => Some(ColumnUsage::Outer(col.clone())),
-                            Expr::OuterReferenceColumn(_, col) => {
-                                Some(ColumnUsage::Outer(col.clone()))
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    (accessed, HashSet::new())
-                }
-                _ => {
-                    return internal_err!("impl scan for node type {:?}", node);
-                }
-            };
+                outer_cols.into_iter().for_each(|c| {
+                    self.mark_column_access(self.current_id, c);
+                });
+            }
+            LogicalPlan::Subquery(subquery) => {
+                is_subquery_node = true;
+                // TODO: once we detect the subquery
+            }
+            _ => {
+                return internal_err!("impl scan for node type {:?}", node);
+            }
+        };
 
         let parent = if self.stack.is_empty() {
             None
@@ -1051,8 +1088,6 @@ impl TreeNodeVisitor<'_> for AlgebraIndex {
                 id: self.current_id,
                 parent,
                 plan: node.clone(),
-                potential_accesses: accesses,
-                provides,
                 is_subquery_node,
                 is_dependent_join_node,
                 children: vec![],
@@ -1071,7 +1106,7 @@ impl TreeNodeVisitor<'_> for AlgebraIndex {
     }
 }
 
-impl OptimizerRule for AlgebraIndex {
+impl OptimizerRule for DependentJoinTracker {
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -1107,7 +1142,7 @@ mod tests {
 
     use crate::test::{test_table_scan, test_table_scan_with_name};
 
-    use super::AlgebraIndex;
+    use super::DependentJoinTracker;
     use arrow::{
         array::{Int32Array, StringArray},
         datatypes::{DataType as ArrowDataType, Field, Fields, Schema},
@@ -1123,9 +1158,19 @@ mod tests {
             LogicalPlanBuilder::from(inner_table_lv1)
                 .filter(
                     col("inner_table_lv1.a")
-                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a")),
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.a")
+                                .gt(col("inner_table_lv1.c")),
+                        )
+                        .and(col("inner_table_lv1.b").eq(lit(1)))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.b")
+                                .eq(col("inner_table_lv1.b")),
+                        ),
                 )?
-                .project(vec![out_ref_col(ArrowDataType::UInt32, "outer_table.b")])?
+                .project(vec![out_ref_col(ArrowDataType::UInt32, "outer_table.b")
+                    .alias("outer_b_alias")])?
                 .build()?,
         );
 
@@ -1136,7 +1181,7 @@ mod tests {
                     .and(in_subquery(col("outer_table.c"), sq_level1)),
             )?
             .build()?;
-        let mut index = AlgebraIndex::default();
+        let mut index = DependentJoinTracker::default();
         index.build(&input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         println!("{}", new_plan);
@@ -1193,7 +1238,7 @@ mod tests {
                     .and(col("outer_table.b").gt(scalar_subquery(sq_level1))),
             )?
             .build()?;
-        let mut index = AlgebraIndex::default();
+        let mut index = DependentJoinTracker::default();
         index.build(&input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         println!("{}", new_plan);
@@ -1246,7 +1291,7 @@ mod tests {
                     .and(col("outer_table.b").gt(scalar_subquery(sq_level1))),
             )?
             .build()?;
-        let mut index = AlgebraIndex::default();
+        let mut index = DependentJoinTracker::default();
         index.build(&input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         println!("{}", new_plan);
