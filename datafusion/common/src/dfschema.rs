@@ -977,7 +977,7 @@ pub trait ExprSchema: std::fmt::Debug {
     fn data_type(&self, col: &Column) -> Result<&DataType>;
 
     /// Returns the column's optional metadata.
-    #[deprecated(since = "48.0.0", note = "Use ExprSchemable::to_field")]
+    #[deprecated(since = "48.0.0", note = "Use ExprSchemable::metadata")]
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
 
     /// Return the column's datatype and nullability
