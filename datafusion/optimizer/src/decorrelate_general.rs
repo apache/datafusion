@@ -35,6 +35,7 @@ use datafusion_common::tree_node::{
     TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{internal_err, not_impl_err, Column, Result};
+use datafusion_expr::expr::Exists;
 use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{conjunction, split_conjunction};
@@ -234,8 +235,11 @@ fn transform_subquery_to_join_expr(
     expr: &Expr,
     sq: &Subquery,
     replace_columns: &[Expr],
-) -> Result<(bool, Option<Expr>)> {
-    let mut transformed_expr = None;
+) -> Result<(bool, Option<Expr>, Option<Expr>)> {
+    let mut post_join_predicate = None;
+
+    // this is used for exist query
+    let mut join_predicate = None;
     if replace_columns.len() != 1 {
         for expr in replace_columns {
             println!("{}", expr)
@@ -252,7 +256,7 @@ fn transform_subquery_to_join_expr(
             }
             if isq.subquery == *sq {
                 if isq.negated {
-                    transformed_expr = Some(binary_expr(
+                    join_predicate = Some(binary_expr(
                         *isq.expr.clone(),
                         ExprOperator::NotEq,
                         replace_columns[0].clone(),
@@ -260,7 +264,7 @@ fn transform_subquery_to_join_expr(
                     return Ok(true);
                 }
 
-                transformed_expr = Some(binary_expr(
+                join_predicate = Some(binary_expr(
                     *isq.expr.clone(),
                     ExprOperator::NotEq,
                     replace_columns[0].clone(),
@@ -270,31 +274,52 @@ fn transform_subquery_to_join_expr(
             return Ok(false);
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-            let (exist, transformed) =
+            let (exist, transformed, post_join_expr_from_left) =
                 transform_subquery_to_join_expr(left.as_ref(), sq, replace_columns)?;
             if !exist {
-                let (right_exist, transformed_right) =
+                let (right_exist, transformed_right, post_join_expr_from_right) =
                     transform_subquery_to_join_expr(right.as_ref(), sq, replace_columns)?;
                 if !right_exist {
                     return Ok(false);
                 }
-                // TODO: exist query won't have any transformed expr,
-                // meaning this query is not supported `where bool_col = exists(subquery)`
-                transformed_expr = Some(binary_expr(
-                    *left.clone(),
-                    op.clone(),
-                    transformed_right.unwrap(),
-                ));
+                if let Some(transformed_right) = transformed_right {
+                    join_predicate =
+                        Some(binary_expr(*left.clone(), op.clone(), transformed_right));
+                }
+                if let Some(transformed_right) = post_join_expr_from_right {
+                    post_join_predicate =
+                        Some(binary_expr(*left.clone(), op.clone(), transformed_right));
+                }
+
                 return Ok(true);
             }
             // TODO: exist query won't have any transformed expr,
             // meaning this query is not supported `where bool_col = exists(subquery)`
-            transformed_expr = Some(binary_expr(
-                transformed.unwrap(),
-                op.clone(),
-                *right.clone(),
-            ));
+
+            if let Some(transformed) = transformed {
+                join_predicate =
+                    Some(binary_expr(transformed, op.clone(), *right.clone()));
+            }
+            if let Some(transformed) = post_join_expr_from_left {
+                post_join_predicate =
+                    Some(binary_expr(transformed, op.clone(), *right.clone()));
+            }
             return Ok(true);
+        }
+        Expr::Exists(Exists { subquery, negated }) => {
+            if let LogicalPlan::Subquery(inner_sq) = subquery.subquery.as_ref() {
+                if inner_sq.clone() == *sq {
+                    let op = if *negated {
+                        ExprOperator::NotEq
+                    } else {
+                        ExprOperator::Eq
+                    };
+                    join_predicate =
+                        Some(binary_expr(col("mark"), op, replace_columns[0].clone()));
+                    return Ok(true);
+                }
+            }
+            internal_err!("subquery field of Exists is not a subquery")
         }
         Expr::ScalarSubquery(ssq) => {
             unimplemented!(
@@ -309,7 +334,7 @@ fn transform_subquery_to_join_expr(
         }
         _ => Ok(false),
     })?;
-    return Ok((found_sq, transformed_expr));
+    return Ok((found_sq, join_predicate, post_join_predicate));
 }
 
 // impl Default for GeneralDecorrelation {
@@ -598,14 +623,18 @@ impl DependentJoinTracker {
                 for expr in exprs.into_iter() {
                     // exist query may not have any transformed expr
                     // i.e where exists(suquery) => semi join
-                    let (transformed, maybe_transformed_expr) =
+                    let (transformed, maybe_transformed_expr, maybe_post_join_expr) =
                         transform_subquery_to_join_expr(
                             expr,
                             &subquery,
                             &pulled_projection,
                         )?;
-                    if maybe_transformed_expr.is_some() {
-                        join_exprs.push(maybe_transformed_expr.unwrap());
+
+                    if let Some(transformed) = maybe_transformed_expr {
+                        join_exprs.push(transformed)
+                    }
+                    if let Some(post_join_expr) = maybe_post_join_expr {
+                        kept_predicates.push(post_join_expr)
                     }
                     if !transformed {
                         kept_predicates.push(expr.clone())
@@ -626,7 +655,7 @@ impl DependentJoinTracker {
                 builder = builder.join_on(
                     subquery_children,
                     // TODO: join type based on filter condition
-                    JoinType::LeftSemi,
+                    JoinType::LeftMark,
                     join_exprs,
                 )?;
 
