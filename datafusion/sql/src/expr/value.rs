@@ -132,8 +132,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let param_type = param_data_types.get(idx);
         // Data type of the parameter
         debug!(
-            "type of param {} param_data_types[idx]: {:?}",
-            param, param_type
+            "type of param {param} param_data_types[idx]: {param_type:?}"
         );
 
         Ok(Expr::Placeholder(Placeholder::new(

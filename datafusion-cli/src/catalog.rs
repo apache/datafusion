@@ -351,15 +351,7 @@ mod tests {
         );
         let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
         let expected = format!(
-            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
-            test_home_path,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR
+            "{test_home_path}{MAIN_SEPARATOR}Code{MAIN_SEPARATOR}datafusion{MAIN_SEPARATOR}benchmarks{MAIN_SEPARATOR}data{MAIN_SEPARATOR}tpch_sf1{MAIN_SEPARATOR}part{MAIN_SEPARATOR}part-0.parquet"
         );
         let actual = substitute_tilde(input.to_string());
         assert_eq!(actual, expected);

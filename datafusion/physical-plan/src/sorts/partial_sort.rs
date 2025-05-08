@@ -297,8 +297,7 @@ impl ExecutionPlan for PartialSortExec {
         let input = self.input.execute(partition, Arc::clone(&context))?;
 
         trace!(
-            "End PartialSortExec's input.execute for partition: {}",
-            partition
+            "End PartialSortExec's input.execute for partition: {partition}"
         );
 
         // Make sure common prefix length is larger than 0

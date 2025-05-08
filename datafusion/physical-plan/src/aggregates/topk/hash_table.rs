@@ -461,7 +461,7 @@ mod tests {
         let (_heap_idxs, map_idxs): (Vec<_>, Vec<_>) = heap_to_map.into_iter().unzip();
         let ids = unsafe { map.take_all(map_idxs) };
         assert_eq!(
-            format!("{:?}", ids),
+            format!("{ids:?}"),
             r#"[Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]"#
         );
         assert_eq!(map.len(), 0, "Map should have been cleared!");

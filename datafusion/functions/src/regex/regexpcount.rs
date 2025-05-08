@@ -577,14 +577,13 @@ fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> 
                     "regexp_count() does not support global flag".to_string(),
                 ));
             }
-            format!("(?{}){}", flags, regex)
+            format!("(?{flags}){regex}")
         }
     };
 
     Regex::new(&pattern).map_err(|_| {
         ArrowError::ComputeError(format!(
-            "Regular expression did not compile: {}",
-            pattern
+            "Regular expression did not compile: {pattern}"
         ))
     })
 }
