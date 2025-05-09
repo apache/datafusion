@@ -395,8 +395,8 @@ impl EquivalenceGroup {
 
     /// Adds the equality `left` = `right` to this equivalence group. New
     /// equality conditions often arise after steps like `Filter(a = b)`,
-    /// `Alias(a, a as b)` etc. Returns whether the given equality was
-    /// material (i.e. it was not already known).
+    /// `Alias(a, a as b)` etc. Returns whether the given equality defines
+    /// a new equivalence class.
     pub fn add_equal_conditions(
         &mut self,
         left: Arc<dyn PhysicalExpr>,
@@ -441,9 +441,10 @@ impl EquivalenceGroup {
                 let class = EquivalenceClass::new([left, right]);
                 Self::update_lookup_table(&mut self.map, &class, self.classes.len());
                 self.classes.push(class);
+                return true;
             }
         }
-        true
+        false
     }
 
     /// Removes the equivalence class at the given index from this group.
@@ -505,13 +506,16 @@ impl EquivalenceGroup {
     }
 
     /// Extends this equivalence group with the `other` equivalence group.
-    pub fn extend(&mut self, other: Self) {
+    /// Returns whether the extension resulted in new equivalence classes.
+    pub fn extend(&mut self, other: Self) -> bool {
+        let n_classes = self.classes.len();
         for (idx, cls) in other.classes.iter().enumerate() {
             // Update the lookup table for the new class:
             Self::update_lookup_table(&mut self.map, cls, idx);
         }
         self.classes.extend(other.classes);
         self.remove_redundant_entries();
+        self.classes.len() > n_classes
     }
 
     /// Normalizes the given physical expression according to this group. The

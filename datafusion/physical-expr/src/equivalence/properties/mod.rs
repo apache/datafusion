@@ -232,7 +232,7 @@ impl EquivalenceProperties {
         &mut self,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) {
-        // TODO: Normalize `orderings` before adding:
+        // Normalize given orderings before adding:
         self.oeq_class.add_orderings(
             orderings
                 .into_iter()
@@ -248,14 +248,14 @@ impl EquivalenceProperties {
     /// Incorporates the given equivalence group to into the existing
     /// equivalence group within.
     pub fn add_equivalence_group(&mut self, other_eq_group: EquivalenceGroup) {
-        self.eq_group.extend(other_eq_group);
-        // TODO: Renormalize the orderings after adding new equivalences:
-        let oeq_class = mem::take(&mut self.oeq_class);
-        self.oeq_class = OrderingEquivalenceClass::new(
-            oeq_class
+        if self.eq_group.extend(other_eq_group) {
+            // Renormalize the orderings after adding new equivalence classes:
+            let oeq_class = mem::take(&mut self.oeq_class);
+            let orderings = oeq_class
                 .into_iter()
-                .map(|o| self.eq_group.normalize_sort_exprs(o)),
-        );
+                .map(|o| self.eq_group.normalize_sort_exprs(o));
+            self.oeq_class = OrderingEquivalenceClass::new(orderings);
+        }
     }
 
     /// Adds a new equality condition into the existing equivalence group.
@@ -268,13 +268,12 @@ impl EquivalenceProperties {
     ) -> Result<()> {
         // Add equal expressions to the state:
         if self.eq_group.add_equal_conditions(Arc::clone(&left), right) {
-            // TODO: Renormalize the orderings after adding the new equality:
+            // Renormalize the orderings after adding a new equivalence class:
             let oeq_class = mem::take(&mut self.oeq_class);
-            self.oeq_class = OrderingEquivalenceClass::new(
-                oeq_class
-                    .into_iter()
-                    .map(|o| self.eq_group.normalize_sort_exprs(o)),
-            );
+            let orderings = oeq_class
+                .into_iter()
+                .map(|o| self.eq_group.normalize_sort_exprs(o));
+            self.oeq_class = OrderingEquivalenceClass::new(orderings);
             // Discover any new orderings:
             self.discover_new_orderings(left)?;
         }
@@ -287,13 +286,15 @@ impl EquivalenceProperties {
         for constant in constants {
             self.eq_group.add_constant(constant);
         }
-        // TODO: Renormalize the orderings after adding new constants:
+        // Renormalize the orderings after adding new constants by removing
+        // the constants from existing orderings:
         let oeq_class = mem::take(&mut self.oeq_class);
-        self.oeq_class = OrderingEquivalenceClass::new(
-            oeq_class
-                .into_iter()
-                .map(|o| self.eq_group.normalize_sort_exprs(o)),
-        );
+        let orderings = oeq_class.into_iter().map(|ordering| {
+            ordering.into_iter().filter(|sort_expr| {
+                self.eq_group.is_expr_constant(&sort_expr.expr).is_none()
+            })
+        });
+        self.oeq_class = OrderingEquivalenceClass::new(orderings);
         // Discover any new orderings based on the constants:
         for ordering in self.oeq_class.clone() {
             let leading = Arc::clone(&ordering[0].expr);
