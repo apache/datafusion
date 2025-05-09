@@ -4615,7 +4615,7 @@ fn test_prepare_statement_infer_types_from_join() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" [Int32] 
+    Prepare: "my_plan" [] 
       Projection: person.id, orders.order_id
         Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
           TableScan: person
@@ -4626,20 +4626,6 @@ fn test_prepare_statement_infer_types_from_join() {
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
     assert_eq!(actual_types, expected_types);
-
-    // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
-    let plan_with_params = plan.with_param_values(param_values).unwrap();
-
-    assert_snapshot!(
-        plan_with_params,
-        @r"
-    Projection: person.id, orders.order_id
-      Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
-        TableScan: person
-        TableScan: orders
-    "
-    );
 }
 
 #[test]
@@ -4649,7 +4635,7 @@ fn test_prepare_statement_infer_types_from_predicate() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" [Int32] 
+    Prepare: "my_plan" [] 
       Projection: person.id, person.age
         Filter: person.age = $1
           TableScan: person
@@ -4659,19 +4645,6 @@ fn test_prepare_statement_infer_types_from_predicate() {
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
     assert_eq!(actual_types, expected_types);
-
-    // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
-    let plan_with_params = plan.with_param_values(param_values).unwrap();
-
-    assert_snapshot!(
-        plan_with_params,
-        @r"
-    Projection: person.id, person.age
-      Filter: person.age = Int32(10)
-        TableScan: person
-    "
-    );
 }
 
 #[test]
@@ -4682,7 +4655,7 @@ fn test_prepare_statement_infer_types_from_between_predicate() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" [Int32, Int32] 
+    Prepare: "my_plan" [] 
       Projection: person.id, person.age
         Filter: person.age BETWEEN $1 AND $2
           TableScan: person
@@ -4695,21 +4668,6 @@ fn test_prepare_statement_infer_types_from_between_predicate() {
         ("$2".to_string(), Some(DataType::Int32)),
     ]);
     assert_eq!(actual_types, expected_types);
-
-    // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))];
-    let plan_with_params = plan.with_param_values(param_values);
-    match plan_with_params {
-        Ok(plan_p) => assert_snapshot!(
-            plan_p,
-            @r"
-        Projection: person.id, person.age
-          Filter: person.age BETWEEN Int32(10) AND Int32(30)
-            TableScan: person
-        "
-        ),
-        Err(err) => print!("error: {:?}", err),
-    };
 }
 
 #[test]
@@ -4720,7 +4678,7 @@ fn test_prepare_statement_infer_types_subquery() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" [UInt32] 
+    Prepare: "my_plan" [] 
       Projection: person.id, person.age
         Filter: person.age = (<subquery>)
           Subquery:
@@ -4735,24 +4693,6 @@ fn test_prepare_statement_infer_types_subquery() {
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([("$1".to_string(), Some(DataType::UInt32))]);
     assert_eq!(actual_types, expected_types);
-
-    // replace params with values
-    let param_values = vec![ScalarValue::UInt32(Some(10))];
-    let plan_with_params = plan.with_param_values(param_values).unwrap();
-
-    assert_snapshot!(
-        plan_with_params,
-        @r"
-    Projection: person.id, person.age
-      Filter: person.age = (<subquery>)
-        Subquery:
-          Projection: max(person.age)
-            Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
-              Filter: person.id = UInt32(10)
-                TableScan: person
-        TableScan: person
-        "
-    );
 }
 
 #[test]
@@ -4763,7 +4703,7 @@ fn test_prepare_statement_update_infer() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" [Int32, UInt32] 
+    Prepare: "my_plan" [] 
       Dml: op=[Update] table=[person]
         Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
           Filter: person.id = $2
@@ -4777,20 +4717,6 @@ fn test_prepare_statement_update_infer() {
         ("$2".to_string(), Some(DataType::UInt32)),
     ]);
     assert_eq!(actual_types, expected_types);
-
-    // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
-    let plan_with_params = plan.with_param_values(param_values).unwrap();
-
-    assert_snapshot!(
-        plan_with_params,
-        @r"
-    Dml: op=[Update] table=[person]
-      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-        Filter: person.id = UInt32(1)
-          TableScan: person
-        "
-    );
 }
 
 #[test]
@@ -4800,7 +4726,7 @@ fn test_prepare_statement_insert_infer() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" [UInt32, Utf8, Utf8] 
+    Prepare: "my_plan" [] 
       Dml: op=[Insert Into] table=[person]
         Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
           Values: ($1, $2, $3)
@@ -4814,22 +4740,6 @@ fn test_prepare_statement_insert_infer() {
         ("$3".to_string(), Some(DataType::Utf8)),
     ]);
     assert_eq!(actual_types, expected_types);
-
-    // replace params with values
-    let param_values = vec![
-        ScalarValue::UInt32(Some(1)),
-        ScalarValue::from("Alan"),
-        ScalarValue::from("Turing"),
-    ];
-    let plan_with_params = plan.with_param_values(param_values).unwrap();
-    assert_snapshot!(
-        plan_with_params,
-        @r#"
-    Dml: op=[Insert Into] table=[person]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
-        Values: (UInt32(1) AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
-    "#
-    );
 }
 
 #[test]

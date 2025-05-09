@@ -711,24 +711,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &mut planner_context,
                 )?;
 
-                //Get inferred data_types from the plan if it is empty in the prepare statement
-                let data_types = if data_types.is_empty() {
-                    true => {
-                        let mut data_types: Vec<DataType> = plan
-                            .get_parameter_types()?
-                            .iter()
-                            .filter_map(|d| match d {
-                                (_, Some(v)) => Some(v.clone()),
-                                _ => None,
-                            })
-                            .collect::<Vec<DataType>>();
-                        data_types.sort();
-                        planner_context.with_prepare_param_data_types(data_types.clone());
-                        data_types
-                    }
-                    false => data_types,
-                };
-
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
                     data_types,
