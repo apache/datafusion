@@ -496,6 +496,8 @@ impl SessionState {
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
             map_varchar_to_utf8view: sql_parser_options.map_varchar_to_utf8view,
             collect_spans: sql_parser_options.collect_spans,
+            enable_eliminate_subquery_sort: sql_parser_options
+                .enable_eliminate_subquery_sort,
         }
     }
 
