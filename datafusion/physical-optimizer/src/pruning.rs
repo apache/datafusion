@@ -984,9 +984,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     let mut options = RecordBatchOptions::default();
     options.row_count = Some(statistics.num_containers());
 
-    trace!(
-        "Creating statistics batch for {required_columns:#?} with {arrays:#?}"
-    );
+    trace!("Creating statistics batch for {required_columns:#?} with {arrays:#?}");
 
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
         plan_datafusion_err!("Can not create statistics record batch: {err}")
@@ -2824,7 +2822,7 @@ mod tests {
             test_build_predicate_expression(&expr, &schema, &mut required_columns);
         assert_eq!(predicate_expr.to_string(), expected_expr);
         println!("required_columns: {required_columns:#?}"); // for debugging assertions below
-                                                               // c1 < 1 should add c1_min
+                                                             // c1 < 1 should add c1_min
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[0],

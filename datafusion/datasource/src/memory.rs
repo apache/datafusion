@@ -404,9 +404,7 @@ impl DataSource for MemorySourceConfig {
                 let output_ordering = self
                     .sort_information
                     .first()
-                    .map(|output_ordering| {
-                        format!(", output_ordering={output_ordering}")
-                    })
+                    .map(|output_ordering| format!(", output_ordering={output_ordering}"))
                     .unwrap_or_default();
 
                 let eq_properties = self.eq_properties();
@@ -1360,9 +1358,7 @@ mod tests {
         partition_cnt: Option<usize>,
     ) {
         let should_exist = if let Some(partition_cnt) = partition_cnt {
-            format!(
-                "new datasource should exist and have {partition_cnt:?} partitions"
-            )
+            format!("new datasource should exist and have {partition_cnt:?} partitions")
         } else {
             "new datasource should not exist".into()
         };

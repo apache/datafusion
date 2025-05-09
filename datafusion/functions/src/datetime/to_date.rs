@@ -481,9 +481,7 @@ mod tests {
             invoke_to_date_with_args(vec![ColumnarValue::Scalar(date_scalar)], 1);
 
         if let Ok(ColumnarValue::Scalar(ScalarValue::Date32(_))) = to_date_result {
-            panic!(
-                "Conversion of {date_str} succeeded, but should have failed, "
-            );
+            panic!("Conversion of {date_str} succeeded, but should have failed, ");
         }
     }
 }

@@ -2498,9 +2498,7 @@ mod tests {
                     avg_files_per_partition
                 );
 
-                println!(
-                    "Distribution - min files: {min_size}, max files: {max_size}"
-                );
+                println!("Distribution - min files: {min_size}, max files: {max_size}");
             }
         }
 

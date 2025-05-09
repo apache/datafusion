@@ -87,9 +87,7 @@ impl DisplayAs for TestMemoryExec {
                 let output_ordering = self
                     .sort_information
                     .first()
-                    .map(|output_ordering| {
-                        format!(", output_ordering={output_ordering}")
-                    })
+                    .map(|output_ordering| format!(", output_ordering={output_ordering}"))
                     .unwrap_or_default();
 
                 let eq_properties = self.eq_properties();

@@ -151,20 +151,17 @@ fn criterion_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
-        c.bench_function(
-            &format!("lower_the_first_value_is_nonascii: {size}"),
-            |b| {
-                b.iter(|| {
-                    let args_cloned = args.clone();
-                    black_box(lower.invoke_with_args(ScalarFunctionArgs {
-                        args: args_cloned,
-                        arg_fields: arg_fields.clone(),
-                        number_rows: size,
-                        return_field: &Field::new("f", DataType::Utf8, true),
-                    }))
-                })
-            },
-        );
+        c.bench_function(&format!("lower_the_first_value_is_nonascii: {size}"), |b| {
+            b.iter(|| {
+                let args_cloned = args.clone();
+                black_box(lower.invoke_with_args(ScalarFunctionArgs {
+                    args: args_cloned,
+                    arg_fields: arg_fields.clone(),
+                    number_rows: size,
+                    return_field: &Field::new("f", DataType::Utf8, true),
+                }))
+            })
+        });
 
         let args = create_args3(size);
         let arg_fields_owned = args

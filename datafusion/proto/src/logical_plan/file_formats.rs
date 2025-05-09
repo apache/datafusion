@@ -205,9 +205,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = CsvOptionsProto::decode(buf).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to decode CsvOptionsProto: {e:?}"
-            ))
+            DataFusionError::Execution(format!("Failed to decode CsvOptionsProto: {e:?}"))
         })?;
         let options: CsvOptions = (&proto).into();
         Ok(Arc::new(CsvFormatFactory {

@@ -267,9 +267,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!(
-            "Start SortPreservingMergeExec::execute for partition: {partition}"
-        );
+        trace!("Start SortPreservingMergeExec::execute for partition: {partition}");
         if 0 != partition {
             return internal_err!(
                 "SortPreservingMergeExec invalid partition {partition}"
