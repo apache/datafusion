@@ -118,7 +118,9 @@ pub enum DataFusionError {
     /// [`JoinError`] during execution of the query.
     ///
     /// This error can't occur for unjoined tasks, such as execution shutdown.
-    ExecutionJoin(JoinError),
+    ///
+    /// 2nd argument is for optional backtrace
+    ExecutionJoin(JoinError, Option<String>),
     /// Error when resources (such as memory of scratch disk space) are exhausted.
     ///
     /// This error is thrown when a consumer cannot acquire additional memory
@@ -127,7 +129,9 @@ pub enum DataFusionError {
     /// Errors originating from outside DataFusion's core codebase.
     ///
     /// For example, a custom S3Error from the crate datafusion-objectstore-s3
-    External(GenericError),
+    ///
+    /// 2nd argument is for optional backtrace
+    External(GenericError, Option<String>),
     /// Error with additional context
     Context(String, Box<DataFusionError>),
     /// Errors from either mapping LogicalPlans to/from Substrait plans
@@ -280,11 +284,17 @@ impl From<ArrowError> for DataFusionError {
     }
 }
 
+impl From<JoinError> for DataFusionError {
+    fn from(e: JoinError) -> Self {
+        DataFusionError::ExecutionJoin(e, None)
+    }
+}
+
 impl From<DataFusionError> for ArrowError {
     fn from(e: DataFusionError) -> Self {
         match e {
             DataFusionError::ArrowError(e, _) => e,
-            DataFusionError::External(e) => ArrowError::ExternalError(e),
+            DataFusionError::External(e, _) => ArrowError::ExternalError(e),
             other => ArrowError::ExternalError(Box::new(other)),
         }
     }
@@ -345,7 +355,7 @@ impl From<GenericError> for DataFusionError {
                 unreachable!()
             }
         } else {
-            DataFusionError::External(err)
+            DataFusionError::External(err, None)
         }
     }
 }
@@ -376,9 +386,9 @@ impl Error for DataFusionError {
             DataFusionError::Plan(_) => None,
             DataFusionError::SchemaError(e, _) => Some(e),
             DataFusionError::Execution(_) => None,
-            DataFusionError::ExecutionJoin(e) => Some(e),
+            DataFusionError::ExecutionJoin(e, _) => Some(e),
             DataFusionError::ResourcesExhausted(_) => None,
-            DataFusionError::External(e) => Some(e.as_ref()),
+            DataFusionError::External(e, _) => Some(e.as_ref()),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
             DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
@@ -508,11 +518,11 @@ impl DataFusionError {
             }
             DataFusionError::SchemaError(_, _) => "Schema error: ",
             DataFusionError::Execution(_) => "Execution error: ",
-            DataFusionError::ExecutionJoin(_) => "ExecutionJoin error: ",
+            DataFusionError::ExecutionJoin(_, _) => "ExecutionJoin error: ",
             DataFusionError::ResourcesExhausted(_) => {
                 "Resources exhausted: "
             }
-            DataFusionError::External(_) => "External error: ",
+            DataFusionError::External(_, _) => "External error: ",
             DataFusionError::Context(_, _) => "",
             DataFusionError::Substrait(_) => "Substrait error: ",
             DataFusionError::Diagnostic(_, _) => "",
@@ -552,9 +562,15 @@ impl DataFusionError {
                 Cow::Owned(format!("{desc}{backtrace}"))
             }
             DataFusionError::Execution(ref desc) => Cow::Owned(desc.to_string()),
-            DataFusionError::ExecutionJoin(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::ExecutionJoin(ref desc, ref backtrace) => {
+                let backtrace = backtrace.clone().unwrap_or_else(|| "".to_owned());
+                Cow::Owned(format!("{desc}{backtrace}"))
+            }
             DataFusionError::ResourcesExhausted(ref desc) => Cow::Owned(desc.to_string()),
-            DataFusionError::External(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::External(ref desc, ref backtrace) => {
+                let backtrace = backtrace.clone().unwrap_or_else(|| "".to_owned());
+                Cow::Owned(format!("{desc}{backtrace}"))
+            }
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Context(ref desc, ref err) => {
@@ -1076,16 +1092,20 @@ mod test {
         );
 
         do_root_test(
-            DataFusionError::External(Box::new(DataFusionError::ResourcesExhausted(
-                "foo".to_string(),
-            ))),
+            DataFusionError::External(
+                Box::new(DataFusionError::ResourcesExhausted("foo".to_string())),
+                None,
+            ),
             DataFusionError::ResourcesExhausted("foo".to_string()),
         );
 
         do_root_test(
-            DataFusionError::External(Box::new(ArrowError::ExternalError(Box::new(
-                DataFusionError::ResourcesExhausted("foo".to_string()),
-            )))),
+            DataFusionError::External(
+                Box::new(ArrowError::ExternalError(Box::new(
+                    DataFusionError::ResourcesExhausted("foo".to_string()),
+                ))),
+                None,
+            ),
             DataFusionError::ResourcesExhausted("foo".to_string()),
         );
 
@@ -1100,16 +1120,22 @@ mod test {
         );
 
         do_root_test(
-            DataFusionError::External(Box::new(Arc::new(
-                DataFusionError::ResourcesExhausted("foo".to_string()),
-            ))),
+            DataFusionError::External(
+                Box::new(Arc::new(DataFusionError::ResourcesExhausted(
+                    "foo".to_string(),
+                ))),
+                None,
+            ),
             DataFusionError::ResourcesExhausted("foo".to_string()),
         );
 
         do_root_test(
-            DataFusionError::External(Box::new(Arc::new(ArrowError::ExternalError(
-                Box::new(DataFusionError::ResourcesExhausted("foo".to_string())),
-            )))),
+            DataFusionError::External(
+                Box::new(Arc::new(ArrowError::ExternalError(Box::new(
+                    DataFusionError::ResourcesExhausted("foo".to_string()),
+                )))),
+                None,
+            ),
             DataFusionError::ResourcesExhausted("foo".to_string()),
         );
     }
