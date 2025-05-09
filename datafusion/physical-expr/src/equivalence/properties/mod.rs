@@ -890,7 +890,7 @@ impl EquivalenceProperties {
                 let normalized_source = self.eq_group.normalize_expr(Arc::clone(source));
                 (normalized_source, target.clone())
             })
-            .collect::<ProjectionMapping>()
+            .collect()
     }
 
     /// Computes projected orderings based on a given projection mapping.
@@ -909,12 +909,12 @@ impl EquivalenceProperties {
     ///
     /// # Returns
     ///
-    /// A vector of `LexOrdering` containing all valid orderings after projection.
+    /// A vector of all valid (un-normalized) orderings after projection.
     fn projected_orderings(
         &self,
         mapping: &ProjectionMapping,
         mut oeq_class: OrderingEquivalenceClass,
-    ) -> OrderingEquivalenceClass {
+    ) -> Vec<LexOrdering> {
         // Normalize source expressions in the mapping:
         let mapping = self.normalized_mapping(mapping);
         // Get dependency map for existing orderings:
@@ -923,14 +923,13 @@ impl EquivalenceProperties {
         let orderings = mapping.iter().flat_map(|(source, targets)| {
             referred_dependencies(&dependency_map, source)
                 .into_iter()
-                .filter_map(|relevant_deps| {
-                    if let Ok(SortProperties::Ordered(options)) =
-                        get_expr_properties(source, &relevant_deps, &self.schema)
-                            .map(|prop| prop.sort_properties)
-                    {
-                        Some((options, relevant_deps))
+                .filter_map(|deps| {
+                    let ep = get_expr_properties(source, &deps, &self.schema);
+                    let sort_properties = ep.map(|prop| prop.sort_properties);
+                    if let Ok(SortProperties::Ordered(options)) = sort_properties {
+                        Some((options, deps))
                     } else {
-                        // Do not consider unordered cases
+                        // Do not consider unordered cases.
                         None
                     }
                 })
@@ -981,29 +980,24 @@ impl EquivalenceProperties {
             prefixes
         });
 
-        // Simplify each ordering by removing redundant sections:
-        orderings
-            .chain(projected_orderings)
-            .map(|lex_ordering| lex_ordering.collapse())
-            .collect::<Vec<_>>()
-            .into()
+        orderings.chain(projected_orderings).collect()
     }
 
     /// Projects constraints according to the given projection mapping.
     ///
-    /// This function takes a projection mapping and extracts the column indices of the target columns.
-    /// It then projects the constraints to only include relationships between
-    /// columns that exist in the projected output.
+    /// This function takes a projection mapping and extracts column indices of
+    /// target columns. It then projects the constraints to only include
+    /// relationships between columns that exist in the projected output.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
-    /// * `mapping` - A reference to `ProjectionMapping` that defines how expressions are mapped
-    ///   in the projection operation
+    /// * `mapping` - A reference to the `ProjectionMapping` that defines the
+    ///   projection operation.
     ///
     /// # Returns
     ///
-    /// Returns a new `Constraints` object containing only the constraints
-    /// that are valid for the projected columns.
+    /// Returns an optional `Constraints` object containing only the constraints
+    /// that are valid for the projected columns (if any exists).
     fn projected_constraints(&self, mapping: &ProjectionMapping) -> Option<Constraints> {
         let indices = mapping
             .iter()
@@ -1019,22 +1013,17 @@ impl EquivalenceProperties {
     /// Projects the equivalences within according to `mapping` and
     /// `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
-        let mut proj_eqp = Self {
-            eq_group: self.eq_group.project(mapping),
-            oeq_class: self.projected_orderings(mapping, self.oeq_class.clone()),
+        let eq_group = self.eq_group.project(mapping);
+        let orderings = self
+            .projected_orderings(mapping, self.oeq_class.clone())
+            .into_iter()
+            .map(|o| eq_group.normalize_sort_exprs(o));
+        Self {
+            oeq_class: OrderingEquivalenceClass::new(orderings),
             constraints: self.projected_constraints(mapping).unwrap_or_default(),
             schema: output_schema,
-        };
-        // TODO: Remove renormalization after fixing `projected_orderings` to
-        //       take the new eq. group as an argument and emit normalized
-        //       orderings.
-        proj_eqp.oeq_class = OrderingEquivalenceClass::new(
-            proj_eqp
-                .oeq_class
-                .into_iter()
-                .map(|o| proj_eqp.eq_group.normalize_sort_exprs(o)),
-        );
-        proj_eqp
+            eq_group,
+        }
     }
 
     /// Returns the longest (potentially partial) permutation satisfying the
