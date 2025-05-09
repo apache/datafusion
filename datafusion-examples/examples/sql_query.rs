@@ -18,7 +18,9 @@
 use datafusion::arrow::array::{UInt64Array, UInt8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::{assert_batches_eq, exec_datafusion_err};
+use datafusion::common::{
+    assert_batches_eq, exec_datafusion_err, external_datafusion_err,
+};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::MemTable;
@@ -168,8 +170,7 @@ async fn query_parquet() -> Result<()> {
 
     let local_fs = Arc::new(LocalFileSystem::default());
 
-    let u = url::Url::parse("file://./")
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let u = url::Url::parse("file://./").map_err(|e| external_datafusion_err!(e))?;
     ctx.register_object_store(&u, local_fs);
 
     // Register a listing table - this will use all files in the directory as data sources

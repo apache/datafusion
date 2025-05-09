@@ -17,7 +17,7 @@
 
 use crate::tests::ForeignLibraryModuleRef;
 use abi_stable::library::RootModule;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::common::{external_datafusion_err, DataFusionError, Result};
 use std::path::Path;
 
 /// Compute the path to the library. It would be preferable to simply use
@@ -69,12 +69,12 @@ pub fn get_module() -> Result<ForeignLibraryModuleRef> {
     // let target: &std::path::Path = "../../../../target/".as_ref();
     let library_path =
         compute_library_path::<ForeignLibraryModuleRef>(target_dir.as_path())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .map_err(|e| external_datafusion_err!(e))?
             .join("deps");
 
     // Load the module
     let module = ForeignLibraryModuleRef::load_from_directory(&library_path)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        .map_err(|e| external_datafusion_err!(e))?;
 
     assert_eq!(
         module
