@@ -476,12 +476,9 @@ impl EquivalenceGroup {
     /// Removes redundant entries from this group.
     fn remove_redundant_entries(&mut self) {
         // First, remove trivial equivalence classes:
-        let mut idx = 0;
-        while idx < self.classes.len() {
+        for idx in (0..self.classes.len()).rev() {
             if self.classes[idx].is_trivial() {
                 self.remove_class_at_idx(idx);
-            } else {
-                idx += 1;
             }
         }
         // Then, unify/bridge groups that have common expressions:
@@ -494,20 +491,14 @@ impl EquivalenceGroup {
     /// equal and belong to one class. This utility converts merges such classes.
     fn bridge_classes(&mut self) {
         let mut idx = 0;
-        while idx < self.classes.len() {
-            let mut next_idx = idx + 1;
-            let start_size = self.classes[idx].len();
-            while next_idx < self.classes.len() {
-                if self.classes[idx].contains_any(&self.classes[next_idx]) {
-                    let extension = self.remove_class_at_idx(next_idx);
+        'scan: while idx < self.classes.len() {
+            for other_idx in (idx + 1..self.classes.len()).rev() {
+                if self.classes[idx].contains_any(&self.classes[other_idx]) {
+                    let extension = self.remove_class_at_idx(other_idx);
                     Self::update_lookup_table(&mut self.map, &extension, idx);
                     self.classes[idx].extend(extension);
-                } else {
-                    next_idx += 1;
+                    continue 'scan;
                 }
-            }
-            if self.classes[idx].len() > start_size {
-                continue;
             }
             idx += 1;
         }
