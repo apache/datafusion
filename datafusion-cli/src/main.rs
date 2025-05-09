@@ -38,7 +38,7 @@ use datafusion_cli::{
 };
 
 use clap::Parser;
-use datafusion::common::config_err;
+use datafusion::common::{config_err, external_datafusion_err};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use mimalloc::MiMalloc;
@@ -233,7 +233,7 @@ async fn main_inner() -> Result<()> {
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
         return exec::exec_from_repl(&ctx, &mut print_options)
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)));
+            .map_err(|e| external_datafusion_err!(e));
     }
 
     if !files.is_empty() {

@@ -38,7 +38,7 @@ use crate::test_util::{aggr_test_schema, arrow_test_data};
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::DataFusionError;
+use datafusion_common::{external_datafusion_err, DataFusionError};
 use datafusion_datasource::source::DataSourceExec;
 
 #[cfg(feature = "compression")]
@@ -135,7 +135,7 @@ pub fn partitioned_file_groups(
             #[cfg(feature = "compression")]
             FileCompressionType::ZSTD => {
                 let encoder = ZstdEncoder::new(file, 0)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .map_err(|e| external_datafusion_err!(e))?
                     .auto_finish();
                 Box::new(encoder)
             }

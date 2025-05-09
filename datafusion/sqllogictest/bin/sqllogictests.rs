@@ -18,7 +18,9 @@
 use clap::Parser;
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
-use datafusion::common::{exec_err, DataFusionError, Result};
+use datafusion::common::{
+    exec_err, external_datafusion_err, external_err, DataFusionError, Result,
+};
 use datafusion_sqllogictest::{
     df_value_validator, read_dir_recursive, setup_scratch_dir, value_normalizer,
     DataFusion, TestContext,
@@ -175,7 +177,7 @@ async fn run_tests() -> Result<()> {
             // Filter out any Ok() leaving only the DataFusionErrors
             futures::stream::iter(match result {
                 // Tokio panic error
-                Err(e) => Some(DataFusionError::External(Box::new(e))),
+                Err(e) => Some(external_datafusion_err!(e)),
                 Ok(thread_result) => thread_result.err(),
             })
         })
@@ -245,8 +247,7 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     mut runner: sqllogictest::Runner<D, M>,
 ) -> Result<()> {
     let path = path.canonicalize()?;
-    let records =
-        parse_file(&path).map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let records = parse_file(&path).map_err(|e| external_datafusion_err!(e))?;
     let mut errs = vec![];
     for record in records.into_iter() {
         if let Record::Halt { .. } = record {
@@ -270,7 +271,7 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
             }
             msg.push_str(&format!("{}. {err}\n\n", i + 1));
         }
-        return Err(DataFusionError::External(msg.into()));
+        return external_err!(msg.into());
     }
 
     Ok(())
