@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{external_datafusion_err, DataFusionError, Result};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -112,7 +112,7 @@ impl ListingTableUrl {
             Ok(url) => Self::try_new(url, None),
             #[cfg(not(target_arch = "wasm32"))]
             Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
-            Err(e) => Err(DataFusionError::External(Box::new(e))),
+            Err(e) => Err(external_datafusion_err!(e)),
         }
     }
 
@@ -121,16 +121,15 @@ impl ListingTableUrl {
     fn parse_path(s: &str) -> Result<Self> {
         let (path, glob) = match split_glob_expression(s) {
             Some((prefix, glob)) => {
-                let glob = Pattern::new(glob)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let glob = Pattern::new(glob).map_err(|e| external_datafusion_err!(e))?;
                 (prefix, Some(glob))
             }
             None => (s, None),
         };
 
         let url = url_from_filesystem_path(path).ok_or_else(|| {
-            DataFusionError::External(
-                format!("Failed to convert path to URL: {path}").into(),
+            external_datafusion_err!(
+                format!("Failed to convert path to URL: {path}").into()
             )
         })?;
 

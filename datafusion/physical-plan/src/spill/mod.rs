@@ -33,7 +33,9 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::{exec_datafusion_err, DataFusionError, HashSet, Result};
+use datafusion_common::{
+    exec_datafusion_err, external_err, DataFusionError, HashSet, Result,
+};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::RecordBatchStream;
@@ -114,7 +116,7 @@ impl SpillReaderStream {
 
             SpillReaderStreamState::ReadInProgress(task) => {
                 let result = futures::ready!(task.poll_unpin(cx))
-                    .unwrap_or_else(|err| Err(DataFusionError::External(Box::new(err))));
+                    .unwrap_or_else(|err| external_err!(err));
 
                 match result {
                     Ok((reader, batch)) => {

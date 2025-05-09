@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{external_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{lit, BinaryExpr, Expr, Like, Operator};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
@@ -79,10 +79,7 @@ pub fn simplify_regex_expr(
             }
             Err(e) => {
                 // error out early since the execution may fail anyways
-                return Err(DataFusionError::Context(
-                    "Invalid regex".to_owned(),
-                    Box::new(DataFusionError::External(Box::new(e))),
-                ));
+                return Err(external_datafusion_err!(e).context("Invalid regex"));
             }
         }
     }

@@ -935,7 +935,7 @@ macro_rules! external_datafusion_err {
 #[macro_export]
 macro_rules! external_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = let err = datafusion_common::external_datafusion_err!($ERR);
+        let err = datafusion_common::external_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?

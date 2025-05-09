@@ -20,7 +20,7 @@
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
-use crate::{DataFusionError, Result};
+use crate::{external_datafusion_err, DataFusionError, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
@@ -1186,7 +1186,7 @@ where
                 input,
                 std::any::type_name::<T>()
             ),
-            Box::new(DataFusionError::External(Box::new(e))),
+            Box::new(external_datafusion_err!(e)),
         )
     })
 }

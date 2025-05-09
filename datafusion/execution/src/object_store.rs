@@ -20,7 +20,7 @@
 //! and query data inside these systems.
 
 use dashmap::DashMap;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, external_datafusion_err, DataFusionError, Result};
 #[cfg(not(target_arch = "wasm32"))]
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
@@ -55,7 +55,7 @@ impl ObjectStoreUrl {
     /// ```
     pub fn parse(s: impl AsRef<str>) -> Result<Self> {
         let mut parsed =
-            Url::parse(s.as_ref()).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Url::parse(s.as_ref()).map_err(|e| external_datafusion_err!(e))?;
 
         let remaining = &parsed[url::Position::BeforePath..];
         if !remaining.is_empty() && remaining != "/" {

@@ -26,6 +26,8 @@ use arrow::array::{ArrayAccessor, StringViewArray};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::exec_err;
+use datafusion_common::external_datafusion_err;
+use datafusion_common::external_err;
 use datafusion_common::plan_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{
@@ -278,7 +280,7 @@ where
                                         Ok(patterns.get(pattern).unwrap())
                                     }
                                     Err(err) => {
-                                        Err(DataFusionError::External(Box::new(err)))
+                                        external_err!(err)
                                     }
                                 },
                             };
@@ -344,7 +346,7 @@ where
                                         Ok(patterns.get(&pattern).unwrap())
                                     }
                                     Err(err) => {
-                                        Err(DataFusionError::External(Box::new(err)))
+                                        external_err!(err)
                                     }
                                 },
                             };
@@ -453,8 +455,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         None => (pattern.to_string(), 1),
     };
 
-    let re =
-        Regex::new(&pattern).map_err(|err| DataFusionError::External(Box::new(err)))?;
+    let re = Regex::new(&pattern).map_err(|err| external_datafusion_err!(err))?;
 
     // Replaces the posix groups in the replacement string
     // with rust ones.

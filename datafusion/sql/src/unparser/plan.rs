@@ -39,7 +39,7 @@ use crate::unparser::extension_unparser::{
 use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_exprs};
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
-    internal_err, not_impl_err,
+    external_datafusion_err, internal_err, not_impl_err,
     tree_node::{TransformedResult, TreeNode},
     Column, DataFusionError, Result, ScalarValue, TableReference,
 };
@@ -1382,7 +1382,7 @@ impl Unparser<'_> {
 
 impl From<BuilderError> for DataFusionError {
     fn from(e: BuilderError) -> Self {
-        DataFusionError::External(Box::new(e))
+        external_datafusion_err!(e)
     }
 }
 
