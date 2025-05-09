@@ -125,9 +125,14 @@ impl OptimizerRule for PushDownLimit {
                 })),
 
             LogicalPlan::Sort(mut sort) => {
+                let original_sort_fetch = sort.fetch;
                 let new_fetch = {
                     let sort_fetch = skip + fetch;
-                    Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
+                    Some(
+                        original_sort_fetch
+                            .map(|f| f.min(sort_fetch))
+                            .unwrap_or(sort_fetch),
+                    )
                 };
                 if new_fetch == sort.fetch {
                     if skip > 0 {
@@ -137,6 +142,9 @@ impl OptimizerRule for PushDownLimit {
                     }
                 } else {
                     sort.fetch = new_fetch;
+                    if skip == 0 {
+                        return Ok(Transformed::yes(LogicalPlan::Sort(sort)));
+                    }
                     limit.input = Arc::new(LogicalPlan::Sort(sort));
                     Ok(Transformed::yes(LogicalPlan::Limit(limit)))
                 }
@@ -630,7 +638,6 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Limit: skip=0, fetch=10
           Sort: test.a ASC NULLS LAST, fetch=10
             TableScan: test
         "
