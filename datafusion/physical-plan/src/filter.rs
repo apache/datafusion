@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
@@ -27,7 +28,7 @@ use super::{
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    FilterDescription, FilterPushdownResult, FilterPushdownSupport,
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
@@ -44,23 +45,29 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::expressions::{lit, BinaryExpr, Column};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AcrossPartitions, AnalysisContext, ConstExpr,
-    ExprBoundaries, PhysicalExpr,
+    analyze, conjunction, split_conjunction, AcrossPartitions, AnalysisContext,
+    ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
+use itertools::Itertools;
 use log::trace;
+
+const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
@@ -88,7 +95,7 @@ impl FilterExec {
     ) -> Result<Self> {
         match predicate.data_type(input.schema().as_ref())? {
             DataType::Boolean => {
-                let default_selectivity = 20;
+                let default_selectivity = FILTER_EXEC_DEFAULT_SELECTIVITY;
                 let cache = Self::compute_properties(
                     &input,
                     &predicate,
@@ -448,54 +455,129 @@ impl ExecutionPlan for FilterExec {
         try_embed_projection(projection, self)
     }
 
-    fn try_pushdown_filters(
+    fn gather_filters_for_pushdown(
         &self,
-        mut fd: FilterDescription,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        // Extend the filter descriptions
-        fd.filters.push(Arc::clone(&self.predicate));
+    ) -> Result<FilterDescription> {
+        let self_filter = split_conjunction(&self.predicate)
+            .into_iter()
+            .cloned()
+            .collect_vec();
 
-        // Extract the information
-        let child_descriptions = vec![fd];
-        let remaining_description = FilterDescription { filters: vec![] };
-        let filter_input = Arc::clone(self.input());
-
-        if let Some(projection_indices) = self.projection.as_ref() {
-            // Push the filters down, but leave a ProjectionExec behind, instead of the FilterExec
-            let filter_child_schema = filter_input.schema();
-            let proj_exprs = projection_indices
+        let parent_filters = if let Some(projection_indices) = self.projection.as_ref() {
+            // We need to invert the projection on any referenced columns in the filter
+            // Create a mapping from the output columns to the input columns (the inverse of the projection)
+            let inverse_projection = projection_indices
                 .iter()
-                .map(|p| {
-                    let field = filter_child_schema.field(*p).clone();
-                    (
-                        Arc::new(Column::new(field.name(), *p)) as Arc<dyn PhysicalExpr>,
-                        field.name().to_string(),
-                    )
+                .enumerate()
+                .map(|(i, &p)| (p, i))
+                .collect::<HashMap<_, _>>();
+            parent_filters
+                .into_iter()
+                .map(|f| {
+                    f.transform_up(|expr| {
+                        let mut res =
+                            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                                let index = col.index();
+                                let index_in_input_schema =
+                                    inverse_projection.get(&index).ok_or_else(|| {
+                                        DataFusionError::Internal(format!(
+                                            "Column {} not found in projection",
+                                            index
+                                        ))
+                                    })?;
+                                Transformed::yes(Arc::new(Column::new(
+                                    col.name(),
+                                    *index_in_input_schema,
+                                )) as _)
+                            } else {
+                                Transformed::no(expr)
+                            };
+                        // Columns can only exist in the leaves, no need to try all nodes
+                        res.tnr = TreeNodeRecursion::Jump;
+                        Ok(res)
+                    })
+                    .data()
                 })
-                .collect::<Vec<_>>();
-            let projection_exec =
-                Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?) as _;
-
-            Ok(FilterPushdownResult {
-                support: FilterPushdownSupport::Supported {
-                    child_descriptions,
-                    op: projection_exec,
-                    revisit: false,
-                },
-                remaining_description,
-            })
+                .collect::<Result<Vec<_>>>()?
         } else {
-            // Pull out the FilterExec, and inform the rule as it should be re-run
-            Ok(FilterPushdownResult {
-                support: FilterPushdownSupport::Supported {
-                    child_descriptions,
-                    op: filter_input,
-                    revisit: true,
-                },
-                remaining_description,
-            })
-        }
+            parent_filters
+        };
+
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters)
+            .with_self_filters_for_children(vec![self_filter]))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // We absorb any parent filters that were not handled by our children
+        let mut unhandled_filters =
+            child_pushdown_result.parent_filters.collect_unsupported();
+        assert_eq!(
+            child_pushdown_result.self_filters.len(),
+            1,
+            "FilterExec should only have one child"
+        );
+        let unsupported_self_filters =
+            child_pushdown_result.self_filters[0].collect_unsupported();
+        unhandled_filters.extend(unsupported_self_filters);
+
+        // If we have unhandled filters, we need to create a new FilterExec
+        let filter_input = Arc::clone(self.input());
+        let new_predicate = conjunction(unhandled_filters);
+        let updated_node = if new_predicate.eq(&lit(true)) {
+            // FilterExec is no longer needed, but we may need to leave a projection in place
+            match self.projection() {
+                Some(projection_indices) => {
+                    let filter_child_schema = filter_input.schema();
+                    let proj_exprs = projection_indices
+                        .iter()
+                        .map(|p| {
+                            let field = filter_child_schema.field(*p).clone();
+                            (
+                                Arc::new(Column::new(field.name(), *p))
+                                    as Arc<dyn PhysicalExpr>,
+                                field.name().to_string(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
+                        as Arc<dyn ExecutionPlan>)
+                }
+                None => {
+                    // No projection needed, just return the input
+                    Some(filter_input)
+                }
+            }
+        } else if new_predicate.eq(&self.predicate) {
+            // The new predicate is the same as our current predicate
+            None
+        } else {
+            // Create a new FilterExec with the new predicate
+            let new = FilterExec {
+                predicate: Arc::clone(&new_predicate),
+                input: Arc::clone(&filter_input),
+                metrics: self.metrics.clone(),
+                default_selectivity: self.default_selectivity,
+                cache: Self::compute_properties(
+                    &filter_input,
+                    &new_predicate,
+                    self.default_selectivity,
+                    self.projection.as_ref(),
+                )?,
+                projection: None,
+            };
+            Some(Arc::new(new) as _)
+        };
+        Ok(FilterPushdownPropagation {
+            filters: child_pushdown_result.parent_filters.make_supported(),
+            updated_node,
+        })
     }
 }
 
