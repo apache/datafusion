@@ -959,7 +959,7 @@ SELECT SUM(column1) FROM foo ORDER BY SUM(column1)
 16
 
 # Order by unprojected aggregate expressions is not supported
-query error DataFusion error: Error during planning: Aggregate functions are not allowed in the ORDER BY clause without a GROUP BY clause.
+query error DataFusion error: Error during planning: cannot add new aggregate func to TableScan: foo
 SELECT column2 FROM foo ORDER BY SUM(column1)
 
 statement ok

@@ -947,10 +947,13 @@ impl LogicalPlanBuilder {
                     }
                     // cannot add new output to distinct
                     // https://github.com/apache/datafusion/blob/1812494a53011cd234a255e92cd15b534ae0d47e/datafusion/expr/src/logical_plan/builder.rs#L644-L663
-                    LogicalPlan::Distinct(_) => {
-                        plan_err!("cannot add new output to distinct")
+                    LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => {
+                        Ok(Transformed::no(plan))
                     }
-                    _ => Ok(Transformed::no(plan)),
+
+                    _ => {
+                        plan_err!("cannot add new aggregate func to {} ", plan)
+                    }
                 }
             })?
             .data;
@@ -2495,6 +2498,24 @@ mod tests {
         let expected = "Projection: Int32(1)\n  Sort: min(employee_csv.salary) ASC NULLS FIRST\n    Projection: Int32(1), min(employee_csv.salary)\n      Aggregate: groupBy=[[employee_csv.state]], aggr=[[min(employee_csv.salary)]]\n        TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan}"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_agg_func_in_order() -> Result<()> {
+        let left =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
+
+        let right =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 1]))?
+                .aggregate(vec![col("id")], vec![max(col("first_name"))])?;
+
+        let join = left.cross_join(right.build()?)?;
+
+        let plan = join.sort(vec![expr::Sort::new(min(col("first_name")), true, true)]);
+
+        assert!(plan.is_err());
 
         Ok(())
     }
