@@ -18,7 +18,7 @@
 //! [`EliminateDuplicatedExpr`] Removes redundant expressions
 
 use crate::optimizer::ApplyOrder;
-use crate::{OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
@@ -128,9 +128,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateDuplicatedExpr::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateDuplicatedExpr::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
