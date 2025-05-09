@@ -26,7 +26,7 @@ use crate::expressions::{Column, Literal};
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinType, ScalarValue};
+use datafusion_common::{HashMap, JoinType, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
@@ -306,57 +306,71 @@ type AugmentedMapping<'a> = IndexMap<
     (&'a ProjectionTargets, Option<&'a EquivalenceClass>),
 >;
 
-/// A collection of distinct `EquivalenceClass`es
+/// A collection of distinct `EquivalenceClass`es. This object supports fast
+/// lookups of expressions and their equivalence classes.
 #[derive(Clone, Debug, Default)]
 pub struct EquivalenceGroup {
+    /// A mapping from expressions to their equivalence class key.
+    map: HashMap<Arc<dyn PhysicalExpr>, usize>,
+    /// The equivalence classes in this group.
     classes: Vec<EquivalenceClass>,
 }
 
 impl EquivalenceGroup {
     /// Creates an equivalence group from the given equivalence classes.
     pub fn new(classes: impl IntoIterator<Item = EquivalenceClass>) -> Self {
+        let classes = classes.into_iter().collect::<Vec<_>>();
         let mut result = Self {
-            classes: classes.into_iter().collect(),
+            map: classes
+                .iter()
+                .enumerate()
+                .flat_map(|(idx, cls)| {
+                    cls.iter().map(move |expr| (Arc::clone(expr), idx))
+                })
+                .collect(),
+            classes,
         };
         result.remove_redundant_entries();
         result
     }
 
-    /// Returns an iterator over the equivalence classes in this group.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut EquivalenceClass> {
-        self.classes.iter_mut()
-    }
-
     /// Adds `expr` as a constant expression to this equivalence group.
     pub fn add_constant(&mut self, const_expr: ConstExpr) {
-        for cls in self.classes.iter_mut() {
-            if cls.contains(&const_expr.expr) {
-                // If the expression is already in an equivalence class, we
-                // should adjust the constant-ness of the class if necessary:
-                if let Some(across) = cls.constant.as_mut() {
-                    // TODO: Return an error if constant values do not agree.
-                    if *across == AcrossPartitions::Heterogeneous {
-                        *across = const_expr.across_partitions;
-                    }
-                } else {
-                    cls.constant = Some(const_expr.across_partitions);
+        // If the expression is already in an equivalence class, we should
+        // adjust the constant-ness of the class if necessary:
+        if let Some(idx) = self.map.get(&const_expr.expr) {
+            let cls = &mut self.classes[*idx];
+            if let Some(across) = cls.constant.as_mut() {
+                // TODO: Return an error if constant values do not agree.
+                if *across == AcrossPartitions::Heterogeneous {
+                    *across = const_expr.across_partitions;
                 }
-                return;
-            } else if let Some(across @ AcrossPartitions::Uniform(_)) = &cls.constant {
-                // If the expression is not in some equivalence class, but has
-                // the same constant value with it, add it to that class:
-                if const_expr.across_partitions.eq(across) {
+            } else {
+                cls.constant = Some(const_expr.across_partitions);
+            }
+            return;
+        }
+        // If the expression is not in any equivalence class, but has the same
+        // constant value with some class, add it to that class:
+        if let AcrossPartitions::Uniform(_) = &const_expr.across_partitions {
+            for (idx, cls) in self.classes.iter_mut().enumerate() {
+                if cls
+                    .constant
+                    .as_ref()
+                    .is_some_and(|across| const_expr.across_partitions.eq(across))
+                {
+                    self.map.insert(Arc::clone(&const_expr.expr), idx);
                     cls.push(const_expr.expr);
                     return;
                 }
             }
         }
-        // If the expression is not in *any* equivalence class, create a new
-        // one with the expression as the only member:
+        // Otherwise, create a new class with the expression as the only member:
         let mut new_class = EquivalenceClass::new(std::iter::once(const_expr.expr));
         if new_class.constant.is_none() {
             new_class.constant = Some(const_expr.across_partitions);
         }
+        Self::update_lookup_table(&mut self.map, &new_class, self.classes.len());
         self.classes.push(new_class);
     }
 
@@ -369,7 +383,7 @@ impl EquivalenceGroup {
             if let Some(AcrossPartitions::Heterogeneous) = cls.constant {
                 if cls.len() == 1 {
                     // If this class becomes trivial, remove it entirely:
-                    self.classes.swap_remove(idx);
+                    self.remove_class_at_idx(idx);
                     continue;
                 } else {
                     cls.constant = None;
@@ -388,20 +402,8 @@ impl EquivalenceGroup {
         left: Arc<dyn PhysicalExpr>,
         right: Arc<dyn PhysicalExpr>,
     ) -> bool {
-        let mut idx = 0;
-        let size = self.classes.len();
-        let mut first_class = None;
-        let mut second_class = None;
-        while (idx < size) && (first_class.is_none() || second_class.is_none()) {
-            let cls = &self.classes[idx];
-            if first_class.is_none() && cls.contains(&left) {
-                first_class = Some(idx);
-            }
-            if second_class.is_none() && cls.contains(&right) {
-                second_class = Some(idx);
-            }
-            idx += 1;
-        }
+        let first_class = self.map.get(&left).copied();
+        let second_class = self.map.get(&right).copied();
         match (first_class, second_class) {
             (Some(mut first_idx), Some(mut second_idx)) => {
                 // If the given left and right sides belong to different classes,
@@ -418,30 +420,70 @@ impl EquivalenceGroup {
                 // Remove the class at `second_idx` and merge its values with
                 // the class at `first_idx`. The convention above makes sure
                 // that `first_idx` is still valid after removing `second_idx`.
-                let other_class = self.classes.swap_remove(second_idx);
+                let other_class = self.remove_class_at_idx(second_idx);
+                // Update the lookup table for the second class:
+                Self::update_lookup_table(&mut self.map, &other_class, first_idx);
                 self.classes[first_idx].extend(other_class);
             }
             (Some(group_idx), None) => {
                 // Right side is new, extend left side's class:
+                self.map.insert(Arc::clone(&right), group_idx);
                 self.classes[group_idx].push(right);
             }
             (None, Some(group_idx)) => {
                 // Left side is new, extend right side's class:
+                self.map.insert(Arc::clone(&left), group_idx);
                 self.classes[group_idx].push(left);
             }
             (None, None) => {
                 // None of the expressions is among existing classes.
                 // Create a new equivalence class and extend the group.
-                self.classes.push(EquivalenceClass::new([left, right]));
+                let class = EquivalenceClass::new([left, right]);
+                Self::update_lookup_table(&mut self.map, &class, self.classes.len());
+                self.classes.push(class);
             }
         }
         true
     }
 
+    /// Removes the equivalence class at the given index from this group.
+    fn remove_class_at_idx(&mut self, idx: usize) -> EquivalenceClass {
+        // Remove the class at the given index:
+        let cls = self.classes.swap_remove(idx);
+        // Remove its entries from the lookup table:
+        for expr in cls.iter() {
+            self.map.remove(expr);
+        }
+        // Update the lookup table for the moved class:
+        if idx < self.classes.len() {
+            Self::update_lookup_table(&mut self.map, &self.classes[idx], idx);
+        }
+        cls
+    }
+
+    /// Updates the entry in lookup table for the given equivalence class with
+    /// the given index.
+    fn update_lookup_table(
+        map: &mut HashMap<Arc<dyn PhysicalExpr>, usize>,
+        cls: &EquivalenceClass,
+        idx: usize,
+    ) {
+        for expr in cls.iter() {
+            map.insert(Arc::clone(expr), idx);
+        }
+    }
+
     /// Removes redundant entries from this group.
     fn remove_redundant_entries(&mut self) {
         // First, remove trivial equivalence classes:
-        self.classes.retain(|cls| !cls.is_trivial());
+        let mut idx = 0;
+        while idx < self.classes.len() {
+            if self.classes[idx].is_trivial() {
+                self.remove_class_at_idx(idx);
+            } else {
+                idx += 1;
+            }
+        }
         // Then, unify/bridge groups that have common expressions:
         self.bridge_classes()
     }
@@ -457,7 +499,8 @@ impl EquivalenceGroup {
             let start_size = self.classes[idx].len();
             while next_idx < self.classes.len() {
                 if self.classes[idx].contains_any(&self.classes[next_idx]) {
-                    let extension = self.classes.swap_remove(next_idx);
+                    let extension = self.remove_class_at_idx(next_idx);
+                    Self::update_lookup_table(&mut self.map, &extension, idx);
                     self.classes[idx].extend(extension);
                 } else {
                     next_idx += 1;
@@ -472,25 +515,24 @@ impl EquivalenceGroup {
 
     /// Extends this equivalence group with the `other` equivalence group.
     pub fn extend(&mut self, other: Self) {
+        for (idx, cls) in other.classes.iter().enumerate() {
+            // Update the lookup table for the new class:
+            Self::update_lookup_table(&mut self.map, cls, idx);
+        }
         self.classes.extend(other.classes);
         self.remove_redundant_entries();
     }
 
     /// Normalizes the given physical expression according to this group. The
-    /// expression is replaced with the first expression in the equivalence
-    /// class it matches with (if any).
+    /// expression is replaced with the first (canonical) expression in the
+    /// equivalence class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.transform(|expr| {
-            for cls in self.iter() {
-                // If the equivalence class is non-empty, and it contains this
-                // expression, use its canonical version:
-                if let Some(canonical) = cls.canonical_expr() {
-                    if cls.contains(&expr) {
-                        return Ok(Transformed::yes(Arc::clone(canonical)));
-                    }
-                }
-            }
-            Ok(Transformed::no(expr))
+            let cls = self.get_equivalence_class(&expr);
+            let Some(canonical) = cls.and_then(|cls| cls.canonical_expr()) else {
+                return Ok(Transformed::no(expr));
+            };
+            Ok(Transformed::yes(Arc::clone(canonical)))
         })
         .data()
         .unwrap()
@@ -576,7 +618,7 @@ impl EquivalenceGroup {
             // the mapping, then we can project. For example, if we have the
             // mapping `(a as a1, a + c)` and the equivalence `a == b`,
             // expression `b` projects to `a1`.
-            if eq_class.as_ref().is_some_and(|group| group.contains(expr)) {
+            if eq_class.as_ref().is_some_and(|cls| cls.contains(expr)) {
                 let (target, _) = targets.first();
                 return Some(Arc::clone(target));
             }
@@ -711,8 +753,8 @@ impl EquivalenceGroup {
         if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
             return Some(AcrossPartitions::Uniform(Some(lit.value().clone())));
         }
-        for cls in self.iter() {
-            if cls.constant.is_some() && cls.contains(expr) {
+        if let Some(cls) = self.get_equivalence_class(expr) {
+            if cls.constant.is_some() {
                 return cls.constant.clone();
             }
         }
@@ -735,7 +777,7 @@ impl EquivalenceGroup {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<&EquivalenceClass> {
-        self.iter().find(|cls| cls.contains(expr))
+        self.map.get(expr).map(|idx| &self.classes[*idx])
     }
 
     /// Combine equivalence groups of the given join children.
