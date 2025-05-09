@@ -31,7 +31,7 @@ use crate::dml::CopyTo;
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{external_datafusion_err, Column, DataFusionError};
 use serde_json::json;
 
 /// Formats plans with a single line per node. For example:
@@ -711,7 +711,7 @@ impl<'n> TreeNodeVisitor<'n> for PgJsonVisitor<'_, '_> {
                 self.f,
                 "{}",
                 serde_json::to_string_pretty(&plan)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .map_err(|e| external_datafusion_err!(e))?
             )?;
         }
 
