@@ -359,7 +359,7 @@ pub fn generate_dependency_orderings(
     // dependency, meaning that dependent is a leading ordering.
     dependencies
         .iter()
-        .flat_map(|dep| {
+        .filter_map(|dep| {
             let prefixes = construct_prefix_orderings(dep, dependency_map);
             (!prefixes.is_empty()).then_some(prefixes)
         })
@@ -376,7 +376,6 @@ pub fn generate_dependency_orderings(
                         acc
                     })
                 })
-                .collect::<Vec<_>>()
         })
         .collect()
 }
