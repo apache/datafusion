@@ -923,7 +923,7 @@ macro_rules! schema_err {
 #[macro_export]
 macro_rules! external_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::External(Box::new($ERR));
+        let err = DataFusionError::External(Box::new($ERR), Some(DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -935,7 +935,7 @@ macro_rules! external_datafusion_err {
 #[macro_export]
 macro_rules! external_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::(Box::new($ERR));
+        let err = let err = datafusion_common::external_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -947,7 +947,7 @@ macro_rules! external_err {
 #[macro_export]
 macro_rules! execution_join_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::ExecutionJoin($ERR);
+        let err = DataFusionError::ExecutionJoin($ERR, Some(DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -959,7 +959,7 @@ macro_rules! execution_join_datafusion_err {
 #[macro_export]
 macro_rules! execution_join_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::ExecutionJoin($ERR);
+        let err = datafusion_common::execution_join_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
