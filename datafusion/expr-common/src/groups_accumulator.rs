@@ -18,12 +18,12 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy)]
 pub enum EmitTo {
-    /// Emit all groups
+    /// Emit all groups, will clear all existing group indexes
     All,
     /// Emit only the first `n` groups and shift all existing group
     /// indexes down by `n`.
@@ -31,6 +31,10 @@ pub enum EmitTo {
     /// For example, if `n=10`, group_index `0, 1, ... 9` are emitted
     /// and group indexes `10, 11, 12, ...` become `0, 1, 2, ...`.
     First(usize),
+    /// Emit next block in the blocked managed groups
+    ///
+    /// Similar as `Emit::All`, will also clear all existing group indexes
+    NextBlock,
 }
 
 impl EmitTo {
@@ -39,6 +43,9 @@ impl EmitTo {
     /// remaining values in `v`.
     ///
     /// This avoids copying if Self::All
+    ///
+    /// NOTICE: only support emit strategies: `Self::All` and `Self::First`
+    ///
     pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
         match self {
             Self::All => {
@@ -52,7 +59,66 @@ impl EmitTo {
                 std::mem::swap(v, &mut t);
                 t
             }
+            Self::NextBlock => unreachable!("don't support take block in take_needed"),
         }
+    }
+}
+
+/// Emitting context used in blocked management
+#[derive(Debug, Default)]
+pub struct EmitBlocksContext {
+    /// Mark if it is during blocks emitting, if so states can't
+    /// be updated until all blocks are emitted
+    pub emitting: bool,
+
+    /// Idx of next emitted block
+    pub next_emit_block: usize,
+
+    /// Number of blocks needed to emit
+    pub num_blocks: usize,
+}
+
+impl EmitBlocksContext {
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    pub fn start_emit(&mut self, num_blocks: usize) {
+        self.emitting = true;
+        self.num_blocks = num_blocks;
+    }
+
+    #[inline]
+    pub fn emitting(&self) -> bool {
+        self.emitting
+    }
+
+    #[inline]
+    pub fn all_emitted(&self) -> bool {
+        self.next_emit_block == self.num_blocks
+    }
+
+    #[inline]
+    pub fn cur_emit_block(&self) -> usize {
+        assert!(self.emitting, "must start emit first");
+        self.next_emit_block
+    }
+
+    #[inline]
+    pub fn advance_emit_block(&mut self) {
+        assert!(self.emitting, "must start emit first");
+        if self.next_emit_block < self.num_blocks {
+            self.next_emit_block += 1;
+        }
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.emitting = false;
+        self.next_emit_block = 0;
+        self.num_blocks = 0;
     }
 }
 
@@ -250,4 +316,49 @@ pub trait GroupsAccumulator: Send {
     /// This function is called once per batch, so it should be `O(n)` to
     /// compute, not `O(num_groups)`
     fn size(&self) -> usize;
+
+    /// Returns `true` if this accumulator supports blocked groups.
+    ///
+    /// Blocked groups(or called blocked management approach) is an optimization
+    /// to reduce the cost of managing aggregation intermediate states.
+    ///
+    /// Here is brief introduction for two states management approaches:
+    ///   - Blocked approach, states are stored and managed in multiple `Vec`s,
+    ///     we call it `Block`s. Organize like this is for avoiding to resize `Vec`
+    ///     and allocate a new `Vec` instead to reduce cost and get better performance.
+    ///     When locating data in `Block`s, we need to use `block_id` to locate the
+    ///     needed `Block` at first, and use `block_offset` to locate the needed
+    ///     data in `Block` after.
+    ///
+    ///   - Single approach, all states are stored and managed in a single large `Block`.
+    ///     So when locating data, `block_id` will always be 0, and we only need `block_offset`
+    ///     to locate data in the single `Block`.
+    ///
+    /// More details can see:
+    /// <https://github.com/apache/datafusion/issues/7065>
+    ///
+    fn supports_blocked_groups(&self) -> bool {
+        false
+    }
+
+    /// Alter the block size in the accumulator
+    ///
+    /// If the target block size is `None`, it will use a single big
+    /// block(can think it a `Vec`) to manage the state.
+    ///
+    /// If the target block size` is `Some(blk_size)`, it will try to
+    /// set the block size to `blk_size`, and the try will only success
+    /// when the accumulator has supported blocked mode.
+    ///
+    /// NOTICE: After altering block size, all data in previous will be cleared.
+    ///
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        if block_size.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "this accumulator doesn't support blocked mode yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
