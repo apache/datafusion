@@ -412,11 +412,11 @@ impl FileFormat for CsvFormat {
         let has_header = self
             .options
             .has_header
-            .unwrap_or(state.config_options().catalog.has_header);
+            .unwrap_or_else(|| state.config_options().catalog.has_header);
         let newlines_in_values = self
             .options
             .newlines_in_values
-            .unwrap_or(state.config_options().catalog.newlines_in_values);
+            .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
 
         let conf_builder = FileScanConfigBuilder::from(conf)
             .with_file_compression_type(self.options.compression.into())
@@ -452,11 +452,11 @@ impl FileFormat for CsvFormat {
         let has_header = self
             .options()
             .has_header
-            .unwrap_or(state.config_options().catalog.has_header);
+            .unwrap_or_else(|| state.config_options().catalog.has_header);
         let newlines_in_values = self
             .options()
             .newlines_in_values
-            .unwrap_or(state.config_options().catalog.newlines_in_values);
+            .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
 
         let options = self
             .options()
@@ -502,7 +502,7 @@ impl CsvFormat {
                         && self
                             .options
                             .has_header
-                            .unwrap_or(state.config_options().catalog.has_header),
+                            .unwrap_or_else(|| state.config_options().catalog.has_header),
                 )
                 .with_delimiter(self.options.delimiter)
                 .with_quote(self.options.quote);

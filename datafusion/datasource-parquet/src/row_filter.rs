@@ -372,7 +372,7 @@ fn pushdown_columns(
 /// Otherwise, true.
 /// Note that the schema passed in here is *not* the physical file schema (as it is not available at that point in time);
 /// it is the schema of the table that this expression is being evaluated against minus any projected columns and partition columns.
-pub(crate) fn can_expr_be_pushed_down_with_schemas(
+pub fn can_expr_be_pushed_down_with_schemas(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
 ) -> bool {

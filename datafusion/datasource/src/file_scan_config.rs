@@ -583,7 +583,7 @@ impl DataSource for FileScanConfig {
                 &file_scan
                     .projection
                     .clone()
-                    .unwrap_or((0..self.file_schema.fields().len()).collect()),
+                    .unwrap_or_else(|| (0..self.file_schema.fields().len()).collect()),
             );
             DataSourceExec::from_data_source(
                 FileScanConfigBuilder::from(file_scan)

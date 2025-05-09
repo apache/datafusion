@@ -155,6 +155,7 @@ fn split_eq_and_noneq_join_predicate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
@@ -162,14 +163,18 @@ mod tests {
     };
     use std::sync::Arc;
 
-    fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq_display_indent(
-            Arc::new(ExtractEquijoinPredicate {}),
-            plan,
-            expected,
-        );
-
-        Ok(())
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(ExtractEquijoinPredicate {});
+            assert_optimized_plan_eq_display_indent_snapshot!(
+                rule,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[test]
@@ -180,11 +185,15 @@ mod tests {
         let plan = LogicalPlanBuilder::from(t1)
             .join_on(t2, JoinType::Left, Some(col("t1.a").eq(col("t2.a"))))?
             .build()?;
-        let expected = "Left Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 
     #[test]
@@ -199,11 +208,15 @@ mod tests {
                 Some((col("t1.a") + lit(10i64)).eq(col("t2.a") * lit(2u32))),
             )?
             .build()?;
-        let expected = "Left Join: t1.a + Int64(10) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: t1.a + Int64(10) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 
     #[test]
@@ -222,11 +235,15 @@ mod tests {
                 ),
             )?
             .build()?;
-        let expected = "Left Join:  Filter: t1.a + Int64(10) >= t2.a * UInt32(2) AND t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join:  Filter: t1.a + Int64(10) >= t2.a * UInt32(2) AND t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 
     #[test]
@@ -249,11 +266,15 @@ mod tests {
                 ),
             )?
             .build()?;
-        let expected = "Left Join: t1.a + UInt32(11) = t2.a * UInt32(2), t1.a + Int64(10) = t2.a * UInt32(2) Filter: t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: t1.a + UInt32(11) = t2.a * UInt32(2), t1.a + Int64(10) = t2.a * UInt32(2) Filter: t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 
     #[test]
@@ -275,11 +296,15 @@ mod tests {
                 ),
             )?
             .build()?;
-        let expected = "Left Join: t1.a = t2.a, t1.b = t2.b Filter: t1.c = t2.c OR t1.a + t1.b > t2.b + t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: t1.a = t2.a, t1.b = t2.b Filter: t1.c = t2.c OR t1.a + t1.b > t2.b + t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 
     #[test]
@@ -310,13 +335,17 @@ mod tests {
                 ),
             )?
             .build()?;
-        let expected = "Left Join: t1.a = t2.a Filter: t1.c + t2.c + t3.c < UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-            \n  Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-            \n    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
-            \n    TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: t1.a = t2.a Filter: t1.c + t2.c + t3.c < UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+          Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 
     #[test]
@@ -343,13 +372,17 @@ mod tests {
                 Some(col("t1.a").eq(col("t2.a")).and(col("t2.c").eq(col("t3.c")))),
             )?
             .build()?;
-        let expected = "Left Join: t1.a = t2.a Filter: t2.c = t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-        \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-        \n  Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-        \n    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
-        \n    TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: t1.a = t2.a Filter: t2.c = t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+          Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 
     #[test]
@@ -369,10 +402,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(t1)
             .join_on(t2, JoinType::Left, Some(filter))?
             .build()?;
-        let expected = "Left Join: t1.a + CAST(Int64(1) AS UInt32) = t2.a + CAST(Int32(2) AS UInt32) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
-        \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-        \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: t1.a + CAST(Int64(1) AS UInt32) = t2.a + CAST(Int32(2) AS UInt32) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 }

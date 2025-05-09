@@ -513,7 +513,7 @@ fn compute_take_arrays(
         for vals in all_partition_values.iter() {
             part_key.push(vals[i].clone().into());
         }
-        let builder = take_map.entry(part_key).or_insert(UInt64Builder::new());
+        let builder = take_map.entry(part_key).or_insert_with(UInt64Builder::new);
         builder.append_value(i as u64);
     }
     take_map
