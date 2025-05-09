@@ -19,23 +19,21 @@
 
 # Extending DataFusion's operators: custom LogicalPlan and Execution Plans
 
-This module contains an end-to-end demonstration of creating a user-defined operator in DataFusion. Specifically, it shows how to define a `TopKNode` that implements `ExtensionPlanNode`, add an OptimizerRule to rewrite a `LogicalPlan` to use that node, create an `ExecutionPlan`, and finally produce results.
+This section contains an end-to-end demonstration of creating a user-defined operator in DataFusion. Specifically, it shows how to define a `TopKNode` that implements `ExtensionPlanNode`, add an `OptimizerRule` to rewrite a `LogicalPlan` to use that node, create an `ExecutionPlan`, and finally produce results.
 
 ## TopK Background:
 
-A "Top K" node is a common query optimization which is used for queries such as "find the top 3 customers by revenue". The(simplified) SQL for such a query might be:
+Note: DataFusion contains a highly optimized version of the `TopK` operator, but we present a simplified version in this section for explanatory purposes. For more information, see the full implementation in the [DataFusion repository].
 
-```sql
-CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT)
-  STORED AS CSV location 'tests/data/customer.csv';
-SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
-```
+[DataFusion repository]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.TopK.html
 
-And a naive plan would be:
+"Top K" operator is a common query optimization used for queries such as "find the top 3 customers by revenue".  The(simplified) SQL for such a query might be:
 
 ```sql
 explain SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
 ```
+
+And a naive plan would be:
 
 ```text
 +--------------+----------------------------------------+
@@ -49,7 +47,7 @@ explain SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
 ```
 
 While this plan produces the correct answer, the careful reader will note it fully sorts the input before discarding everything other than the top 3 elements.
-The same answer can be produced by simply keeping track of the top N elements, reducing the total amount of required buffer memory.
+The same answer can be produced more efficiently by simply keeping track of the top N elements, reducing the total amount of memory buffer.
 
 ## Process for Defining Extending Operator
 
