@@ -156,6 +156,29 @@ convention but encourage its use if you want your PR to feature in the correct s
 The change log generator will also look at GitHub labels such as `bug`, `enhancement`, or `api change`, and labels
 do take priority over the conventional commit approach, allowing maintainers to re-categorize PRs after they have been merged.
 
+####  Commit Prefix Guide
+
+| Prefix     | Purpose                                 |
+|------------|-----------------------------------------|
+| `feat:`    | A new feature                           |
+| `fix:`     | A bug fix                               |
+| `docs:`    | Documentation only changes              |
+| `chore:`   | Build process or auxiliary tool changes |
+| `refactor:`| Code changes that neither fix nor add   |
+| `test:`    | Adding or updating tests                |
+
+#### Example PR Titles
+
+- `docs: update README with example usage`
+- `fix: resolve crash on null input`
+- `feat: add support for XYZ operator`
+- `chore: update Cargo dependencies`
+
+Using these formats helps:
+- Organize changelogs automatically
+- Improve review clarity
+- Maintain a clean project history
+
 [conventional commits]: https://www.conventionalcommits.org/en/v1.0.0/
 
 # Reviewing Pull Requests
