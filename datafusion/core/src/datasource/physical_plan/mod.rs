@@ -27,9 +27,8 @@ pub mod parquet;
 #[cfg(feature = "avro")]
 pub mod avro;
 
-#[allow(deprecated)]
 #[cfg(feature = "avro")]
-pub use avro::{AvroExec, AvroSource};
+pub use avro::AvroSource;
 
 #[cfg(feature = "parquet")]
 pub use datafusion_datasource_parquet::source::ParquetSource;
@@ -44,9 +43,6 @@ pub use arrow_file::ArrowSource;
 pub use json::NdJsonExec;
 
 pub use json::{JsonOpener, JsonSource};
-
-#[allow(deprecated)]
-pub use csv::{CsvExec, CsvExecBuilder};
 
 pub use csv::{CsvOpener, CsvSource};
 pub use datafusion_datasource::file::FileSource;
