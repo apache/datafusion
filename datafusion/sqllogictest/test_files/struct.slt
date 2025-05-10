@@ -286,7 +286,7 @@ drop table struct_values;
 statement ok
 CREATE OR REPLACE VIEW complex_view AS 
 SELECT {
-    'user': {
+    'user_information': {
         'info': {
             'personal': {
                 'name': 'John Doe',
@@ -347,22 +347,22 @@ SELECT {
 } AS complex_data;
 
 query T
-SELECT complex_data.user.info.personal.name FROM complex_view;
+SELECT complex_data.user_information.info.personal.name FROM complex_view;
 ----
 John Doe
 
 query I
-SELECT complex_data.user.info.personal.age FROM complex_view;
+SELECT complex_data.user_information.info.personal.age FROM complex_view;
 ----
 30
 
 query T
-SELECT complex_data.user.info.address.city FROM complex_view;
+SELECT complex_data.user_information.info.address.city FROM complex_view;
 ----
 Anytown
 
 query T
-SELECT complex_data.user.preferences.languages[2] FROM complex_view;
+SELECT complex_data.user_information.preferences.languages[2] FROM complex_view;
 ----
 es
 
@@ -595,3 +595,40 @@ Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_
 
 statement ok
 drop table t;
+
+
+# Test struct field access with subscript notation
+# This tests accessing struct fields using the subscript notation with string literals
+
+statement ok
+create table test (struct_field struct(substruct int)) as values (struct(1));
+
+query ??
+select *
+from test as test1, test as test2 where
+test1.struct_field['substruct'] = test2.struct_field['substruct'];
+----
+{substruct: 1} {substruct: 1}
+
+statement ok
+DROP TABLE test;
+
+statement ok
+create table test (struct_field struct(substruct struct(subsubstruct int))) as values (struct(struct(1)));
+
+query ??
+select *
+from test as test1, test as test2 where
+test1.struct_field.substruct['subsubstruct'] = test2.struct_field.substruct['subsubstruct'];
+----
+{substruct: {subsubstruct: 1}} {substruct: {subsubstruct: 1}}
+
+query ??
+select *
+from test AS test1, test AS test2 where
+test1.struct_field['substruct']['subsubstruct'] = test2.struct_field['substruct']['subsubstruct'];
+----
+{substruct: {subsubstruct: 1}} {substruct: {subsubstruct: 1}}
+
+statement ok
+drop table test;

@@ -17,7 +17,7 @@
 
 //! Sort expressions
 
-use crate::physical_expr::PhysicalExpr;
+use crate::physical_expr::{fmt_sql, PhysicalExpr};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -37,13 +37,14 @@ use itertools::Itertools;
 /// Example:
 /// ```
 /// # use std::any::Any;
-/// # use std::fmt::Display;
+/// # use std::collections::HashMap;
+/// # use std::fmt::{Display, Formatter};
 /// # use std::hash::Hasher;
 /// # use std::sync::Arc;
 /// # use arrow::array::RecordBatch;
 /// # use datafusion_common::Result;
 /// # use arrow::compute::SortOptions;
-/// # use arrow::datatypes::{DataType, Schema};
+/// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 /// # use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -56,8 +57,10 @@ use itertools::Itertools;
 /// #  fn data_type(&self, input_schema: &Schema) -> Result<DataType> {todo!()}
 /// #  fn nullable(&self, input_schema: &Schema) -> Result<bool> {todo!() }
 /// #  fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {todo!() }
+/// #  fn return_field(&self, input_schema: &Schema) -> Result<Field> { unimplemented!() }
 /// #  fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {todo!()}
 /// #  fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> {todo!()}
+/// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { todo!() }
 /// # }
 /// # impl Display for MyPhysicalExpr {
 /// #    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "a") }
@@ -116,6 +119,16 @@ impl PhysicalSortExpr {
         self.options.nulls_first = false;
         self
     }
+
+    /// Like [`PhysicalExpr::fmt_sql`] prints a [`PhysicalSortExpr`] in a SQL-like format.
+    pub fn fmt_sql(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{} {}",
+            fmt_sql(self.expr.as_ref()),
+            to_str(&self.options)
+        )
+    }
 }
 
 /// Access the PhysicalSortExpr as a PhysicalExpr
@@ -172,13 +185,11 @@ impl PhysicalSortExpr {
         let nullable = self.expr.nullable(schema).unwrap_or(true);
         self.expr.eq(&requirement.expr)
             && if nullable {
-                requirement
-                    .options
-                    .map_or(true, |opts| self.options == opts)
+                requirement.options.is_none_or(|opts| self.options == opts)
             } else {
                 requirement
                     .options
-                    .map_or(true, |opts| self.options.descending == opts.descending)
+                    .is_none_or(|opts| self.options.descending == opts.descending)
             }
     }
 }
@@ -293,7 +304,7 @@ impl PhysicalSortRequirement {
         self.expr.eq(&other.expr)
             && other
                 .options
-                .map_or(true, |other_opts| self.options == Some(other_opts))
+                .is_none_or(|other_opts| self.options == Some(other_opts))
     }
 
     #[deprecated(since = "43.0.0", note = "use  LexRequirement::from_lex_ordering")]
@@ -361,6 +372,11 @@ impl LexOrdering {
     /// Clears the LexOrdering, removing all elements.
     pub fn clear(&mut self) {
         self.inner.clear()
+    }
+
+    /// Takes ownership of the actual vector of `PhysicalSortExpr`s in the LexOrdering.
+    pub fn take_exprs(self) -> Vec<PhysicalSortExpr> {
+        self.inner
     }
 
     /// Returns `true` if the LexOrdering contains `expr`

@@ -120,12 +120,11 @@ impl ScalarUDFImpl for ArrayPosition {
         Ok(UInt64)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_position_inner)(args)
+        make_scalar_function(array_position_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -274,12 +273,11 @@ impl ScalarUDFImpl for ArrayPositions {
         Ok(List(Arc::new(Field::new_list_field(UInt64, true))))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_positions_inner)(args)
+        make_scalar_function(array_positions_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

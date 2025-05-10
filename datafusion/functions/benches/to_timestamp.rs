@@ -22,10 +22,10 @@ use std::sync::Arc;
 use arrow::array::builder::StringBuilder;
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::compute::cast;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, TimeUnit};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_timestamp;
 
 fn data() -> StringArray {
@@ -109,16 +109,24 @@ fn data_with_formats() -> (StringArray, StringArray, StringArray, StringArray) {
     )
 }
 fn criterion_benchmark(c: &mut Criterion) {
+    let return_field =
+        &Field::new("f", DataType::Timestamp(TimeUnit::Nanosecond, None), true);
+    let arg_field = Field::new("a", DataType::Utf8, false);
+    let arg_fields = vec![&arg_field];
     c.bench_function("to_timestamp_no_formats_utf8", |b| {
         let arr_data = data();
         let batch_len = arr_data.len();
         let string_array = ColumnarValue::Array(Arc::new(arr_data) as ArrayRef);
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
-                    .invoke_batch(&[string_array.clone()], batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![string_array.clone()],
+                        arg_fields: arg_fields.clone(),
+                        number_rows: batch_len,
+                        return_field,
+                    })
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -130,10 +138,14 @@ fn criterion_benchmark(c: &mut Criterion) {
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
-                    .invoke_batch(&[string_array.clone()], batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![string_array.clone()],
+                        arg_fields: arg_fields.clone(),
+                        number_rows: batch_len,
+                        return_field,
+                    })
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -145,10 +157,14 @@ fn criterion_benchmark(c: &mut Criterion) {
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
-                    .invoke_batch(&[string_array.clone()], batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![string_array.clone()],
+                        arg_fields: arg_fields.clone(),
+                        number_rows: batch_len,
+                        return_field,
+                    })
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -158,17 +174,28 @@ fn criterion_benchmark(c: &mut Criterion) {
         let (inputs, format1, format2, format3) = data_with_formats();
         let batch_len = inputs.len();
 
-        let args = [
+        let args = vec![
             ColumnarValue::Array(Arc::new(inputs) as ArrayRef),
             ColumnarValue::Array(Arc::new(format1) as ArrayRef),
             ColumnarValue::Array(Arc::new(format2) as ArrayRef),
             ColumnarValue::Array(Arc::new(format3) as ArrayRef),
         ];
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
-                    .invoke_batch(&args.clone(), batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: batch_len,
+                        return_field,
+                    })
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -178,7 +205,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let (inputs, format1, format2, format3) = data_with_formats();
         let batch_len = inputs.len();
 
-        let args = [
+        let args = vec![
             ColumnarValue::Array(
                 Arc::new(cast(&inputs, &DataType::LargeUtf8).unwrap()) as ArrayRef
             ),
@@ -192,11 +219,22 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Arc::new(cast(&format3, &DataType::LargeUtf8).unwrap()) as ArrayRef
             ),
         ];
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
-                    .invoke_batch(&args.clone(), batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: batch_len,
+                        return_field,
+                    })
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -207,7 +245,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let batch_len = inputs.len();
 
-        let args = [
+        let args = vec![
             ColumnarValue::Array(
                 Arc::new(cast(&inputs, &DataType::Utf8View).unwrap()) as ArrayRef
             ),
@@ -221,11 +259,22 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Arc::new(cast(&format3, &DataType::Utf8View).unwrap()) as ArrayRef
             ),
         ];
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
-                    .invoke_batch(&args.clone(), batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: batch_len,
+                        return_field,
+                    })
                     .expect("to_timestamp should work on valid values"),
             )
         })

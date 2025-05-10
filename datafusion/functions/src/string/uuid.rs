@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -80,22 +80,20 @@ impl ScalarUDFImpl for UuidFunc {
 
     /// Prints random (v4) uuid values per row
     /// uuid() = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        num_rows: usize,
-    ) -> Result<ColumnarValue> {
-        if !args.is_empty() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if !args.args.is_empty() {
             return internal_err!("{} function does not accept arguments", self.name());
         }
 
         // Generate random u128 values
         let mut rng = rand::thread_rng();
-        let mut randoms = vec![0u128; num_rows];
+        let mut randoms = vec![0u128; args.number_rows];
         rng.fill(&mut randoms[..]);
 
-        let mut builder =
-            GenericStringBuilder::<i32>::with_capacity(num_rows, num_rows * 36);
+        let mut builder = GenericStringBuilder::<i32>::with_capacity(
+            args.number_rows,
+            args.number_rows * 36,
+        );
 
         let mut buffer = [0u8; 36];
         for x in &mut randoms {

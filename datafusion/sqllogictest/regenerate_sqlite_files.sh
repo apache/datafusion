@@ -164,7 +164,7 @@ echo "Updating the datafusion/sqllogictest/Cargo.toml file with an updated sqllo
 
 # update the sqllogictest Cargo.toml with the new repo for sqllogictest-rs (tied to a specific hash)
 cd "$DF_HOME" || exit;
-sd -f i '^sqllogictest.*' 'sqllogictest = { git = "https://github.com/Omega359/sqllogictest-rs.git", rev = "1cd933d" }' datafusion/sqllogictest/Cargo.toml
+sd -f i '^sqllogictest.*' 'sqllogictest = { git = "https://github.com/Omega359/sqllogictest-rs.git", rev = "73c47cf7" }' datafusion/sqllogictest/Cargo.toml
 
 echo "Replacing the datafusion/sqllogictest/bin/sqllogictests.rs file with a custom version required for running completion"
 

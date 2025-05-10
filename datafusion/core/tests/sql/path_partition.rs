@@ -25,9 +25,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::{
-    assert_batches_sorted_eq,
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig},
@@ -39,75 +37,21 @@ use datafusion::{
 };
 use datafusion_catalog::TableProvider;
 use datafusion_common::stats::Precision;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
-use datafusion_expr::{col, lit, Expr, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::stream::{self, BoxStream};
+use insta::assert_snapshot;
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
     ObjectStore, PutOptions, PutResult,
 };
 use object_store::{Attributes, MultipartUpload, PutMultipartOpts, PutPayload};
 use url::Url;
-
-#[tokio::test]
-async fn parquet_partition_pruning_filter() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let table = create_partitioned_alltypes_parquet_table(
-        &ctx,
-        &[
-            "year=2021/month=09/day=09/file.parquet",
-            "year=2021/month=10/day=09/file.parquet",
-            "year=2021/month=10/day=28/file.parquet",
-        ],
-        &[
-            ("year", DataType::Int32),
-            ("month", DataType::Int32),
-            ("day", DataType::Int32),
-        ],
-        "mirror:///",
-        "alltypes_plain.parquet",
-    )
-    .await;
-
-    // The first three filters can be resolved using only the partition columns.
-    let filters = [
-        Expr::eq(col("year"), lit(2021)),
-        Expr::eq(col("month"), lit(10)),
-        Expr::eq(col("day"), lit(28)),
-        Expr::gt(col("id"), lit(1)),
-    ];
-    let exec = table.scan(&ctx.state(), None, &filters, None).await?;
-    let data_source = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let source = data_source.source();
-    let file_source = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
-    let parquet_config = file_source
-        .file_source()
-        .as_any()
-        .downcast_ref::<ParquetSource>()
-        .unwrap();
-    let pred = parquet_config.predicate().unwrap();
-    // Only the last filter should be pushdown to TableScan
-    let expected = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
-        Operator::Gt,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-    ));
-
-    assert!(pred.as_any().is::<BinaryExpr>());
-    let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
-
-    assert_eq!(pred, expected.as_ref());
-
-    Ok(())
-}
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
@@ -142,16 +86,15 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+------+-------+-----+",
-        "| year | month | day |",
-        "+------+-------+-----+",
-        "| 2021 | 09    | 09  |",
-        "| 2021 | 10    | 09  |",
-        "| 2021 | 10    | 28  |",
-        "+------+-------+-----+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +------+-------+-----+
+    | year | month | day |
+    +------+-------+-----+
+    | 2021 | 09    | 09  |
+    | 2021 | 10    | 09  |
+    | 2021 | 10    | 28  |
+    +------+-------+-----+
+    ");
     //Test that the number of rows returned by partition column scan and actually reading the parquet file are the same
     let actual_row_count: usize = ctx
         .sql("SELECT id from t")
@@ -272,18 +215,17 @@ async fn csv_filter_with_file_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+----+",
-        "| c1 | c2 |",
-        "+----+----+",
-        "| a  | 1  |",
-        "| b  | 1  |",
-        "| b  | 5  |",
-        "| c  | 2  |",
-        "| d  | 5  |",
-        "+----+----+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+----+
+    | c1 | c2 |
+    +----+----+
+    | a  | 1  |
+    | b  | 1  |
+    | b  | 5  |
+    | c  | 2  |
+    | d  | 5  |
+    +----+----+
+    ");
 
     Ok(())
 }
@@ -310,18 +252,17 @@ async fn csv_filter_with_file_nonstring_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+----+------------+",
-        "| c1 | c2 | date       |",
-        "+----+----+------------+",
-        "| a  | 1  | 2021-10-28 |",
-        "| b  | 1  | 2021-10-28 |",
-        "| b  | 5  | 2021-10-28 |",
-        "| c  | 2  | 2021-10-28 |",
-        "| d  | 5  | 2021-10-28 |",
-        "+----+----+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+----+------------+
+    | c1 | c2 | date       |
+    +----+----+------------+
+    | a  | 1  | 2021-10-28 |
+    | b  | 1  | 2021-10-28 |
+    | b  | 5  | 2021-10-28 |
+    | c  | 2  | 2021-10-28 |
+    | d  | 5  | 2021-10-28 |
+    +----+----+------------+
+    ");
 
     Ok(())
 }
@@ -348,18 +289,17 @@ async fn csv_projection_on_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+------------+",
-        "| c1 | date       |",
-        "+----+------------+",
-        "| a  | 2021-10-27 |",
-        "| b  | 2021-10-27 |",
-        "| b  | 2021-10-27 |",
-        "| c  | 2021-10-27 |",
-        "| d  | 2021-10-27 |",
-        "+----+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+------------+
+    | c1 | date       |
+    +----+------------+
+    | a  | 2021-10-27 |
+    | b  | 2021-10-27 |
+    | b  | 2021-10-27 |
+    | c  | 2021-10-27 |
+    | d  | 2021-10-27 |
+    +----+------------+
+    ");
 
     Ok(())
 }
@@ -387,15 +327,14 @@ async fn csv_grouping_by_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+------------+----------+----------------------+",
-        "| date       | count(*) | count(DISTINCT t.c1) |",
-        "+------------+----------+----------------------+",
-        "| 2021-10-26 | 100      | 5                    |",
-        "| 2021-10-27 | 100      | 5                    |",
-        "+------------+----------+----------------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +------------+----------+----------------------+
+    | date       | count(*) | count(DISTINCT t.c1) |
+    +------------+----------+----------------------+
+    | 2021-10-26 | 100      | 5                    |
+    | 2021-10-27 | 100      | 5                    |
+    +------------+----------+----------------------+
+    ");
 
     Ok(())
 }
@@ -427,21 +366,20 @@ async fn parquet_multiple_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+-----+",
-        "| id | day |",
-        "+----+-----+",
-        "| 0  | 09  |",
-        "| 1  | 09  |",
-        "| 2  | 09  |",
-        "| 3  | 09  |",
-        "| 4  | 09  |",
-        "| 5  | 09  |",
-        "| 6  | 09  |",
-        "| 7  | 09  |",
-        "+----+-----+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+-----+
+    | id | day |
+    +----+-----+
+    | 0  | 09  |
+    | 1  | 09  |
+    | 2  | 09  |
+    | 3  | 09  |
+    | 4  | 09  |
+    | 5  | 09  |
+    | 6  | 09  |
+    | 7  | 09  |
+    +----+-----+
+    ");
 
     Ok(())
 }
@@ -473,21 +411,20 @@ async fn parquet_multiple_nonstring_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+-----+",
-        "| id | day |",
-        "+----+-----+",
-        "| 0  | 9   |",
-        "| 1  | 9   |",
-        "| 2  | 9   |",
-        "| 3  | 9   |",
-        "| 4  | 9   |",
-        "| 5  | 9   |",
-        "| 6  | 9   |",
-        "| 7  | 9   |",
-        "+----+-----+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+-----+
+    | id | day |
+    +----+-----+
+    | 0  | 9   |
+    | 1  | 9   |
+    | 2  | 9   |
+    | 3  | 9   |
+    | 4  | 9   |
+    | 5  | 9   |
+    | 6  | 9   |
+    | 7  | 9   |
+    +----+-----+
+    ");
 
     Ok(())
 }
@@ -521,7 +458,7 @@ async fn parquet_statistics() -> Result<()> {
     let schema = physical_plan.schema();
     assert_eq!(schema.fields().len(), 4);
 
-    let stat_cols = physical_plan.statistics()?.column_statistics;
+    let stat_cols = physical_plan.partition_statistics(None)?.column_statistics;
     assert_eq!(stat_cols.len(), 4);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Precision::Exact(3));
@@ -536,7 +473,7 @@ async fn parquet_statistics() -> Result<()> {
     let schema = physical_plan.schema();
     assert_eq!(schema.fields().len(), 2);
 
-    let stat_cols = physical_plan.statistics()?.column_statistics;
+    let stat_cols = physical_plan.partition_statistics(None)?.column_statistics;
     assert_eq!(stat_cols.len(), 2);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Precision::Exact(1));
@@ -722,7 +659,7 @@ impl ObjectStore for MirroringObjectStore {
         let meta = ObjectMeta {
             location: location.clone(),
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len() as usize,
+            size: metadata.len(),
             e_tag: None,
             version: None,
         };
@@ -738,14 +675,15 @@ impl ObjectStore for MirroringObjectStore {
     async fn get_range(
         &self,
         location: &Path,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> object_store::Result<Bytes> {
         self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let mut file = File::open(path).unwrap();
-        file.seek(SeekFrom::Start(range.start as u64)).unwrap();
+        file.seek(SeekFrom::Start(range.start)).unwrap();
 
         let to_read = range.end - range.start;
+        let to_read: usize = to_read.try_into().unwrap();
         let mut data = Vec::with_capacity(to_read);
         let read = file.take(to_read as u64).read_to_end(&mut data).unwrap();
         assert_eq!(read, to_read);
@@ -760,9 +698,10 @@ impl ObjectStore for MirroringObjectStore {
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         let prefix = prefix.cloned().unwrap_or_default();
-        Box::pin(stream::iter(self.files.iter().filter_map(
+        let size = self.file_size;
+        Box::pin(stream::iter(self.files.clone().into_iter().filter_map(
             move |location| {
                 // Don't return for exact prefix match
                 let filter = location
@@ -772,9 +711,9 @@ impl ObjectStore for MirroringObjectStore {
 
                 filter.then(|| {
                     Ok(ObjectMeta {
-                        location: location.clone(),
+                        location,
                         last_modified: Utc.timestamp_nanos(0),
-                        size: self.file_size as usize,
+                        size,
                         e_tag: None,
                         version: None,
                     })
@@ -812,7 +751,7 @@ impl ObjectStore for MirroringObjectStore {
                 let object = ObjectMeta {
                     location: k.clone(),
                     last_modified: Utc.timestamp_nanos(0),
-                    size: self.file_size as usize,
+                    size: self.file_size,
                     e_tag: None,
                     version: None,
                 };

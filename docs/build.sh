@@ -28,4 +28,4 @@ sed -i -e 's/\.\.\/\.\.\/\.\.\//https:\/\/github.com\/apache\/arrow-datafusion\/
 
 python rustdoc_trim.py
 
-make SOURCEDIR=`pwd`/temp html
+make SOURCEDIR=`pwd`/temp SPHINXOPTS=-W html

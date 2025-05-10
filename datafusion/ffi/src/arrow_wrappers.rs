@@ -19,8 +19,9 @@ use std::sync::Arc;
 
 use abi_stable::StableAbi;
 use arrow::{
+    array::{make_array, ArrayRef},
     datatypes::{Schema, SchemaRef},
-    ffi::{FFI_ArrowArray, FFI_ArrowSchema},
+    ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
 };
 use log::error;
 
@@ -67,4 +68,14 @@ pub struct WrappedArray {
     pub array: FFI_ArrowArray,
 
     pub schema: WrappedSchema,
+}
+
+impl TryFrom<WrappedArray> for ArrayRef {
+    type Error = arrow::error::ArrowError;
+
+    fn try_from(value: WrappedArray) -> Result<Self, Self::Error> {
+        let data = unsafe { from_ffi(value.array, &value.schema.0)? };
+
+        Ok(make_array(data))
+    }
 }

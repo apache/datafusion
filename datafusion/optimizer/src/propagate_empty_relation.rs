@@ -242,17 +242,28 @@ mod tests {
         binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Operator,
     };
 
+    use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_filter::EliminateFilter;
     use crate::eliminate_nested_union::EliminateNestedUnion;
     use crate::test::{
-        assert_optimized_plan_eq, assert_optimized_plan_with_rules, test_table_scan,
-        test_table_scan_fields, test_table_scan_with_name,
+        assert_optimized_plan_with_rules, test_table_scan, test_table_scan_fields,
+        test_table_scan_with_name,
     };
 
     use super::*;
 
-    fn assert_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(Arc::new(PropagateEmptyRelation::new()), plan, expected)
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(PropagateEmptyRelation::new());
+            assert_optimized_plan_eq_snapshot!(
+                rule,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     fn assert_together_optimized_plan(
@@ -280,8 +291,7 @@ mod tests {
             .project(vec![binary_expr(lit(1), Operator::Plus, lit(1))])?
             .build()?;
 
-        let expected = "EmptyRelation";
-        assert_eq(plan, expected)
+        assert_optimized_plan_equal!(plan, @"EmptyRelation")
     }
 
     #[test]
@@ -316,7 +326,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "TableScan: test";
+        let expected = "Projection: a, b, c\n  TableScan: test";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -406,7 +416,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "TableScan: test";
+        let expected = "Projection: a, b, c\n  TableScan: test";
         assert_together_optimized_plan(plan, expected, true)
     }
 

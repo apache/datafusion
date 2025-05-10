@@ -18,11 +18,13 @@
 extern crate criterion;
 
 use arrow::array::{ArrayRef, Int64Array, OffsetSizeTrait};
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
-use datafusion_expr::ColumnarValue;
+use datafusion_common::DataFusionError;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode;
 use std::sync::Arc;
 
@@ -95,8 +97,26 @@ fn create_args_with_count<O: OffsetSizeTrait>(
     }
 }
 
+fn invoke_substr_with_args(
+    args: Vec<ColumnarValue>,
+    number_rows: usize,
+) -> Result<ColumnarValue, DataFusionError> {
+    let arg_fields_owned = args
+        .iter()
+        .enumerate()
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .collect::<Vec<_>>();
+    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
+    unicode::substr().invoke_with_args(ScalarFunctionArgs {
+        args: args.clone(),
+        arg_fields,
+        number_rows,
+        return_field: &Field::new("f", DataType::Utf8View, true),
+    })
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
-    let substr = unicode::substr();
     for size in [1024, 4096] {
         // string_len = 12, substring_len=6 (see `create_args_without_count`)
         let len = 12;
@@ -107,34 +127,19 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args_without_count::<i32>(size, len, true, true);
         group.bench_function(
             format!("substr_string_view [size={}, strlen={}]", size, len),
-            |b| {
-                b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
-                })
-            },
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_without_count::<i32>(size, len, false, false);
         group.bench_function(
             format!("substr_string [size={}, strlen={}]", size, len),
-            |b| {
-                b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
-                })
-            },
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_without_count::<i64>(size, len, true, false);
         group.bench_function(
             format!("substr_large_string [size={}, strlen={}]", size, len),
-            |b| {
-                b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
-                })
-            },
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         group.finish();
@@ -152,12 +157,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_string_view [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| {
-                b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
-                })
-            },
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_with_count::<i32>(size, len, count, false);
@@ -166,12 +166,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| {
-                b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
-                })
-            },
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_with_count::<i64>(size, len, count, false);
@@ -180,12 +175,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_large_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| {
-                b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
-                })
-            },
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         group.finish();
@@ -203,12 +193,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_string_view [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| {
-                b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
-                })
-            },
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_with_count::<i32>(size, len, count, false);
@@ -217,12 +202,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| {
-                b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
-                })
-            },
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_with_count::<i64>(size, len, count, false);
@@ -231,12 +211,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_large_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| {
-                b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
-                })
-            },
+            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         group.finish();

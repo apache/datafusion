@@ -28,15 +28,18 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [features]
 force_hash_collisions = []
+bench = []
 
 [lib]
 name = "datafusion_physical_plan"
-path = "src/lib.rs"
 
 [dependencies]
 ahash = { workspace = true }
@@ -63,12 +66,14 @@ pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["async_futures"] }
+criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
+insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
+tempfile = "3.19.1"
 tokio = { workspace = true, features = [
     "rt-multi-thread",
     "fs",
@@ -77,4 +82,13 @@ tokio = { workspace = true, features = [
 
 [[bench]]
 harness = false
-name = "spm"
+name = "partial_ordering"
+
+[[bench]]
+harness = false
+name = "spill_io"
+
+[[bench]]
+harness = false
+name = "sort_preserving_merge"
+required-features = ["bench"]

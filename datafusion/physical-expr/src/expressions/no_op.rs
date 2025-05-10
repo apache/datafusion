@@ -21,12 +21,11 @@ use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
-use crate::PhysicalExpr;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -76,5 +75,9 @@ impl PhysicalExpr for NoOp {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }

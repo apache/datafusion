@@ -23,7 +23,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_doc::Documentation;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -143,8 +143,8 @@ impl ScalarUDFImpl for GreatestFunc {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        super::greatest_least_utils::execute_conditional::<Self>(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        super::greatest_least_utils::execute_conditional::<Self>(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

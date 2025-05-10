@@ -20,12 +20,13 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int32Array};
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
 use rand::Rng;
 
 use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::make_date;
 
 fn years(rng: &mut ThreadRng) -> Int32Array {
@@ -64,13 +65,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 make_date()
-                    .invoke_batch(
-                        &[years.clone(), months.clone(), days.clone()],
-                        batch_len,
-                    )
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![years.clone(), months.clone(), days.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", years.data_type(), true),
+                            &Field::new("a", months.data_type(), true),
+                            &Field::new("a", days.data_type(), true),
+                        ],
+                        number_rows: batch_len,
+                        return_field: &Field::new("f", DataType::Date32, true),
+                    })
                     .expect("make_date should work on valid values"),
             )
         })
@@ -85,13 +91,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 make_date()
-                    .invoke_batch(
-                        &[year.clone(), months.clone(), days.clone()],
-                        batch_len,
-                    )
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![year.clone(), months.clone(), days.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", year.data_type(), true),
+                            &Field::new("a", months.data_type(), true),
+                            &Field::new("a", days.data_type(), true),
+                        ],
+                        number_rows: batch_len,
+                        return_field: &Field::new("f", DataType::Date32, true),
+                    })
                     .expect("make_date should work on valid values"),
             )
         })
@@ -106,10 +117,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         let days = ColumnarValue::Array(day_arr);
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 make_date()
-                    .invoke_batch(&[year.clone(), month.clone(), days.clone()], batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![year.clone(), month.clone(), days.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", year.data_type(), true),
+                            &Field::new("a", month.data_type(), true),
+                            &Field::new("a", days.data_type(), true),
+                        ],
+                        number_rows: batch_len,
+                        return_field: &Field::new("f", DataType::Date32, true),
+                    })
                     .expect("make_date should work on valid values"),
             )
         })
@@ -121,10 +140,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         let day = ColumnarValue::Scalar(ScalarValue::Int32(Some(26)));
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 make_date()
-                    .invoke_batch(&[year.clone(), month.clone(), day.clone()], 1)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![year.clone(), month.clone(), day.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", year.data_type(), true),
+                            &Field::new("a", month.data_type(), true),
+                            &Field::new("a", day.data_type(), true),
+                        ],
+                        number_rows: 1,
+                        return_field: &Field::new("f", DataType::Date32, true),
+                    })
                     .expect("make_date should work on valid values"),
             )
         })

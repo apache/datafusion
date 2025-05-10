@@ -26,7 +26,8 @@ use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, Field, TimeUnit};
+use datafusion_common::types::{logical_date, NativeType};
 
 use datafusion_common::{
     cast::{
@@ -41,10 +42,10 @@ use datafusion_common::{
     Result, ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -95,24 +96,29 @@ impl DatePartFunc {
             signature: Signature::one_of(
                 vec![
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Timestamp,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Timestamp,
+                            // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
+                            vec![TypeSignatureClass::Native(logical_string())],
+                            NativeType::Timestamp(Nanosecond, None),
+                        ),
                     ]),
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Date,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_date())),
                     ]),
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Time,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Time),
                     ]),
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Interval,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Interval),
                     ]),
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Duration,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Duration),
                     ]),
                 ],
                 Volatility::Immutable,
@@ -136,10 +142,10 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be called instead")
+        internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
 
         field
@@ -149,9 +155,9 @@ impl ScalarUDFImpl for DatePartFunc {
                     .filter(|s| !s.is_empty())
                     .map(|part| {
                         if is_epoch(part) {
-                            ReturnInfo::new_nullable(DataType::Float64)
+                            Field::new(self.name(), DataType::Float64, true)
                         } else {
-                            ReturnInfo::new_nullable(DataType::Int32)
+                            Field::new(self.name(), DataType::Int32, true)
                         }
                     })
             })
@@ -161,11 +167,11 @@ impl ScalarUDFImpl for DatePartFunc {
             )
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         let [part, array] = take_function_args(self.name(), args)?;
 
         let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
@@ -181,11 +187,11 @@ impl ScalarUDFImpl for DatePartFunc {
         let is_scalar = matches!(array, ColumnarValue::Scalar(_));
 
         let array = match array {
-            ColumnarValue::Array(array) => Arc::clone(array),
+            ColumnarValue::Array(array) => Arc::clone(&array),
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        let part_trim = part_normalization(part);
+        let part_trim = part_normalization(&part);
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow

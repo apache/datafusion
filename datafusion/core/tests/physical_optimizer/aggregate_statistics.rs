@@ -22,6 +22,8 @@ use crate::physical_optimizer::test_utils::TestAggregate;
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
@@ -36,9 +38,7 @@ use datafusion_physical_plan::aggregates::PhysicalGroupBy;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::common;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// Mock data using a MemorySourceConfig which has an exact count statistic

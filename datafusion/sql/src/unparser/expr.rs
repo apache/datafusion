@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::expr::Unnest;
+use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
-    Subscript, TimezoneInfo, UnaryOperator,
+    self, Array, BinaryOperator, CaseWhen, Expr as AstExpr, Function, Ident, Interval,
+    ObjectName, OrderByOptions, Subscript, TimezoneInfo, UnaryOperator, ValueWithSpan,
 };
 use std::sync::Arc;
 use std::vec;
@@ -94,6 +94,7 @@ impl Unparser<'_> {
         Ok(root_expr)
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
         match expr {
             Expr::InList(InList {
@@ -154,12 +155,14 @@ impl Unparser<'_> {
             }) => {
                 let conditions = when_then_expr
                     .iter()
-                    .map(|(w, _)| self.expr_to_sql_inner(w))
-                    .collect::<Result<Vec<_>>>()?;
-                let results = when_then_expr
-                    .iter()
-                    .map(|(_, t)| self.expr_to_sql_inner(t))
-                    .collect::<Result<Vec<_>>>()?;
+                    .map(|(cond, result)| {
+                        Ok(CaseWhen {
+                            condition: self.expr_to_sql_inner(cond)?,
+                            result: self.expr_to_sql_inner(result)?,
+                        })
+                    })
+                    .collect::<Result<Vec<CaseWhen>>>()?;
+
                 let operand = match expr.as_ref() {
                     Some(e) => match self.expr_to_sql_inner(e) {
                         Ok(sql_expr) => Some(Box::new(sql_expr)),
@@ -178,7 +181,6 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Case {
                     operand,
                     conditions,
-                    results,
                     else_result,
                 })
             }
@@ -189,11 +191,14 @@ impl Unparser<'_> {
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(WindowFunction {
                 fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment: _,
+                params:
+                    WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        ..
+                    },
             }) => {
                 let func_name = fun.name();
 
@@ -244,7 +249,7 @@ impl Unparser<'_> {
                 }));
 
                 Ok(ast::Expr::Function(Function {
-                    name: ObjectName(vec![Ident {
+                    name: ObjectName::from(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
                         span: Span::empty(),
@@ -268,13 +273,6 @@ impl Unparser<'_> {
                 pattern,
                 escape_char,
                 case_insensitive: _,
-            })
-            | Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive: _,
             }) => Ok(ast::Expr::Like {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
@@ -282,23 +280,65 @@ impl Unparser<'_> {
                 escape_char: escape_char.map(|c| c.to_string()),
                 any: false,
             }),
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                if *case_insensitive {
+                    Ok(ast::Expr::ILike {
+                        negated: *negated,
+                        expr: Box::new(self.expr_to_sql_inner(expr)?),
+                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
+                        escape_char: escape_char.map(|c| c.to_string()),
+                        any: false,
+                    })
+                } else {
+                    Ok(ast::Expr::Like {
+                        negated: *negated,
+                        expr: Box::new(self.expr_to_sql_inner(expr)?),
+                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
+                        escape_char: escape_char.map(|c| c.to_string()),
+                        any: false,
+                    })
+                }
+            }
+
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func.name();
+                let AggregateFunctionParams {
+                    distinct,
+                    args,
+                    filter,
+                    order_by,
+                    ..
+                } = &agg.params;
 
-                let args = self.function_args_to_sql(&agg.args)?;
-                let filter = match &agg.filter {
+                let args = self.function_args_to_sql(args)?;
+                let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
+                let within_group = if agg.func.is_ordered_set_aggregate() {
+                    order_by
+                        .as_ref()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .map(|sort_expr| self.sort_to_sql(sort_expr))
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    Vec::new()
+                };
                 Ok(ast::Expr::Function(Function {
-                    name: ObjectName(vec![Ident {
+                    name: ObjectName::from(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
                         span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
-                        duplicate_treatment: agg
-                            .distinct
+                        duplicate_treatment: distinct
                             .then_some(ast::DuplicateTreatment::Distinct),
                         args,
                         clauses: vec![],
@@ -306,7 +346,7 @@ impl Unparser<'_> {
                     filter,
                     null_treatment: None,
                     over: None,
-                    within_group: vec![],
+                    within_group,
                     parameters: ast::FunctionArguments::None,
                     uses_odbc_syntax: false,
                 }))
@@ -421,13 +461,14 @@ impl Unparser<'_> {
                 })
             }
             // TODO: unparsing wildcard addition options
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, .. } => {
                 let attached_token = AttachedToken::empty();
                 if let Some(qualifier) = qualifier {
                     let idents: Vec<Ident> =
                         qualifier.to_vec().into_iter().map(Ident::new).collect();
                     Ok(ast::Expr::QualifiedWildcard(
-                        ObjectName(idents),
+                        ObjectName::from(idents),
                         attached_token,
                     ))
                 } else {
@@ -469,7 +510,7 @@ impl Unparser<'_> {
                 }
             },
             Expr::Placeholder(p) => {
-                Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
+                Ok(ast::Expr::value(ast::Value::Placeholder(p.id.to_string())))
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
@@ -499,7 +540,7 @@ impl Unparser<'_> {
     ) -> Result<ast::Expr> {
         let args = self.function_args_to_sql(args)?;
         Ok(ast::Expr::Function(Function {
-            name: ObjectName(vec![Ident {
+            name: ObjectName::from(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
                 span: Span::empty(),
@@ -651,8 +692,10 @@ impl Unparser<'_> {
 
         Ok(ast::OrderByExpr {
             expr: sql_parser_expr,
-            asc: Some(*asc),
-            nulls_first,
+            options: OrderByOptions {
+                asc: Some(*asc),
+                nulls_first,
+            },
             with_fill: None,
         })
     }
@@ -665,7 +708,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
+    pub fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
             let mut id = if self.dialect.full_qualified_col() {
                 table_ref.to_vec()
@@ -692,7 +735,11 @@ impl Unparser<'_> {
             datafusion_expr::window_frame::WindowFrameBound::Preceding(val) => {
                 Ok(ast::WindowFrameBound::Preceding({
                     let val = self.scalar_to_sql(val)?;
-                    if let ast::Expr::Value(ast::Value::Null) = &val {
+                    if let ast::Expr::Value(ValueWithSpan {
+                        value: ast::Value::Null,
+                        span: _,
+                    }) = &val
+                    {
                         None
                     } else {
                         Some(Box::new(val))
@@ -702,7 +749,11 @@ impl Unparser<'_> {
             datafusion_expr::window_frame::WindowFrameBound::Following(val) => {
                 Ok(ast::WindowFrameBound::Following({
                     let val = self.scalar_to_sql(val)?;
-                    if let ast::Expr::Value(ast::Value::Null) = &val {
+                    if let ast::Expr::Value(ValueWithSpan {
+                        value: ast::Value::Null,
+                        span: _,
+                    }) = &val
+                    {
                         None
                     } else {
                         Some(Box::new(val))
@@ -721,6 +772,7 @@ impl Unparser<'_> {
     ) -> Result<Vec<ast::FunctionArg>> {
         args.iter()
             .map(|e| {
+                #[expect(deprecated)]
                 if matches!(
                     e,
                     Expr::Wildcard {
@@ -903,6 +955,19 @@ impl Unparser<'_> {
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             BinaryOperator::AtArrow => Ok(Operator::AtArrow),
             BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
+            BinaryOperator::Arrow => Ok(Operator::Arrow),
+            BinaryOperator::LongArrow => Ok(Operator::LongArrow),
+            BinaryOperator::HashArrow => Ok(Operator::HashArrow),
+            BinaryOperator::HashLongArrow => Ok(Operator::HashLongArrow),
+            BinaryOperator::AtAt => Ok(Operator::AtAt),
+            BinaryOperator::DuckIntegerDivide | BinaryOperator::MyIntegerDivide => {
+                Ok(Operator::IntegerDivide)
+            }
+            BinaryOperator::HashMinus => Ok(Operator::HashMinus),
+            BinaryOperator::AtQuestion => Ok(Operator::AtQuestion),
+            BinaryOperator::Question => Ok(Operator::Question),
+            BinaryOperator::QuestionAnd => Ok(Operator::QuestionAnd),
+            BinaryOperator::QuestionPipe => Ok(Operator::QuestionPipe),
             _ => not_impl_err!("unsupported operation: {op:?}"),
         }
     }
@@ -938,8 +1003,19 @@ impl Unparser<'_> {
             Operator::BitwiseShiftRight => Ok(BinaryOperator::PGBitwiseShiftRight),
             Operator::BitwiseShiftLeft => Ok(BinaryOperator::PGBitwiseShiftLeft),
             Operator::StringConcat => Ok(BinaryOperator::StringConcat),
-            Operator::AtArrow => not_impl_err!("unsupported operation: {op:?}"),
-            Operator::ArrowAt => not_impl_err!("unsupported operation: {op:?}"),
+            Operator::AtArrow => Ok(BinaryOperator::AtArrow),
+            Operator::ArrowAt => Ok(BinaryOperator::ArrowAt),
+            Operator::Arrow => Ok(BinaryOperator::Arrow),
+            Operator::LongArrow => Ok(BinaryOperator::LongArrow),
+            Operator::HashArrow => Ok(BinaryOperator::HashArrow),
+            Operator::HashLongArrow => Ok(BinaryOperator::HashLongArrow),
+            Operator::AtAt => Ok(BinaryOperator::AtAt),
+            Operator::IntegerDivide => Ok(BinaryOperator::DuckIntegerDivide),
+            Operator::HashMinus => Ok(BinaryOperator::HashMinus),
+            Operator::AtQuestion => Ok(BinaryOperator::AtQuestion),
+            Operator::Question => Ok(BinaryOperator::Question),
+            Operator::QuestionAnd => Ok(BinaryOperator::QuestionAnd),
+            Operator::QuestionPipe => Ok(BinaryOperator::QuestionPipe),
         }
     }
 
@@ -989,7 +1065,7 @@ impl Unparser<'_> {
 
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
-            expr: Box::new(ast::Expr::Value(SingleQuotedString(ts))),
+            expr: Box::new(ast::Expr::value(SingleQuotedString(ts))),
             data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
             format: None,
         })
@@ -1011,7 +1087,7 @@ impl Unparser<'_> {
             .to_string();
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
-            expr: Box::new(ast::Expr::Value(SingleQuotedString(time))),
+            expr: Box::new(ast::Expr::value(SingleQuotedString(time))),
             data_type: ast::DataType::Time(None, TimezoneInfo::None),
             format: None,
         })
@@ -1046,102 +1122,102 @@ impl Unparser<'_> {
     /// For example ScalarValue::Date32(d) corresponds to the ast::Expr CAST('datestr' as DATE)
     fn scalar_to_sql(&self, v: &ScalarValue) -> Result<ast::Expr> {
         match v {
-            ScalarValue::Null => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Null => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Boolean(Some(b)) => {
-                Ok(ast::Expr::Value(ast::Value::Boolean(b.to_owned())))
+                Ok(ast::Expr::value(ast::Value::Boolean(b.to_owned())))
             }
-            ScalarValue::Boolean(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Boolean(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Float16(Some(f)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+                Ok(ast::Expr::value(ast::Value::Number(f.to_string(), false)))
             }
-            ScalarValue::Float16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Float16(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Float32(Some(f)) => {
                 let f_val = match f.fract() {
                     0.0 => format!("{:.1}", f),
                     _ => format!("{}", f),
                 };
-                Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
+                Ok(ast::Expr::value(ast::Value::Number(f_val, false)))
             }
-            ScalarValue::Float32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Float32(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Float64(Some(f)) => {
                 let f_val = match f.fract() {
                     0.0 => format!("{:.1}", f),
                     _ => format!("{}", f),
                 };
-                Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
+                Ok(ast::Expr::value(ast::Value::Number(f_val, false)))
             }
-            ScalarValue::Float64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Float64(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Decimal128(Some(value), precision, scale) => {
-                Ok(ast::Expr::Value(ast::Value::Number(
+                Ok(ast::Expr::value(ast::Value::Number(
                     Decimal128Type::format_decimal(*value, *precision, *scale),
                     false,
                 )))
             }
-            ScalarValue::Decimal128(None, ..) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Decimal128(None, ..) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Decimal256(Some(value), precision, scale) => {
-                Ok(ast::Expr::Value(ast::Value::Number(
+                Ok(ast::Expr::value(ast::Value::Number(
                     Decimal256Type::format_decimal(*value, *precision, *scale),
                     false,
                 )))
             }
-            ScalarValue::Decimal256(None, ..) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Decimal256(None, ..) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Int8(Some(i)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(i.to_string(), false)))
+                Ok(ast::Expr::value(ast::Value::Number(i.to_string(), false)))
             }
-            ScalarValue::Int8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Int8(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Int16(Some(i)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(i.to_string(), false)))
+                Ok(ast::Expr::value(ast::Value::Number(i.to_string(), false)))
             }
-            ScalarValue::Int16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Int16(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Int32(Some(i)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(i.to_string(), false)))
+                Ok(ast::Expr::value(ast::Value::Number(i.to_string(), false)))
             }
-            ScalarValue::Int32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Int32(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Int64(Some(i)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(i.to_string(), false)))
+                Ok(ast::Expr::value(ast::Value::Number(i.to_string(), false)))
             }
-            ScalarValue::Int64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Int64(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::UInt8(Some(ui)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
+                Ok(ast::Expr::value(ast::Value::Number(ui.to_string(), false)))
             }
-            ScalarValue::UInt8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::UInt8(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::UInt16(Some(ui)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
+                Ok(ast::Expr::value(ast::Value::Number(ui.to_string(), false)))
             }
-            ScalarValue::UInt16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::UInt16(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::UInt32(Some(ui)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
+                Ok(ast::Expr::value(ast::Value::Number(ui.to_string(), false)))
             }
-            ScalarValue::UInt32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::UInt32(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::UInt64(Some(ui)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
+                Ok(ast::Expr::value(ast::Value::Number(ui.to_string(), false)))
             }
-            ScalarValue::UInt64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::UInt64(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Utf8(Some(str)) => {
-                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
+                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
             }
-            ScalarValue::Utf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Utf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Utf8View(Some(str)) => {
-                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
+                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
             }
-            ScalarValue::Utf8View(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Utf8View(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::LargeUtf8(Some(str)) => {
-                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
+                Ok(ast::Expr::value(SingleQuotedString(str.to_string())))
             }
-            ScalarValue::LargeUtf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Binary(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Binary(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::BinaryView(Some(_)) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
-            ScalarValue::BinaryView(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::BinaryView(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::FixedSizeBinary(..) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
             ScalarValue::LargeBinary(Some(_)) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
-            ScalarValue::LargeBinary(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::LargeBinary(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
@@ -1160,14 +1236,14 @@ impl Unparser<'_> {
 
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(SingleQuotedString(
+                    expr: Box::new(ast::Expr::value(SingleQuotedString(
                         date.to_string(),
                     ))),
                     data_type: ast::DataType::Date,
                     format: None,
                 })
             }
-            ScalarValue::Date32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Date32(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Date64(Some(_)) => {
                 let datetime = v
                     .to_array()?
@@ -1183,57 +1259,57 @@ impl Unparser<'_> {
 
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(SingleQuotedString(
+                    expr: Box::new(ast::Expr::value(SingleQuotedString(
                         datetime.to_string(),
                     ))),
                     data_type: self.ast_type_for_date64_in_cast(),
                     format: None,
                 })
             }
-            ScalarValue::Date64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Date64(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Time32Second(Some(_t)) => {
                 self.handle_time::<Time32SecondType>(v)
             }
-            ScalarValue::Time32Second(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Time32Second(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Time32Millisecond(Some(_t)) => {
                 self.handle_time::<Time32MillisecondType>(v)
             }
             ScalarValue::Time32Millisecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::Time64Microsecond(Some(_t)) => {
                 self.handle_time::<Time64MicrosecondType>(v)
             }
             ScalarValue::Time64Microsecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::Time64Nanosecond(Some(_t)) => {
                 self.handle_time::<Time64NanosecondType>(v)
             }
-            ScalarValue::Time64Nanosecond(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::Time64Nanosecond(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::TimestampSecond(Some(_ts), tz) => {
                 self.handle_timestamp::<TimestampSecondType>(v, tz)
             }
             ScalarValue::TimestampSecond(None, _) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampMillisecond(Some(_ts), tz) => {
                 self.handle_timestamp::<TimestampMillisecondType>(v, tz)
             }
             ScalarValue::TimestampMillisecond(None, _) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampMicrosecond(Some(_ts), tz) => {
                 self.handle_timestamp::<TimestampMicrosecondType>(v, tz)
             }
             ScalarValue::TimestampMicrosecond(None, _) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampNanosecond(Some(_ts), tz) => {
                 self.handle_timestamp::<TimestampNanosecondType>(v, tz)
             }
             ScalarValue::TimestampNanosecond(None, _) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::IntervalYearMonth(Some(_))
             | ScalarValue::IntervalDayTime(Some(_))
@@ -1241,33 +1317,33 @@ impl Unparser<'_> {
                 self.interval_scalar_to_sql(v)
             }
             ScalarValue::IntervalYearMonth(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
-            ScalarValue::IntervalDayTime(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::IntervalDayTime(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::IntervalMonthDayNano(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::DurationSecond(Some(_d)) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
-            ScalarValue::DurationSecond(None) => Ok(ast::Expr::Value(ast::Value::Null)),
+            ScalarValue::DurationSecond(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::DurationMillisecond(Some(_d)) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
             ScalarValue::DurationMillisecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::DurationMicrosecond(Some(_d)) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
             ScalarValue::DurationMicrosecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::DurationNanosecond(Some(_d)) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
             ScalarValue::DurationNanosecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
+                Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
@@ -1291,7 +1367,7 @@ impl Unparser<'_> {
         // MONTH only
         if months != 0 && days == 0 && microseconds == 0 {
             let interval = Interval {
-                value: Box::new(ast::Expr::Value(ast::Value::Number(
+                value: Box::new(ast::Expr::value(ast::Value::Number(
                     months.to_string(),
                     false,
                 ))),
@@ -1308,7 +1384,7 @@ impl Unparser<'_> {
         // DAY only
         if microseconds == 0 {
             let interval = Interval {
-                value: Box::new(ast::Expr::Value(ast::Value::Number(
+                value: Box::new(ast::Expr::value(ast::Value::Number(
                     days.to_string(),
                     false,
                 ))),
@@ -1326,7 +1402,7 @@ impl Unparser<'_> {
 
         if microseconds % 1_000_000 != 0 {
             let interval = Interval {
-                value: Box::new(ast::Expr::Value(ast::Value::Number(
+                value: Box::new(ast::Expr::value(ast::Value::Number(
                     microseconds.to_string(),
                     false,
                 ))),
@@ -1342,7 +1418,7 @@ impl Unparser<'_> {
 
         if secs % 60 != 0 {
             let interval = Interval {
-                value: Box::new(ast::Expr::Value(ast::Value::Number(
+                value: Box::new(ast::Expr::value(ast::Value::Number(
                     secs.to_string(),
                     false,
                 ))),
@@ -1358,7 +1434,7 @@ impl Unparser<'_> {
 
         if mins % 60 != 0 {
             let interval = Interval {
-                value: Box::new(ast::Expr::Value(ast::Value::Number(
+                value: Box::new(ast::Expr::value(ast::Value::Number(
                     mins.to_string(),
                     false,
                 ))),
@@ -1374,7 +1450,7 @@ impl Unparser<'_> {
 
         if hours % 24 != 0 {
             let interval = Interval {
-                value: Box::new(ast::Expr::Value(ast::Value::Number(
+                value: Box::new(ast::Expr::value(ast::Value::Number(
                     hours.to_string(),
                     false,
                 ))),
@@ -1389,7 +1465,7 @@ impl Unparser<'_> {
         let days = hours / 24;
 
         let interval = Interval {
-            value: Box::new(ast::Expr::Value(ast::Value::Number(
+            value: Box::new(ast::Expr::value(ast::Value::Number(
                 days.to_string(),
                 false,
             ))),
@@ -1411,7 +1487,7 @@ impl Unparser<'_> {
                     );
                 };
                 let interval = Interval {
-                    value: Box::new(ast::Expr::Value(SingleQuotedString(
+                    value: Box::new(ast::Expr::value(SingleQuotedString(
                         result.to_uppercase(),
                     ))),
                     leading_field: None,
@@ -1425,7 +1501,7 @@ impl Unparser<'_> {
             IntervalStyle::SQLStandard => match v {
                 ScalarValue::IntervalYearMonth(Some(v)) => {
                     let interval = Interval {
-                        value: Box::new(ast::Expr::Value(SingleQuotedString(
+                        value: Box::new(ast::Expr::value(SingleQuotedString(
                             v.to_string(),
                         ))),
                         leading_field: Some(ast::DateTimeField::Month),
@@ -1446,7 +1522,7 @@ impl Unparser<'_> {
 
                     let millis = v.milliseconds % 1_000;
                     let interval = Interval {
-                        value: Box::new(ast::Expr::Value(SingleQuotedString(format!(
+                        value: Box::new(ast::Expr::value(SingleQuotedString(format!(
                             "{days} {hours}:{mins}:{secs}.{millis:3}"
                         )))),
                         leading_field: Some(ast::DateTimeField::Day),
@@ -1459,7 +1535,7 @@ impl Unparser<'_> {
                 ScalarValue::IntervalMonthDayNano(Some(v)) => {
                     if v.months >= 0 && v.days == 0 && v.nanoseconds == 0 {
                         let interval = Interval {
-                            value: Box::new(ast::Expr::Value(SingleQuotedString(
+                            value: Box::new(ast::Expr::value(SingleQuotedString(
                                 v.months.to_string(),
                             ))),
                             leading_field: Some(ast::DateTimeField::Month),
@@ -1480,7 +1556,7 @@ impl Unparser<'_> {
                         let millis = (v.nanoseconds % 1_000_000_000) / 1_000_000;
 
                         let interval = Interval {
-                            value: Box::new(ast::Expr::Value(SingleQuotedString(
+                            value: Box::new(ast::Expr::value(SingleQuotedString(
                                 format!("{days} {hours}:{mins}:{secs}.{millis:03}"),
                             ))),
                             leading_field: Some(ast::DateTimeField::Day),
@@ -1525,7 +1601,7 @@ impl Unparser<'_> {
         let args = self.function_args_to_sql(std::slice::from_ref(&unnest.expr))?;
 
         Ok(ast::Expr::Function(Function {
-            name: ObjectName(vec![Ident {
+            name: ObjectName::from(vec![Ident {
                 value: "UNNEST".to_string(),
                 quote_style: None,
                 span: Span::empty(),
@@ -1554,10 +1630,10 @@ impl Unparser<'_> {
             DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
             DataType::Int32 => Ok(self.dialect.int32_cast_dtype()),
             DataType::Int64 => Ok(self.dialect.int64_cast_dtype()),
-            DataType::UInt8 => Ok(ast::DataType::UnsignedTinyInt(None)),
-            DataType::UInt16 => Ok(ast::DataType::UnsignedSmallInt(None)),
-            DataType::UInt32 => Ok(ast::DataType::UnsignedInteger(None)),
-            DataType::UInt64 => Ok(ast::DataType::UnsignedBigInt(None)),
+            DataType::UInt8 => Ok(ast::DataType::TinyIntUnsigned(None)),
+            DataType::UInt16 => Ok(ast::DataType::SmallIntUnsigned(None)),
+            DataType::UInt32 => Ok(ast::DataType::IntegerUnsigned(None)),
+            DataType::UInt64 => Ok(ast::DataType::BigIntUnsigned(None)),
             DataType::Float16 => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1577,9 +1653,7 @@ impl Unparser<'_> {
             DataType::Duration(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Interval(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Interval(_) => Ok(ast::DataType::Interval),
             DataType::Binary => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1616,9 +1690,7 @@ impl Unparser<'_> {
             DataType::Union(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Dictionary(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
             DataType::Decimal128(precision, scale)
             | DataType::Decimal256(precision, scale) => {
                 let mut new_precision = *precision as u64;
@@ -1647,6 +1719,7 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{any::Any, sync::Arc, vec};
 
+    use crate::unparser::dialect::SqliteDialect;
     use arrow::array::{LargeListArray, ListArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
@@ -1655,10 +1728,11 @@ mod tests {
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when, wildcard, ScalarUDF, ScalarUDFImpl, Signature,
-        Volatility, WindowFrame, WindowFunctionDefinition,
+        table_scan, try_cast, when, ColumnarValue, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
+    use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
     use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
@@ -1670,7 +1744,7 @@ mod tests {
 
     use crate::unparser::dialect::{
         CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
-        Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
+        DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
     };
 
     use super::*;
@@ -1705,12 +1779,17 @@ mod tests {
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
         }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
+        }
     }
     // See sql::tests for E2E tests.
 
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        #[expect(deprecated)]
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,
@@ -1806,9 +1885,19 @@ mod tests {
                     expr: Box::new(col("a")),
                     pattern: Box::new(lit("foo")),
                     escape_char: Some('o'),
-                    case_insensitive: true,
+                    case_insensitive: false,
                 }),
                 r#"a NOT LIKE 'foo' ESCAPE 'o'"#,
+            ),
+            (
+                Expr::Like(Like {
+                    negated: true,
+                    expr: Box::new(col("a")),
+                    pattern: Box::new(lit("foo")),
+                    escape_char: Some('o'),
+                    case_insensitive: true,
+                }),
+                r#"a NOT ILIKE 'foo' ESCAPE 'o'"#,
             ),
             (
                 Expr::SimilarTo(Like {
@@ -1906,16 +1995,24 @@ mod tests {
             ),
             (sum(col("a")), r#"sum(a)"#),
             (
+                #[expect(deprecated)]
                 count_udaf()
-                    .call(vec![wildcard()])
+                    .call(vec![Expr::Wildcard {
+                        qualifier: None,
+                        options: Box::new(WildcardOptions::default()),
+                    }])
                     .distinct()
                     .build()
                     .unwrap(),
                 "count(DISTINCT *)",
             ),
             (
+                #[expect(deprecated)]
                 count_udaf()
-                    .call(vec![wildcard()])
+                    .call(vec![Expr::Wildcard {
+                        qualifier: None,
+                        options: Box::new(WildcardOptions::default()),
+                    }])
                     .filter(lit(true))
                     .build()
                     .unwrap(),
@@ -1924,30 +2021,38 @@ mod tests {
             (
                 Expr::WindowFunction(WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                    args: vec![col("col")],
-                    partition_by: vec![],
-                    order_by: vec![],
-                    window_frame: WindowFrame::new(None),
-                    null_treatment: None,
+                    params: WindowFunctionParams {
+                        args: vec![col("col")],
+                        partition_by: vec![],
+                        order_by: vec![],
+                        window_frame: WindowFrame::new(None),
+                        null_treatment: None,
+                    },
                 }),
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
             (
+                #[expect(deprecated)]
                 Expr::WindowFunction(WindowFunction {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
-                    args: vec![wildcard()],
-                    partition_by: vec![],
-                    order_by: vec![Sort::new(col("a"), false, true)],
-                    window_frame: WindowFrame::new_bounds(
-                        datafusion_expr::WindowFrameUnits::Range,
-                        datafusion_expr::WindowFrameBound::Preceding(
-                            ScalarValue::UInt32(Some(6)),
+                    params: WindowFunctionParams {
+                        args: vec![Expr::Wildcard {
+                            qualifier: None,
+                            options: Box::new(WildcardOptions::default()),
+                        }],
+                        partition_by: vec![],
+                        order_by: vec![Sort::new(col("a"), false, true)],
+                        window_frame: WindowFrame::new_bounds(
+                            datafusion_expr::WindowFrameUnits::Range,
+                            datafusion_expr::WindowFrameBound::Preceding(
+                                ScalarValue::UInt32(Some(6)),
+                            ),
+                            datafusion_expr::WindowFrameBound::Following(
+                                ScalarValue::UInt32(Some(2)),
+                            ),
                         ),
-                        datafusion_expr::WindowFrameBound::Following(
-                            ScalarValue::UInt32(Some(2)),
-                        ),
-                    ),
-                    null_treatment: None,
+                        null_treatment: None,
+                    },
                 }),
                 r#"count(*) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
@@ -2101,6 +2206,22 @@ mod tests {
                     )]),
                 ))),
                 "[1, 2, 3]",
+            ),
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("a")),
+                    op: Operator::ArrowAt,
+                    right: Box::new(col("b")),
+                }),
+                "(a <@ b)",
+            ),
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("a")),
+                    op: Operator::AtArrow,
+                    right: Box::new(col("b")),
+                }),
+                "(a @> b)",
             ),
         ];
 
@@ -2530,7 +2651,7 @@ mod tests {
         let default_dialect = CustomDialectBuilder::new().build();
         let mysql_dialect = CustomDialectBuilder::new()
             .with_int64_cast_dtype(ast::DataType::Custom(
-                ObjectName(vec![Ident::new("SIGNED")]),
+                ObjectName::from(vec![Ident::new("SIGNED")]),
                 vec![],
             ))
             .build();
@@ -2558,7 +2679,7 @@ mod tests {
         let default_dialect = CustomDialectBuilder::new().build();
         let mysql_dialect = CustomDialectBuilder::new()
             .with_int32_cast_dtype(ast::DataType::Custom(
-                ObjectName(vec![Ident::new("SIGNED")]),
+                ObjectName::from(vec![Ident::new("SIGNED")]),
                 vec![],
             ))
             .build();
@@ -2780,7 +2901,7 @@ mod tests {
             let unparser = Unparser::new(dialect.as_ref());
             let func = WindowFunctionDefinition::WindowUDF(rank_udwf());
             let mut window_func = WindowFunction::new(func, vec![]);
-            window_func.order_by = vec![Sort::new(col("a"), true, true)];
+            window_func.params.order_by = vec![Sort::new(col("a"), true, true)];
             let expr = Expr::WindowFunction(window_func);
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -2789,6 +2910,131 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_unixtime() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> = Arc::new(DefaultDialect {});
+        let sqlite_dialect: Arc<dyn Dialect> = Arc::new(SqliteDialect {});
+
+        for (dialect, expected) in [
+            (default_dialect, "from_unixtime(date_col)"),
+            (sqlite_dialect, "datetime(`date_col`, 'unixepoch')"),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+            let expr = Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::new())),
+                args: vec![col("date_col")],
+            });
+
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = ast.to_string();
+            let expected = expected.to_string();
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_date_trunc() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> = Arc::new(DefaultDialect {});
+        let sqlite_dialect: Arc<dyn Dialect> = Arc::new(SqliteDialect {});
+
+        for (dialect, precision, expected) in [
+            (
+                Arc::clone(&default_dialect),
+                "YEAR",
+                "date_trunc('YEAR', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "YEAR",
+                "strftime('%Y', `date_col`)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                "MONTH",
+                "date_trunc('MONTH', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "MONTH",
+                "strftime('%Y-%m', `date_col`)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                "DAY",
+                "date_trunc('DAY', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "DAY",
+                "strftime('%Y-%m-%d', `date_col`)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                "HOUR",
+                "date_trunc('HOUR', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "HOUR",
+                "strftime('%Y-%m-%d %H', `date_col`)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                "MINUTE",
+                "date_trunc('MINUTE', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "MINUTE",
+                "strftime('%Y-%m-%d %H:%M', `date_col`)",
+            ),
+            (default_dialect, "SECOND", "date_trunc('SECOND', date_col)"),
+            (
+                sqlite_dialect,
+                "SECOND",
+                "strftime('%Y-%m-%d %H:%M:%S', `date_col`)",
+            ),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+            let expr = Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(
+                    datafusion_functions::datetime::date_trunc::DateTruncFunc::new(),
+                )),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8(Some(precision.to_string()))),
+                    col("date_col"),
+                ],
+            });
+
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = ast.to_string();
+            let expected = expected.to_string();
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_dictionary_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new().build();
+
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8),
+        ))?;
+
+        assert_eq!(ast_dtype, ast::DataType::Varchar(None));
+
         Ok(())
     }
 

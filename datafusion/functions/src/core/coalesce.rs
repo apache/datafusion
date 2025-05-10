@@ -18,10 +18,12 @@
 use arrow::array::{new_null_array, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::binary::try_type_union_resolution;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -77,27 +79,25 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be called instead")
+        internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
         // If any the arguments in coalesce is non-null, the result is non-null
-        let nullable = args.nullables.iter().all(|&nullable| nullable);
+        let nullable = args.arg_fields.iter().all(|f| f.is_nullable());
         let return_type = args
-            .arg_types
+            .arg_fields
             .iter()
+            .map(|f| f.data_type())
             .find_or_first(|d| !d.is_null())
             .unwrap()
             .clone();
-        Ok(ReturnInfo::new(return_type, nullable))
+        Ok(Field::new(self.name(), return_type, nullable))
     }
 
     /// coalesce evaluates to the first value which is not NULL
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = args.args;
         // do not accept 0 arguments.
         if args.is_empty() {
             return exec_err!(

@@ -108,6 +108,12 @@ impl DisplayAs for GlobalLimitExec {
                     self.fetch.map_or("None".to_string(), |x| x.to_string())
                 )
             }
+            DisplayFormatType::TreeRender => {
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "limit={}", fetch)?;
+                }
+                write!(f, "skip={}", self.skip)
+            }
         }
     }
 }
@@ -187,8 +193,11 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(
-            self.input.statistics()?,
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)?.with_fetch(
             self.schema(),
             self.fetch,
             self.skip,
@@ -261,6 +270,9 @@ impl DisplayAs for LocalLimitExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "LocalLimitExec: fetch={}", self.fetch)
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "limit={}", self.fetch)
+            }
         }
     }
 }
@@ -325,8 +337,11 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(
-            self.input.statistics()?,
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)?.with_fetch(
             self.schema(),
             Some(self.fetch),
             0,
@@ -756,7 +771,7 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        Ok(offset.statistics()?.num_rows)
+        Ok(offset.partition_statistics(None)?.num_rows)
     }
 
     pub fn build_group_by(
@@ -796,7 +811,7 @@ mod tests {
             fetch,
         );
 
-        Ok(offset.statistics()?.num_rows)
+        Ok(offset.partition_statistics(None)?.num_rows)
     }
 
     async fn row_number_statistics_for_local_limit(
@@ -809,7 +824,7 @@ mod tests {
 
         let offset = LocalLimitExec::new(csv, fetch);
 
-        Ok(offset.statistics()?.num_rows)
+        Ok(offset.partition_statistics(None)?.num_rows)
     }
 
     /// Return a RecordBatch with a single array with row_count sz

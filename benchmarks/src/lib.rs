@@ -16,6 +16,7 @@
 // under the License.
 
 //! DataFusion benchmark runner
+pub mod cancellation;
 pub mod clickbench;
 pub mod h2o;
 pub mod imdb;

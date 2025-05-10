@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_common_runtime::JoinSet;
 use rand::{thread_rng, Rng};
-use tokio::task::JoinSet;
 
+use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
     check_equality_of_batches,
     context_generator::{SessionContextGenerator, SessionContextWithParams},
@@ -68,30 +68,16 @@ impl AggregationFuzzerBuilder {
     /// - 3 random queries
     /// - 3 random queries for each group by selected from the sort keys
     /// - 1 random query with no grouping
-    pub fn add_query_builder(mut self, mut query_builder: QueryBuilder) -> Self {
-        const NUM_QUERIES: usize = 3;
-        for _ in 0..NUM_QUERIES {
-            let sql = query_builder.generate_query();
-            self.candidate_sqls.push(Arc::from(sql));
-        }
-        // also add several queries limited to grouping on the group by columns only, if any
-        // So if the data is sorted on `a,b` only group by `a,b` or`a` or `b`
-        if let Some(data_gen_config) = &self.data_gen_config {
-            for sort_keys in &data_gen_config.sort_keys_set {
-                let group_by_columns = sort_keys.iter().map(|s| s.as_str());
-                query_builder = query_builder.set_group_by_columns(group_by_columns);
-                for _ in 0..NUM_QUERIES {
-                    let sql = query_builder.generate_query();
-                    self.candidate_sqls.push(Arc::from(sql));
-                }
-            }
-        }
-        // also add a query with no grouping
-        query_builder = query_builder.set_group_by_columns(vec![]);
-        let sql = query_builder.generate_query();
-        self.candidate_sqls.push(Arc::from(sql));
+    pub fn add_query_builder(mut self, query_builder: QueryBuilder) -> Self {
+        self = self.table_name(query_builder.table_name());
 
-        self.table_name(query_builder.table_name())
+        let sqls = query_builder
+            .generate_queries()
+            .into_iter()
+            .map(|sql| Arc::from(sql.as_str()));
+        self.candidate_sqls.extend(sqls);
+
+        self
     }
 
     pub fn table_name(mut self, table_name: &str) -> Self {
@@ -163,7 +149,7 @@ struct QueryGroup {
 
 impl AggregationFuzzer {
     /// Run the fuzzer, printing an error and panicking if any of the tasks fail
-    pub async fn run(&self) {
+    pub async fn run(&mut self) {
         let res = self.run_inner().await;
 
         if let Err(e) = res {
@@ -175,7 +161,7 @@ impl AggregationFuzzer {
         }
     }
 
-    async fn run_inner(&self) -> Result<()> {
+    async fn run_inner(&mut self) -> Result<()> {
         let mut join_set = JoinSet::new();
         let mut rng = thread_rng();
 
@@ -269,7 +255,7 @@ impl AggregationFuzzer {
 ///   - `sql`, the selected test sql
 ///
 ///   - `dataset_ref`, the input dataset, store it for error reported when found
-///      the inconsistency between the one for `ctx` and `expected results`.
+///     the inconsistency between the one for `ctx` and `expected results`.
 ///
 struct AggregationFuzzTestTask {
     /// Generated session context in current test case
@@ -369,159 +355,4 @@ fn format_batches_with_limit(batches: &[RecordBatch]) -> impl std::fmt::Display 
         .collect::<Vec<_>>();
 
     pretty_format_batches(&to_print).unwrap()
-}
-
-/// Random aggregate query builder
-///
-/// Creates queries like
-/// ```sql
-/// SELECT AGG(..) FROM table_name GROUP BY <group_by_columns>
-///```
-#[derive(Debug, Default, Clone)]
-pub struct QueryBuilder {
-    /// The name of the table to query
-    table_name: String,
-    /// Aggregate functions to be used in the query
-    /// (function_name, is_distinct)
-    aggregate_functions: Vec<(String, bool)>,
-    /// Columns to be used in group by
-    group_by_columns: Vec<String>,
-    /// Possible columns for arguments in the aggregate functions
-    ///
-    /// Assumes each
-    arguments: Vec<String>,
-}
-impl QueryBuilder {
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    /// return the table name if any
-    pub fn table_name(&self) -> &str {
-        &self.table_name
-    }
-
-    /// Set the table name for the query builder
-    pub fn with_table_name(mut self, table_name: impl Into<String>) -> Self {
-        self.table_name = table_name.into();
-        self
-    }
-
-    /// Add a new possible aggregate function to the query builder
-    pub fn with_aggregate_function(
-        mut self,
-        aggregate_function: impl Into<String>,
-    ) -> Self {
-        self.aggregate_functions
-            .push((aggregate_function.into(), false));
-        self
-    }
-
-    /// Add a new possible `DISTINCT` aggregate function to the query
-    ///
-    /// This is different than `with_aggregate_function` because only certain
-    /// aggregates support `DISTINCT`
-    pub fn with_distinct_aggregate_function(
-        mut self,
-        aggregate_function: impl Into<String>,
-    ) -> Self {
-        self.aggregate_functions
-            .push((aggregate_function.into(), true));
-        self
-    }
-
-    /// Set the columns to be used in the group bys clauses
-    pub fn set_group_by_columns<'a>(
-        mut self,
-        group_by: impl IntoIterator<Item = &'a str>,
-    ) -> Self {
-        self.group_by_columns = group_by.into_iter().map(String::from).collect();
-        self
-    }
-
-    /// Add one or more columns to be used as an argument in the aggregate functions
-    pub fn with_aggregate_arguments<'a>(
-        mut self,
-        arguments: impl IntoIterator<Item = &'a str>,
-    ) -> Self {
-        let arguments = arguments.into_iter().map(String::from);
-        self.arguments.extend(arguments);
-        self
-    }
-
-    pub fn generate_query(&self) -> String {
-        let group_by = self.random_group_by();
-        let mut query = String::from("SELECT ");
-        query.push_str(&self.random_aggregate_functions().join(", "));
-        query.push_str(" FROM ");
-        query.push_str(&self.table_name);
-        if !group_by.is_empty() {
-            query.push_str(" GROUP BY ");
-            query.push_str(&group_by.join(", "));
-        }
-        query
-    }
-
-    /// Generate a some random aggregate function invocations (potentially repeating).
-    ///
-    /// Each aggregate function invocation is of the form
-    ///
-    /// ```sql
-    /// function_name(<DISTINCT> argument) as alias
-    /// ```
-    ///
-    /// where
-    /// * `function_names` are randomly selected from [`Self::aggregate_functions`]
-    /// * `<DISTINCT> argument` is randomly selected from [`Self::arguments`]
-    /// * `alias` is a unique alias `colN` for the column (to avoid duplicate column names)
-    fn random_aggregate_functions(&self) -> Vec<String> {
-        const MAX_NUM_FUNCTIONS: usize = 5;
-        let mut rng = thread_rng();
-        let num_aggregate_functions = rng.gen_range(1..MAX_NUM_FUNCTIONS);
-
-        let mut alias_gen = 1;
-
-        let mut aggregate_functions = vec![];
-        while aggregate_functions.len() < num_aggregate_functions {
-            let idx = rng.gen_range(0..self.aggregate_functions.len());
-            let (function_name, is_distinct) = &self.aggregate_functions[idx];
-            let argument = self.random_argument();
-            let alias = format!("col{}", alias_gen);
-            let distinct = if *is_distinct { "DISTINCT " } else { "" };
-            alias_gen += 1;
-            let function = format!("{function_name}({distinct}{argument}) as {alias}");
-            aggregate_functions.push(function);
-        }
-        aggregate_functions
-    }
-
-    /// Pick a random aggregate function argument
-    fn random_argument(&self) -> String {
-        let mut rng = thread_rng();
-        let idx = rng.gen_range(0..self.arguments.len());
-        self.arguments[idx].clone()
-    }
-
-    /// Pick a random number of fields to group by (non-repeating)
-    ///
-    /// Limited to 3 group by columns to ensure coverage for large groups. With
-    /// larger numbers of columns, each group has many fewer values.
-    fn random_group_by(&self) -> Vec<String> {
-        let mut rng = thread_rng();
-        const MAX_GROUPS: usize = 3;
-        let max_groups = self.group_by_columns.len().max(MAX_GROUPS);
-        let num_group_by = rng.gen_range(1..max_groups);
-
-        let mut already_used = HashSet::new();
-        let mut group_by = vec![];
-        while group_by.len() < num_group_by
-            && already_used.len() != self.group_by_columns.len()
-        {
-            let idx = rng.gen_range(0..self.group_by_columns.len());
-            if already_used.insert(idx) {
-                group_by.push(self.group_by_columns[idx].clone());
-            }
-        }
-        group_by
-    }
 }

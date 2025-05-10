@@ -17,16 +17,15 @@
 
 //! Runtime configuration, via [`ConfigOptions`]
 
+use crate::error::_config_err;
+use crate::parsers::CompressionTypeVariant;
+use crate::utils::get_available_parallelism;
+use crate::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
-
-use crate::error::_config_err;
-use crate::parsers::CompressionTypeVariant;
-use crate::utils::get_available_parallelism;
-use crate::{DataFusionError, Result};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -149,9 +148,17 @@ macro_rules! config_namespace {
                             // $(#[allow(deprecated)])?
                             {
                                 $(let value = $transform(value);)? // Apply transformation if specified
-                                $(log::warn!($warn);)? // Log warning if specified
                                 #[allow(deprecated)]
-                                self.$field_name.set(rem, value.as_ref())
+                                let ret = self.$field_name.set(rem, value.as_ref());
+
+                                $(if !$warn.is_empty() {
+                                    let default: $field_type = $default;
+                                    #[allow(deprecated)]
+                                    if default != self.$field_name {
+                                        log::warn!($warn);
+                                    }
+                                })? // Log warning if specified, and the value is not the default
+                                ret
                             }
                         },
                     )*
@@ -242,7 +249,7 @@ config_namespace! {
         pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
-        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
+        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
         pub dialect: String, default = "generic".to_string()
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
@@ -252,10 +259,18 @@ config_namespace! {
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
 
+       /// If true, `VARCHAR` is mapped to `Utf8View` during SQL planning.
+       /// If false, `VARCHAR` is mapped to `Utf8`  during SQL planning.
+       /// Default is false.
+        pub map_varchar_to_utf8view: bool, default = false
+
         /// When set to true, the source locations relative to the original SQL
-        /// query (i.e. [`Span`](sqlparser::tokenizer::Span)) will be collected
+        /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
         /// and recorded in the logical plan nodes.
         pub collect_spans: bool, default = false
+
+        /// Specifies the recursion depth limit when parsing complex SQL Queries
+        pub recursion_limit: usize, default = 50
     }
 }
 
@@ -284,7 +299,7 @@ config_namespace! {
         /// concurrency.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub target_partitions: usize, default = get_available_parallelism()
+        pub target_partitions: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// The default time zone
         ///
@@ -300,7 +315,7 @@ config_namespace! {
         /// This is mostly use to plan `UNION` children in parallel.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub planning_concurrency: usize, default = get_available_parallelism()
+        pub planning_concurrency: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// When set to true, skips verifying that the schema produced by
         /// planning the input of `LogicalPlan::Aggregate` exactly matches the
@@ -389,6 +404,13 @@ config_namespace! {
         /// in joins can reduce memory usage when joining large
         /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
+
+        /// Size (bytes) of data buffer DataFusion uses when writing output files.
+        /// This affects the size of the data chunks that are uploaded to remote
+        /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being
+        /// written, it may be necessary to increase this size to avoid errors from
+        /// the remote end point.
+        pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
     }
 }
 
@@ -442,6 +464,17 @@ config_namespace! {
         /// the UTF8 flag for strings, causing string columns to be loaded as
         /// BLOB instead.
         pub binary_as_string: bool, default = false
+
+        /// (reading) If true, parquet reader will read columns of
+        /// physical type int96 as originating from a different resolution
+        /// than nanosecond. This is useful for reading data from systems like Spark
+        /// which stores microsecond resolution timestamps in an int96 allowing it
+        /// to write values with a larger date range than 64-bit timestamps with
+        /// nanosecond resolution.
+        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
+
+        /// (reading) Use any available bloom filters when reading parquet files
+        pub bloom_filter_on_read: bool, default = true
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -503,6 +536,10 @@ config_namespace! {
         /// (writing) Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = Some(64)
 
+        /// (writing) Sets statictics truncate length. If NULL, uses
+        /// default parquet writer setting
+        pub statistics_truncate_length: Option<usize>, default = None
+
         /// (writing) Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = 20_000
 
@@ -513,9 +550,6 @@ config_namespace! {
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<String>, transform = str::to_lowercase, default = None
-
-        /// (writing) Use any available bloom filters when reading parquet files
-        pub bloom_filter_on_read: bool, default = true
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
@@ -704,6 +738,76 @@ config_namespace! {
 
         /// When set to true, the explain statement will print schema information
         pub show_schema: bool, default = false
+
+        /// Display format of explain. Default is "indent".
+        /// When set to "tree", it will print the plan in a tree-rendered format.
+        pub format: String, default = "indent".to_string()
+    }
+}
+
+impl ExecutionOptions {
+    /// Returns the correct parallelism based on the provided `value`.
+    /// If `value` is `"0"`, returns the default available parallelism, computed with
+    /// `get_available_parallelism`. Otherwise, returns `value`.
+    fn normalized_parallelism(value: &str) -> String {
+        if value.parse::<usize>() == Ok(0) {
+            get_available_parallelism().to_string()
+        } else {
+            value.to_owned()
+        }
+    }
+}
+
+config_namespace! {
+    /// Options controlling the format of output when printing record batches
+    /// Copies [`arrow::util::display::FormatOptions`]
+    pub struct FormatOptions {
+        /// If set to `true` any formatting errors will be written to the output
+        /// instead of being converted into a [`std::fmt::Error`]
+        pub safe: bool, default = true
+        /// Format string for nulls
+        pub null: String, default = "".into()
+        /// Date format for date arrays
+        pub date_format: Option<String>, default = Some("%Y-%m-%d".to_string())
+        /// Format for DateTime arrays
+        pub datetime_format: Option<String>, default = Some("%Y-%m-%dT%H:%M:%S%.f".to_string())
+        /// Timestamp format for timestamp arrays
+        pub timestamp_format: Option<String>, default = Some("%Y-%m-%dT%H:%M:%S%.f".to_string())
+        /// Timestamp format for timestamp with timezone arrays. When `None`, ISO 8601 format is used.
+        pub timestamp_tz_format: Option<String>, default = None
+        /// Time format for time arrays
+        pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
+        /// Duration format. Can be either `"pretty"` or `"ISO8601"`
+        pub duration_format: String, transform = str::to_lowercase, default = "pretty".into()
+        /// Show types in visual representation batches
+        pub types_info: bool, default = false
+    }
+}
+
+impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
+    type Error = DataFusionError;
+    fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
+        let duration_format = match self.duration_format.as_str() {
+            "pretty" => arrow::util::display::DurationFormat::Pretty,
+            "iso8601" => arrow::util::display::DurationFormat::ISO8601,
+            _ => {
+                return _config_err!(
+                    "Invalid duration format: {}. Valid values are pretty or iso8601",
+                    self.duration_format
+                )
+            }
+        };
+
+        Ok(arrow::util::display::FormatOptions::new()
+            .with_display_error(self.safe)
+            .with_null(&self.null)
+            .with_date_format(self.date_format.as_deref())
+            .with_datetime_format(self.datetime_format.as_deref())
+            .with_timestamp_format(self.timestamp_format.as_deref())
+            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
+            .with_time_format(self.time_format.as_deref())
+            .with_duration_format(duration_format)
+            .with_types_info(self.types_info))
     }
 }
 
@@ -736,6 +840,8 @@ pub struct ConfigOptions {
     pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]
     pub extensions: Extensions,
+    /// Formatting options when printing batches
+    pub format: FormatOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -748,6 +854,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
+            "format" => self.format.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -758,6 +865,7 @@ impl ConfigField for ConfigOptions {
         self.optimizer.visit(v, "datafusion.optimizer", "");
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
+        self.format.visit(v, "datafusion.format", "");
     }
 }
 
@@ -819,7 +927,9 @@ impl ConfigOptions {
         for key in keys.0 {
             let env = key.to_uppercase().replace('.', "_");
             if let Some(var) = std::env::var_os(env) {
-                ret.set(&key, var.to_string_lossy().as_ref())?;
+                let value = var.to_string_lossy();
+                log::info!("Set {key} to {value} from the environment variable");
+                ret.set(&key, value.as_ref())?;
             }
         }
 
@@ -1950,11 +2060,11 @@ config_namespace! {
     }
 }
 
-pub trait FormatOptionsExt: Display {}
+pub trait OutputFormatExt: Display {}
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
-pub enum FormatOptions {
+pub enum OutputFormat {
     CSV(CsvOptions),
     JSON(JsonOptions),
     #[cfg(feature = "parquet")]
@@ -1963,15 +2073,15 @@ pub enum FormatOptions {
     ARROW,
 }
 
-impl Display for FormatOptions {
+impl Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let out = match self {
-            FormatOptions::CSV(_) => "csv",
-            FormatOptions::JSON(_) => "json",
+            OutputFormat::CSV(_) => "csv",
+            OutputFormat::JSON(_) => "json",
             #[cfg(feature = "parquet")]
-            FormatOptions::PARQUET(_) => "parquet",
-            FormatOptions::AVRO => "avro",
-            FormatOptions::ARROW => "arrow",
+            OutputFormat::PARQUET(_) => "parquet",
+            OutputFormat::AVRO => "avro",
+            OutputFormat::ARROW => "arrow",
         };
         write!(f, "{}", out)
     }
@@ -1983,8 +2093,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigFileType, ExtensionOptions, Extensions,
-        TableOptions,
+        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
+        Extensions, TableOptions,
     };
 
     #[derive(Default, Debug, Clone)]
@@ -2067,6 +2177,37 @@ mod tests {
         assert_eq!(table_config.csv.escape.unwrap() as char, '"');
         table_config.set("format.escape", "\'").unwrap();
         assert_eq!(table_config.csv.escape.unwrap() as char, '\'');
+    }
+
+    #[test]
+    fn warning_only_not_default() {
+        use std::sync::atomic::AtomicUsize;
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        use log::{Level, LevelFilter, Metadata, Record};
+        struct SimpleLogger;
+        impl log::Log for SimpleLogger {
+            fn enabled(&self, metadata: &Metadata) -> bool {
+                metadata.level() <= Level::Info
+            }
+
+            fn log(&self, record: &Record) {
+                if self.enabled(record.metadata()) {
+                    COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            fn flush(&self) {}
+        }
+        log::set_logger(&SimpleLogger).unwrap();
+        log::set_max_level(LevelFilter::Info);
+        let mut sql_parser_options = crate::config::SqlParserOptions::default();
+        sql_parser_options
+            .set("enable_options_value_normalization", "false")
+            .unwrap();
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 0);
+        sql_parser_options
+            .set("enable_options_value_normalization", "true")
+            .unwrap();
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[cfg(feature = "parquet")]

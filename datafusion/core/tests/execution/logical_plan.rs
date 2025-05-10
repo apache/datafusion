@@ -15,23 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Logical plans need to provide stable semantics, as downstream projects
+//! create them and depend on them. Test executable semantics of logical plans.
+
 use arrow::array::Int64Array;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::datasource::{provider_as_source, ViewTable};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion_common::{Column, DFSchema, Result, ScalarValue, Spans};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
 use datafusion_execution::TaskContext;
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::logical_plan::{LogicalPlan, Values};
-use datafusion_expr::{Aggregate, AggregateUDF, Expr};
+use datafusion_expr::{
+    Aggregate, AggregateUDF, EmptyRelation, Expr, LogicalPlanBuilder, UNNAMED_TABLE,
+};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_plan::collect;
+use insta::assert_snapshot;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
-
-///! Logical plans need to provide stable semantics, as downstream projects
-///! create them and depend on them. Test executable semantics of logical plans.
 
 #[tokio::test]
 async fn count_only_nulls() -> Result<()> {
@@ -60,11 +64,13 @@ async fn count_only_nulls() -> Result<()> {
         vec![],
         vec![Expr::AggregateFunction(AggregateFunction {
             func: Arc::new(AggregateUDF::new_from_impl(Count::new())),
-            args: vec![input_col_ref],
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args: vec![input_col_ref],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         })],
     )?);
 
@@ -93,4 +99,38 @@ where
         panic!("Expected exactly one element, got {:?}", elements);
     };
     element
+}
+
+#[test]
+fn inline_scan_projection_test() -> Result<()> {
+    let name = UNNAMED_TABLE;
+    let column = "a";
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]);
+    let projection = vec![schema.index_of(column)?];
+
+    let provider = ViewTable::new(
+        LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: DFSchemaRef::new(DFSchema::try_from(schema)?),
+        }),
+        None,
+    );
+    let source = provider_as_source(Arc::new(provider));
+
+    let plan = LogicalPlanBuilder::scan(name, source, Some(projection))?.build()?;
+
+    assert_snapshot!(
+        format!("{plan}"),
+        @r"
+    SubqueryAlias: ?table?
+      Projection: a
+        EmptyRelation
+    "
+    );
+
+    Ok(())
 }

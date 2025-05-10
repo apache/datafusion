@@ -26,6 +26,8 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::JoinSide;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::BinaryExpr;
 use datafusion::physical_plan::collect;
@@ -38,8 +40,6 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::PhysicalExprRef;
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
 
 use itertools::Itertools;
 use rand::Rng;
@@ -186,7 +186,7 @@ async fn test_full_join_1k_filtered() {
 }
 
 #[tokio::test]
-async fn test_semi_join_1k() {
+async fn test_left_semi_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
@@ -198,11 +198,35 @@ async fn test_semi_join_1k() {
 }
 
 #[tokio::test]
-async fn test_semi_join_1k_filtered() {
+async fn test_left_semi_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::LeftSemi,
+        Some(Box::new(col_lt_col_filter)),
+    )
+    .run_test(&[HjSmj, NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_right_semi_join_1k() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightSemi,
+        None,
+    )
+    .run_test(&[HjSmj, NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_right_semi_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightSemi,
         Some(Box::new(col_lt_col_filter)),
     )
     .run_test(&[HjSmj, NljHj], false)
