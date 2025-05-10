@@ -4607,18 +4607,19 @@ fn test_prepare_statement_to_plan_params_as_constants() {
 }
 
 #[test]
-fn test_infer_types_from_join() {
+fn test_prepare_statement_infer_types_from_join() {
     let sql =
-        "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1";
+        "PREPARE my_plan AS SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1";
 
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
-    Projection: person.id, orders.order_id
-      Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
-        TableScan: person
-        TableScan: orders
+    Prepare: "my_plan" [Int32] 
+      Projection: person.id, orders.order_id
+        Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
+          TableScan: person
+          TableScan: orders
     "#
     );
 
@@ -4642,15 +4643,16 @@ fn test_infer_types_from_join() {
 }
 
 #[test]
-fn test_infer_types_from_predicate() {
-    let sql = "SELECT id, age FROM person WHERE age = $1";
+fn test_prepare_statement_infer_types_from_predicate() {
+    let sql = "PREPARE my_plan AS SELECT id, age FROM person WHERE age = $1";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
-    Projection: person.id, person.age
-      Filter: person.age = $1
-        TableScan: person
+    Prepare: "my_plan" [Int32] 
+      Projection: person.id, person.age
+        Filter: person.age = $1
+          TableScan: person
     "#
     );
 
@@ -4673,16 +4675,17 @@ fn test_infer_types_from_predicate() {
 }
 
 #[test]
-fn test_infer_types_from_between_predicate() {
-    let sql = "SELECT id, age FROM person WHERE age BETWEEN $1 AND $2";
+fn test_prepare_statement_infer_types_from_between_predicate() {
+    let sql = "PREPARE my_plan AS SELECT id, age FROM person WHERE age BETWEEN $1 AND $2";
 
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
-    Projection: person.id, person.age
-      Filter: person.age BETWEEN $1 AND $2
-        TableScan: person
+    Prepare: "my_plan" [Int32, Int32] 
+      Projection: person.id, person.age
+        Filter: person.age BETWEEN $1 AND $2
+          TableScan: person
     "#
     );
 
@@ -4708,21 +4711,22 @@ fn test_infer_types_from_between_predicate() {
 }
 
 #[test]
-fn test_infer_types_subquery() {
-    let sql = "SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)";
+fn test_prepare_statement_infer_types_subquery() {
+    let sql = "PREPARE my_plan AS SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)";
 
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
-    Projection: person.id, person.age
-      Filter: person.age = (<subquery>)
-        Subquery:
-          Projection: max(person.age)
-            Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
-              Filter: person.id = $1
-                TableScan: person
-        TableScan: person
+    Prepare: "my_plan" [UInt32] 
+      Projection: person.id, person.age
+        Filter: person.age = (<subquery>)
+          Subquery:
+            Projection: max(person.age)
+              Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
+                Filter: person.id = $1
+                  TableScan: person
+          TableScan: person
     "#
     );
 
@@ -4750,17 +4754,18 @@ fn test_infer_types_subquery() {
 }
 
 #[test]
-fn test_update_infer() {
-    let sql = "update person set age=$1 where id=$2";
+fn test_prepare_statement_update_infer() {
+    let sql = "PREPARE my_plan AS update person set age=$1 where id=$2";
 
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
-    Dml: op=[Update] table=[person]
-      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-        Filter: person.id = $2
-          TableScan: person
+    Prepare: "my_plan" [Int32, UInt32] 
+      Dml: op=[Update] table=[person]
+        Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+          Filter: person.id = $2
+            TableScan: person
     "#
     );
 
@@ -4787,15 +4792,16 @@ fn test_update_infer() {
 }
 
 #[test]
-fn test_insert_infer() {
-    let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3)";
+fn test_prepare_statement_insert_infer() {
+    let sql = "PREPARE my_plan AS insert into person (id, first_name, last_name) values ($1, $2, $3)";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
-    Dml: op=[Insert Into] table=[person]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
-        Values: ($1, $2, $3)
+    Prepare: "my_plan" [UInt32, Utf8, Utf8] 
+      Dml: op=[Insert Into] table=[person]
+        Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
+          Values: ($1, $2, $3)
     "#
     );
 
