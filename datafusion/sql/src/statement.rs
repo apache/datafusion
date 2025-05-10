@@ -696,7 +696,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statement,
             } => {
                 // Convert parser data types to DataFusion data types
-                let data_types: Vec<DataType> = data_types
+                let mut data_types: Vec<DataType> = data_types
                     .into_iter()
                     .map(|t| self.convert_data_type(&t))
                     .collect::<Result<_>>()?;
@@ -710,6 +710,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     *statement,
                     &mut planner_context,
                 )?;
+
+                if data_types.is_empty() {
+                    for dt in plan.get_parameter_types()?.into_values().into_iter() {
+                        if let Some(dt) = dt {
+                            data_types.push(dt);
+                        }
+                    }
+                    data_types.sort();
+                    planner_context.with_prepare_param_data_types(data_types.clone());
+                }
 
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
