@@ -40,7 +40,7 @@ use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
-    binary_expr, col, expr_fn, BinaryExpr, Cast, Expr, JoinType, LogicalPlan,
+    binary_expr, col, expr_fn, lit, BinaryExpr, Cast, Expr, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator as ExprOperator, Subquery,
 };
 use datafusion_sql::unparser::Unparser;
@@ -231,7 +231,7 @@ struct SimpleDecorrelationResult {
     pulled_up_predicates: Vec<Expr>,
 }
 
-fn transform_subquery_to_join_expr(
+fn try_transform_subquery_to_join_expr(
     expr: &Expr,
     sq: &Subquery,
     replace_columns: &[Expr],
@@ -259,15 +259,15 @@ fn transform_subquery_to_join_expr(
                     join_predicate = Some(binary_expr(
                         *isq.expr.clone(),
                         ExprOperator::NotEq,
-                        replace_columns[0].clone(),
+                        strip_outer_reference(replace_columns[0].clone()),
                     ));
                     return Ok(true);
                 }
 
                 join_predicate = Some(binary_expr(
                     *isq.expr.clone(),
-                    ExprOperator::NotEq,
-                    replace_columns[0].clone(),
+                    ExprOperator::Eq,
+                    strip_outer_reference(replace_columns[0].clone()),
                 ));
                 return Ok(true);
             }
@@ -275,20 +275,24 @@ fn transform_subquery_to_join_expr(
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             let (exist, transformed, post_join_expr_from_left) =
-                transform_subquery_to_join_expr(left.as_ref(), sq, replace_columns)?;
+                try_transform_subquery_to_join_expr(left.as_ref(), sq, replace_columns)?;
             if !exist {
                 let (right_exist, transformed_right, post_join_expr_from_right) =
-                    transform_subquery_to_join_expr(right.as_ref(), sq, replace_columns)?;
+                    try_transform_subquery_to_join_expr(
+                        right.as_ref(),
+                        sq,
+                        replace_columns,
+                    )?;
                 if !right_exist {
                     return Ok(false);
                 }
                 if let Some(transformed_right) = transformed_right {
                     join_predicate =
-                        Some(binary_expr(*left.clone(), op.clone(), transformed_right));
+                        Some(binary_expr(*left.clone(), *op, transformed_right));
                 }
                 if let Some(transformed_right) = post_join_expr_from_right {
                     post_join_predicate =
-                        Some(binary_expr(*left.clone(), op.clone(), transformed_right));
+                        Some(binary_expr(*left.clone(), *op, transformed_right));
                 }
 
                 return Ok(true);
@@ -297,25 +301,22 @@ fn transform_subquery_to_join_expr(
             // meaning this query is not supported `where bool_col = exists(subquery)`
 
             if let Some(transformed) = transformed {
-                join_predicate =
-                    Some(binary_expr(transformed, op.clone(), *right.clone()));
+                join_predicate = Some(binary_expr(transformed, *op, *right.clone()));
             }
             if let Some(transformed) = post_join_expr_from_left {
-                post_join_predicate =
-                    Some(binary_expr(transformed, op.clone(), *right.clone()));
+                post_join_predicate = Some(binary_expr(transformed, *op, *right.clone()));
             }
             return Ok(true);
         }
         Expr::Exists(Exists { subquery, negated }) => {
             if let LogicalPlan::Subquery(inner_sq) = subquery.subquery.as_ref() {
                 if inner_sq.clone() == *sq {
-                    let op = if *negated {
-                        ExprOperator::NotEq
+                    let mark_predicate = if *negated {
+                        expr_fn::not(col("mark"))
                     } else {
-                        ExprOperator::Eq
+                        col("mark")
                     };
-                    join_predicate =
-                        Some(binary_expr(col("mark"), op, replace_columns[0].clone()));
+                    join_predicate = Some(mark_predicate);
                     return Ok(true);
                 }
             }
@@ -620,20 +621,42 @@ impl DependentJoinTracker {
                     .cloned()
                     .map(strip_outer_reference)
                     .collect();
+                let right_exprs: Vec<Expr> = if ret.pulled_up_projections.is_empty() {
+                    subquery_children.expressions()
+                } else {
+                    ret.pulled_up_projections
+                        .iter()
+                        .cloned()
+                        .map(strip_outer_reference)
+                        .collect()
+                };
+                let mut join_type = JoinType::LeftSemi;
                 for expr in exprs.into_iter() {
                     // exist query may not have any transformed expr
                     // i.e where exists(suquery) => semi join
                     let (transformed, maybe_transformed_expr, maybe_post_join_expr) =
-                        transform_subquery_to_join_expr(
+                        try_transform_subquery_to_join_expr(
                             expr,
                             &subquery,
-                            &pulled_projection,
+                            &right_exprs,
                         )?;
 
                     if let Some(transformed) = maybe_transformed_expr {
                         join_exprs.push(transformed)
                     }
                     if let Some(post_join_expr) = maybe_post_join_expr {
+                        if post_join_expr
+                            .exists(|e| {
+                                if let Expr::Column(col) = e {
+                                    return Ok(col.name == "mark");
+                                }
+                                return Ok(false);
+                            })
+                            .unwrap()
+                        {
+                            // only use mark join if required
+                            join_type = JoinType::LeftMark
+                        }
                         kept_predicates.push(post_join_expr)
                     }
                     if !transformed {
@@ -655,7 +678,7 @@ impl DependentJoinTracker {
                 builder = builder.join_on(
                     subquery_children,
                     // TODO: join type based on filter condition
-                    JoinType::LeftMark,
+                    join_type,
                     join_exprs,
                 )?;
 
@@ -1162,7 +1185,7 @@ mod tests {
 
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
-        expr_fn::{self, col},
+        expr_fn::{self, col, not},
         in_subquery, lit, out_ref_col, scalar_subquery, table_scan, CreateMemoryTable,
         EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder,
     };
@@ -1176,9 +1199,41 @@ mod tests {
         array::{Int32Array, StringArray},
         datatypes::{DataType as ArrowDataType, Field, Fields, Schema},
     };
-
     #[test]
-    fn play_unnest_simple_projection_pull_up() -> Result<()> {
+    fn simple_decorrelate_with_in_subquery_no_dependent_column() -> Result<()> {
+        // let mut framework = GeneralDecorrelation::default();
+
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1)
+                .filter(col("inner_table_lv1.b").eq(lit(1)))?
+                .project(vec![col("inner_table_lv1.b")])?
+                .build()?,
+        );
+
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(
+                col("outer_table.a")
+                    .gt(lit(1))
+                    .and(in_subquery(col("outer_table.c"), sq_level1)),
+            )?
+            .build()?;
+        let mut index = DependentJoinTracker::default();
+        index.build(&input1)?;
+        let new_plan = index.root_dependent_join_elimination()?;
+        let expected = "\
+        Filter: outer_table.a > Int32(1)\
+        \n  LeftSemi Join:  Filter: outer_table.c = inner_table_lv1.b\
+        \n    TableScan: outer_table\
+        \n    Projection: inner_table_lv1.b\
+        \n      Filter: inner_table_lv1.b = Int32(1)\
+        \n        TableScan: inner_table_lv1";
+        assert_eq!(expected, format!("{new_plan}"));
+        Ok(())
+    }
+    #[test]
+    fn simple_decorrelate_with_in_subquery_has_dependent_column() -> Result<()> {
         // let mut framework = GeneralDecorrelation::default();
 
         let outer_table = test_table_scan_with_name("outer_table")?;
@@ -1213,16 +1268,13 @@ mod tests {
         let mut index = DependentJoinTracker::default();
         index.build(&input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
-        println!("{}", new_plan);
-
-        // let input2 = LogicalPlanBuilder::from(input.clone())
-        //     .filter(col("int_col").gt(lit(1)))?
-        //     .project(vec![col("string_col")])?
-        //     .build()?;
-
-        // let mut b = GeneralDecorrelation::default();
-        // b.build_algebra_index(input2)?;
-
+        let expected = "\
+        Filter: outer_table.a > Int32(1)\
+        \n  LeftSemi Join:  Filter: outer_table.c != outer_table.b AS outer_b_alias AND inner_table_lv1.a = outer_table.a AND outer_table.a > inner_table_lv1.c AND outer_table.b = inner_table_lv1.b\
+        \n    TableScan: outer_table\
+        \n    Filter: inner_table_lv1.b = Int32(1)\
+        \n      TableScan: inner_table_lv1";
+        assert_eq!(expected, format!("{new_plan}"));
         Ok(())
     }
     #[test]
