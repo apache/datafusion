@@ -19,7 +19,6 @@
 //!
 //! [`FileSource`]: datafusion_datasource::file::FileSource
 
-#[allow(deprecated)]
 pub use datafusion_datasource_json::source::*;
 
 #[cfg(test)]
