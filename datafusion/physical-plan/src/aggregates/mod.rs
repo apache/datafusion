@@ -733,13 +733,33 @@ impl AggregateExec {
         &self.input_order_mode
     }
 
-    fn statistics_inner(&self) -> Result<Statistics> {
+    fn statistics_inner(&self, child_statistics: Statistics) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
         // - aggregations sometimes also preserve invariants such as min, max...
-        let column_statistics = Statistics::unknown_column(&self.schema());
+
+        let column_statistics = {
+            // self.schema: [<group by exprs>, <aggregate exprs>]
+            let mut column_statistics = Statistics::unknown_column(&self.schema());
+
+            for (idx, (expr, _)) in self.group_by.expr.iter().enumerate() {
+                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                    column_statistics[idx].max_value = child_statistics.column_statistics
+                        [col.index()]
+                    .max_value
+                    .clone();
+
+                    column_statistics[idx].min_value = child_statistics.column_statistics
+                        [col.index()]
+                    .min_value
+                    .clone();
+                }
+            }
+
+            column_statistics
+        };
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
                 if self.group_by.expr.is_empty() =>
@@ -751,28 +771,16 @@ impl AggregateExec {
                 })
             }
             _ => {
-                // When the input row count is 0 or 1, we can adopt that statistic keeping its reliability.
+                // When the input row count is 1, we can adopt that statistic keeping its reliability.
                 // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
-                let num_rows = if let Some(value) = self
-                    .input()
-                    .partition_statistics(None)?
-                    .num_rows
-                    .get_value()
+                let num_rows = if let Some(value) = child_statistics.num_rows.get_value()
                 {
-                    if *value > 1 {
-                        self.input()
-                            .partition_statistics(None)?
-                            .num_rows
-                            .to_inexact()
-                    } else if *value == 0 {
-                        // Aggregation on an empty table creates a null row.
-                        self.input()
-                            .partition_statistics(None)?
-                            .num_rows
-                            .add(&Precision::Exact(1))
+                    if *value != 1 {
+                        child_statistics.num_rows.to_inexact()
                     } else {
                         // num_rows = 1 case
-                        self.input().partition_statistics(None)?.num_rows
+                        let grouping_set_num = self.group_by.groups.len();
+                        child_statistics.num_rows.map(|x| x * grouping_set_num)
                     }
                 } else {
                     Precision::Absent
@@ -991,16 +999,11 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
+        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            // If the partition is not specified, we can use the statistics of the input plan
-            self.statistics_inner()
-        } else {
-            Ok(Statistics::new_unknown(&self.schema()))
-        }
+        self.statistics_inner(self.input().partition_statistics(partition)?)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -1431,7 +1434,9 @@ mod tests {
     use crate::expressions::col;
     use crate::metrics::MetricValue;
     use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::exec::{
+        assert_strong_count_converges_to_zero, BlockingExec, PartitionStatisticsExec,
+    };
     use crate::test::TestMemoryExec;
     use crate::RecordBatchStream;
 
@@ -1442,7 +1447,9 @@ mod tests {
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Int32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{internal_err, DataFusionError, ScalarValue};
+    use datafusion_common::{
+        internal_err, ColumnStatistics, DataFusionError, ScalarValue,
+    };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -3039,6 +3046,98 @@ mod tests {
         run_test_with_spill_pool_if_necessary(2_000, true).await?;
         // test without spill
         run_test_with_spill_pool_if_necessary(20_000, false).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]));
+
+        let grouping_set = PhysicalGroupBy::new(
+            vec![
+                (col("a", &schema)?, "a".to_string()),
+                (col("b", &schema)?, "b".to_string()),
+            ],
+            vec![
+                (lit(ScalarValue::Int32(None)), "a".to_string()),
+                (lit(ScalarValue::Int32(None)), "b".to_string()),
+            ],
+            vec![
+                vec![false, true],  // (a, NULL)
+                vec![true, false],  // (NULL, b)
+                vec![false, false], // (a,b)
+            ],
+        );
+
+        let aggr_expr =
+            vec![
+                AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias(String::from("COUNT(c)"))
+                    .build()
+                    .map(Arc::new)?,
+            ];
+
+        let input = PartitionStatisticsExec::new(
+            Arc::clone(&schema),
+            vec![
+                Statistics {
+                    num_rows: Precision::Exact(100),
+                    column_statistics: vec![
+                        ColumnStatistics::new_unknown()
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                66,
+                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                -66,
+                            )))),
+                        ColumnStatistics::new_unknown(),
+                        ColumnStatistics::new_unknown(),
+                    ],
+                    total_byte_size: Precision::Absent,
+                },
+                Statistics {
+                    num_rows: Precision::Exact(1),
+                    column_statistics: vec![
+                        ColumnStatistics::new_unknown(),
+                        ColumnStatistics::new_unknown(),
+                        ColumnStatistics::new_unknown(),
+                    ],
+                    total_byte_size: Precision::Absent,
+                },
+            ],
+        );
+
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            grouping_set,
+            aggr_expr,
+            vec![None],
+            Arc::new(input),
+            schema,
+        )?);
+
+        let p0_stats = aggregate_exec.partition_statistics(Some(0))?;
+
+        assert_eq!(p0_stats.num_rows, Precision::Inexact(100));
+        assert_eq!(
+            p0_stats.column_statistics[0].max_value,
+            (Precision::Exact(ScalarValue::Int32(Some(66))))
+        );
+
+        assert_eq!(
+            p0_stats.column_statistics[0].min_value,
+            (Precision::Exact(ScalarValue::Int32(Some(-66))))
+        );
+
+        let p1_stats = aggregate_exec.partition_statistics(Some(1))?;
+
+        assert_eq!(p1_stats.num_rows, Precision::Exact(3));
+
         Ok(())
     }
 }
