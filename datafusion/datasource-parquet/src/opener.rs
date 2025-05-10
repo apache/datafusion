@@ -33,8 +33,9 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use arrow::datatypes::{SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
+use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_physical_optimizer::pruning::{PrunableStatistics, PruningPredicate};
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
 
 use futures::{StreamExt, TryStreamExt};
@@ -85,7 +86,38 @@ pub(super) struct ParquetOpener {
 }
 
 impl FileOpener for ParquetOpener {
-    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture> {
+        let predicate_creation_errors = MetricBuilder::new(&self.metrics)
+            .global_counter("num_predicate_creation_errors");
+        // Prune using known statistics
+        match (&file.statistics, &self.predicate) {
+            (Some(stats), Some(predicate)) => {
+                let pruning_predicate =
+                    build_pruning_predicate(Arc::clone(predicate), &self.table_schema, &predicate_creation_errors);
+                if let Some(pruning_predicate) = pruning_predicate {
+                    let pruning_stats = PrunableStatistics::new(
+                        Arc::clone(stats),
+                        Arc::clone(&self.table_schema),
+                    );
+                    match pruning_predicate.prune(&pruning_stats) {
+                        Ok(values) => {
+                            // We expect a single container -> if all containers are false skip this file
+                            if values.into_iter().all(|v| !v) {
+                                // Return an empty stream
+                                todo!()
+                            }
+                        }
+                        // stats filter array could not be built, so we can't prune
+                        Err(e) => {
+                            log::debug!("Error evaluating row group predicate values {e}");
+                            predicate_creation_errors.add(1);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
         let file_range = file_meta.range.clone();
         let extensions = file_meta.extensions.clone();
         let file_name = file_meta.location().to_string();
@@ -118,9 +150,6 @@ impl FileOpener for ParquetOpener {
         let enable_bloom_filter = self.enable_bloom_filter;
         let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
         let limit = self.limit;
-
-        let predicate_creation_errors = MetricBuilder::new(&self.metrics)
-            .global_counter("num_predicate_creation_errors");
 
         let enable_page_index = self.enable_page_index;
 

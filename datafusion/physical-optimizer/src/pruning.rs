@@ -22,12 +22,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::AsArray;
+use arrow::array::{AsArray, UInt64Array};
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
+use datafusion_common::stats::Precision;
 use log::{debug, trace};
 
 use datafusion_common::error::{DataFusionError, Result};
@@ -37,7 +38,7 @@ use datafusion_common::{
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
-use datafusion_common::{Column, DFSchema};
+use datafusion_common::{Column, DFSchema, Statistics};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
@@ -993,6 +994,123 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
         plan_datafusion_err!("Can not create statistics record batch: {err}")
     })
+}
+
+
+pub struct PrunableStatistics {
+    statistics: Arc<Statistics>,
+    schema: SchemaRef,
+}
+
+impl PrunableStatistics {
+    /// Create a new instance of [`PrunableStatistics`]
+    pub fn new(statistics: Arc<Statistics>, schema: SchemaRef) -> Self {
+        Self { statistics, schema }
+    }
+}
+
+impl PruningStatistics for PrunableStatistics {
+    /// Return the minimum values for the named column, if known.
+    ///
+    /// If the minimum value for a particular container is not known, the
+    /// returned array should have `null` in that row. If the minimum value is
+    /// not known for any row, return `None`.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        let index = self.schema.index_of(column.name()).ok()?;
+        let stats = self.statistics.column_statistics.get(index)?;
+        match &stats.min_value {
+            Precision::Exact(min) => min.to_array_of_size(1).ok(),
+            _ => None,
+        }
+    }
+
+    /// Return the maximum values for the named column, if known.
+    ///
+    /// See [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        let index = self.schema.index_of(column.name()).ok()?;
+        let stats = self.statistics.column_statistics.get(index)?;
+        match &stats.max_value {
+            Precision::Exact(max) => max.to_array_of_size(1).ok(),
+            _ => None,
+        }
+    }
+
+    /// Return the number of containers (e.g. Row Groups) being pruned with
+    /// these statistics.
+    ///
+    /// This value corresponds to the size of the [`ArrayRef`] returned by
+    /// [`Self::min_values`], [`Self::max_values`], [`Self::null_counts`],
+    /// and [`Self::row_counts`].
+    fn num_containers(&self) -> usize {
+        1
+    }
+
+    /// Return the number of null values for the named column as an
+    /// [`UInt64Array`]
+    ///
+    /// See [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
+    ///
+    /// [`UInt64Array`]: arrow::array::UInt64Array
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let index = self.schema.index_of(column.name()).ok()?;
+        let stats = self.statistics.column_statistics.get(index)?;
+        match &stats.null_count {
+            Precision::Exact(null_count) => {
+                let null_count = u64::try_from(*null_count).ok()?;
+                Some(Arc::new(UInt64Array::from(vec![null_count])))
+            }
+            _ => None,
+        }
+    }
+
+    /// Return the number of rows for the named column in each container
+    /// as an [`UInt64Array`].
+    ///
+    /// See [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
+    ///
+    /// [`UInt64Array`]: arrow::array::UInt64Array
+    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        match self.statistics.num_rows {
+            Precision::Exact(num_rows) => {
+                let num_rows = u64::try_from(num_rows).ok()?;
+                Some(Arc::new(UInt64Array::from(vec![num_rows])))
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns [`BooleanArray`] where each row represents information known
+    /// about specific literal `values` in a column.
+    ///
+    /// For example, Parquet Bloom Filters implement this API to communicate
+    /// that `values` are known not to be present in a Row Group.
+    ///
+    /// The returned array has one row for each container, with the following
+    /// meanings:
+    /// * `true` if the values in `column`  ONLY contain values from `values`
+    /// * `false` if the values in `column` are NOT ANY of `values`
+    /// * `null` if the neither of the above holds or is unknown.
+    ///
+    /// If these statistics can not determine column membership for any
+    /// container, return `None` (the default).
+    ///
+    /// Note: the returned array must contain [`Self::num_containers`] rows
+    fn contained(
+        &self,
+        _column: &Column,
+        _values: &HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        None
+    }
 }
 
 struct PruningExpressionBuilder<'a> {
