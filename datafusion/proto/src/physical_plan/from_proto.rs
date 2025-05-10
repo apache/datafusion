@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
+use arrow::datatypes::Field;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
@@ -365,7 +366,7 @@ pub fn parse_physical_expr(
                     e.name.as_str(),
                     scalar_fun_def,
                     args,
-                    convert_required!(e.return_type)?,
+                    Field::new("f", convert_required!(e.return_type)?, true),
                 )
                 .with_nullable(e.nullable),
             )
@@ -555,7 +556,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
             object_meta: ObjectMeta {
                 location: Path::from(val.path.as_str()),
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
-                size: val.size as usize,
+                size: val.size,
                 e_tag: None,
                 version: None,
             },

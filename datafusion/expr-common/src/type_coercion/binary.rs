@@ -733,6 +733,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
         .or_else(|| struct_coercion(lhs_type, rhs_type))
+        .or_else(|| map_coercion(lhs_type, rhs_type))
 }
 
 /// Similar to [`comparison_coercion`] but prefers numeric if compares with
@@ -987,6 +988,25 @@ fn coerce_fields(common_type: DataType, lhs: &FieldRef, rhs: &FieldRef) -> Field
     Arc::new(Field::new(name, common_type, is_nullable))
 }
 
+/// coerce two types if they are Maps by coercing their inner 'entries' fields' types
+/// using struct coercion
+fn map_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Map(lhs_field, lhs_ordered), Map(rhs_field, rhs_ordered)) => {
+            struct_coercion(lhs_field.data_type(), rhs_field.data_type()).map(
+                |key_value_type| {
+                    Map(
+                        Arc::new((**lhs_field).clone().with_data_type(key_value_type)),
+                        *lhs_ordered && *rhs_ordered,
+                    )
+                },
+            )
+        }
+        _ => None,
+    }
+}
+
 /// Returns the output type of applying mathematics operations such as
 /// `+` to arguments of `lhs_type` and `rhs_type`.
 fn mathematics_numerical_coercion(
@@ -1118,7 +1138,7 @@ fn dictionary_comparison_coercion(
 /// 2. Data type of the other side should be able to cast to string type
 fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    string_coercion(lhs_type, rhs_type).or(match (lhs_type, rhs_type) {
+    string_coercion(lhs_type, rhs_type).or_else(|| match (lhs_type, rhs_type) {
         (Utf8View, from_type) | (from_type, Utf8View) => {
             string_concat_internal_coercion(from_type, &Utf8View)
         }
@@ -1277,6 +1297,10 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
             Some(LargeBinary)
         }
         (Binary, Utf8) | (Utf8, Binary) => Some(Binary),
+
+        // Cast FixedSizeBinary to Binary
+        (FixedSizeBinary(_), Binary) | (Binary, FixedSizeBinary(_)) => Some(Binary),
+
         _ => None,
     }
 }
@@ -2480,6 +2504,51 @@ mod tests {
             DataType::Boolean,
             Operator::Or,
             DataType::Boolean
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_coercion() -> Result<()> {
+        let lhs = Field::new_map(
+            "lhs",
+            "entries",
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::LargeUtf8, false)),
+            true,
+            false,
+        );
+        let rhs = Field::new_map(
+            "rhs",
+            "kvp",
+            Arc::new(Field::new("k", DataType::Utf8, false)),
+            Arc::new(Field::new("v", DataType::Utf8, true)),
+            false,
+            true,
+        );
+
+        let expected = Field::new_map(
+            "expected",
+            "entries", // struct coercion takes lhs name
+            Arc::new(Field::new(
+                "keys", // struct coercion takes lhs name
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                "values",            // struct coercion takes lhs name
+                DataType::LargeUtf8, // lhs is large string
+                true,                // rhs is nullable
+            )),
+            false, // both sides must be sorted
+            true,  // rhs is nullable
+        );
+
+        test_coercion_binary_rule!(
+            lhs.data_type(),
+            rhs.data_type(),
+            Operator::Eq,
+            expected.data_type().clone()
         );
         Ok(())
     }

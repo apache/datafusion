@@ -67,6 +67,7 @@ pub mod empty;
 pub mod execution_plan;
 pub mod explain;
 pub mod filter;
+pub mod filter_pushdown;
 pub mod joins;
 pub mod limit;
 pub mod memory;
@@ -91,5 +92,5 @@ pub mod udaf {
 }
 
 pub mod coalesce;
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 pub mod test;

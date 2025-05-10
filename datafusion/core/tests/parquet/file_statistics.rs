@@ -28,6 +28,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
+use datafusion_common::DFSchema;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::cache::cache_unit::{
     DefaultFileStatisticsCache, DefaultListFilesCache,
@@ -37,6 +38,10 @@ use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{col, lit, Expr};
 
 use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::ExecutionPlan;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -47,16 +52,50 @@ async fn check_stats_precision_with_filter_pushdown() {
 
     let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
     let table = get_listing_table(&table_path, None, &opt).await;
+
     let (_, _, state) = get_cache_runtime_state();
+    let mut options = state.config().options().clone();
+    options.execution.parquet.pushdown_filters = true;
+
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
-    assert_eq!(exec.statistics().unwrap().num_rows, Precision::Exact(8));
+    assert_eq!(
+        exec.partition_statistics(None).unwrap().num_rows,
+        Precision::Exact(8),
+        "Stats without filter should be exact"
+    );
 
+    // This is a filter that cannot be evaluated by the table provider scanning
+    // (it is not a partition filter). Therefore; it will be pushed down to the
+    // source operator after the appropriate optimizer pass.
+    let filter_expr = Expr::gt(col("id"), lit(1));
+    let exec_with_filter = table
+        .scan(&state, None, &[filter_expr.clone()], None)
+        .await
+        .unwrap();
+
+    let ctx = SessionContext::new();
+    let df_schema = DFSchema::try_from(table.schema()).unwrap();
+    let physical_filter = ctx.create_physical_expr(filter_expr, &df_schema).unwrap();
+
+    let filtered_exec =
+        Arc::new(FilterExec::try_new(physical_filter, exec_with_filter).unwrap())
+            as Arc<dyn ExecutionPlan>;
+
+    let optimized_exec = FilterPushdown::new()
+        .optimize(filtered_exec, &options)
+        .unwrap();
+
+    assert!(
+        optimized_exec.as_any().is::<DataSourceExec>(),
+        "Sanity check that the pushdown did what we expected"
+    );
     // Scan with filter pushdown, stats are inexact
-    let filter = Expr::gt(col("id"), lit(1));
-
-    let exec = table.scan(&state, None, &[filter], None).await.unwrap();
-    assert_eq!(exec.statistics().unwrap().num_rows, Precision::Inexact(8));
+    assert_eq!(
+        optimized_exec.partition_statistics(None).unwrap().num_rows,
+        Precision::Inexact(8),
+        "Stats after filter pushdown should be inexact"
+    );
 }
 
 #[tokio::test]
@@ -79,9 +118,12 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(get_static_cache_size(&state1), 0);
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
 
-    assert_eq!(exec1.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
-        exec1.statistics().unwrap().total_byte_size,
+        exec1.partition_statistics(None).unwrap().num_rows,
+        Precision::Exact(8)
+    );
+    assert_eq!(
+        exec1.partition_statistics(None).unwrap().total_byte_size,
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         Precision::Exact(671),
     );
@@ -91,9 +133,12 @@ async fn load_table_stats_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_static_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
-    assert_eq!(exec2.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
-        exec2.statistics().unwrap().total_byte_size,
+        exec2.partition_statistics(None).unwrap().num_rows,
+        Precision::Exact(8)
+    );
+    assert_eq!(
+        exec2.partition_statistics(None).unwrap().total_byte_size,
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         Precision::Exact(671),
     );
@@ -103,9 +148,12 @@ async fn load_table_stats_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_static_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
-    assert_eq!(exec3.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
-        exec3.statistics().unwrap().total_byte_size,
+        exec3.partition_statistics(None).unwrap().num_rows,
+        Precision::Exact(8)
+    );
+    assert_eq!(
+        exec3.partition_statistics(None).unwrap().total_byte_size,
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         Precision::Exact(671),
     );

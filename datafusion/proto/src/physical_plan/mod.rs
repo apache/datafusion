@@ -728,7 +728,7 @@ impl protobuf::PhysicalPlanNode {
             let mut source = ParquetSource::new(options);
 
             if let Some(predicate) = predicate {
-                source = source.with_predicate(Arc::clone(&schema), predicate);
+                source = source.with_predicate(predicate);
             }
             let base_config = parse_protobuf_file_scan_config(
                 scan.base_conf.as_ref().unwrap(),
@@ -792,7 +792,10 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&merge.input, registry, runtime, extension_codec)?;
-        Ok(Arc::new(CoalescePartitionsExec::new(input)))
+        Ok(Arc::new(
+            CoalescePartitionsExec::new(input)
+                .with_fetch(merge.fetch.map(|f| f as usize)),
+        ))
     }
 
     fn try_into_repartition_physical_plan(
@@ -2354,6 +2357,7 @@ impl protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Merge(Box::new(
                 protobuf::CoalescePartitionsExecNode {
                     input: Some(Box::new(input)),
+                    fetch: exec.fetch().map(|f| f as u32),
                 },
             ))),
         })
