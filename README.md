@@ -28,7 +28,6 @@
 [![Linkedin][linkedin-badge]][linkedin-url]
 ![Crates.io MSRV][msrv-badge]
 
-
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
 [license-badge]: https://img.shields.io/badge/license-Apache%20v2-blue.svg
