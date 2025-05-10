@@ -193,5 +193,18 @@ physical_plan
 02)--SortExec: expr=[c2@1 ASC NULLS LAST], preserve_partitioning=[false]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2], file_type=csv, has_header=true
 
+query TT
+explain with t as (select c1 from sink_table order by c2 nulls last) select * from t;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: sink_table.c1
+03)----Sort: sink_table.c2 ASC NULLS LAST
+04)------TableScan: sink_table projection=[c1, c2]
+physical_plan
+01)ProjectionExec: expr=[c1@0 as c1]
+02)--SortExec: expr=[c2@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2], file_type=csv, has_header=true
+
 statement ok
 set datafusion.sql_parser.enable_eliminate_subquery_sort=true
