@@ -506,16 +506,13 @@ impl EquivalenceGroup {
     }
 
     /// Extends this equivalence group with the `other` equivalence group.
-    /// Returns whether the extension resulted in new equivalence classes.
-    pub fn extend(&mut self, other: Self) -> bool {
-        let n_classes = self.classes.len();
+    pub fn extend(&mut self, other: Self) {
         for (idx, cls) in other.classes.iter().enumerate() {
             // Update the lookup table for the new class:
             Self::update_lookup_table(&mut self.map, cls, idx);
         }
         self.classes.extend(other.classes);
         self.remove_redundant_entries();
-        self.classes.len() > n_classes
     }
 
     /// Normalizes the given physical expression according to this group. The
@@ -548,9 +545,9 @@ impl EquivalenceGroup {
     }
 
     /// Normalizes the given sort expressions (i.e. `sort_exprs`) by:
-    /// - Removing expressions that have a constant value.
     /// - Replacing sections that belong to some equivalence class in the
     ///   with the first entry in the matching equivalence class.
+    /// - Removing expressions that have a constant value.
     /// - Removing duplicate sort expressions.
     ///
     /// If columns `a` and `b` are known to be equal, `d` is known to be a
@@ -581,9 +578,9 @@ impl EquivalenceGroup {
     }
 
     /// Normalizes the given sort requirements (i.e. `sort_reqs`) by:
-    /// - Removing expressions that have a constant value.
     /// - Replacing sections that belong to some equivalence class in the
     ///   with the first entry in the matching equivalence class.
+    /// - Removing expressions that have a constant value.
     /// - Removing duplicate sort expressions.
     ///
     /// If columns `a` and `b` are known to be equal, `d` is known to be a

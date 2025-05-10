@@ -16,7 +16,6 @@
 // under the License.
 
 use std::fmt::Display;
-use std::hash::Hash;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
@@ -44,7 +43,7 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 ///
 /// Here, both `[a ASC, b ASC]` and `[c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OrderingEquivalenceClass {
     orderings: Vec<LexOrdering>,
 }
@@ -209,31 +208,6 @@ impl OrderingEquivalenceClass {
     /// such cases. If an expression is constant within a prefix ordering, it is
     /// added as a constant during `ordering_satisfy_requirement()` iterations
     /// after the corresponding prefix requirement is satisfied.
-    ///
-    /// ### Example Scenarios
-    ///
-    /// In these scenarios, we assume that all expressions share the same sort
-    /// properties.
-    ///
-    /// #### Case 1: Sort Requirement `[a, c]`
-    ///
-    /// **Existing Orderings:** `[[a, b, c], [a, d]]`, **Constants:** `[]`
-    /// 1. `ordering_satisfy_single()` returns `true` because the requirement
-    ///    `a` is satisfied by `[a, b, c].first()`.
-    /// 2. `a` is added as a constant for the next iteration.
-    /// 3. The normalized orderings become `[[b, c], [d]]`.
-    /// 4. `ordering_satisfy_single()` returns `false` for `c`, as neither
-    ///    `[b, c]` nor `[d]` satisfies `c`.
-    ///
-    /// #### Case 2: Sort Requirement `[a, d]`
-    ///
-    /// **Existing Orderings:** `[[a, b, c], [a, d]]`, **Constants:** `[]`
-    /// 1. `ordering_satisfy_single()` returns `true` because the requirement
-    ///    `a` is satisfied by `[a, b, c].first()`.
-    /// 2. `a` is added as a constant for the next iteration.
-    /// 3. The normalized orderings become `[[b, c], [d]]`.
-    /// 4. `ordering_satisfy_single()` returns `true` for `d`, as `[d]` satisfies
-    ///    `d`.
     ///
     /// ### Future Improvements
     ///

@@ -248,13 +248,16 @@ impl EquivalenceProperties {
     /// Incorporates the given equivalence group to into the existing
     /// equivalence group within.
     pub fn add_equivalence_group(&mut self, other_eq_group: EquivalenceGroup) {
-        if self.eq_group.extend(other_eq_group) {
-            // Renormalize the orderings after adding new equivalence classes:
-            let oeq_class = mem::take(&mut self.oeq_class);
-            let orderings = oeq_class
-                .into_iter()
-                .map(|o| self.eq_group.normalize_sort_exprs(o));
-            self.oeq_class = OrderingEquivalenceClass::new(orderings);
+        self.eq_group.extend(other_eq_group);
+        // Renormalize orderings after modifying equivalence classes:
+        let oeq_class = mem::take(&mut self.oeq_class);
+        let orderings = oeq_class
+            .into_iter()
+            .map(|o| self.eq_group.normalize_sort_exprs(o));
+        self.oeq_class = OrderingEquivalenceClass::new(orderings);
+        for ordering in self.oeq_class.clone() {
+            let leading = Arc::clone(&ordering[0].expr);
+            self.discover_new_orderings(leading).unwrap();
         }
     }
 
@@ -424,8 +427,9 @@ impl EquivalenceProperties {
         LexRequirement::new(self.eq_group.normalize_sort_requirements(sort_reqs))
     }
 
-    /// Checks whether the given ordering is satisfied by any of the existing
-    /// orderings.
+    /// Iteratively checks whether the given ordering is satisfied by any of
+    /// the existing orderings. See [`Self::ordering_satisfy_requirement`] for
+    /// more details and examples.
     pub fn ordering_satisfy(
         &self,
         given: impl IntoIterator<Item = PhysicalSortExpr>,
@@ -439,8 +443,32 @@ impl EquivalenceProperties {
         self.common_sort_prefix_length(normalized_ordering) == length
     }
 
-    /// Checks whether the given sort requirements are satisfied by any of the
-    /// existing orderings.
+    /// Iteratively checks whether the given sort requirement is satisfied by
+    /// any of the existing orderings.
+    ///
+    /// ### Example Scenarios
+    ///
+    /// In these scenarios, assume that all expressions share the same sort
+    /// properties.
+    ///
+    /// #### Case 1: Sort Requirement `[a, c]`
+    ///
+    /// **Existing orderings:** `[[a, b, c], [a, d]]`, **constants:** `[]`
+    /// 1. The function first checks the leading requirement `a`, which is
+    ///    satisfied by `[a, b, c].first()`.
+    /// 2. `a` is added as a constant for the next iteration.
+    /// 3. Normalized orderings become `[[b, c], [d]]`.
+    /// 4. The function fails for `c` in the second iteration, as neither
+    ///    `[b, c]` nor `[d]` satisfies `c`.
+    ///
+    /// #### Case 2: Sort Requirement `[a, d]`
+    ///
+    /// **Existing orderings:** `[[a, b, c], [a, d]]`, **constants:** `[]`
+    /// 1. The function first checks the leading requirement `a`, which is
+    ///    satisfied by `[a, b, c].first()`.
+    /// 2. `a` is added as a constant for the next iteration.
+    /// 3. Normalized orderings become `[[b, c], [d]]`.
+    /// 4. The function returns `true` as `[d]` satisfies `d`.
     pub fn ordering_satisfy_requirement(
         &self,
         given: impl IntoIterator<Item = PhysicalSortRequirement>,

@@ -329,7 +329,7 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 /// For example, a `vec![a ASC, b DESC]` represents a lexicographical ordering
 /// that first sorts by column `a` in ascending order, then by column `b` in
 /// descending order.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexOrdering {
     exprs: Vec<PhysicalSortExpr>,
 }
