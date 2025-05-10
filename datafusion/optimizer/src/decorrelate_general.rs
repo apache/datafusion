@@ -240,18 +240,12 @@ fn try_transform_subquery_to_join_expr(
 
     // this is used for exist query
     let mut join_predicate = None;
-    if replace_columns.len() != 1 {
-        for expr in replace_columns {
-            println!("{}", expr)
-        }
-        return internal_err!("result of in subquery should only involve one column");
-    }
+
     let found_sq = expr.exists(|e| match e {
         Expr::InSubquery(isq) => {
             if replace_columns.len() != 1 {
-                println!("{:?}", replace_columns);
                 return internal_err!(
-                    "result of in subquery should only involve one column"
+                    "result of IN subquery should only involve one column"
                 );
             }
             if isq.subquery == *sq {
@@ -308,19 +302,21 @@ fn try_transform_subquery_to_join_expr(
             }
             return Ok(true);
         }
-        Expr::Exists(Exists { subquery, negated }) => {
-            if let LogicalPlan::Subquery(inner_sq) = subquery.subquery.as_ref() {
-                if inner_sq.clone() == *sq {
-                    let mark_predicate = if *negated {
-                        expr_fn::not(col("mark"))
-                    } else {
-                        col("mark")
-                    };
-                    join_predicate = Some(mark_predicate);
-                    return Ok(true);
-                }
+        Expr::Exists(Exists {
+            subquery: inner_sq,
+            negated,
+            ..
+        }) => {
+            if inner_sq.clone() == *sq {
+                let mark_predicate = if *negated {
+                    expr_fn::not(col("mark"))
+                } else {
+                    col("mark")
+                };
+                post_join_predicate = Some(mark_predicate);
+                return Ok(true);
             }
-            internal_err!("subquery field of Exists is not a subquery")
+            return Ok(false);
         }
         Expr::ScalarSubquery(ssq) => {
             unimplemented!(
@@ -675,12 +671,16 @@ impl DependentJoinTracker {
                 // left
                 let mut builder = LogicalPlanBuilder::new(filter.input.deref().clone());
 
-                builder = builder.join_on(
-                    subquery_children,
-                    // TODO: join type based on filter condition
-                    join_type,
-                    join_exprs,
-                )?;
+                builder = if join_exprs.is_empty() {
+                    builder.join_on(subquery_children, join_type, vec![lit(true)])?
+                } else {
+                    builder.join_on(
+                        subquery_children,
+                        // TODO: join type based on filter condition
+                        join_type,
+                        join_exprs,
+                    )?
+                };
 
                 if kept_predicates.len() > 0 {
                     builder = builder.filter(conjunction(kept_predicates).unwrap())?
@@ -710,8 +710,6 @@ impl DependentJoinTracker {
         let simple_unnest_result = self.simple_decorrelation(node)?;
         let mut new_root = self.nodes.get(&node).unwrap().clone();
         if new_root.access_tracker.len() == 0 {
-            println!("after rewriting================================");
-            println!("{:?}", self);
             return self
                 .build_join_from_simple_unnest(&mut new_root, simple_unnest_result);
             if parent.is_some() {
@@ -723,8 +721,6 @@ impl DependentJoinTracker {
             unimplemented!()
             // return Ok(dependent_join);
         }
-        println!("after rewriting================================");
-        println!("{:?}", self);
         if parent.is_some() {
             // i.e exists (where inner.col_a = outer_col.b and other_nested_subquery...)
 
@@ -1185,6 +1181,7 @@ mod tests {
 
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
+        exists,
         expr_fn::{self, col, not},
         in_subquery, lit, out_ref_col, scalar_subquery, table_scan, CreateMemoryTable,
         EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder,
@@ -1200,9 +1197,34 @@ mod tests {
         datatypes::{DataType as ArrowDataType, Field, Fields, Schema},
     };
     #[test]
-    fn simple_decorrelate_with_in_subquery_no_dependent_column() -> Result<()> {
-        // let mut framework = GeneralDecorrelation::default();
+    fn simple_decorrelate_with_exist_subquery_no_dependent_column() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1)
+                .filter(col("inner_table_lv1.b").eq(lit(1)))?
+                .project(vec![col("inner_table_lv1.b"), col("inner_table_lv1.a")])?
+                .build()?,
+        );
 
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
+            .build()?;
+        let mut index = DependentJoinTracker::default();
+        index.build(&input1)?;
+        let new_plan = index.root_dependent_join_elimination()?;
+        let expected = "\
+        Filter: outer_table.a > Int32(1) AND inner_table_lv1.mark\
+        \n  LeftMark Join:  Filter: Boolean(true)\
+        \n    TableScan: outer_table\
+        \n    Projection: inner_table_lv1.b, inner_table_lv1.a\
+        \n      Filter: inner_table_lv1.b = Int32(1)\
+        \n        TableScan: inner_table_lv1";
+        assert_eq!(expected, format!("{new_plan}"));
+        Ok(())
+    }
+    #[test]
+    fn simple_decorrelate_with_in_subquery_no_dependent_column() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -1234,8 +1256,6 @@ mod tests {
     }
     #[test]
     fn simple_decorrelate_with_in_subquery_has_dependent_column() -> Result<()> {
-        // let mut framework = GeneralDecorrelation::default();
-
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
