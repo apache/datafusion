@@ -1020,7 +1020,10 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn requried_filtered_input(&self) -> bool {
-        matches!(self.mode(), AggregateMode::FinalPartitioned(HashPartitionMode::SelectionBitmap))
+        matches!(
+            self.mode(),
+            AggregateMode::FinalPartitioned(HashPartitionMode::SelectionBitmap)
+        )
     }
 }
 

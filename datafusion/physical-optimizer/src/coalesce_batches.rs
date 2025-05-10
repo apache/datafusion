@@ -66,10 +66,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                 || plan_any
                     .downcast_ref::<RepartitionExec>()
                     .map(|repart_exec| {
-                        !matches!(
-                            repart_exec.partitioning().clone(),
-                            Partitioning::RoundRobinBatch(_)
-                        )
+                        !matches!(repart_exec.partitioning(), Partitioning::RoundRobinBatch(_) | Partitioning::HashSelectionBitmap(_, _))
                     })
                     .unwrap_or(false);
             if wrap_in_coalesce {
