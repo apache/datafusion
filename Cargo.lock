@@ -1968,6 +1968,7 @@ dependencies = [
  "regex",
  "rstest",
  "rustyline",
+ "snmalloc-rs",
  "tokio",
  "url",
 ]
