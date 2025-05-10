@@ -184,3 +184,17 @@ provide integrations with other systems, some of which are described below:
 - _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet, and Flight), DataFusion works well with the rest of the big data ecosystem
 - _Easy to Embed_: Allowing extension at almost any point in its design, and published regularly as a crate on [crates.io](http://crates.io), DataFusion can be integrated and tailored for your specific usecase.
 - _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can and is used as the foundation for production systems.
+
+## Rust Version Compatibility Policy
+
+The Rust toolchain releases are tracked at [Rust Versions](https://releases.rs) and follow
+[semantic versioning](https://semver.org/). A Rust toolchain release can be identified
+by a version string like `1.80.0`, or more generally `major.minor.patch`.
+
+DataFusion supports the last 4 stable Rust minor versions released and any such versions released within the last 4 months.
+
+For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
+
+Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
+
+DataFusion enforces MSRV policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
