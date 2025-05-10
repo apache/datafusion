@@ -30,6 +30,7 @@ use crate::utils::has_all_column_refs;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
 use arrow::compute::kernels::cmp::eq;
+use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
     TreeNodeRewriter, TreeNodeVisitor,
@@ -60,6 +61,7 @@ pub struct DependentJoinTracker {
     stack: Vec<usize>,
     // track for each column, the nodes/logical plan that reference to its within the tree
     accessed_columns: IndexMap<Column, Vec<ColumnAccess>>,
+    alias_generator: Arc<AliasGenerator>,
 }
 
 #[derive(Debug, Hash, PartialEq, PartialOrd, Eq, Clone)]
@@ -308,11 +310,7 @@ fn try_transform_subquery_to_join_expr(
             ..
         }) => {
             if inner_sq.clone() == *sq {
-                let mark_predicate = if *negated {
-                    expr_fn::not(col("mark"))
-                } else {
-                    col("mark")
-                };
+                let mark_predicate = if *negated { !col("mark") } else { col("mark") };
                 post_join_predicate = Some(mark_predicate);
                 return Ok(true);
             }
@@ -997,10 +995,11 @@ impl DependentJoinTracker {
     }
 }
 
-impl Default for DependentJoinTracker {
-    fn default() -> Self {
+impl DependentJoinTracker {
+    fn new(alias_generator: Arc<AliasGenerator>) -> Self {
         return DependentJoinTracker {
             root: None,
+            alias_generator,
             current_id: 0,
             nodes: IndexMap::new(),
             stack: vec![],
@@ -1179,7 +1178,7 @@ impl OptimizerRule for DependentJoinTracker {
 mod tests {
     use std::sync::Arc;
 
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::{alias::AliasGenerator, DFSchema, Result};
     use datafusion_expr::{
         exists,
         expr_fn::{self, col, not},
@@ -1197,6 +1196,45 @@ mod tests {
         datatypes::{DataType as ArrowDataType, Field, Fields, Schema},
     };
     #[test]
+    fn simple_decorrelate_with_exist_subquery_with_dependent_columns() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1)
+                .filter(
+                    col("inner_table_lv1.a")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.a")
+                                .gt(col("inner_table_lv1.c")),
+                        )
+                        .and(col("inner_table_lv1.b").eq(lit(1)))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.b")
+                                .eq(col("inner_table_lv1.b")),
+                        ),
+                )?
+                .project(vec![out_ref_col(ArrowDataType::UInt32, "outer_table.b")
+                    .alias("outer_b_alias")])?
+                .build()?,
+        );
+
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
+            .build()?;
+        let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
+        index.build(&input1)?;
+        let new_plan = index.root_dependent_join_elimination()?;
+        let expected = "\
+        Filter: outer_table.a > Int32(1) AND inner_table_lv1.mark\
+        \n  LeftMark Join:  Filter: inner_table_lv1.a = outer_table.a AND outer_table.a > inner_table_lv1.c AND outer_table.b = inner_table_lv1.b\
+        \n    TableScan: outer_table\
+        \n    Filter: inner_table_lv1.b = Int32(1)\
+        \n      TableScan: inner_table_lv1";
+        assert_eq!(expected, format!("{new_plan}"));
+        Ok(())
+    }
+    #[test]
     fn simple_decorrelate_with_exist_subquery_no_dependent_column() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
@@ -1210,7 +1248,7 @@ mod tests {
         let input1 = LogicalPlanBuilder::from(outer_table.clone())
             .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
             .build()?;
-        let mut index = DependentJoinTracker::default();
+        let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
         index.build(&input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
@@ -1241,7 +1279,7 @@ mod tests {
                     .and(in_subquery(col("outer_table.c"), sq_level1)),
             )?
             .build()?;
-        let mut index = DependentJoinTracker::default();
+        let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
         index.build(&input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
@@ -1285,7 +1323,7 @@ mod tests {
                     .and(in_subquery(col("outer_table.c"), sq_level1)),
             )?
             .build()?;
-        let mut index = DependentJoinTracker::default();
+        let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
         index.build(&input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
@@ -1297,166 +1335,4 @@ mod tests {
         assert_eq!(expected, format!("{new_plan}"));
         Ok(())
     }
-    #[test]
-    fn play_unnest_simple_predicate_pull_up() -> Result<()> {
-        // let mut framework = GeneralDecorrelation::default();
-
-        let outer_table = test_table_scan_with_name("outer_table")?;
-        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
-        // let inner_table_lv2 = test_table_scan_with_name("inner_table_lv2")?;
-        // let sq_level2 = Arc::new(
-        //     LogicalPlanBuilder::from(inner_table_lv2)
-        //         .filter(
-        //             out_ref_col(ArrowDataType::UInt32, "inner_table_lv1.b")
-        //                 .eq(col("inner_table_lv2.b"))
-        //                 .and(
-        //                     out_ref_col(ArrowDataType::UInt32, "outer_table.c")
-        //                         .eq(col("inner_table_lv2.c")),
-        //                 ),
-        //         )?
-        //         .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv2.a"))])?
-        //         .build()?,
-        // );
-        let sq_level1 = Arc::new(
-            LogicalPlanBuilder::from(inner_table_lv1)
-                .filter(
-                    col("inner_table_lv1.a")
-                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
-                        .and(
-                            out_ref_col(ArrowDataType::UInt32, "outer_table.a")
-                                .eq(lit(1)),
-                        ),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![sum(col("inner_table_lv1.b"))])?
-                .project(vec![sum(col("inner_table_lv1.b"))])?
-                .build()?,
-        );
-
-        let input1 = LogicalPlanBuilder::from(outer_table.clone())
-            .filter(
-                col("outer_table.a")
-                    .gt(lit(1))
-                    .and(col("outer_table.b").gt(scalar_subquery(sq_level1))),
-            )?
-            .build()?;
-        let mut index = DependentJoinTracker::default();
-        index.build(&input1)?;
-        let new_plan = index.root_dependent_join_elimination()?;
-        println!("{}", new_plan);
-
-        // let input2 = LogicalPlanBuilder::from(input.clone())
-        //     .filter(col("int_col").gt(lit(1)))?
-        //     .project(vec![col("string_col")])?
-        //     .build()?;
-
-        // let mut b = GeneralDecorrelation::default();
-        // b.build_algebra_index(input2)?;
-
-        Ok(())
-    }
-    #[test]
-    fn play_unnest() -> Result<()> {
-        // let mut framework = GeneralDecorrelation::default();
-
-        let outer_table = test_table_scan_with_name("outer_table")?;
-        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
-        // let inner_table_lv2 = test_table_scan_with_name("inner_table_lv2")?;
-        // let sq_level2 = Arc::new(
-        //     LogicalPlanBuilder::from(inner_table_lv2)
-        //         .filter(
-        //             out_ref_col(ArrowDataType::UInt32, "inner_table_lv1.b")
-        //                 .eq(col("inner_table_lv2.b"))
-        //                 .and(
-        //                     out_ref_col(ArrowDataType::UInt32, "outer_table.c")
-        //                         .eq(col("inner_table_lv2.c")),
-        //                 ),
-        //         )?
-        //         .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv2.a"))])?
-        //         .build()?,
-        // );
-        let sq_level1 = Arc::new(
-            LogicalPlanBuilder::from(inner_table_lv1)
-                .filter(
-                    col("inner_table_lv1.a")
-                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![sum(col("inner_table_lv1.b"))])?
-                .project(vec![sum(col("inner_table_lv1.b"))])?
-                .build()?,
-        );
-
-        let input1 = LogicalPlanBuilder::from(outer_table.clone())
-            .filter(
-                col("outer_table.a")
-                    .gt(lit(1))
-                    .and(col("outer_table.b").gt(scalar_subquery(sq_level1))),
-            )?
-            .build()?;
-        let mut index = DependentJoinTracker::default();
-        index.build(&input1)?;
-        let new_plan = index.root_dependent_join_elimination()?;
-        println!("{}", new_plan);
-
-        // let input2 = LogicalPlanBuilder::from(input.clone())
-        //     .filter(col("int_col").gt(lit(1)))?
-        //     .project(vec![col("string_col")])?
-        //     .build()?;
-
-        // let mut b = GeneralDecorrelation::default();
-        // b.build_algebra_index(input2)?;
-
-        Ok(())
-    }
-
-    // #[test]
-    // fn todo() -> Result<()> {
-    //     let mut framework = GeneralDecorrelation::default();
-
-    //     let outer_table = test_table_scan_with_name("outer_table")?;
-    //     let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
-    //     let inner_table_lv2 = test_table_scan_with_name("inner_table_lv2")?;
-    //     let sq_level2 = Arc::new(
-    //         LogicalPlanBuilder::from(inner_table_lv2)
-    //             .filter(
-    //                 out_ref_col(ArrowDataType::UInt32, "inner_table_lv1.b")
-    //                     .eq(col("inner_table_lv2.b"))
-    //                     .and(
-    //                         out_ref_col(ArrowDataType::UInt32, "outer_table.c")
-    //                             .eq(col("inner_table_lv2.c")),
-    //                     ),
-    //             )?
-    //             .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv2.a"))])?
-    //             .build()?,
-    //     );
-    //     let sq_level1 = Arc::new(
-    //         LogicalPlanBuilder::from(inner_table_lv1)
-    //             .filter(
-    //                 col("inner_table_lv1.a")
-    //                     .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
-    //                     .and(scalar_subquery(sq_level2).gt(lit(5))),
-    //             )?
-    //             .aggregate(Vec::<Expr>::new(), vec![sum(col("inner_table_lv1.b"))])?
-    //             .project(vec![sum(col("inner_table_lv1.b"))])?
-    //             .build()?,
-    //     );
-
-    //     let input1 = LogicalPlanBuilder::from(outer_table.clone())
-    //         .filter(
-    //             col("outer_table.a")
-    //                 .gt(lit(1))
-    //                 .and(col("outer_table.b").gt(scalar_subquery(sq_level1))),
-    //         )?
-    //         .build()?;
-    //     framework.build(&input1)?;
-
-    //     // let input2 = LogicalPlanBuilder::from(input.clone())
-    //     //     .filter(col("int_col").gt(lit(1)))?
-    //     //     .project(vec![col("string_col")])?
-    //     //     .build()?;
-
-    //     // let mut b = GeneralDecorrelation::default();
-    //     // b.build_algebra_index(input2)?;
-
-    //     Ok(())
-    // }
 }
