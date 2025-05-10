@@ -700,6 +700,10 @@ config_namespace! {
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         pub prefer_hash_join: bool, default = true
 
+        /// When set to true, the physical plan optimizer will prefer HashSelectionBitmapPartitioning for HashAggregate
+        /// over HashPartitioning. HashSelectionBitmapPartitioning can work without data copying.
+        pub prefer_hash_selection_bitmap_partitioning_agg: bool, default = false
+
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024

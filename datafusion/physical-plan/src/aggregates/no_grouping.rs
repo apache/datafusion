@@ -82,7 +82,7 @@ impl AggregateStream {
             AggregateMode::Partial
             | AggregateMode::Single
             | AggregateMode::SinglePartitioned => agg_filter_expr,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            AggregateMode::Final | AggregateMode::FinalPartitioned(_) => {
                 vec![None; agg.aggr_expr.len()]
             }
         };
@@ -233,7 +233,7 @@ fn aggregate_batch(
                 AggregateMode::Partial
                 | AggregateMode::Single
                 | AggregateMode::SinglePartitioned => accum.update_batch(&values),
-                AggregateMode::Final | AggregateMode::FinalPartitioned => {
+                AggregateMode::Final | AggregateMode::FinalPartitioned(_) => {
                     accum.merge_batch(&values)
                 }
             };
