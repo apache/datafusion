@@ -261,7 +261,7 @@ mod sp_repartition_fuzz_tests {
             let res = concat_batches(&res[0].schema(), &res)?;
 
             for ordering in eq_properties.oeq_class().iter() {
-                let err_msg = format!("error in eq properties: {:?}", eq_properties);
+                let err_msg = format!("error in eq properties: {eq_properties:?}");
                 let sort_columns = ordering
                     .iter()
                     .map(|sort_expr| sort_expr.evaluate_to_sort_column(&res))
@@ -273,7 +273,7 @@ mod sp_repartition_fuzz_tests {
                 let sorted_columns = lexsort(&sort_columns, None)?;
 
                 // Make sure after merging ordering is still valid.
-                assert_eq!(orig_columns.len(), sorted_columns.len(), "{}", err_msg);
+                assert_eq!(orig_columns.len(), sorted_columns.len(), "{err_msg}");
                 assert!(
                     izip!(orig_columns.into_iter(), sorted_columns.into_iter())
                         .all(|(lhs, rhs)| { lhs == rhs }),

@@ -161,15 +161,14 @@ async fn test_aws_options() {
 STORED AS CSV
 LOCATION 's3://data/cars.csv'
 OPTIONS(
-    'aws.access_key_id' '{}',
-    'aws.secret_access_key' '{}',
-    'aws.endpoint' '{}',
+    'aws.access_key_id' '{access_key_id}',
+    'aws.secret_access_key' '{secret_access_key}',
+    'aws.endpoint' '{endpoint_url}',
     'aws.allow_http' 'true'
 );
 
 SELECT * FROM CARS limit 1;
-"#,
-        access_key_id, secret_access_key, endpoint_url
+"#
     );
 
     assert_cmd_snapshot!(cli().env_clear().pass_stdin(input));

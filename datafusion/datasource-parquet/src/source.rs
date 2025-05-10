@@ -555,7 +555,7 @@ impl FileSource for ParquetSource {
                     .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
 
-                write!(f, "{}", predicate_string)?;
+                write!(f, "{predicate_string}")?;
 
                 // Try to build a the pruning predicates.
                 // These are only generated here because it's useful to have *some*
@@ -577,7 +577,7 @@ impl FileSource for ParquetSource {
                         let mut guarantees = pruning_predicate
                             .literal_guarantees()
                             .iter()
-                            .map(|item| format!("{}", item))
+                            .map(|item| format!("{item}"))
                             .collect_vec();
                         guarantees.sort();
                         writeln!(

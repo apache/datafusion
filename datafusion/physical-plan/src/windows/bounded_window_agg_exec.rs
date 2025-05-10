@@ -278,7 +278,7 @@ impl DisplayAs for BoundedWindowAggExec {
                 writeln!(f, "select_list={}", g.join(", "))?;
 
                 let mode = &self.input_order_mode;
-                writeln!(f, "mode={:?}", mode)?;
+                writeln!(f, "mode={mode:?}")?;
             }
         }
         Ok(())
@@ -1357,8 +1357,7 @@ mod tests {
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n_future_range as u64))),
         );
         let fn_name = format!(
-            "{}({:?}) PARTITION BY: [{:?}], ORDER BY: [{:?}]",
-            window_fn, args, partitionby_exprs, orderby_exprs
+            "{window_fn}({args:?}) PARTITION BY: [{partitionby_exprs:?}], ORDER BY: [{orderby_exprs:?}]"
         );
         let input_order_mode = InputOrderMode::Linear;
         Ok(Arc::new(BoundedWindowAggExec::try_new(

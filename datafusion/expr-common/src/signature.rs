@@ -969,8 +969,7 @@ mod tests {
         for case in positive_cases {
             assert!(
                 case.supports_zero_argument(),
-                "Expected {:?} to support zero arguments",
-                case
+                "Expected {case:?} to support zero arguments"
             );
         }
 
@@ -989,8 +988,7 @@ mod tests {
         for case in negative_cases {
             assert!(
                 !case.supports_zero_argument(),
-                "Expected {:?} not to support zero arguments",
-                case
+                "Expected {case:?} not to support zero arguments"
             );
         }
     }

@@ -1705,7 +1705,7 @@ mod tests {
 
         // more files than meta_fetch_concurrency (32)
         let files: Vec<String> =
-            (0..64).map(|i| format!("bucket/key1/file{}", i)).collect();
+            (0..64).map(|i| format!("bucket/key1/file{i}")).collect();
         // Collect references to each string
         let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
         assert_list_files_for_exact_paths(file_refs.as_slice(), 5, 5, Some("")).await?;
@@ -1878,7 +1878,7 @@ mod tests {
 
         let table_paths = files
             .iter()
-            .map(|t| ListingTableUrl::parse(format!("test:///{}", t)).unwrap())
+            .map(|t| ListingTableUrl::parse(format!("test:///{t}")).unwrap())
             .collect();
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(opt)
@@ -2425,7 +2425,7 @@ mod tests {
     #[tokio::test]
     async fn test_infer_options_compressed_csv() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/csv/aggregate_test_100.csv.gz", testdata);
+        let filename = format!("{testdata}/csv/aggregate_test_100.csv.gz");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let ctx = SessionContext::new();

@@ -278,7 +278,7 @@ mod tests {
         for _ in 0..3 {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?
         }
@@ -318,7 +318,7 @@ mod tests {
         for _ in 0..2 {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?
         }

@@ -1721,7 +1721,7 @@ impl LogicalPlan {
                     LogicalPlan::RecursiveQuery(RecursiveQuery {
                         is_distinct, ..
                     }) => {
-                        write!(f, "RecursiveQuery: is_distinct={}", is_distinct)
+                        write!(f, "RecursiveQuery: is_distinct={is_distinct}")
                     }
                     LogicalPlan::Values(Values { ref values, .. }) => {
                         let str_values: Vec<_> = values
@@ -1964,7 +1964,7 @@ impl LogicalPlan {
                         };
                         write!(
                             f,
-                            "Limit: skip={}, fetch={}", skip_str,fetch_str,
+                            "Limit: skip={skip_str}, fetch={fetch_str}",
                         )
                     }
                     LogicalPlan::Subquery(Subquery { .. }) => {
@@ -2860,7 +2860,7 @@ impl Union {
                 // Generate unique field name
                 let name = if let Some(count) = name_counts.get_mut(&base_name) {
                     *count += 1;
-                    format!("{}_{}", base_name, count)
+                    format!("{base_name}_{count}")
                 } else {
                     name_counts.insert(base_name.clone(), 0);
                     base_name
@@ -3657,7 +3657,7 @@ fn calc_func_dependencies_for_project(
                     .unwrap_or(vec![]))
             }
             _ => {
-                let name = format!("{}", expr);
+                let name = format!("{expr}");
                 Ok(input_fields
                     .iter()
                     .position(|item| *item == name)
@@ -5280,12 +5280,7 @@ digraph {
             )?;
 
             let fields = join.schema.fields();
-            assert_eq!(
-                fields.len(),
-                6,
-                "Expected 6 fields for {:?} join",
-                join_type
-            );
+            assert_eq!(fields.len(), 6, "Expected 6 fields for {join_type:?} join");
 
             for (i, field) in fields.iter().enumerate() {
                 let expected_nullable = match (i, &join_type) {

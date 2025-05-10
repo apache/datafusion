@@ -138,7 +138,7 @@ mod tests {
         assert!(returned_err_result.is_err());
         assert!(
             returned_err_result.unwrap_err().to_string()
-                == format!("Execution error: {}", ERROR_VALUE)
+                == format!("Execution error: {ERROR_VALUE}")
         );
 
         let ok_result: Result<String, DataFusionError> = Ok(VALID_VALUE.to_string());
@@ -151,7 +151,7 @@ mod tests {
         let returned_err_r_result = wrap_result(err_result);
         assert!(
             returned_err_r_result
-                == RResult::RErr(format!("Execution error: {}", ERROR_VALUE).into())
+                == RResult::RErr(format!("Execution error: {ERROR_VALUE}").into())
         );
     }
 }

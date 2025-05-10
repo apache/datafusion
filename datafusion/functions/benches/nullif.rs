@@ -40,7 +40,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
-        c.bench_function(&format!("nullif scalar array: {}", size), |b| {
+        c.bench_function(&format!("nullif scalar array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     nullif

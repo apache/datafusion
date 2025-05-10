@@ -430,7 +430,7 @@ fn provide_top_memory_consumers_to_error_msg(
     error_msg: String,
     top_consumers: String,
 ) -> String {
-    format!("Additional allocation failed with top memory consumers (across reservations) as: {}. Error: {}", top_consumers, error_msg)
+    format!("Additional allocation failed with top memory consumers (across reservations) as: {top_consumers}. Error: {error_msg}")
 }
 
 #[cfg(test)]
@@ -546,8 +546,7 @@ mod tests {
                 &res,
                 Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
-            "should provide list of top memory consumers, instead found {:?}",
-            res
+            "should provide list of top memory consumers, instead found {res:?}"
         );
     }
 
@@ -569,7 +568,7 @@ mod tests {
                 &res,
                 Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
-            "should provide proper error when no reservations have been made yet, instead found {:?}", res
+            "should provide proper error when no reservations have been made yet, instead found {res:?}"
         );
 
         // API: multiple registrations using the same hashed consumer,
@@ -587,8 +586,7 @@ mod tests {
                 &res,
                 Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
-            "should provide proper error for 2 consumers, instead found {:?}",
-            res
+            "should provide proper error for 2 consumers, instead found {res:?}"
         );
 
         // Test: will accumulate size changes per consumer, not per reservation
@@ -600,7 +598,7 @@ mod tests {
                 &res,
                 Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
-            "should provide proper error for 2 consumers(one foo=20 bytes, another foo=10 bytes, available=70), instead found {:?}", res
+            "should provide proper error for 2 consumers(one foo=20 bytes, another foo=10 bytes, available=70), instead found {res:?}"
         );
 
         // Test: different hashed consumer, (even with the same name),
@@ -615,7 +613,7 @@ mod tests {
                 &res,
                 Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
-            "should provide proper error with 3 separate consumers(1 = 20 bytes, 2 = 10 bytes, 3 = 0 bytes), instead found {:?}", res
+            "should provide proper error with 3 separate consumers(1 = 20 bytes, 2 = 10 bytes, 3 = 0 bytes), instead found {res:?}"
         );
     }
 
@@ -636,8 +634,7 @@ mod tests {
                     &res,
                     Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
                 ),
-                "should provide proper error with both consumers, instead found {:?}",
-                res
+                "should provide proper error with both consumers, instead found {res:?}"
             );
 
             // Test: unregister one
@@ -650,7 +647,7 @@ mod tests {
                     &res,
                     Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected_consumers)
                 ),
-                "should provide proper error with only 1 consumer left registered, instead found {:?}", res
+                "should provide proper error with only 1 consumer left registered, instead found {res:?}"
             );
 
             // Test: actual message we see is the `available is 70`. When it should be `available is 90`.
@@ -662,7 +659,7 @@ mod tests {
                     &res,
                     Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_90_available)
                 ),
-                "should find that the inner pool will still count all bytes for the deregistered consumer until the reservation is dropped, instead found {:?}", res
+                "should find that the inner pool will still count all bytes for the deregistered consumer until the reservation is dropped, instead found {res:?}"
             );
 
             // Test: the registration needs to free itself (or be dropped),
@@ -674,7 +671,7 @@ mod tests {
                     &res,
                     Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_90_available)
                 ),
-                "should correctly account the total bytes after reservation is free, instead found {:?}", res
+                "should correctly account the total bytes after reservation is free, instead found {res:?}"
             );
         }
 
@@ -720,8 +717,7 @@ mod tests {
         let res = downcasted.report_top(2);
         assert_eq!(
             res, expected,
-            "should provide list of top memory consumers, instead found {:?}",
-            res
+            "should provide list of top memory consumers, instead found {res:?}"
         );
     }
 }

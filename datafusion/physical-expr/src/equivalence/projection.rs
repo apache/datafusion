@@ -634,11 +634,10 @@ mod tests {
             let orderings = projected_eq.oeq_class();
 
             let err_msg = format!(
-                "test_idx: {:?}, actual: {:?}, expected: {:?}, projection_mapping: {:?}",
-                idx, orderings, expected, projection_mapping
+                "test_idx: {idx:?}, actual: {orderings:?}, expected: {expected:?}, projection_mapping: {projection_mapping:?}"
             );
 
-            assert_eq!(orderings.len(), expected.len(), "{}", err_msg);
+            assert_eq!(orderings.len(), expected.len(), "{err_msg}");
             for expected_ordering in &expected {
                 assert!(orderings.contains(expected_ordering), "{}", err_msg)
             }
@@ -822,11 +821,10 @@ mod tests {
             let orderings = projected_eq.oeq_class();
 
             let err_msg = format!(
-                "test idx: {:?}, actual: {:?}, expected: {:?}, projection_mapping: {:?}",
-                idx, orderings, expected, projection_mapping
+                "test idx: {idx:?}, actual: {orderings:?}, expected: {expected:?}, projection_mapping: {projection_mapping:?}"
             );
 
-            assert_eq!(orderings.len(), expected.len(), "{}", err_msg);
+            assert_eq!(orderings.len(), expected.len(), "{err_msg}");
             for expected_ordering in &expected {
                 assert!(orderings.contains(expected_ordering), "{}", err_msg)
             }
@@ -968,11 +966,10 @@ mod tests {
             let orderings = projected_eq.oeq_class();
 
             let err_msg = format!(
-                "actual: {:?}, expected: {:?}, projection_mapping: {:?}",
-                orderings, expected, projection_mapping
+                "actual: {orderings:?}, expected: {expected:?}, projection_mapping: {projection_mapping:?}"
             );
 
-            assert_eq!(orderings.len(), expected.len(), "{}", err_msg);
+            assert_eq!(orderings.len(), expected.len(), "{err_msg}");
             for expected_ordering in &expected {
                 assert!(orderings.contains(expected_ordering), "{}", err_msg)
             }

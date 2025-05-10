@@ -39,7 +39,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
-        c.bench_function(&format!("isnan f32 array: {}", size), |b| {
+        c.bench_function(&format!("isnan f32 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     isnan
@@ -61,7 +61,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
-        c.bench_function(&format!("isnan f64 array: {}", size), |b| {
+        c.bench_function(&format!("isnan f64 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     isnan

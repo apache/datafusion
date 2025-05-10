@@ -267,10 +267,10 @@ pub fn format_physical_sort_requirement_list(
             let mut iter = self.0.iter();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
-                write!(f, "{}", expr)?;
+                write!(f, "{expr}")?;
             }
             for expr in iter {
-                write!(f, ", {}", expr)?;
+                write!(f, ", {expr}")?;
             }
             write!(f, "]")?;
             Ok(())
@@ -510,7 +510,7 @@ impl Display for LexOrdering {
             } else {
                 write!(f, ", ")?;
             }
-            write!(f, "{}", sort_expr)?;
+            write!(f, "{sort_expr}")?;
         }
         Ok(())
     }

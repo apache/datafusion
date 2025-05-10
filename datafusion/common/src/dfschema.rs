@@ -1088,7 +1088,7 @@ impl SchemaExt for Schema {
 
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
     match qualifier {
-        Some(q) => format!("{}.{}", q, name),
+        Some(q) => format!("{q}.{name}"),
         None => name.to_string(),
     }
 }

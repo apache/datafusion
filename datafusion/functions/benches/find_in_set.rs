@@ -158,7 +158,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .map(|arg| Field::new("a", arg.data_type().clone(), true))
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
-        group.bench_function(format!("string_len_{}", str_len), |b| {
+        group.bench_function(format!("string_len_{str_len}"), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
@@ -175,7 +175,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .map(|arg| Field::new("a", arg.data_type().clone(), true))
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
-        group.bench_function(format!("string_view_len_{}", str_len), |b| {
+        group.bench_function(format!("string_view_len_{str_len}"), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
@@ -196,7 +196,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .map(|arg| Field::new("a", arg.data_type().clone(), true))
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
-        group.bench_function(format!("string_len_{}", str_len), |b| {
+        group.bench_function(format!("string_len_{str_len}"), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
@@ -213,7 +213,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .map(|arg| Field::new("a", arg.data_type().clone(), true))
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
-        group.bench_function(format!("string_view_len_{}", str_len), |b| {
+        group.bench_function(format!("string_view_len_{str_len}"), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),

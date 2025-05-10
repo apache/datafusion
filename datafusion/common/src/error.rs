@@ -945,7 +945,7 @@ pub fn add_possible_columns_to_diag(
         .collect();
 
     for name in field_names {
-        diagnostic.add_note(format!("possible column {}", name), None);
+        diagnostic.add_note(format!("possible column {name}"), None);
     }
 }
 
@@ -1138,7 +1138,7 @@ mod test {
         let generic_error_2: GenericError = Box::new(external_error_1);
         let external_error_2: DataFusionError = generic_error_2.into();
 
-        println!("{}", external_error_2);
+        println!("{external_error_2}");
         assert!(external_error_2
             .to_string()
             .starts_with("External error: io error"));

@@ -1670,11 +1670,7 @@ pub(crate) mod tests {
                         .into_iter()
                         .zip(prev_values)
                         .all(|(current, prev)| current >= prev),
-                    "batch_index: {} row: {} current: {:?}, prev: {:?}",
-                    batch_index,
-                    row,
-                    current_values,
-                    prev_values
+                    "batch_index: {batch_index} row: {row} current: {current_values:?}, prev: {prev_values:?}"
                 );
                 prev_values = current_values;
             }

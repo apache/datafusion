@@ -125,8 +125,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         for &batch_count in &batch_counts {
             for &partition_count in &partition_counts {
                 let description = format!(
-                    "{}_batch_count_{}_partition_count_{}",
-                    cardinality_label, batch_count, partition_count
+                    "{cardinality_label}_batch_count_{batch_count}_partition_count_{partition_count}"
                 );
                 run_bench(
                     c,

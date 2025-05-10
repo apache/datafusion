@@ -379,7 +379,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
 
         let file = PartitionedFile {
             object_meta: ObjectMeta {
-                location: Path::from(format!("file_{}.parquet", i)),
+                location: Path::from(format!("file_{i}.parquet")),
                 last_modified: chrono::Utc::now(),
                 size: 1000,
                 e_tag: None,

@@ -138,7 +138,7 @@ impl ScalarUDFImpl for SparkHex {
 }
 
 fn hex_int64(num: i64) -> String {
-    format!("{:X}", num)
+    format!("{num:X}")
 }
 
 #[inline(always)]

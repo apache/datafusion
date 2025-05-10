@@ -255,9 +255,9 @@ fn partial_anchored_literal_to_like(v: &[Hir]) -> Option<String> {
     };
 
     if match_begin {
-        Some(format!("{}%", lit))
+        Some(format!("{lit}%"))
     } else {
-        Some(format!("%{}", lit))
+        Some(format!("%{lit}"))
     }
 }
 

@@ -209,8 +209,7 @@ mod tests {
             for alias in func.aliases() {
                 assert!(
                     names.insert(alias.to_string().to_lowercase()),
-                    "duplicate function name: {}",
-                    alias
+                    "duplicate function name: {alias}"
                 );
             }
         }

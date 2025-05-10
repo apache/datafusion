@@ -295,7 +295,7 @@ impl QueryBuilder {
             let idx = rng.gen_range(0..self.aggregate_functions.len());
             let (function_name, is_distinct) = &self.aggregate_functions[idx];
             let argument = self.random_argument();
-            let alias = format!("col{}", alias_gen);
+            let alias = format!("col{alias_gen}");
             let distinct = if *is_distinct { "DISTINCT " } else { "" };
             alias_gen += 1;
 
@@ -344,7 +344,7 @@ impl QueryBuilder {
         let mut result = String::from_str(" order by ").unwrap();
         for col in selected_columns {
             let order = if rng.gen_bool(0.5) { "ASC" } else { "DESC" };
-            result.push_str(&format!("{} {},", col, order));
+            result.push_str(&format!("{col} {order},"));
         }
 
         result.strip_suffix(",").unwrap().to_string()

@@ -603,7 +603,7 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let spill_count = plan.metrics().unwrap().spill_count().unwrap();
     let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
 
-    println!("spill count {}, spill bytes {}", spill_count, spilled_bytes);
+    println!("spill count {spill_count}, spill bytes {spilled_bytes}");
     assert!(spill_count > 0);
     assert!((spilled_bytes as u64) < disk_spill_limit);
 

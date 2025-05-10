@@ -1223,7 +1223,7 @@ impl ExecutionPlan for SortExec {
 
         let execution_options = &context.session_config().options().execution;
 
-        trace!("End SortExec's input.execute for partition: {}", partition);
+        trace!("End SortExec's input.execute for partition: {partition}");
 
         let requirement = &LexRequirement::from(self.expr.clone());
 
@@ -1660,15 +1660,13 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             matches!(err, DataFusionError::Context(..)),
-            "Assertion failed: expected a Context error, but got: {:?}",
-            err
+            "Assertion failed: expected a Context error, but got: {err:?}"
         );
 
         // Assert that the context error is wrapping a resources exhausted error.
         assert!(
             matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
-            "Assertion failed: expected a ResourcesExhausted error, but got: {:?}",
-            err
+            "Assertion failed: expected a ResourcesExhausted error, but got: {err:?}"
         );
 
         Ok(())

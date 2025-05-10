@@ -41,7 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         c.bench_function(
-            &format!("character_length_StringArray_ascii_str_len_{}", str_len),
+            &format!("character_length_StringArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
@@ -63,7 +63,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         c.bench_function(
-            &format!("character_length_StringArray_utf8_str_len_{}", str_len),
+            &format!("character_length_StringArray_utf8_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
@@ -85,7 +85,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         c.bench_function(
-            &format!("character_length_StringViewArray_ascii_str_len_{}", str_len),
+            &format!("character_length_StringViewArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
@@ -107,7 +107,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         c.bench_function(
-            &format!("character_length_StringViewArray_utf8_str_len_{}", str_len),
+            &format!("character_length_StringViewArray_utf8_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {

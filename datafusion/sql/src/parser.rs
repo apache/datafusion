@@ -147,7 +147,7 @@ impl fmt::Display for CopyToStatement {
 
         write!(f, "COPY {source} TO {target}")?;
         if let Some(file_type) = stored_as {
-            write!(f, " STORED AS {}", file_type)?;
+            write!(f, " STORED AS {file_type}")?;
         }
         if !partitioned_by.is_empty() {
             write!(f, " PARTITIONED BY ({})", partitioned_by.join(", "))?;

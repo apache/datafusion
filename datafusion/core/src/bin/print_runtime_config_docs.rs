@@ -19,5 +19,5 @@ use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
 fn main() {
     let docs = RuntimeEnvBuilder::generate_config_markdown();
-    println!("{}", docs);
+    println!("{docs}");
 }

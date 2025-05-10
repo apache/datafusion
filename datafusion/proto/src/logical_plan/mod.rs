@@ -465,7 +465,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             ));
                         };
                         let arrow_type = DataType::try_from(arrow_type).map_err(|e| {
-                            proto_error(format!("Received an unknown ArrowType: {}", e))
+                            proto_error(format!("Received an unknown ArrowType: {e}"))
                         })?;
                         Ok((col.name.clone(), arrow_type))
                     })
@@ -1127,8 +1127,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             let arrow_type = protobuf::ArrowType::try_from(arrow_type)
                                 .map_err(|e| {
                                     proto_error(format!(
-                                        "Received an unknown ArrowType: {}",
-                                        e
+                                        "Received an unknown ArrowType: {e}"
                                     ))
                                 })?;
                             Ok(protobuf::PartitionColumn {

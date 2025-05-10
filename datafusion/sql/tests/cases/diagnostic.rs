@@ -379,7 +379,7 @@ fn test_syntax_error() -> Result<()> {
             Some(diag) => {
                 let diag = diag.clone();
                 assert_snapshot!(diag.message, @"Expected: ',' or ')' after partition definition, found: int at Line: 1, Column: 77");
-                println!("{:?}", spans);
+                println!("{spans:?}");
                 assert_eq!(diag.span, Some(spans["int"]));
                 Ok(())
             }

@@ -33,7 +33,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 4096, 8192] {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
         let f32_args = vec![ColumnarValue::Array(f32_array)];
-        c.bench_function(&format!("trunc f32 array: {}", size), |b| {
+        c.bench_function(&format!("trunc f32 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     trunc
@@ -49,7 +49,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let f64_args = vec![ColumnarValue::Array(f64_array)];
-        c.bench_function(&format!("trunc f64 array: {}", size), |b| {
+        c.bench_function(&format!("trunc f64 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     trunc

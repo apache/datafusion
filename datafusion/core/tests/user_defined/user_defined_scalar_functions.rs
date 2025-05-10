@@ -1009,8 +1009,7 @@ impl ScalarFunctionWrapper {
         if let Some(value) = placeholder.strip_prefix('$') {
             Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
                 DataFusionError::Execution(format!(
-                    "Placeholder `{}` parsing error: {}!",
-                    placeholder, e
+                    "Placeholder `{placeholder}` parsing error: {e}!"
                 ))
             })?)
         } else {
@@ -1165,7 +1164,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
     match ctx.sql(sql).await {
         Ok(_) => {}
         Err(e) => {
-            panic!("Error creating function: {}", e);
+            panic!("Error creating function: {e}");
         }
     }
 

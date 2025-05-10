@@ -237,7 +237,7 @@ impl fmt::Display for ColumnarValue {
         };
 
         if let Ok(formatted) = formatted {
-            write!(f, "{}", formatted)
+            write!(f, "{formatted}")
         } else {
             write!(f, "Error formatting columnar value")
         }

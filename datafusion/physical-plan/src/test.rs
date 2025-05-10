@@ -87,9 +87,7 @@ impl DisplayAs for TestMemoryExec {
                 let output_ordering = self
                     .sort_information
                     .first()
-                    .map(|output_ordering| {
-                        format!(", output_ordering={}", output_ordering)
-                    })
+                    .map(|output_ordering| format!(", output_ordering={output_ordering}"))
                     .unwrap_or_default();
 
                 let eq_properties = self.eq_properties();
@@ -97,12 +95,12 @@ impl DisplayAs for TestMemoryExec {
                 let constraints = if constraints.is_empty() {
                     String::new()
                 } else {
-                    format!(", {}", constraints)
+                    format!(", {constraints}")
                 };
 
                 let limit = self
                     .fetch
-                    .map_or(String::new(), |limit| format!(", fetch={}", limit));
+                    .map_or(String::new(), |limit| format!(", fetch={limit}"));
                 if self.show_sizes {
                     write!(
                                 f,
@@ -458,7 +456,7 @@ pub fn make_partition_utf8(sz: i32) -> RecordBatch {
     let seq_start = 0;
     let seq_end = sz;
     let values = (seq_start..seq_end)
-        .map(|i| format!("test_long_string_that_is_roughly_42_bytes_{}", i))
+        .map(|i| format!("test_long_string_that_is_roughly_42_bytes_{i}"))
         .collect::<Vec<_>>();
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Utf8, true)]));
     let mut string_array = arrow::array::StringArray::from(values);

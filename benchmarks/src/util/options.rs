@@ -122,15 +122,14 @@ fn parse_memory_limit(limit: &str) -> Result<usize, String> {
     let (number, unit) = limit.split_at(limit.len() - 1);
     let number: f64 = number
         .parse()
-        .map_err(|_| format!("Failed to parse number from memory limit '{}'", limit))?;
+        .map_err(|_| format!("Failed to parse number from memory limit '{limit}'"))?;
 
     match unit {
         "K" => Ok((number * 1024.0) as usize),
         "M" => Ok((number * 1024.0 * 1024.0) as usize),
         "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
         _ => Err(format!(
-            "Unsupported unit '{}' in memory limit '{}'",
-            unit, limit
+            "Unsupported unit '{unit}' in memory limit '{limit}'"
         )),
     }
 }

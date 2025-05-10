@@ -103,8 +103,7 @@ impl DiskManager {
             DiskManagerConfig::NewSpecified(conf_dirs) => {
                 let local_dirs = create_local_dirs(conf_dirs)?;
                 debug!(
-                    "Created local dirs {:?} as DataFusion working directory",
-                    local_dirs
+                    "Created local dirs {local_dirs:?} as DataFusion working directory"
                 );
                 Ok(Arc::new(Self {
                     local_dirs: Mutex::new(Some(local_dirs)),

@@ -210,7 +210,7 @@ impl FileSource for TestSource {
                     .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
 
-                write!(f, "{}{}", support, predicate_string)
+                write!(f, "{support}{predicate_string}")
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = &self.predicate {

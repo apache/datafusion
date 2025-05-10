@@ -446,10 +446,10 @@ where
             let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
-                write!(f, "{}", expr)?;
+                write!(f, "{expr}")?;
             }
             for expr in iter {
-                write!(f, ", {}", expr)?;
+                write!(f, ", {expr}")?;
             }
             write!(f, "]")?;
             Ok(())

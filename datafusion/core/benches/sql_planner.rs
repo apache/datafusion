@@ -136,10 +136,10 @@ fn benchmark_with_param_values_many_columns(
         if i > 0 {
             aggregates.push_str(", ");
         }
-        aggregates.push_str(format!("MAX(a{})", i).as_str());
+        aggregates.push_str(format!("MAX(a{i})").as_str());
     }
     // SELECT max(attr0), ..., max(attrN) FROM t1.
-    let query = format!("SELECT {} FROM t1", aggregates);
+    let query = format!("SELECT {aggregates} FROM t1");
     let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
     let plan =
         rt.block_on(async { ctx.state().statement_to_plan(statement).await.unwrap() });
@@ -164,7 +164,7 @@ fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows
                 .map(|j| j as u64 * 100 + i)
                 .collect::<Vec<_>>(),
         ));
-        (format!("c{}", i), array)
+        (format!("c{i}"), array)
     });
     let batch = RecordBatch::try_from_iter(iter).unwrap();
     let schema = batch.schema();
@@ -172,7 +172,7 @@ fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows
 
     // tell DataFusion that the table is sorted by all columns
     let sort_order = (0..num_columns)
-        .map(|i| col(format!("c{}", i)).sort(true, true))
+        .map(|i| col(format!("c{i}")).sort(true, true))
         .collect::<Vec<_>>();
 
     // create the table
@@ -208,12 +208,12 @@ fn union_orderby_query(n: usize) -> String {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        query.push_str(&format!("(SELECT {} FROM t ORDER BY c{})", select_list, i));
+        query.push_str(&format!("(SELECT {select_list} FROM t ORDER BY c{i})"));
     }
     query.push_str(&format!(
         "\nORDER BY {}",
         (0..n)
-            .map(|i| format!("c{}", i))
+            .map(|i| format!("c{i}"))
             .collect::<Vec<_>>()
             .join(", ")
     ));
@@ -293,9 +293,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             if i > 0 {
                 aggregates.push_str(", ");
             }
-            aggregates.push_str(format!("MAX(a{})", i).as_str());
+            aggregates.push_str(format!("MAX(a{i})").as_str());
         }
-        let query = format!("SELECT {} FROM t1", aggregates);
+        let query = format!("SELECT {aggregates} FROM t1");
         b.iter(|| {
             physical_plan(&ctx, &rt, &query);
         });
@@ -402,7 +402,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for q in tpch_queries {
         let sql =
             std::fs::read_to_string(format!("{benchmarks_path}queries/{q}.sql")).unwrap();
-        c.bench_function(&format!("physical_plan_tpch_{}", q), |b| {
+        c.bench_function(&format!("physical_plan_tpch_{q}"), |b| {
             b.iter(|| physical_plan(&tpch_ctx, &rt, &sql))
         });
     }

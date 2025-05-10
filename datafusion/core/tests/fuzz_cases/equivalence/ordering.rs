@@ -69,16 +69,14 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
                     table_data_with_properties.clone(),
                 )?;
                 let err_msg = format!(
-                    "Error in test case requirement:{:?}, expected: {:?}, eq_properties {}",
-                    requirement, expected, eq_properties
+                    "Error in test case requirement:{requirement:?}, expected: {expected:?}, eq_properties {eq_properties}"
                 );
                 // Check whether ordering_satisfy API result and
                 // experimental result matches.
                 assert_eq!(
                     eq_properties.ordering_satisfy(requirement.as_ref()),
                     expected,
-                    "{}",
-                    err_msg
+                    "{err_msg}"
                 );
             }
         }
@@ -141,8 +139,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                     table_data_with_properties.clone(),
                 )?;
                 let err_msg = format!(
-                    "Error in test case requirement:{:?}, expected: {:?}, eq_properties: {}",
-                    requirement, expected, eq_properties,
+                    "Error in test case requirement:{requirement:?}, expected: {expected:?}, eq_properties: {eq_properties}",
                 );
                 // Check whether ordering_satisfy API result and
                 // experimental result matches.
@@ -150,8 +147,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                 assert_eq!(
                     eq_properties.ordering_satisfy(requirement.as_ref()),
                     (expected | false),
-                    "{}",
-                    err_msg
+                    "{err_msg}"
                 );
             }
         }

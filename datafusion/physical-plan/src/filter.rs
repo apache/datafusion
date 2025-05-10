@@ -483,8 +483,7 @@ impl ExecutionPlan for FilterExec {
                                 let index_in_input_schema =
                                     inverse_projection.get(&index).ok_or_else(|| {
                                         DataFusionError::Internal(format!(
-                                            "Column {} not found in projection",
-                                            index
+                                            "Column {index} not found in projection"
                                         ))
                                     })?;
                                 Transformed::yes(Arc::new(Column::new(

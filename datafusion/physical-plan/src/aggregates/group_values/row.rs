@@ -82,7 +82,7 @@ impl GroupValuesRows {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         // Print a debugging message, so it is clear when the (slower) fallback
         // GroupValuesRows is used.
-        debug!("Creating GroupValuesRows for schema: {}", schema);
+        debug!("Creating GroupValuesRows for schema: {schema}");
         let row_converter = RowConverter::new(
             schema
                 .fields()

@@ -1133,16 +1133,16 @@ impl Unparser<'_> {
             ScalarValue::Float16(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Float32(Some(f)) => {
                 let f_val = match f.fract() {
-                    0.0 => format!("{:.1}", f),
-                    _ => format!("{}", f),
+                    0.0 => format!("{f:.1}"),
+                    _ => format!("{f}"),
                 };
                 Ok(ast::Expr::value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float32(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Float64(Some(f)) => {
                 let f_val = match f.fract() {
-                    0.0 => format!("{:.1}", f),
-                    _ => format!("{}", f),
+                    0.0 => format!("{f:.1}"),
+                    _ => format!("{f}"),
                 };
                 Ok(ast::Expr::value(ast::Value::Number(f_val, false)))
             }
@@ -2228,7 +2228,7 @@ mod tests {
         for (expr, expected) in tests {
             let ast = expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             assert_eq!(actual, expected);
         }
@@ -2246,7 +2246,7 @@ mod tests {
         let expr = col("a").gt(lit(4));
         let ast = unparser.expr_to_sql(&expr)?;
 
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
 
         let expected = r#"('a' > 4)"#;
         assert_eq!(actual, expected);
@@ -2262,7 +2262,7 @@ mod tests {
         let expr = col("a").gt(lit(4));
         let ast = unparser.expr_to_sql(&expr)?;
 
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
 
         let expected = r#"(a > 4)"#;
         assert_eq!(actual, expected);
@@ -2286,7 +2286,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             let expected = format!(r#"CAST(a AS {identifier})"#);
             assert_eq!(actual, expected);
@@ -2311,7 +2311,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             let expected = format!(r#"CAST(a AS {identifier})"#);
             assert_eq!(actual, expected);
@@ -2333,7 +2333,7 @@ mod tests {
             let unparser = Unparser::new(&dialect);
             let ast = unparser.sort_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             assert_eq!(actual, expected);
         }
@@ -2583,7 +2583,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2639,7 +2639,7 @@ mod tests {
             .call(vec![Expr::Literal(ScalarValue::new_utf8(unit)), col("x")]);
 
             let ast = unparser.expr_to_sql(&expr)?;
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             assert_eq!(actual, expected);
         }
@@ -2666,7 +2666,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2694,7 +2694,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2733,7 +2733,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2762,7 +2762,7 @@ mod tests {
             ));
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST('2025-01-31 01:05:49.123' AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2789,7 +2789,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2815,7 +2815,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = expected.to_string();
 
             assert_eq!(actual, expected);
@@ -2872,7 +2872,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"round(CAST("a" AS {identifier}), 2)"#);
 
             assert_eq!(actual, expected);
@@ -3052,7 +3052,7 @@ mod tests {
         let expr = cast(col("a"), DataType::Utf8View);
         let ast = unparser.expr_to_sql(&expr)?;
 
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
         let expected = r#"CAST(a AS CHAR)"#.to_string();
 
         assert_eq!(actual, expected);
@@ -3060,7 +3060,7 @@ mod tests {
         let expr = col("a").eq(lit(ScalarValue::Utf8View(Some("hello".to_string()))));
         let ast = unparser.expr_to_sql(&expr)?;
 
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
         let expected = r#"(a = 'hello')"#.to_string();
 
         assert_eq!(actual, expected);
@@ -3068,7 +3068,7 @@ mod tests {
         let expr = col("a").is_not_null();
 
         let ast = unparser.expr_to_sql(&expr)?;
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
         let expected = r#"a IS NOT NULL"#.to_string();
 
         assert_eq!(actual, expected);
@@ -3076,7 +3076,7 @@ mod tests {
         let expr = col("a").is_null();
 
         let ast = unparser.expr_to_sql(&expr)?;
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
         let expected = r#"a IS NULL"#.to_string();
 
         assert_eq!(actual, expected);

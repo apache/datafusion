@@ -398,9 +398,9 @@ impl RecursiveUnnestRewriter<'_> {
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
         // inside unnest execution, each column inside the inner projection
         // will be transformed into new columns. Thus we need to keep track of these placeholding column names
-        let placeholder_name = format!("{UNNEST_PLACEHOLDER}({})", inner_expr_name);
+        let placeholder_name = format!("{UNNEST_PLACEHOLDER}({inner_expr_name})");
         let post_unnest_name =
-            format!("{UNNEST_PLACEHOLDER}({},depth={})", inner_expr_name, level);
+            format!("{UNNEST_PLACEHOLDER}({inner_expr_name},depth={level})");
         // This is due to the fact that unnest transformation should keep the original
         // column name as is, to comply with group by and order by
         let placeholder_column = Column::from_name(placeholder_name.clone());
@@ -680,7 +680,7 @@ mod tests {
                     "{}=>[{}]",
                     i.0,
                     vec.iter()
-                        .map(|i| format!("{}", i))
+                        .map(|i| format!("{i}"))
                         .collect::<Vec<String>>()
                         .join(", ")
                 ),

@@ -1559,18 +1559,14 @@ mod tests {
                 assert_eq!(
                     new_generic_from_binary_op(&op, &dist_a, &dist_b)?.range()?,
                     apply_operator(&op, a, b)?,
-                    "Failed for {:?} {op} {:?}",
-                    dist_a,
-                    dist_b
+                    "Failed for {dist_a:?} {op} {dist_b:?}"
                 );
             }
             for op in [Gt, GtEq, Lt, LtEq, Eq, NotEq] {
                 assert_eq!(
                     create_bernoulli_from_comparison(&op, &dist_a, &dist_b)?.range()?,
                     apply_operator(&op, a, b)?,
-                    "Failed for {:?} {op} {:?}",
-                    dist_a,
-                    dist_b
+                    "Failed for {dist_a:?} {op} {dist_b:?}"
                 );
             }
         }

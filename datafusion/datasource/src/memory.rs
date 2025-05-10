@@ -404,9 +404,7 @@ impl DataSource for MemorySourceConfig {
                 let output_ordering = self
                     .sort_information
                     .first()
-                    .map(|output_ordering| {
-                        format!(", output_ordering={}", output_ordering)
-                    })
+                    .map(|output_ordering| format!(", output_ordering={output_ordering}"))
                     .unwrap_or_default();
 
                 let eq_properties = self.eq_properties();
@@ -414,12 +412,12 @@ impl DataSource for MemorySourceConfig {
                 let constraints = if constraints.is_empty() {
                     String::new()
                 } else {
-                    format!(", {}", constraints)
+                    format!(", {constraints}")
                 };
 
                 let limit = self
                     .fetch
-                    .map_or(String::new(), |limit| format!(", fetch={}", limit));
+                    .map_or(String::new(), |limit| format!(", fetch={limit}"));
                 if self.show_sizes {
                     write!(
                                 f,
@@ -1360,10 +1358,7 @@ mod tests {
         partition_cnt: Option<usize>,
     ) {
         let should_exist = if let Some(partition_cnt) = partition_cnt {
-            format!(
-                "new datasource should exist and have {:?} partitions",
-                partition_cnt
-            )
+            format!("new datasource should exist and have {partition_cnt:?} partitions")
         } else {
             "new datasource should not exist".into()
         };
@@ -1373,9 +1368,7 @@ mod tests {
         assert_eq!(
             actual,
             partition_cnt,
-            "partitioned datasrc does not match expected, we expected {}, instead found {:?}",
-            should_exist,
-            actual
+            "partitioned datasrc does not match expected, we expected {should_exist}, instead found {actual:?}"
         );
     }
 

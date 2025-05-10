@@ -189,8 +189,7 @@ impl ScalarFunctionWrapper {
         if let Some(value) = placeholder.strip_prefix('$') {
             Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
                 DataFusionError::Execution(format!(
-                    "Placeholder `{}` parsing error: {}!",
-                    placeholder, e
+                    "Placeholder `{placeholder}` parsing error: {e}!"
                 ))
             })?)
         } else {
