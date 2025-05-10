@@ -217,3 +217,22 @@ unnecessary_lazy_evaluations = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+
+# Pin to https://github.com/apache/arrow-rs/pull/7486/commits/5a6f62b737bd40e5e089447ca6678493dfc018de
+#
+## Temporary arrow-rs patch until 52.1.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "5a6f62b737bd40e5e089447ca6678493dfc018de" }
