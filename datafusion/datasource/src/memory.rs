@@ -26,16 +26,6 @@ use std::sync::Arc;
 
 use crate::sink::DataSink;
 use crate::source::{DataSource, DataSourceExec};
-use async_trait::async_trait;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::memory::MemoryStream;
-use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
-};
-use datafusion_physical_plan::{
-    common, ColumnarValue, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr, PlanProperties, SendableRecordBatchStream, Statistics,
-};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
@@ -49,6 +39,17 @@ use datafusion_physical_expr::equivalence::{
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::memory::MemoryStream;
+use datafusion_physical_plan::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+};
+use datafusion_physical_plan::{
+    common, ColumnarValue, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PhysicalExpr, PlanProperties, SendableRecordBatchStream, Statistics,
+};
+
+use async_trait::async_trait;
 use futures::StreamExt;
 use itertools::Itertools;
 use tokio::sync::RwLock;
@@ -1073,16 +1074,16 @@ mod memory_source_tests {
 
     use crate::memory::MemorySourceConfig;
     use crate::source::DataSourceExec;
-    use datafusion_physical_plan::ExecutionPlan;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::Result;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_plan::ExecutionPlan;
 
     #[test]
-    fn test_memory_order_eq() -> datafusion_common::Result<()> {
+    fn test_memory_order_eq() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
