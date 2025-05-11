@@ -52,3 +52,83 @@ impl OptimizerRule for EliminateSelfJoin {
         Ok(Transformed::no(plan))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::assert_optimized_plan_eq_snapshot;
+    use crate::OptimizerContext;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{Column, Result};
+    use datafusion_expr::builder::subquery_alias;
+    use datafusion_expr::table_scan;
+    use datafusion_expr::JoinConstraint;
+    use datafusion_expr::{
+        col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType, LogicalPlan,
+    };
+    use datafusion_sql::TableReference;
+    use std::sync::Arc;
+
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(super::EliminateSelfJoin::new())];
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
+    }
+
+    fn test_table_scan() -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new("department", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let left = table_scan(Some("employees"), &schema, None)?.build()?;
+        let left = subquery_alias(left, TableReference::from("a"))?;
+        let right = table_scan(Some("employees"), &schema, None)?.build()?;
+        let right = subquery_alias(right, TableReference::from("b"))?;
+
+        let plan = LogicalPlanBuilder::new(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec![Column::from_name("id")], vec![Column::from_name("id")]),
+                None,
+            )?
+            .build()?;
+        // TODO: double check if this monkey patch is needed. If only `join_keys` is specified, the `join_constraint` should be `Using`
+        let join = match plan {
+            LogicalPlan::Join(mut join) => {
+                join.join_constraint = JoinConstraint::Using;
+                join
+            }
+            _ => panic!("Expected a Join"),
+        };
+        LogicalPlanBuilder::new(LogicalPlan::Join(join))
+            .filter(col("b.department").eq(lit("HR")))?
+            .project(vec![col("a.id")])?
+            .build()
+    }
+
+    #[test]
+    fn join_on_unique_key_with_filter() -> Result<()> {
+        let plan = test_table_scan()?;
+
+        assert_optimized_plan_equal!(plan, @r#"
+        Projection: a.id
+          Filter: b.department = Utf8("HR")
+            Inner Join: a.id = b.id
+              SubqueryAlias: a
+                TableScan: employees
+              SubqueryAlias: b
+                TableScan: employees
+        "#)
+    }
+}
