@@ -511,17 +511,16 @@ mod tests {
         let col_c_expr = col("c", &schema)?;
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
 
-        eq_properties
-            .add_equal_conditions(Arc::clone(&col_a_expr), Arc::clone(&col_c_expr))?;
+        eq_properties.add_equal_conditions(col_a_expr, Arc::clone(&col_c_expr))?;
         eq_properties.add_orderings([
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_b_expr))],
-            vec![PhysicalSortExpr::new_default(col_c_expr)],
+            vec![PhysicalSortExpr::new_default(Arc::clone(&col_c_expr))],
         ]);
 
         let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
         expected_eqs.add_orderings([
             vec![PhysicalSortExpr::new_default(col_b_expr)],
-            vec![PhysicalSortExpr::new_default(col_a_expr)],
+            vec![PhysicalSortExpr::new_default(col_c_expr)],
         ]);
 
         assert!(eq_properties.oeq_class().eq(expected_eqs.oeq_class()));
@@ -1136,11 +1135,11 @@ mod tests {
         ]);
 
         // Add equality condition c = concat(a, b)
-        eq_properties.add_equal_conditions(Arc::clone(&col_c), a_concat_b)?;
+        eq_properties.add_equal_conditions(col_c, Arc::clone(&a_concat_b))?;
 
         let orderings = eq_properties.oeq_class();
 
-        let expected_ordering1 = [PhysicalSortExpr::new_default(col_c).asc()].into();
+        let expected_ordering1 = [PhysicalSortExpr::new_default(a_concat_b).asc()].into();
         let expected_ordering2 = [
             PhysicalSortExpr::new_default(col_a).asc(),
             PhysicalSortExpr::new_default(col_b).asc(),

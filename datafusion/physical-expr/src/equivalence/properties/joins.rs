@@ -263,8 +263,8 @@ mod tests {
 
         let mut join_eq_properties = EquivalenceProperties::new(Arc::new(schema));
         // a=x and d=w
-        join_eq_properties.add_equal_conditions(Arc::clone(&col_a), col_x)?;
-        join_eq_properties.add_equal_conditions(Arc::clone(&col_d), col_w)?;
+        join_eq_properties.add_equal_conditions(col_a, Arc::clone(&col_x))?;
+        join_eq_properties.add_equal_conditions(col_d, Arc::clone(&col_w))?;
 
         updated_right_ordering_equivalence_class(
             &mut right_oeq_class,
@@ -276,8 +276,8 @@ mod tests {
 
         // [x ASC, y ASC], [z ASC, w ASC]
         let orderings = vec![
-            vec![(col_a, option_asc), (col_y, option_asc)],
-            vec![(col_z, option_asc), (col_d, option_asc)],
+            vec![(col_x, option_asc), (col_y, option_asc)],
+            vec![(col_z, option_asc), (col_w, option_asc)],
         ];
         let orderings = convert_to_orderings(&orderings);
         let expected = OrderingEquivalenceClass::from(orderings);

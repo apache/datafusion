@@ -204,7 +204,14 @@ impl EquivalenceProperties {
 
     /// Returns the output ordering of the properties.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        self.oeq_class.output_ordering()
+        let mut sort_exprs: Vec<_> = self.oeq_class.output_ordering()?.into();
+        // Prune out constant expressions:
+        sort_exprs.retain(|sort_expr| {
+            self.eq_group
+                .get_equivalence_class(&sort_expr.expr)
+                .is_none_or(|cls| cls.constant.is_none())
+        });
+        LexOrdering::new(sort_exprs)
     }
 
     /// Extends this `EquivalenceProperties` with the `other` object.
@@ -232,12 +239,8 @@ impl EquivalenceProperties {
         &mut self,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) {
-        // Normalize given orderings before adding:
-        self.oeq_class.add_orderings(
-            orderings
-                .into_iter()
-                .map(|o| self.eq_group.normalize_sort_exprs(o)),
-        );
+        // TODO: Normalization point.
+        self.oeq_class.add_orderings(orderings);
     }
 
     /// Adds a single ordering to the existing ordering equivalence class.
@@ -249,13 +252,9 @@ impl EquivalenceProperties {
     /// equivalence group within.
     pub fn add_equivalence_group(&mut self, other_eq_group: EquivalenceGroup) {
         self.eq_group.extend(other_eq_group);
-        // Renormalize orderings after modifying equivalence classes:
-        let oeq_class = mem::take(&mut self.oeq_class);
-        let orderings = oeq_class
-            .into_iter()
-            .map(|o| self.eq_group.normalize_sort_exprs(o));
-        self.oeq_class = OrderingEquivalenceClass::new(orderings);
-        for ordering in self.oeq_class.clone() {
+        // TODO: Normalization point.
+        // Discover any new orderings based on the new equivalence classes:
+        for ordering in self.normalized_oeq_class() {
             let leading = Arc::clone(&ordering[0].expr);
             self.discover_new_orderings(leading).unwrap();
         }
@@ -271,12 +270,7 @@ impl EquivalenceProperties {
     ) -> Result<()> {
         // Add equal expressions to the state:
         if self.eq_group.add_equal_conditions(Arc::clone(&left), right) {
-            // Renormalize the orderings after adding a new equivalence class:
-            let oeq_class = mem::take(&mut self.oeq_class);
-            let orderings = oeq_class
-                .into_iter()
-                .map(|o| self.eq_group.normalize_sort_exprs(o));
-            self.oeq_class = OrderingEquivalenceClass::new(orderings);
+            // TODO: Normalization point.
             // Discover any new orderings:
             self.discover_new_orderings(left)?;
         }
@@ -289,20 +283,24 @@ impl EquivalenceProperties {
         for constant in constants {
             self.eq_group.add_constant(constant);
         }
-        // Renormalize the orderings after adding new constants by removing
-        // the constants from existing orderings:
-        let oeq_class = mem::take(&mut self.oeq_class);
-        let orderings = oeq_class.into_iter().map(|ordering| {
-            ordering.into_iter().filter(|sort_expr| {
-                self.eq_group.is_expr_constant(&sort_expr.expr).is_none()
-            })
-        });
-        self.oeq_class = OrderingEquivalenceClass::new(orderings);
+        // TODO: Normalization point.
         // Discover any new orderings based on the constants:
-        for ordering in self.oeq_class.clone() {
+        for ordering in self.normalized_oeq_class() {
             let leading = Arc::clone(&ordering[0].expr);
             self.discover_new_orderings(leading).unwrap();
         }
+    }
+
+    /// Returns the ordering equivalence class within in normal form.
+    /// Normalization standardizes expressions according to the equivalence
+    /// group within, and removes constants/duplicates.
+    pub fn normalized_oeq_class(&self) -> OrderingEquivalenceClass {
+        self.oeq_class
+            .iter()
+            .cloned()
+            .filter_map(|ordering| self.normalize_sort_exprs(ordering))
+            .collect::<Vec<_>>()
+            .into()
     }
 
     /// Discover new valid orderings in light of a new equality. Accepts a single
@@ -311,18 +309,18 @@ impl EquivalenceProperties {
     /// that can be discovered with the new equivalence properties.
     /// For a discussion, see: <https://github.com/apache/datafusion/issues/9812>
     fn discover_new_orderings(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        let normalized_expr = self.eq_group.normalize_expr(expr);
+        let normal_expr = self.eq_group.normalize_expr(expr);
         let eq_class = self
             .eq_group
-            .get_equivalence_class(&normalized_expr)
+            .get_equivalence_class(&normal_expr)
             .map_or_else(
-                || vec![Arc::clone(&normalized_expr)],
+                || vec![Arc::clone(&normal_expr)],
                 |class| class.clone().into(),
             );
 
         let mut new_orderings = vec![];
-        for ordering in self.oeq_class.iter() {
-            if !ordering[0].expr.eq(&normalized_expr) {
+        for ordering in self.normalized_oeq_class() {
+            if !ordering[0].expr.eq(&normal_expr) {
                 continue;
             }
 
@@ -380,15 +378,15 @@ impl EquivalenceProperties {
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Self {
         // Normalize the given ordering and process:
-        if let Some(normalized_ordering) = self.normalize_sort_exprs(ordering) {
+        if let Some(normal_ordering) = self.normalize_sort_exprs(ordering) {
             // Preserve valid suffixes from existing orderings:
             let mut orderings: Vec<_> = mem::take(&mut self.oeq_class).into();
             orderings.retain(|existing| {
                 // Check if the existing ordering is a prefix of the new ordering:
-                self.is_prefix_of(&normalized_ordering, existing)
+                self.is_prefix_of(&normal_ordering, existing)
             });
             if orderings.is_empty() {
-                orderings.push(normalized_ordering);
+                orderings.push(normal_ordering);
             }
             self.oeq_class = OrderingEquivalenceClass::new(orderings);
         }
@@ -435,12 +433,11 @@ impl EquivalenceProperties {
         given: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> bool {
         // First, standardize the given ordering:
-        let Some(normalized_ordering) = self.normalize_sort_exprs(given) else {
+        let Some(normal_ordering) = self.normalize_sort_exprs(given) else {
             // If the ordering vanishes after normalization, it is satisfied:
             return true;
         };
-        let length = normalized_ordering.len();
-        self.common_sort_prefix_length(normalized_ordering) == length
+        normal_ordering.len() == self.common_sort_prefix_length(normal_ordering)
     }
 
     /// Iteratively checks whether the given sort requirement is satisfied by
@@ -457,7 +454,7 @@ impl EquivalenceProperties {
     /// 1. The function first checks the leading requirement `a`, which is
     ///    satisfied by `[a, b, c].first()`.
     /// 2. `a` is added as a constant for the next iteration.
-    /// 3. Normalized orderings become `[[b, c], [d]]`.
+    /// 3. Normal orderings become `[[b, c], [d]]`.
     /// 4. The function fails for `c` in the second iteration, as neither
     ///    `[b, c]` nor `[d]` satisfies `c`.
     ///
@@ -467,24 +464,24 @@ impl EquivalenceProperties {
     /// 1. The function first checks the leading requirement `a`, which is
     ///    satisfied by `[a, b, c].first()`.
     /// 2. `a` is added as a constant for the next iteration.
-    /// 3. Normalized orderings become `[[b, c], [d]]`.
+    /// 3. Normal orderings become `[[b, c], [d]]`.
     /// 4. The function returns `true` as `[d]` satisfies `d`.
     pub fn ordering_satisfy_requirement(
         &self,
         given: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> bool {
         // First, standardize the given requirement:
-        let Some(normalized_reqs) = self.normalize_sort_requirements(given) else {
+        let Some(normal_reqs) = self.normalize_sort_requirements(given) else {
             // If the requirement vanishes after normalization, it is satisfied:
             return true;
         };
         // Then, check whether given requirement is satisfied by constraints:
-        if self.satisfied_by_constraints(&normalized_reqs) {
+        if self.satisfied_by_constraints(&normal_reqs) {
             return true;
         }
         let schema = self.schema();
         let mut eq_properties = self.clone();
-        for element in normalized_reqs {
+        for element in normal_reqs {
             // Check whether given requirement is satisfied:
             let ExprProperties {
                 sort_properties, ..
@@ -522,17 +519,17 @@ impl EquivalenceProperties {
 
     /// Returns the number of consecutive sort expressions (starting from the
     /// left) that are satisfied by the existing ordering.
-    fn common_sort_prefix_length(&self, normalized_ordering: LexOrdering) -> usize {
-        let full_length = normalized_ordering.len();
+    fn common_sort_prefix_length(&self, normal_ordering: LexOrdering) -> usize {
+        let full_length = normal_ordering.len();
         // Check whether the given ordering is satisfied by constraints:
-        if self.satisfied_by_constraints_ordering(&normalized_ordering) {
+        if self.satisfied_by_constraints_ordering(&normal_ordering) {
             // If constraints satisfy all sort expressions, return the full
             // length:
             return full_length;
         }
         let schema = self.schema();
         let mut eq_properties = self.clone();
-        for (idx, element) in normalized_ordering.into_iter().enumerate() {
+        for (idx, element) in normal_ordering.into_iter().enumerate() {
             // Check whether given ordering is satisfied:
             let ExprProperties {
                 sort_properties, ..
@@ -572,7 +569,7 @@ impl EquivalenceProperties {
         full_length
     }
 
-    /// Determines the longest normalized prefix of `ordering` satisfied by the
+    /// Determines the longest normal prefix of `ordering` satisfied by the
     /// existing ordering. Returns that prefix as a new `LexOrdering`, and a
     /// boolean indicating whether all the sort expressions are satisfied.
     pub fn extract_common_sort_prefix(
@@ -580,13 +577,13 @@ impl EquivalenceProperties {
         ordering: LexOrdering,
     ) -> (Vec<PhysicalSortExpr>, bool) {
         // First, standardize the given ordering:
-        let Some(normalized_ordering) = self.normalize_sort_exprs(ordering) else {
+        let Some(normal_ordering) = self.normalize_sort_exprs(ordering) else {
             // If the ordering vanishes after normalization, it is satisfied:
             return (vec![], true);
         };
-        let prefix_len = self.common_sort_prefix_length(normalized_ordering.clone());
-        let flag = prefix_len == normalized_ordering.len();
-        let mut sort_exprs: Vec<_> = normalized_ordering.into();
+        let prefix_len = self.common_sort_prefix_length(normal_ordering.clone());
+        let flag = prefix_len == normal_ordering.len();
+        let mut sort_exprs: Vec<_> = normal_ordering.into();
         if !flag {
             sort_exprs.truncate(prefix_len);
         }
@@ -600,12 +597,12 @@ impl EquivalenceProperties {
     /// unique constraints, also verifies nullable columns.
     fn satisfied_by_constraints_ordering(
         &self,
-        normalized_exprs: &[PhysicalSortExpr],
+        normal_exprs: &[PhysicalSortExpr],
     ) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
                 let check_null = matches!(constraint, Constraint::Unique(_));
-                let normalized_size = normalized_exprs.len();
+                let normalized_size = normal_exprs.len();
                 indices.len() <= normalized_size
                     && self.oeq_class.iter().any(|ordering| {
                         let length = ordering.len();
@@ -633,12 +630,9 @@ impl EquivalenceProperties {
                             return false;
                         }
                         // Check if this ordering matches the prefix:
-                        normalized_exprs
-                            .iter()
-                            .zip(ordering)
-                            .all(|(given, existing)| {
-                                existing.satisfy_expr(given, &self.schema)
-                            })
+                        normal_exprs.iter().zip(ordering).all(|(given, existing)| {
+                            existing.satisfy_expr(given, &self.schema)
+                        })
                     })
             }
         })
@@ -649,14 +643,11 @@ impl EquivalenceProperties {
     /// fully satisfies the requirements (i.e. constraint indices form a valid
     /// prefix of an existing ordering that matches the requirements). For
     /// unique constraints, also verifies nullable columns.
-    fn satisfied_by_constraints(
-        &self,
-        normalized_reqs: &[PhysicalSortRequirement],
-    ) -> bool {
+    fn satisfied_by_constraints(&self, normal_reqs: &[PhysicalSortRequirement]) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
                 let check_null = matches!(constraint, Constraint::Unique(_));
-                let normalized_size = normalized_reqs.len();
+                let normalized_size = normal_reqs.len();
                 indices.len() <= normalized_size
                     && self.oeq_class.iter().any(|ordering| {
                         let length = ordering.len();
@@ -684,12 +675,9 @@ impl EquivalenceProperties {
                             return false;
                         }
                         // Check if this ordering matches the prefix:
-                        normalized_reqs
-                            .iter()
-                            .zip(ordering)
-                            .all(|(given, existing)| {
-                                existing.satisfy(given, &self.schema)
-                            })
+                        normal_reqs.iter().zip(ordering).all(|(given, existing)| {
+                            existing.satisfy(given, &self.schema)
+                        })
                     })
             }
         })
@@ -702,18 +690,17 @@ impl EquivalenceProperties {
         given: LexRequirement,
         reference: LexRequirement,
     ) -> bool {
-        let Some(normalized_given) = self.normalize_sort_requirements(given) else {
+        let Some(normal_given) = self.normalize_sort_requirements(given) else {
             return true;
         };
-        let Some(normalized_reference) = self.normalize_sort_requirements(reference)
-        else {
+        let Some(normal_reference) = self.normalize_sort_requirements(reference) else {
             return true;
         };
 
-        (normalized_reference.len() <= normalized_given.len())
-            && normalized_reference
+        (normal_reference.len() <= normal_given.len())
+            && normal_reference
                 .into_iter()
-                .zip(normalized_given)
+                .zip(normal_given)
                 .all(|(reference, given)| given.compatible(&reference))
     }
 
@@ -898,25 +885,24 @@ impl EquivalenceProperties {
         projectable
     }
 
-    /// Returns a new `ProjectionMapping` where source expressions are normalized.
-    ///
-    /// This normalization ensures that source expressions are transformed into a
-    /// consistent representation. This is beneficial for algorithms that rely on
-    /// exact equalities, as it allows for more precise and reliable comparisons.
+    /// Returns a new `ProjectionMapping` where source expressions are in normal
+    /// form. Normalization ensures that source expressions are transformed into
+    /// a consistent representation, which is beneficial for algorithms that rely
+    /// on exact equalities, as it allows for more precise and reliable comparisons.
     ///
     /// # Parameters
     ///
-    /// - `mapping`: A reference to the original `ProjectionMapping` to be normalized.
+    /// - `mapping`: A reference to the original `ProjectionMapping` to normalize.
     ///
     /// # Returns
     ///
-    /// A new `ProjectionMapping` with normalized source expressions.
-    fn normalized_mapping(&self, mapping: &ProjectionMapping) -> ProjectionMapping {
+    /// A new `ProjectionMapping` with source expressions in normal form.
+    fn normalize_mapping(&self, mapping: &ProjectionMapping) -> ProjectionMapping {
         mapping
             .iter()
             .map(|(source, target)| {
-                let normalized_source = self.eq_group.normalize_expr(Arc::clone(source));
-                (normalized_source, target.clone())
+                let normal_source = self.eq_group.normalize_expr(Arc::clone(source));
+                (normal_source, target.clone())
             })
             .collect()
     }
@@ -937,14 +923,14 @@ impl EquivalenceProperties {
     ///
     /// # Returns
     ///
-    /// A vector of all valid (un-normalized) orderings after projection.
+    /// A vector of all valid (but not in normal form) orderings after projection.
     fn projected_orderings(
         &self,
         mapping: &ProjectionMapping,
         mut oeq_class: OrderingEquivalenceClass,
     ) -> Vec<LexOrdering> {
         // Normalize source expressions in the mapping:
-        let mapping = self.normalized_mapping(mapping);
+        let mapping = self.normalize_mapping(mapping);
         // Get dependency map for existing orderings:
         oeq_class = Self::substitute_oeq_class(&self.schema, &mapping, oeq_class);
         let dependency_map = self.construct_dependency_map(oeq_class, &mapping);
@@ -1008,7 +994,11 @@ impl EquivalenceProperties {
             prefixes
         });
 
-        orderings.chain(projected_orderings).collect()
+        // Simplify each ordering by removing redundant sections:
+        orderings
+            .chain(projected_orderings)
+            .map(|lex_ordering| lex_ordering.collapse())
+            .collect()
     }
 
     /// Projects constraints according to the given projection mapping.
@@ -1042,10 +1032,8 @@ impl EquivalenceProperties {
     /// `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
         let eq_group = self.eq_group.project(mapping);
-        let orderings = self
-            .projected_orderings(mapping, self.oeq_class.clone())
-            .into_iter()
-            .map(|o| eq_group.normalize_sort_exprs(o));
+        let orderings = self.projected_orderings(mapping, self.normalized_oeq_class());
+        // TODO: Normalization point.
         Self {
             oeq_class: OrderingEquivalenceClass::new(orderings),
             constraints: self.projected_constraints(mapping).unwrap_or_default(),
@@ -1311,15 +1299,15 @@ fn update_properties(
             Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?
     }
     // Now, check what we know about orderings:
-    let normalized_expr = eq_properties
+    let normal_expr = eq_properties
         .eq_group
         .normalize_expr(Arc::clone(&node.expr));
-    let oeq_class = &eq_properties.oeq_class;
-    if eq_properties.is_expr_constant(&normalized_expr).is_some()
-        || oeq_class.is_expr_partial_const(&normalized_expr)
+    let oeq_class = eq_properties.normalized_oeq_class();
+    if eq_properties.is_expr_constant(&normal_expr).is_some()
+        || oeq_class.is_expr_partial_const(&normal_expr)
     {
         node.data.sort_properties = SortProperties::Singleton;
-    } else if let Some(options) = oeq_class.get_options(&normalized_expr) {
+    } else if let Some(options) = oeq_class.get_options(&normal_expr) {
         node.data.sort_properties = SortProperties::Ordered(options);
     }
     Ok(Transformed::yes(node))
