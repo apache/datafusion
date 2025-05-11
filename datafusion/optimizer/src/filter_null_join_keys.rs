@@ -108,6 +108,7 @@ fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
 mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_snapshot;
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Column;
     use datafusion_expr::logical_plan::table_scan;
@@ -118,9 +119,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(FilterNullJoinKeys {});
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(FilterNullJoinKeys {})];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )

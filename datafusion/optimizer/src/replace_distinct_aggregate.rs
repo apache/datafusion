@@ -190,6 +190,7 @@ mod tests {
     use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
     use crate::test::*;
 
+    use crate::OptimizerContext;
     use datafusion_common::Result;
     use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder, Expr};
     use datafusion_functions_aggregate::sum::sum;
@@ -199,9 +200,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(ReplaceDistinctWithAggregate::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(ReplaceDistinctWithAggregate::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )

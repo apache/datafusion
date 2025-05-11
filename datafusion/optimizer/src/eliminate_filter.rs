@@ -82,6 +82,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::assert_optimized_plan_eq_snapshot;
+    use crate::OptimizerContext;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{col, lit, logical_plan::builder::LogicalPlanBuilder, Expr};
 
@@ -94,9 +95,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateFilter::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateFilter::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )

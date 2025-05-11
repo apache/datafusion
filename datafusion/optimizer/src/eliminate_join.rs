@@ -76,6 +76,7 @@ impl OptimizerRule for EliminateJoin {
 mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_join::EliminateJoin;
+    use crate::OptimizerContext;
     use datafusion_common::Result;
     use datafusion_expr::JoinType::Inner;
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
@@ -84,11 +85,13 @@ mod tests {
     macro_rules! assert_optimized_plan_equal {
         (
             $plan:expr,
-            @$expected:literal $(,)?
+            @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateJoin::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateJoin::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
