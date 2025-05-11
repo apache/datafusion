@@ -123,12 +123,9 @@ mod tests {
 
         assert_optimized_plan_equal!(plan, @r#"
         Projection: a.id
-          Filter: b.department = Utf8("HR")
-            Inner Join: a.id = b.id
-              SubqueryAlias: a
-                TableScan: employees
-              SubqueryAlias: b
-                TableScan: employees
+          Filter: a.department = Utf8("HR")
+            SubqueryAlias: a
+              TableScan: employees
         "#)
     }
 }
