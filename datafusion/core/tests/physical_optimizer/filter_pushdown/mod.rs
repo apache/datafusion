@@ -410,7 +410,7 @@ async fn test_topk_dynamic_filter_pushdown() {
     // Actually apply the optimization to the plan
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
-    let plan = FilterPushdown {}.optimize(plan, &config).unwrap();
+    let plan = FilterPushdown::new().optimize(plan, &config).unwrap();
     let config = SessionConfig::new().with_batch_size(2);
     let session_ctx = SessionContext::new_with_config(config);
     session_ctx.register_object_store(

@@ -1395,7 +1395,7 @@ impl ExecutionPlan for SortExec {
     ) -> Result<FilterDescription> {
         if let Some(filter) = &self.filter {
             if config.optimizer.enable_dynamic_filter_pushdown {
-                let filter = Arc::clone(filter) as Arc<dyn PhysicalExpr>;
+                let filter = Arc::clone(filter);
                 return Ok(FilterDescription::new_with_child_count(1)
                     .all_parent_filters_supported(parent_filters)
                     .with_self_filter(filter));

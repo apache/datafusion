@@ -39,8 +39,9 @@ use datafusion_execution::{
 };
 use datafusion_physical_expr::{
     expressions::{is_not_null, is_null, lit, BinaryExpr, DynamicFilterPhysicalExpr},
-    PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortExpr,
 };
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Global TopK
@@ -261,8 +262,7 @@ impl TopK {
         };
         if let Some(thresholds) = self.heap.get_threshold_values(&self.expr)? {
             // Create filter expressions for each threshold
-            let mut filters: Vec<Arc<dyn PhysicalExpr>> =
-                Vec::with_capacity(thresholds.len());
+            let mut filters = Vec::with_capacity(thresholds.len());
 
             let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
             for (sort_expr, value) in self.expr.iter().zip(thresholds.iter()) {
@@ -701,8 +701,9 @@ impl TopKHeap {
         let mut scalar_values = Vec::with_capacity(sort_exprs.len());
         for sort_expr in sort_exprs {
             // Extract the value for this column from the max row
-            let expr = Arc::clone(&sort_expr.expr);
-            let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
+            let value = sort_expr
+                .expr
+                .evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
 
             // Convert to scalar value - should be a single value since we're evaluating on a single row batch
             let scalar = match value {

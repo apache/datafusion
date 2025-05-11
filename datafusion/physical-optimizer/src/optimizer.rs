@@ -111,9 +111,6 @@ impl PhysicalOptimizer {
             Arc::new(OptimizeAggregateOrder::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
-            // The CoalesceBatches rule will not influence the distribution and ordering of the
-            // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
-            Arc::new(CoalesceBatches::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),
@@ -122,6 +119,13 @@ impl PhysicalOptimizer {
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
             // to the aggregation, allowing it to use only y number of accumulators.
             Arc::new(TopKAggregation::new()),
+            // The FilterPushdown rule tries to push down filters as far as it can.
+            // For example, it will push down filtering from a `FilterExec` to
+            // a `DataSourceExec`, or from a `TopK`'s current state to a `DataSourceExec`.
+            Arc::new(FilterPushdown::new()),
+            // The CoalesceBatches rule will not influence the distribution and ordering of the
+            // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
+            Arc::new(CoalesceBatches::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.
@@ -133,10 +137,6 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
-            // The FilterPushdown rule tries to push down filters as far as it can.
-            // For example, it will push down filtering from a `FilterExec` to
-            // a `DataSourceExec`, or from a `TopK`'s current state to a `DataSourceExec`.
-            Arc::new(FilterPushdown::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query

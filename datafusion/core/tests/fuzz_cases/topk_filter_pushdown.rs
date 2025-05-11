@@ -28,6 +28,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_parquet::ParquetFormat;
 use datafusion_execution::object_store::ObjectStoreUrl;
+
 use itertools::Itertools;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -45,7 +46,7 @@ struct TestDataSet {
 }
 
 /// List of in memory parquet files with UTF8 data
-// Use a mutex rather than LazyLock to allow for async initialization
+// Use LazyLock for lazy static initialization, and Mutex for safe interior mutability
 static TESTFILES: LazyLock<Mutex<Vec<TestDataSet>>> =
     LazyLock::new(|| Mutex::new(vec![]));
 
