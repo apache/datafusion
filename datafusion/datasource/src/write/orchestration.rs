@@ -27,7 +27,9 @@ use crate::file_compression_type::FileCompressionType;
 use datafusion_common::error::Result;
 
 use arrow::array::RecordBatch;
-use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
+use datafusion_common::{
+    execution_join_datafusion_err, internal_datafusion_err, internal_err, DataFusionError,
+};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
 
@@ -285,8 +287,8 @@ pub async fn spawn_writer_tasks_and_join(
         write_coordinator_task.join_unwind(),
         demux_task.join_unwind()
     );
-    r1.map_err(DataFusionError::ExecutionJoin)??;
-    r2.map_err(DataFusionError::ExecutionJoin)??;
+    r1.map_err(|e| execution_join_datafusion_err!(e))??;
+    r2.map_err(|e| execution_join_datafusion_err!(e))??;
 
     // Return total row count:
     rx_row_cnt.await.map_err(|_| {

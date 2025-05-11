@@ -128,9 +128,11 @@ impl ListingTableUrl {
         };
 
         let url = url_from_filesystem_path(path).ok_or_else(|| {
-            external_datafusion_err!(
-                format!("Failed to convert path to URL: {path}").into()
-            )
+            let err = std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to convert path to URL: {path}"),
+            );
+            external_datafusion_err!(err)
         })?;
 
         Self::try_new(url, glob)

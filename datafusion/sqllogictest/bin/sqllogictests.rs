@@ -271,7 +271,8 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
             }
             msg.push_str(&format!("{}. {err}\n\n", i + 1));
         }
-        return external_err!(msg.into());
+        let err = std::io::Error::new(std::io::ErrorKind::Other, msg);
+        return external_err!(err);
     }
 
     Ok(())
