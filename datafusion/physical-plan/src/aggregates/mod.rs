@@ -775,8 +775,10 @@ impl AggregateExec {
                 // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
                 let num_rows = if let Some(value) = child_statistics.num_rows.get_value()
                 {
-                    if *value != 1 {
+                    if *value > 1 {
                         child_statistics.num_rows.to_inexact()
+                    } else if *value == 0 {
+                        child_statistics.num_rows
                     } else {
                         // num_rows = 1 case
                         let grouping_set_num = self.group_by.groups.len();
@@ -1434,9 +1436,7 @@ mod tests {
     use crate::expressions::col;
     use crate::metrics::MetricValue;
     use crate::test::assert_is_pending;
-    use crate::test::exec::{
-        assert_strong_count_converges_to_zero, BlockingExec, PartitionStatisticsExec,
-    };
+    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
     use crate::RecordBatchStream;
 
@@ -1447,9 +1447,7 @@ mod tests {
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Int32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{
-        internal_err, ColumnStatistics, DataFusionError, ScalarValue,
-    };
+    use datafusion_common::{internal_err, DataFusionError, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -3046,98 +3044,6 @@ mod tests {
         run_test_with_spill_pool_if_necessary(2_000, true).await?;
         // test without spill
         run_test_with_spill_pool_if_necessary(20_000, false).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_statistic() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-            Field::new("c", DataType::Int32, true),
-        ]));
-
-        let grouping_set = PhysicalGroupBy::new(
-            vec![
-                (col("a", &schema)?, "a".to_string()),
-                (col("b", &schema)?, "b".to_string()),
-            ],
-            vec![
-                (lit(ScalarValue::Int32(None)), "a".to_string()),
-                (lit(ScalarValue::Int32(None)), "b".to_string()),
-            ],
-            vec![
-                vec![false, true],  // (a, NULL)
-                vec![true, false],  // (NULL, b)
-                vec![false, false], // (a,b)
-            ],
-        );
-
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias(String::from("COUNT(c)"))
-                    .build()
-                    .map(Arc::new)?,
-            ];
-
-        let input = PartitionStatisticsExec::new(
-            Arc::clone(&schema),
-            vec![
-                Statistics {
-                    num_rows: Precision::Exact(100),
-                    column_statistics: vec![
-                        ColumnStatistics::new_unknown()
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                66,
-                            ))))
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                -66,
-                            )))),
-                        ColumnStatistics::new_unknown(),
-                        ColumnStatistics::new_unknown(),
-                    ],
-                    total_byte_size: Precision::Absent,
-                },
-                Statistics {
-                    num_rows: Precision::Exact(1),
-                    column_statistics: vec![
-                        ColumnStatistics::new_unknown(),
-                        ColumnStatistics::new_unknown(),
-                        ColumnStatistics::new_unknown(),
-                    ],
-                    total_byte_size: Precision::Absent,
-                },
-            ],
-        );
-
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            grouping_set,
-            aggr_expr,
-            vec![None],
-            Arc::new(input),
-            schema,
-        )?);
-
-        let p0_stats = aggregate_exec.partition_statistics(Some(0))?;
-
-        assert_eq!(p0_stats.num_rows, Precision::Inexact(100));
-        assert_eq!(
-            p0_stats.column_statistics[0].max_value,
-            (Precision::Exact(ScalarValue::Int32(Some(66))))
-        );
-
-        assert_eq!(
-            p0_stats.column_statistics[0].min_value,
-            (Precision::Exact(ScalarValue::Int32(Some(-66))))
-        );
-
-        let p1_stats = aggregate_exec.partition_statistics(Some(1))?;
-
-        assert_eq!(p1_stats.num_rows, Precision::Exact(3));
-
         Ok(())
     }
 }
