@@ -174,7 +174,7 @@ macro_rules! value_transition {
 ///    - `INF` values are converted to `NULL`s while constructing an interval to
 ///      ensure consistency, with other data types.
 ///    - `NaN` (Not a Number) results are conservatively result in unbounded
-///       endpoints.
+///      endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
     lower: ScalarValue,
@@ -606,7 +606,7 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible data types for logical conjunction"),
+            _ => internal_err!("Incompatible data types for logical disjunction"),
         }
     }
 
@@ -949,6 +949,18 @@ impl Display for Interval {
     }
 }
 
+impl From<ScalarValue> for Interval {
+    fn from(value: ScalarValue) -> Self {
+        Self::new(value.clone(), value)
+    }
+}
+
+impl From<&ScalarValue> for Interval {
+    fn from(value: &ScalarValue) -> Self {
+        Self::new(value.to_owned(), value.to_owned())
+    }
+}
+
 /// Applies the given binary operator the `lhs` and `rhs` arguments.
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     match *op {
@@ -959,6 +971,7 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::Lt => lhs.lt(rhs),
         Operator::LtEq => lhs.lt_eq(rhs),
         Operator::And => lhs.and(rhs),
+        Operator::Or => lhs.or(rhs),
         Operator::Plus => lhs.add(rhs),
         Operator::Minus => lhs.sub(rhs),
         Operator::Multiply => lhs.mul(rhs),

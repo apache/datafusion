@@ -18,7 +18,7 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    compute::interleave,
+    compute::interleave_record_batch,
     row::{RowConverter, Rows, SortField},
 };
 use std::mem::size_of;
@@ -27,10 +27,10 @@ use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
-use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::HashMap;
 use datafusion_common::Result;
+use datafusion_common::{internal_datafusion_err, HashMap};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
@@ -70,6 +70,25 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 /// The same answer can be produced by simply keeping track of the top
 /// K=3 elements, reducing the total amount of required buffer memory.
 ///
+/// # Partial Sort Optimization
+///
+/// This implementation additionally optimizes queries where the input is already
+/// partially sorted by a common prefix of the requested ordering. Once the top K
+/// heap is full, if subsequent rows are guaranteed to be strictly greater (in sort
+/// order) on this prefix than the largest row currently stored, the operator
+/// safely terminates early.
+///
+/// ## Example
+///
+/// For input sorted by `(day DESC)`, but not by `timestamp`, a query such as:
+///
+/// ```sql
+/// SELECT day, timestamp FROM sensor ORDER BY day DESC, timestamp DESC LIMIT 10;
+/// ```
+///
+/// can terminate scanning early once sufficient rows from the latest days have been
+/// collected, skipping older data.
+///
 /// # Structure
 ///
 /// This operator tracks the top K items using a `TopKHeap`.
@@ -90,15 +109,43 @@ pub struct TopK {
     scratch_rows: Rows,
     /// stores the top k values and their sort key values, in order
     heap: TopKHeap,
+    /// row converter, for common keys between the sort keys and the input ordering
+    common_sort_prefix_converter: Option<RowConverter>,
+    /// Common sort prefix between the input and the sort expressions to allow early exit optimization
+    common_sort_prefix: Arc<[PhysicalSortExpr]>,
+    /// If true, indicates that all rows of subsequent batches are guaranteed
+    /// to be greater (by byte order, after row conversion) than the top K,
+    /// which means the top K won't change and the computation can be finished early.
+    pub(crate) finished: bool,
+}
+
+// Guesstimate for memory allocation: estimated number of bytes used per row in the RowConverter
+const ESTIMATED_BYTES_PER_ROW: usize = 20;
+
+fn build_sort_fields(
+    ordering: &LexOrdering,
+    schema: &SchemaRef,
+) -> Result<Vec<SortField>> {
+    ordering
+        .iter()
+        .map(|e| {
+            Ok(SortField::new_with_options(
+                e.expr.data_type(schema)?,
+                e.options,
+            ))
+        })
+        .collect::<Result<_>>()
 }
 
 impl TopK {
     /// Create a new [`TopK`] that stores the top `k` values, as
     /// defined by the sort expressions in `expr`.
     // TODO: make a builder or some other nicer API
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         partition_id: usize,
         schema: SchemaRef,
+        common_sort_prefix: LexOrdering,
         expr: LexOrdering,
         k: usize,
         batch_size: usize,
@@ -108,35 +155,34 @@ impl TopK {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
 
-        let expr: Arc<[PhysicalSortExpr]> = expr.into();
-
-        let sort_fields: Vec<_> = expr
-            .iter()
-            .map(|e| {
-                Ok(SortField::new_with_options(
-                    e.expr.data_type(&schema)?,
-                    e.options,
-                ))
-            })
-            .collect::<Result<_>>()?;
+        let sort_fields: Vec<_> = build_sort_fields(&expr, &schema)?;
 
         // TODO there is potential to add special cases for single column sort fields
         // to improve performance
         let row_converter = RowConverter::new(sort_fields)?;
-        let scratch_rows = row_converter.empty_rows(
-            batch_size,
-            20 * batch_size, // guesstimate 20 bytes per row
-        );
+        let scratch_rows =
+            row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
+
+        let prefix_row_converter = if common_sort_prefix.is_empty() {
+            None
+        } else {
+            let input_sort_fields: Vec<_> =
+                build_sort_fields(&common_sort_prefix, &schema)?;
+            Some(RowConverter::new(input_sort_fields)?)
+        };
 
         Ok(Self {
             schema: Arc::clone(&schema),
             metrics: TopKMetrics::new(metrics, partition_id),
             reservation,
             batch_size,
-            expr,
+            expr: Arc::from(expr),
             row_converter,
             scratch_rows,
-            heap: TopKHeap::new(k, batch_size, schema),
+            heap: TopKHeap::new(k, batch_size),
+            common_sort_prefix_converter: prefix_row_converter,
+            common_sort_prefix: Arc::from(common_sort_prefix),
+            finished: false,
         })
     }
 
@@ -144,7 +190,8 @@ impl TopK {
     /// the top k seen so far.
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Updates on drop
-        let _timer = self.metrics.baseline.elapsed_compute().timer();
+        let baseline = self.metrics.baseline.clone();
+        let _timer = baseline.elapsed_compute().timer();
 
         let sort_keys: Vec<ArrayRef> = self
             .expr
@@ -163,7 +210,7 @@ impl TopK {
         // TODO make this algorithmically better?:
         // Idea: filter out rows >= self.heap.max() early (before passing to `RowConverter`)
         //       this avoids some work and also might be better vectorizable.
-        let mut batch_entry = self.heap.register_batch(batch);
+        let mut batch_entry = self.heap.register_batch(batch.clone());
         for (index, row) in rows.iter().enumerate() {
             match self.heap.max() {
                 // heap has k items, and the new row is greater than the
@@ -183,6 +230,87 @@ impl TopK {
 
         // update memory reservation
         self.reservation.try_resize(self.size())?;
+
+        // flag the topK as finished if we know that all
+        // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
+        // which means the top K won't change and the computation can be finished early.
+        self.attempt_early_completion(&batch)?;
+
+        Ok(())
+    }
+
+    /// If input ordering shares a common sort prefix with the TopK, and if the TopK's heap is full,
+    /// check if the computation can be finished early.
+    /// This is the case if the last row of the current batch is strictly greater than the max row in the heap,
+    /// comparing only on the shared prefix columns.
+    fn attempt_early_completion(&mut self, batch: &RecordBatch) -> Result<()> {
+        // Early exit if the batch is empty as there is no last row to extract from it.
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
+        // prefix_row_converter is only `Some` if the input ordering has a common prefix with the TopK,
+        // so early exit if it is `None`.
+        let Some(prefix_converter) = &self.common_sort_prefix_converter else {
+            return Ok(());
+        };
+
+        // Early exit if the heap is not full (`heap.max()` only returns `Some` if the heap is full).
+        let Some(max_topk_row) = self.heap.max() else {
+            return Ok(());
+        };
+
+        // Evaluate the prefix for the last row of the current batch.
+        let last_row_idx = batch.num_rows() - 1;
+        let mut batch_prefix_scratch =
+            prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
+
+        self.compute_common_sort_prefix(batch, last_row_idx, &mut batch_prefix_scratch)?;
+
+        // Retrieve the max row from the heap.
+        let store_entry = self
+            .heap
+            .store
+            .get(max_topk_row.batch_id)
+            .ok_or(internal_datafusion_err!("Invalid batch id in topK heap"))?;
+        let max_batch = &store_entry.batch;
+        let mut heap_prefix_scratch =
+            prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
+        self.compute_common_sort_prefix(
+            max_batch,
+            max_topk_row.index,
+            &mut heap_prefix_scratch,
+        )?;
+
+        // If the last row's prefix is strictly greater than the max prefix, mark as finished.
+        if batch_prefix_scratch.row(0).as_ref() > heap_prefix_scratch.row(0).as_ref() {
+            self.finished = true;
+        }
+
+        Ok(())
+    }
+
+    // Helper function to compute the prefix for a given batch and row index, storing the result in scratch.
+    fn compute_common_sort_prefix(
+        &self,
+        batch: &RecordBatch,
+        last_row_idx: usize,
+        scratch: &mut Rows,
+    ) -> Result<()> {
+        let last_row: Vec<ArrayRef> = self
+            .common_sort_prefix
+            .iter()
+            .map(|expr| {
+                expr.expr
+                    .evaluate(&batch.slice(last_row_idx, 1))?
+                    .into_array(1)
+            })
+            .collect::<Result<_>>()?;
+
+        self.common_sort_prefix_converter
+            .as_ref()
+            .unwrap()
+            .append(scratch, &last_row)?;
         Ok(())
     }
 
@@ -197,6 +325,9 @@ impl TopK {
             row_converter: _,
             scratch_rows: _,
             mut heap,
+            common_sort_prefix_converter: _,
+            common_sort_prefix: _,
+            finished: _,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
@@ -271,13 +402,13 @@ struct TopKHeap {
 }
 
 impl TopKHeap {
-    fn new(k: usize, batch_size: usize, schema: SchemaRef) -> Self {
+    fn new(k: usize, batch_size: usize) -> Self {
         assert!(k > 0);
         Self {
             k,
             batch_size,
             inner: BinaryHeap::new(),
-            store: RecordBatchStore::new(schema),
+            store: RecordBatchStore::new(),
             owned_bytes: 0,
         }
     }
@@ -354,8 +485,6 @@ impl TopKHeap {
     /// high, as a single [`RecordBatch`], and a sorted vec of the
     /// current heap's contents
     pub fn emit_with_state(&mut self) -> Result<(Option<RecordBatch>, Vec<TopKRow>)> {
-        let schema = Arc::clone(self.store.schema());
-
         // generate sorted rows
         let topk_rows = std::mem::take(&mut self.inner).into_sorted_vec();
 
@@ -370,30 +499,20 @@ impl TopKHeap {
             .map(|(i, k)| (i, k.index))
             .collect();
 
-        let num_columns = schema.fields().len();
-
-        // build the output columns one at time, using the
-        // `interleave` kernel to pick rows from different arrays
-        let output_columns: Vec<_> = (0..num_columns)
-            .map(|col| {
-                let input_arrays: Vec<_> = topk_rows
-                    .iter()
-                    .map(|k| {
-                        let entry =
-                            self.store.get(k.batch_id).expect("invalid stored batch id");
-                        entry.batch.column(col) as &dyn Array
-                    })
-                    .collect();
-
-                // at this point `indices` contains indexes within the
-                // rows and `input_arrays` contains a reference to the
-                // relevant Array for that index. `interleave` pulls
-                // them together into a single new array
-                Ok(interleave(&input_arrays, &indices)?)
+        let record_batches: Vec<_> = topk_rows
+            .iter()
+            .map(|k| {
+                let entry = self.store.get(k.batch_id).expect("invalid stored batch id");
+                &entry.batch
             })
-            .collect::<Result<_>>()?;
+            .collect();
 
-        let new_batch = RecordBatch::try_new(schema, output_columns)?;
+        // At this point `indices` contains indexes within the
+        // rows and `input_arrays` contains a reference to the
+        // relevant RecordBatch for that index. `interleave_record_batch` pulls
+        // them together into a single new batch
+        let new_batch = interleave_record_batch(&record_batches, &indices)?;
+
         Ok((Some(new_batch), topk_rows))
     }
 
@@ -548,17 +667,14 @@ struct RecordBatchStore {
     batches: HashMap<u32, RecordBatchEntry>,
     /// total size of all record batches tracked by this store
     batches_size: usize,
-    /// schema of the batches
-    schema: SchemaRef,
 }
 
 impl RecordBatchStore {
-    fn new(schema: SchemaRef) -> Self {
+    fn new() -> Self {
         Self {
             next_id: 0,
             batches: HashMap::new(),
             batches_size: 0,
-            schema,
         }
     }
 
@@ -609,11 +725,6 @@ impl RecordBatchStore {
         self.batches.is_empty()
     }
 
-    /// return the schema of batches stored
-    fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-
     /// remove a use from the specified batch id. If the use count
     /// reaches zero the batch entry is removed from the store
     ///
@@ -649,6 +760,10 @@ mod tests {
     use super::*;
     use arrow::array::{Float64Array, Int32Array, RecordBatch};
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::SortOptions;
+    use datafusion_common::assert_batches_eq;
+    use datafusion_physical_expr::expressions::col;
+    use futures::TryStreamExt;
 
     /// This test ensures the size calculation is correct for RecordBatches with multiple columns.
     #[test]
@@ -658,7 +773,7 @@ mod tests {
             Field::new("ints", DataType::Int32, true),
             Field::new("float64", DataType::Float64, false),
         ]));
-        let mut record_batch_store = RecordBatchStore::new(Arc::clone(&schema));
+        let mut record_batch_store = RecordBatchStore::new();
         let int_array =
             Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4), Some(5)]); // 5 * 4 = 20
         let float64_array = Float64Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0]); // 5 * 8 = 40
@@ -680,5 +795,99 @@ mod tests {
         // when unuse record batch entry
         record_batch_store.unuse(0);
         assert_eq!(record_batch_store.batches_size, 0);
+    }
+
+    /// This test validates that the `try_finish` method marks the TopK operator as finished
+    /// when the prefix (on column "a") of the last row in the current batch is strictly greater
+    /// than the max top‑k row.
+    /// The full sort expression is defined on both columns ("a", "b"), but the input ordering is only on "a".
+    #[tokio::test]
+    async fn test_try_finish_marks_finished_with_prefix() -> Result<()> {
+        // Create a schema with two columns.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        // Create sort expressions.
+        // Full sort: first by "a", then by "b".
+        let sort_expr_a = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+        let sort_expr_b = PhysicalSortExpr {
+            expr: col("b", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+
+        // Input ordering uses only column "a" (a prefix of the full sort).
+        let input_ordering = LexOrdering::from(vec![sort_expr_a.clone()]);
+        let full_expr = LexOrdering::from(vec![sort_expr_a, sort_expr_b]);
+
+        // Create a dummy runtime environment and metrics.
+        let runtime = Arc::new(RuntimeEnv::default());
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // Create a TopK instance with k = 3 and batch_size = 2.
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            input_ordering,
+            full_expr,
+            3,
+            2,
+            runtime,
+            &metrics,
+        )?;
+
+        // Create the first batch with two columns:
+        // Column "a": [1, 1, 2], Column "b": [20.0, 15.0, 30.0].
+        let array_a1: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(2)]));
+        let array_b1: ArrayRef = Arc::new(Float64Array::from(vec![20.0, 15.0, 30.0]));
+        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![array_a1, array_b1])?;
+
+        // Insert the first batch.
+        // At this point the heap is not yet “finished” because the prefix of the last row of the batch
+        // is not strictly greater than the prefix of the max top‑k row (both being `2`).
+        topk.insert_batch(batch1)?;
+        assert!(
+            !topk.finished,
+            "Expected 'finished' to be false after the first batch."
+        );
+
+        // Create the second batch with two columns:
+        // Column "a": [2, 3], Column "b": [10.0, 20.0].
+        let array_a2: ArrayRef = Arc::new(Int32Array::from(vec![Some(2), Some(3)]));
+        let array_b2: ArrayRef = Arc::new(Float64Array::from(vec![10.0, 20.0]));
+        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![array_a2, array_b2])?;
+
+        // Insert the second batch.
+        // The last row in this batch has a prefix value of `3`,
+        // which is strictly greater than the max top‑k row (with value `2`),
+        // so try_finish should mark the TopK as finished.
+        topk.insert_batch(batch2)?;
+        assert!(
+            topk.finished,
+            "Expected 'finished' to be true after the second batch."
+        );
+
+        // Verify the TopK correctly emits the top k rows from both batches
+        // (the value 10.0 for b is from the second batch).
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+---+------+",
+                "| a | b    |",
+                "+---+------+",
+                "| 1 | 15.0 |",
+                "| 1 | 20.0 |",
+                "| 2 | 10.0 |",
+                "+---+------+",
+            ],
+            &results
+        );
+
+        Ok(())
     }
 }

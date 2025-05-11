@@ -1061,7 +1061,7 @@ async fn roundtrip_literal_list() -> Result<()> {
 async fn roundtrip_literal_struct() -> Result<()> {
     let plan = generate_plan_from_sql(
         "SELECT STRUCT(1, true, CAST(NULL AS STRING)) FROM data",
-        false,
+        true,
         true,
     )
     .await?;
@@ -1070,6 +1070,46 @@ async fn roundtrip_literal_struct() -> Result<()> {
     plan,
     @r#"
     Projection: Struct({c0:1,c1:true,c2:}) AS struct(Int64(1),Boolean(true),NULL)
+      TableScan: data projection=[]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_literal_named_struct() -> Result<()> {
+    let plan = generate_plan_from_sql(
+        "SELECT STRUCT(1 as int_field, true as boolean_field, CAST(NULL AS STRING) as string_field) FROM data",
+        true,
+        true,
+    )
+        .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: Struct({int_field:1,boolean_field:true,string_field:}) AS named_struct(Utf8("int_field"),Int64(1),Utf8("boolean_field"),Boolean(true),Utf8("string_field"),NULL)
+      TableScan: data projection=[]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_literal_renamed_struct() -> Result<()> {
+    // This test aims to hit a case where the struct column itself has the expected name, but its
+    // inner field needs to be renamed.
+    let plan = generate_plan_from_sql(
+        "SELECT CAST((STRUCT(1)) AS Struct<\"int_field\"Int>) AS 'Struct({c0:1})' FROM data",
+        true,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+    Projection: Struct({int_field:1}) AS Struct({c0:1})
       TableScan: data projection=[]
     "#
             );

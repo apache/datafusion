@@ -2843,6 +2843,11 @@ select to_char(arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, N
 03-08-2023 14-38-50
 
 query T
+select to_char(arrow_cast('2023-09-04'::date, 'Timestamp(Second, Some("UTC"))'), '%Y-%m-%dT%H:%M:%S%.3f');
+----
+2023-09-04T00:00:00.000
+
+query T
 select to_char(arrow_cast(123456, 'Duration(Second)'), 'pretty');
 ----
 1 days 10 hours 17 mins 36 secs

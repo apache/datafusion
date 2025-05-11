@@ -25,7 +25,7 @@ use datafusion::{
     },
     prelude::SessionConfig,
 };
-use datafusion_common::{utils::get_available_parallelism, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use structopt::StructOpt;
 
 // Common benchmark options (don't use doc comments otherwise this doc
@@ -41,8 +41,8 @@ pub struct CommonOpt {
     pub partitions: Option<usize>,
 
     /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
-    pub batch_size: usize,
+    #[structopt(short = "s", long = "batch-size")]
+    pub batch_size: Option<usize>,
 
     /// The memory pool type to use, should be one of "fair" or "greedy"
     #[structopt(long = "mem-pool-type", default_value = "fair")]
@@ -65,21 +65,25 @@ pub struct CommonOpt {
 
 impl CommonOpt {
     /// Return an appropriately configured `SessionConfig`
-    pub fn config(&self) -> SessionConfig {
-        self.update_config(SessionConfig::new())
+    pub fn config(&self) -> Result<SessionConfig> {
+        SessionConfig::from_env().map(|config| self.update_config(config))
     }
 
     /// Modify the existing config appropriately
-    pub fn update_config(&self, config: SessionConfig) -> SessionConfig {
-        let mut config = config
-            .with_target_partitions(
-                self.partitions.unwrap_or(get_available_parallelism()),
-            )
-            .with_batch_size(self.batch_size);
+    pub fn update_config(&self, mut config: SessionConfig) -> SessionConfig {
+        if let Some(batch_size) = self.batch_size {
+            config = config.with_batch_size(batch_size);
+        }
+
+        if let Some(partitions) = self.partitions {
+            config = config.with_target_partitions(partitions);
+        }
+
         if let Some(sort_spill_reservation_bytes) = self.sort_spill_reservation_bytes {
             config =
                 config.with_sort_spill_reservation_bytes(sort_spill_reservation_bytes);
         }
+
         config
     }
 

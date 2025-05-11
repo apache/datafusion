@@ -184,6 +184,14 @@ impl ExecutionPlan for StatisticsValidation {
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
     }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            Ok(Statistics::new_unknown(&self.schema))
+        } else {
+            Ok(self.stats.clone())
+        }
+    }
 }
 
 fn init_ctx(stats: Statistics, schema: Schema) -> Result<SessionContext> {
@@ -232,7 +240,7 @@ async fn sql_basic() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
 
     // the statistics should be those of the source
-    assert_eq!(stats, physical_plan.statistics()?);
+    assert_eq!(stats, physical_plan.partition_statistics(None)?);
 
     Ok(())
 }
@@ -248,7 +256,7 @@ async fn sql_filter() -> Result<()> {
         .unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
-    let stats = physical_plan.statistics()?;
+    let stats = physical_plan.partition_statistics(None)?;
     assert_eq!(stats.num_rows, Precision::Inexact(1));
 
     Ok(())
@@ -270,7 +278,7 @@ async fn sql_limit() -> Result<()> {
             column_statistics: col_stats,
             total_byte_size: Precision::Absent
         },
-        physical_plan.statistics()?
+        physical_plan.partition_statistics(None)?
     );
 
     let df = ctx
@@ -279,7 +287,7 @@ async fn sql_limit() -> Result<()> {
         .unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is larger than the original number of lines, statistics remain unchanged
-    assert_eq!(stats, physical_plan.statistics()?);
+    assert_eq!(stats, physical_plan.partition_statistics(None)?);
 
     Ok(())
 }
@@ -296,7 +304,7 @@ async fn sql_window() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    let result = physical_plan.statistics()?;
+    let result = physical_plan.partition_statistics(None)?;
 
     assert_eq!(stats.num_rows, result.num_rows);
     let col_stats = result.column_statistics;

@@ -75,8 +75,11 @@ mod tests {
         assert_eq!(tt_batches, 6 /* 12/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
+        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
 
         Ok(())
     }
@@ -149,7 +152,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filename = "tests/data/2.json";
         let format = JsonFormat::default();
-        scan_format(state, &format, ".", filename, projection, limit).await
+        scan_format(state, &format, None, ".", filename, projection, limit).await
     }
 
     #[tokio::test]

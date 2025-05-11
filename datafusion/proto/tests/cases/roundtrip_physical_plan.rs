@@ -66,6 +66,7 @@ use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
@@ -504,7 +505,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
         vec![col("b", &schema)?, lit(0.5)],
     )
     .schema(Arc::clone(&schema))
-    .alias("APPROX_PERCENTILE_CONT(b, 0.5)")
+    .alias("APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY b)")
     .build()
     .map(Arc::new)?];
 
@@ -709,7 +710,7 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
 }
 
 #[test]
-fn roundtrip_coalesce_with_fetch() -> Result<()> {
+fn roundtrip_coalesce_batches_with_fetch() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -721,6 +722,22 @@ fn roundtrip_coalesce_with_fetch() -> Result<()> {
 
     roundtrip_test(Arc::new(
         CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
+            .with_fetch(Some(10)),
+    ))
+}
+
+#[test]
+fn roundtrip_coalesce_partitions_with_fetch() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    roundtrip_test(Arc::new(CoalescePartitionsExec::new(Arc::new(
+        EmptyExec::new(schema.clone()),
+    ))))?;
+
+    roundtrip_test(Arc::new(
+        CoalescePartitionsExec::new(Arc::new(EmptyExec::new(schema)))
             .with_fetch(Some(10)),
     ))
 }
@@ -739,9 +756,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let mut options = TableParquetOptions::new();
     options.global.pushdown_filters = true;
 
-    let file_source = Arc::new(
-        ParquetSource::new(options).with_predicate(Arc::clone(&file_schema), predicate),
-    );
+    let file_source = Arc::new(ParquetSource::new(options).with_predicate(predicate));
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -800,10 +815,8 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         inner: Arc::new(Column::new("col", 1)),
     });
 
-    let file_source = Arc::new(
-        ParquetSource::default()
-            .with_predicate(Arc::clone(&file_schema), custom_predicate_expr),
-    );
+    let file_source =
+        Arc::new(ParquetSource::default().with_predicate(custom_predicate_expr));
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -968,7 +981,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         "dummy",
         fun_def,
         vec![col("a", &schema)?],
-        DataType::Int64,
+        Field::new("f", DataType::Int64, true),
     );
 
     let project =
@@ -1096,7 +1109,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        DataType::Int64,
+        Field::new("f", DataType::Int64, true),
     ));
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1198,7 +1211,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        DataType::Int64,
+        Field::new("f", DataType::Int64, true),
     ));
 
     let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(
@@ -1675,4 +1688,48 @@ async fn roundtrip_empty_projection() -> Result<()> {
     let ctx = all_types_context().await?;
     let sql = "select 1 from alltypes_plain";
     roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_physical_plan_node() {
+    use datafusion::prelude::*;
+    use datafusion_proto::physical_plan::{
+        AsExecutionPlan, DefaultPhysicalExtensionCodec,
+    };
+    use datafusion_proto::protobuf::PhysicalPlanNode;
+
+    let ctx = SessionContext::new();
+
+    ctx.register_parquet(
+        "pt",
+        &format!(
+            "{}/alltypes_plain.snappy.parquet",
+            datafusion_common::test_util::parquet_test_data()
+        ),
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let plan = ctx
+        .sql("select id, string_col, timestamp_col from pt where id > 4 order by string_col")
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+
+    let node: PhysicalPlanNode =
+        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
+            .unwrap();
+
+    let plan = node
+        .try_into_physical_plan(
+            &ctx,
+            &ctx.runtime_env(),
+            &DefaultPhysicalExtensionCodec {},
+        )
+        .unwrap();
+
+    let _ = plan.execute(0, ctx.task_ctx()).unwrap();
 }

@@ -23,31 +23,6 @@ use std::{
     fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
 };
 
-use arrow::{
-    array::{
-        ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch,
-        RecordBatchOptions,
-    },
-    buffer::Buffer,
-    datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
-};
-use datafusion_common::{exec_err, ColumnStatistics, Constraints, Result, Statistics};
-use datafusion_common::{DataFusionError, ScalarValue};
-use datafusion_execution::{
-    object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
-};
-use datafusion_physical_expr::{
-    expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
-    PhysicalSortExpr,
-};
-use datafusion_physical_plan::{
-    display::{display_orderings, ProjectSchemaDisplay},
-    metrics::ExecutionPlanMetricsSet,
-    projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
-    DisplayAs, DisplayFormatType, ExecutionPlan,
-};
-use log::{debug, warn};
-
 use crate::file_groups::FileGroup;
 use crate::{
     display::FileGroupsDisplay,
@@ -58,6 +33,34 @@ use crate::{
     statistics::MinMaxStatistics,
     PartitionedFile,
 };
+use arrow::{
+    array::{
+        ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch,
+        RecordBatchOptions,
+    },
+    buffer::Buffer,
+    datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
+};
+use datafusion_common::{
+    config::ConfigOptions, exec_err, ColumnStatistics, Constraints, Result, Statistics,
+};
+use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_execution::{
+    object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
+};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{
+    expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
+    PhysicalSortExpr,
+};
+use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
+use datafusion_physical_plan::{
+    display::{display_orderings, ProjectSchemaDisplay},
+    metrics::ExecutionPlanMetricsSet,
+    projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
+    DisplayAs, DisplayFormatType, ExecutionPlan,
+};
+use log::{debug, warn};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -87,6 +90,7 @@ use crate::{
 /// #  Field::new("c4", DataType::Int32, false),
 /// # ]));
 /// # // Note: crate mock ParquetSource, as ParquetSource is not in the datasource crate
+/// #[derive(Clone)]
 /// # struct ParquetSource {
 /// #    projected_statistics: Option<Statistics>
 /// # };
@@ -94,7 +98,7 @@ use crate::{
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
 /// #  fn as_any(&self) -> &dyn Any { self  }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
-/// #  fn with_schema(&self, _: SchemaRef) -> Arc<dyn FileSource> { unimplemented!() }
+/// #  fn with_schema(&self, _: SchemaRef) -> Arc<dyn FileSource> { Arc::new(self.clone()) as Arc<dyn FileSource> }
 /// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: Some(statistics)} ) }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
@@ -402,7 +406,9 @@ impl FileScanConfigBuilder {
         let statistics =
             statistics.unwrap_or_else(|| Statistics::new_unknown(&file_schema));
 
-        let file_source = file_source.with_statistics(statistics.clone());
+        let file_source = file_source
+            .with_statistics(statistics.clone())
+            .with_schema(Arc::clone(&file_schema));
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
@@ -458,7 +464,6 @@ impl DataSource for FileScanConfig {
         let source = self
             .file_source
             .with_batch_size(batch_size)
-            .with_schema(Arc::clone(&self.file_schema))
             .with_projection(self);
 
         let opener = source.create_file_opener(object_store, self, partition);
@@ -474,7 +479,8 @@ impl DataSource for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let (schema, _, _, orderings) = self.project();
+                let schema = self.projected_schema();
+                let orderings = get_projected_output_ordering(self, &schema);
 
                 write!(f, "file_groups=")?;
                 FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -576,7 +582,7 @@ impl DataSource for FileScanConfig {
                 &file_scan
                     .projection
                     .clone()
-                    .unwrap_or((0..self.file_schema.fields().len()).collect()),
+                    .unwrap_or_else(|| (0..self.file_schema.fields().len()).collect()),
             );
             DataSourceExec::from_data_source(
                 FileScanConfigBuilder::from(file_scan)
@@ -586,6 +592,32 @@ impl DataSource for FileScanConfig {
                     .build(),
             ) as _
         }))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        let result = self.file_source.try_pushdown_filters(filters, config)?;
+        match result.updated_node {
+            Some(new_file_source) => {
+                let file_scan_config = FileScanConfigBuilder::from(self.clone())
+                    .with_source(new_file_source)
+                    .build();
+                Ok(FilterPushdownPropagation {
+                    filters: result.filters,
+                    updated_node: Some(Arc::new(file_scan_config) as _),
+                })
+            }
+            None => {
+                // If the file source does not support filter pushdown, return the original config
+                Ok(FilterPushdownPropagation {
+                    filters: result.filters,
+                    updated_node: None,
+                })
+            }
+        }
     }
 }
 
@@ -607,7 +639,9 @@ impl FileScanConfig {
         file_source: Arc<dyn FileSource>,
     ) -> Self {
         let statistics = Statistics::new_unknown(&file_schema);
-        let file_source = file_source.with_statistics(statistics.clone());
+        let file_source = file_source
+            .with_statistics(statistics.clone())
+            .with_schema(Arc::clone(&file_schema));
         Self {
             object_store_url,
             file_schema,
@@ -655,7 +689,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_stats(&self) -> Statistics {
+    pub fn projected_stats(&self) -> Statistics {
         let statistics = self.file_source.statistics().unwrap();
 
         let table_cols_stats = self
@@ -679,7 +713,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_schema(&self) -> Arc<Schema> {
+    pub fn projected_schema(&self) -> Arc<Schema> {
         let table_fields: Vec<_> = self
             .projection_indices()
             .into_iter()
@@ -699,7 +733,7 @@ impl FileScanConfig {
         ))
     }
 
-    fn projected_constraints(&self) -> Constraints {
+    pub fn projected_constraints(&self) -> Constraints {
         let indexes = self.projection_indices();
 
         self.constraints
@@ -1051,7 +1085,8 @@ impl Debug for FileScanConfig {
 
 impl DisplayAs for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let (schema, _, _, orderings) = self.project();
+        let schema = self.projected_schema();
+        let orderings = get_projected_output_ordering(self, &schema);
 
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -1564,7 +1599,7 @@ mod tests {
         );
 
         // verify the proj_schema includes the last column and exactly the same the field it is defined
-        let (proj_schema, _, _, _) = conf.project();
+        let proj_schema = conf.projected_schema();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             *proj_schema.field(file_schema.fields().len()),
@@ -1670,7 +1705,7 @@ mod tests {
         assert_eq!(source_statistics, statistics);
         assert_eq!(source_statistics.column_statistics.len(), 3);
 
-        let (proj_schema, ..) = conf.project();
+        let proj_schema = conf.projected_schema();
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(
             proj_schema,
