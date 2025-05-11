@@ -41,8 +41,8 @@ use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
-    binary_expr, col, expr_fn, lit, BinaryExpr, Cast, Expr, JoinType, LogicalPlan,
-    LogicalPlanBuilder, Operator as ExprOperator, Subquery,
+    binary_expr, col, expr_fn, lit, Aggregate, BinaryExpr, Cast, Expr, JoinType,
+    LogicalPlan, LogicalPlanBuilder, Operator as ExprOperator, Subquery,
 };
 use datafusion_sql::unparser::Unparser;
 use indexmap::map::Entry;
@@ -350,8 +350,12 @@ impl DependentJoinTracker {
             _ => false,
         }
     }
-    fn is_linear_path(&self, parent: &usize, child: &usize) -> bool {
-        let mut current_node = *child;
+    fn is_linear_path(&self, parent: &Operator, child: &Operator) -> bool {
+        if !self.is_linear_operator(&child.plan) {
+            return false;
+        }
+
+        let mut current_node = child.parent.unwrap();
 
         loop {
             let child_node = self.nodes.get(&current_node).unwrap();
@@ -361,15 +365,12 @@ impl DependentJoinTracker {
                         unimplemented!("traversing from descedent to top does not meet expected root")
                     }
                     Some(new_parent) => {
-                        if new_parent == *parent {
+                        if new_parent == parent.id {
                             return true;
                         }
                         return false;
                     }
                 }
-            }
-            if current_node == *parent {
-                return true;
             }
             match child_node.parent {
                 None => return true,
@@ -399,7 +400,7 @@ impl DependentJoinTracker {
         // unnest children first
         // println!("decorrelating {} from {}", child, root);
 
-        if !self.is_linear_path(&root_node.id, &child_node.id) {
+        if !self.is_linear_path(root_node, child_node) {
             // TODO:
             return Ok(());
         }
@@ -698,27 +699,27 @@ impl DependentJoinTracker {
         outer_refs_from_parent: IndexSet<Column>,
     ) -> Result<LogicalPlan> {
         let parent = unnesting.parent.clone();
-        let operator = self.nodes.get(&node).unwrap();
-        let plan = &operator.plan;
-        let mut join = self.new_dependent_join(operator);
+        let mut root_node = self.nodes.swap_remove(&node).unwrap();
+        // let plan = &root_node.plan;
         // we have to do the reversed iter, because we know the subquery (right side of
         // the dependent join) is always the first child of the node, and we want to visit
         // the left side first
 
-        let simple_unnest_result = self.simple_decorrelation(node)?;
-        let mut new_root = self.nodes.get(&node).unwrap().clone();
-        if new_root.access_tracker.len() == 0 {
-            return self
-                .build_join_from_simple_unnest(&mut new_root, simple_unnest_result);
+        let simple_unnest_result = self.simple_decorrelation(&mut root_node)?;
+        if root_node.access_tracker.is_empty() {
             if parent.is_some() {
                 // for each projection of outer column moved up by simple_decorrelation
                 // replace them with the expr store inside parent.replaces
-                unimplemented!("");
+                unimplemented!("simple dependent join not implemented for the case of recursive subquery");
                 return self.unnest(node, &mut parent.unwrap(), outer_refs_from_parent);
             }
+            return self
+                .build_join_from_simple_unnest(&mut root_node, simple_unnest_result);
             unimplemented!()
             // return Ok(dependent_join);
         }
+
+        let mut join = self.new_dependent_join(&root_node);
         if parent.is_some() {
             // i.e exists (where inner.col_a = outer_col.b and other_nested_subquery...)
 
@@ -797,10 +798,8 @@ impl DependentJoinTracker {
 
     fn simple_decorrelation(
         &mut self,
-        node_id: usize,
+        node: &mut Operator,
     ) -> Result<SimpleDecorrelationResult> {
-        let node = self.get_node_uncheck(&node_id);
-        let mut all_eliminated = false;
         let mut result = SimpleDecorrelationResult {
             // new: None,
             pulled_up_projections: IndexSet::new(),
@@ -817,16 +816,16 @@ impl DependentJoinTracker {
 
         for col_access in accesses_bottom_up {
             // create two copy because of
-            let mut parent_node = self.get_node_uncheck(&node_id);
-            let mut descendent = self.get_node_uncheck(&col_access.node_id);
+            // let mut descendent = self.get_node_uncheck(&col_access.node_id);
+            let mut descendent = self.nodes.swap_remove(&col_access.node_id).unwrap();
             self.try_simple_decorrelate_descendent(
-                &mut parent_node,
+                node,
                 &mut descendent,
                 &col_access,
                 &mut result,
             )?;
             // TODO: find a nicer way to do in-place update
-            self.nodes.insert(node_id, parent_node.clone());
+            // self.nodes.insert(node_id, parent_node.clone());
             self.nodes.insert(col_access.node_id, descendent);
         }
 
@@ -1115,6 +1114,7 @@ impl TreeNodeVisitor<'_> for DependentJoinTracker {
                 is_subquery_node = true;
                 // TODO: once we detect the subquery
             }
+            LogicalPlan::Aggregate(_) => {}
             _ => {
                 return internal_err!("impl scan for node type {:?}", node);
             }
@@ -1195,6 +1195,49 @@ mod tests {
         array::{Int32Array, StringArray},
         datatypes::{DataType as ArrowDataType, Field, Fields, Schema},
     };
+    #[test]
+    fn complex_1_level_decorrelate_in_subquery_with_count() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1)
+                .filter(
+                    col("inner_table_lv1.a")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.a")
+                                .gt(col("inner_table_lv1.c")),
+                        )
+                        .and(col("inner_table_lv1.b").eq(lit(1)))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.b")
+                                .eq(col("inner_table_lv1.b")),
+                        ),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv1.a"))])?
+                .project(vec![count(col("inner_table_lv1.a")).alias("count_a")])?
+                .build()?,
+        );
+
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(
+                col("outer_table.a")
+                    .gt(lit(1))
+                    .and(in_subquery(col("outer_table.c"), sq_level1)),
+            )?
+            .build()?;
+        let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
+        index.build(&input1)?;
+        let new_plan = index.root_dependent_join_elimination()?;
+        let expected = "\
+        Filter: outer_table.a > Int32(1) AND inner_table_lv1.mark\
+        \n  LeftMark Join:  Filter: inner_table_lv1.a = outer_table.a AND outer_table.a > inner_table_lv1.c AND outer_table.b = inner_table_lv1.b\
+        \n    TableScan: outer_table\
+        \n    Filter: inner_table_lv1.b = Int32(1)\
+        \n      TableScan: inner_table_lv1";
+        assert_eq!(expected, format!("{new_plan}"));
+        Ok(())
+    }
     #[test]
     fn simple_decorrelate_with_exist_subquery_with_dependent_columns() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
@@ -1328,7 +1371,7 @@ mod tests {
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
         Filter: outer_table.a > Int32(1)\
-        \n  LeftSemi Join:  Filter: outer_table.c != outer_table.b AS outer_b_alias AND inner_table_lv1.a = outer_table.a AND outer_table.a > inner_table_lv1.c AND outer_table.b = inner_table_lv1.b\
+        \n  LeftSemi Join:  Filter: outer_table.c = outer_table.b AS outer_b_alias AND inner_table_lv1.a = outer_table.a AND outer_table.a > inner_table_lv1.c AND outer_table.b = inner_table_lv1.b\
         \n    TableScan: outer_table\
         \n    Filter: inner_table_lv1.b = Int32(1)\
         \n      TableScan: inner_table_lv1";
