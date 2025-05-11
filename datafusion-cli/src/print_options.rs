@@ -24,8 +24,8 @@ use crate::print_format::PrintFormat;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion::common::external_err;
 use datafusion::common::instant::Instant;
-use datafusion::common::{external_err, DataFusionError};
 use datafusion::error::Result;
 use datafusion::physical_plan::RecordBatchStream;
 
@@ -143,9 +143,11 @@ impl PrintOptions {
         format_options: &FormatOptions,
     ) -> Result<()> {
         if self.format == PrintFormat::Table {
-            return external_err!("PrintFormat::Table is not implemented"
-                .to_string()
-                .into());
+            let err = std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "PrintFormat::Table is not implemented",
+            );
+            return external_err!(err);
         };
 
         let stdout = std::io::stdout();

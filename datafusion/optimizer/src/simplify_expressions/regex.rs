@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{external_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{external_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{lit, BinaryExpr, Expr, Like, Operator};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 

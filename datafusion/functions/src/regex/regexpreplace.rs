@@ -30,9 +30,7 @@ use datafusion_common::external_datafusion_err;
 use datafusion_common::external_err;
 use datafusion_common::plan_err;
 use datafusion_common::ScalarValue;
-use datafusion_common::{
-    cast::as_generic_string_array, internal_err, DataFusionError, Result,
-};
+use datafusion_common::{cast::as_generic_string_array, internal_err, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;

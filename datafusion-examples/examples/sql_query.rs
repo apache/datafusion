@@ -24,7 +24,7 @@ use datafusion::common::{
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::MemTable;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::prelude::*;
 use object_store::local::LocalFileSystem;
 use std::path::Path;

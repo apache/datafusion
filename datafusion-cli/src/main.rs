@@ -21,7 +21,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -381,6 +381,7 @@ pub fn extract_disk_limit(size: &str) -> Result<usize, String> {
 mod tests {
     use super::*;
     use datafusion::common::test_util::batches_to_string;
+    use datafusion::common::DataFusionError;
     use insta::assert_snapshot;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
