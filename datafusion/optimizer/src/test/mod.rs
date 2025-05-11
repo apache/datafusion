@@ -99,29 +99,20 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
     }
 }
 
-pub fn assert_analyzed_plan_eq(
-    rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    plan: LogicalPlan,
-    expected: &str,
-) -> Result<()> {
-    let options = ConfigOptions::default();
-    assert_analyzed_plan_with_config_eq(options, rule, plan, expected)?;
+#[macro_export]
+macro_rules! assert_analyzed_plan_with_config_eq_snapshot {
+    (
+        $options:expr,
+        $rule:expr,
+        $plan:expr,
+        @ $expected:literal $(,)?
+    ) => {{
+    let analyzed_plan = $crate::Analyzer::with_rules(vec![$rule]).execute_and_check($plan, &$options, |_, _| {})?;
 
-    Ok(())
-}
+    insta::assert_snapshot!(analyzed_plan, @ $expected);
 
-pub fn assert_analyzed_plan_with_config_eq(
-    options: ConfigOptions,
-    rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    plan: LogicalPlan,
-    expected: &str,
-) -> Result<()> {
-    let analyzed_plan =
-        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
-    let formatted_plan = format!("{analyzed_plan}");
-    assert_eq!(formatted_plan, expected);
-
-    Ok(())
+    Ok::<(), datafusion_common::DataFusionError>(())
+    }};
 }
 
 pub fn assert_analyzer_check_err(
@@ -145,15 +136,13 @@ fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 #[macro_export]
 macro_rules! assert_optimized_plan_eq_snapshot {
     (
-        $rule:expr,
+        $optimizer_context:expr,
+        $rules:expr,
         $plan:expr,
         @ $expected:literal $(,)?
     ) => {{
-    // Apply the rule once
-    let opt_context = $crate::OptimizerContext::new().with_max_passes(1);
-
-    let optimizer = $crate::Optimizer::with_rules(vec![Arc::clone(&$rule)]);
-    let optimized_plan = optimizer.optimize($plan, &opt_context, |_, _| {})?;
+    let optimizer = $crate::Optimizer::with_rules($rules);
+    let optimized_plan = optimizer.optimize($plan, &$optimizer_context, |_, _| {})?;
     insta::assert_snapshot!(optimized_plan, @ $expected);
 
     Ok::<(), datafusion_common::DataFusionError>(())
