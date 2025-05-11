@@ -444,7 +444,6 @@ fn try_pushdown_requirements_to_join(
         new_left_ordering,
         new_right_ordering,
         join_type,
-        smj.on(),
         smj.left().schema().fields.len(),
         &smj.maintains_input_order(),
         Some(probe_side),

@@ -45,7 +45,6 @@ use arrow::datatypes::{
 };
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
@@ -125,28 +124,6 @@ pub fn adjust_right_output_partitioning(
     }
 }
 
-/// Replaces the right column (first index in the `on_column` tuple) with
-/// the left column (zeroth index in the tuple) inside `right_ordering`.
-fn replace_on_columns_of_right_ordering(
-    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
-    right_ordering: &mut LexOrdering,
-) {
-    for (left_col, right_col) in on_columns {
-        for item in right_ordering.iter_mut() {
-            item.expr = Arc::clone(&item.expr)
-                .transform(|e| {
-                    if e.eq(right_col) {
-                        Ok(Transformed::yes(Arc::clone(left_col)))
-                    } else {
-                        Ok(Transformed::no(e))
-                    }
-                })
-                .data()
-                .expect("closure is infallible");
-        }
-    }
-}
-
 fn offset_ordering(
     ordering: &LexOrdering,
     join_type: &JoinType,
@@ -171,7 +148,6 @@ pub fn calculate_join_output_ordering(
     left_ordering: Option<&LexOrdering>,
     right_ordering: Option<&LexOrdering>,
     join_type: JoinType,
-    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     left_columns_len: usize,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
@@ -181,10 +157,6 @@ pub fn calculate_join_output_ordering(
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 if let Some(right_ordering) = right_ordering {
-                    replace_on_columns_of_right_ordering(
-                        on_columns,
-                        &mut right_ordering.clone(),
-                    );
                     let right_offset =
                         offset_ordering(right_ordering, &join_type, left_columns_len);
                     return if let Some(left_ordering) = left_ordering {
@@ -202,10 +174,6 @@ pub fn calculate_join_output_ordering(
             // Special case, we can prefix ordering of left side with the ordering of right side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 return if let Some(right_ordering) = right_ordering {
-                    replace_on_columns_of_right_ordering(
-                        on_columns,
-                        &mut right_ordering.clone(),
-                    );
                     let mut right_offset =
                         offset_ordering(right_ordering, &join_type, left_columns_len);
                     if let Some(left_ordering) = left_ordering {
@@ -2329,10 +2297,6 @@ mod tests {
             PhysicalSortExpr::new_default(Arc::new(Column::new("y", 1))),
         ]);
         let join_type = JoinType::Inner;
-        let on_columns = [(
-            Arc::new(Column::new("b", 1)) as _,
-            Arc::new(Column::new("x", 0)) as _,
-        )];
         let left_columns_len = 5;
         let maintains_input_orders = [[true, false], [false, true]];
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];
@@ -2362,7 +2326,6 @@ mod tests {
                     left_ordering.as_ref(),
                     right_ordering.as_ref(),
                     join_type,
-                    &on_columns,
                     left_columns_len,
                     maintains_input_order,
                     probe_side,
