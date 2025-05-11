@@ -279,6 +279,7 @@ mod test {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
 
+    use crate::OptimizerContext;
     use datafusion_common::DFSchemaRef;
     use datafusion_expr::{
         col, exists, logical_plan::builder::LogicalPlanBuilder, Expr, Extension,
@@ -291,9 +292,11 @@ mod test {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(PushDownLimit::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PushDownLimit::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )

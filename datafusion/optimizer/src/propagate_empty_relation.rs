@@ -249,6 +249,7 @@ mod tests {
         assert_optimized_plan_with_rules, test_table_scan, test_table_scan_fields,
         test_table_scan_with_name,
     };
+    use crate::OptimizerContext;
 
     use super::*;
 
@@ -257,9 +258,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(PropagateEmptyRelation::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PropagateEmptyRelation::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
