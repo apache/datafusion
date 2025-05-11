@@ -17,9 +17,15 @@
 
 //! [`EliminateSelfJoin`] eliminates self joins on unique constraint columns
 
+use std::sync::Arc;
+
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use datafusion_common::{tree_node::Transformed, Result};
-use datafusion_expr::LogicalPlan;
+use arrow::datatypes::Field;
+use datafusion_common::{tree_node::Transformed, HashSet, Result};
+use datafusion_expr::{
+    builder::subquery_alias, Expr, Filter, Join, JoinConstraint, JoinType, LogicalPlan,
+    SubqueryAlias, TableScan,
+};
 
 #[derive(Default, Debug)]
 pub struct EliminateSelfJoin;
@@ -31,13 +37,79 @@ impl EliminateSelfJoin {
     }
 }
 
+fn is_unique_constraint(field: &Field) -> bool {
+    // FIXME: This is a placeholder. In a real implementation, this function should check
+    // if the field is part of a unique constraint in the schema.
+    // For now, we will just check if the field name is "id".
+    field.name() == "id"
+}
+
+fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<LogicalPlan> {
+    match (left, right) {
+        (LogicalPlan::TableScan(left_scan), LogicalPlan::TableScan(right_scan)) => {
+            let filters = left_scan
+                .filters
+                .iter()
+                .chain(right_scan.filters.iter())
+                .cloned()
+                .collect();
+            // FIXME: double iteration over the filters
+            let projection = match (&left_scan.projection, &right_scan.projection) {
+                (Some(left_projection), Some(right_projection)) => Some(
+                    left_projection
+                        .iter()
+                        .chain(right_projection.iter())
+                        .cloned()
+                        .collect::<HashSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                ),
+                (Some(left_projection), None) => Some(left_projection.clone()),
+                (None, Some(right_projection)) => Some(right_projection.clone()),
+                (None, None) => None,
+            };
+            let fetch = match (left_scan.fetch, right_scan.fetch) {
+                (Some(left_fetch), Some(right_fetch)) => {
+                    Some(left_fetch.max(right_fetch))
+                }
+                (Some(rows), None) | (None, Some(rows)) => Some(rows),
+                (None, None) => None,
+            };
+            let table_scan = TableScan::try_new(
+                left_scan.table_name.clone(),
+                Arc::clone(&left_scan.source),
+                projection,
+                filters,
+                fetch,
+            )
+            .unwrap();
+            Some(LogicalPlan::TableScan(table_scan))
+        }
+        (
+            LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input: left_input,
+                alias: left_alias,
+                ..
+            }),
+            LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input: right_input, ..
+            }),
+        ) => {
+            // TODO: rename aliases used in the join
+            let plan = optimize(left_input, right_input)?;
+            subquery_alias(plan, left_alias.clone()).ok()
+        }
+        _ => None,
+    }
+}
+
 impl OptimizerRule for EliminateSelfJoin {
     fn name(&self) -> &str {
         "self_join"
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
-        None
+        Some(ApplyOrder::TopDown)
     }
 
     fn supports_rewrite(&self) -> bool {
@@ -47,9 +119,72 @@ impl OptimizerRule for EliminateSelfJoin {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        _: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        Ok(Transformed::no(plan))
+        match plan {
+            LogicalPlan::Join(Join {
+                ref left,
+                ref right,
+                ref on,
+                join_type,
+                join_constraint,
+                ref filter,
+                ..
+            }) if join_type == JoinType::Inner
+                && join_constraint == JoinConstraint::Using
+                // TODO: equality of `inner` `apachearrow::datatypes::SchemaRef` doesn't
+                // mean equality of the tables
+                && left.schema().inner() == right.schema().inner() =>
+            {
+                // TODO: Check if left and right are the same table
+                // If `on` includes a column with a unique constraint, we can eliminate the self join
+                let mut unique_constraint = None;
+                for on_expr in on {
+                    match on_expr {
+                        (Expr::Column(left_col), Expr::Column(right_col)) => {
+                            let left_field = left.schema().field_with_name(
+                                left_col.relation.as_ref(),
+                                left_col.name(),
+                            )?;
+                            let right_field = right.schema().field_with_name(
+                                right_col.relation.as_ref(),
+                                right_col.name(),
+                            )?;
+                            if left_field == right_field
+                                && is_unique_constraint(left_field)
+                                && is_unique_constraint(right_field)
+                            {
+                                unique_constraint =
+                                    Some((left_col.clone(), right_col.clone()));
+                            }
+                        }
+                        _ => {
+                            unreachable!("Join condition is not a column equality");
+                        }
+                    }
+                }
+                if unique_constraint.is_none() {
+                    // If we don't have a unique constraint, we cannot eliminate the join
+                    return Ok(Transformed::no(plan));
+                }
+                // If we reach here, it means we can eliminate the self join
+                if let Some(plan) = optimize(left.as_ref(), right.as_ref()) {
+                    let plan = if let Some(filter) = filter {
+                        LogicalPlan::Filter(Filter::try_new(
+                            filter.clone(),
+                            Arc::new(plan),
+                        )?)
+                    } else {
+                        plan
+                    };
+                    Ok(Transformed::yes(plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
+            }
+            // This is called `EliminateSelfJoin` after all
+            _ => Ok(Transformed::no(plan)),
+        }
     }
 }
 
