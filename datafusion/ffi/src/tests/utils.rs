@@ -17,7 +17,7 @@
 
 use crate::tests::ForeignLibraryModuleRef;
 use abi_stable::library::RootModule;
-use datafusion::common::{external_datafusion_err, DataFusionError, Result};
+use datafusion::common::{external_datafusion_err, Result};
 use std::path::Path;
 
 /// Compute the path to the library. It would be preferable to simply use
