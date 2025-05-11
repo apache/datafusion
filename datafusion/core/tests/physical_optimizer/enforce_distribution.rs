@@ -20,12 +20,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    check_integrity, coalesce_partitions_exec, parquet_exec_with_sort, repartition_exec,
-    schema, sort_exec, sort_exec_with_preserve_partitioning, sort_merge_join_exec,
+    check_integrity, coalesce_partitions_exec, parquet_exec_with_sort,
+    parquet_exec_with_stats, repartition_exec, schema, sort_exec,
+    sort_exec_with_preserve_partitioning, sort_merge_join_exec,
     sort_preserving_merge_exec, union_exec,
-};
-use crate::physical_optimizer::test_utils::{
-    parquet_exec_with_sort, parquet_exec_with_stats,
 };
 
 use arrow::array::{RecordBatch, UInt64Array, UInt8Array};
@@ -3507,11 +3505,8 @@ async fn test_distribute_sort_parquet() -> Result<()> {
     );
 
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
-        options: SortOptions::default(),
-    }]);
-    let physical_plan = sort_exec(sort_key, parquet_exec_with_stats(10000 * 8192), false);
+    let sort_key = [PhysicalSortExpr::new_default(col("c", &schema)?)].into();
+    let physical_plan = sort_exec(sort_key, parquet_exec_with_stats(10000 * 8192));
 
     // prior to optimization, this is the starting plan
     let starting = &[

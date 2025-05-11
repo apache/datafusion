@@ -771,7 +771,7 @@ impl MemorySourceConfig {
         target_partitions: usize,
         output_ordering: LexOrdering,
     ) -> Result<Option<Vec<Vec<RecordBatch>>>> {
-        if !self.eq_properties().ordering_satisfy(&output_ordering) {
+        if !self.eq_properties().ordering_satisfy(output_ordering) {
             Ok(None)
         } else {
             let total_num_batches =
@@ -1126,19 +1126,17 @@ mod memory_source_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::test_util::col;
     use crate::tests::{aggr_test_schema, make_partition};
 
-    use super::*;
-
     use arrow::array::{ArrayRef, Int32Array, Int64Array, StringArray};
-    use arrow::compute::SortOptions;
-    use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_plan::expressions::lit;
-
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::{ColumnStatistics, Precision};
+    use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_plan::expressions::lit;
+
     use futures::StreamExt;
 
     #[tokio::test]
@@ -1624,10 +1622,8 @@ mod tests {
     #[test]
     fn test_repartition_with_sort_information() -> Result<()> {
         let schema = schema();
-        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
-            options: SortOptions::default(),
-        }]);
+        let sort_key: LexOrdering =
+            [PhysicalSortExpr::new_default(col("c", &schema)?)].into();
         let has_sort = vec![sort_key.clone()];
         let output_ordering = Some(sort_key);
 
@@ -1674,10 +1670,8 @@ mod tests {
     #[test]
     fn test_repartition_with_batch_ordering_not_matching_sizing() -> Result<()> {
         let schema = schema();
-        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
-            options: SortOptions::default(),
-        }]);
+        let sort_key: LexOrdering =
+            [PhysicalSortExpr::new_default(col("c", &schema)?)].into();
         let has_sort = vec![sort_key.clone()];
         let output_ordering = Some(sort_key);
 
