@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result, TableReference};
+use datafusion_common::{plan_err, Constraint, Constraints, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -480,6 +480,167 @@ fn select_correlated_predicate_subquery_with_uppercase_ident() {
     );
 }
 
+#[test]
+fn eliminate_unique_keyed_self_join_using_unique_index() {
+    let sql = r#"
+        SELECT
+            a.id
+        FROM
+            employees a
+            JOIN employees b USING (id)
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_unique_keyed_self_join_using_unique_index_with_right_alias() {
+    let sql = r#"
+        SELECT
+            b.id
+        FROM
+            employees a
+            JOIN employees b USING (id)
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_unique_keyed_self_join_on_unique_index() {
+    let sql = r#"
+        SELECT
+            a.id
+        FROM
+            employees a
+            JOIN employees b ON a.id = b.id
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_unique_keyed_self_join_using_unique_index_subquery() {
+    let sql = r#"
+        SELECT a.id
+        FROM employees a
+        JOIN (SELECT id FROM employees WHERE department = 'HR') b USING (id);
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_unique_keyed_self_join_on_unique_index_subquery() {
+    let sql = r#"
+        SELECT a.id
+        FROM employees a
+        JOIN (SELECT id FROM employees WHERE department = 'HR') b ON a.id = b.id;
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_unique_keyed_self_join_on_unique_index_subquery_with_column_alias() {
+    let sql = r#"
+        SELECT a.id
+        FROM employees a
+        JOIN (SELECT id as key FROM employees WHERE department = 'HR') b ON a.id = b.key;
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    Projection: a.id
+      SubqueryAlias: a
+        Projection: employees.id
+          Filter: employees.department = Utf8("HR")
+            TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_unique_keyed_self_join_on_non_unique_index() {
+    let sql = r#"
+        SELECT
+            a.id
+        FROM
+            employees a
+            JOIN employees b USING (name)
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    Projection: a.id
+      Inner Join: a.name = b.name
+        SubqueryAlias: a
+          TableScan: employees projection=[id, name]
+        SubqueryAlias: b
+          Projection: employees.name
+            Filter: employees.department = Utf8("HR")
+              TableScan: employees projection=[name, department]
+    "#
+    );
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -517,6 +678,20 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
                 ],
                 HashMap::new(),
             ),
+        )
+        .with_schema_constraints(
+            "employees",
+            Schema::new_with_metadata(
+                vec![
+                    Field::new("id", DataType::UInt32, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("department", DataType::Utf8, false),
+                    Field::new("salary", DataType::UInt32, false),
+                    Field::new("hire_date", DataType::Date64, false),
+                ],
+                HashMap::new(),
+            ),
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]),
         );
 
     let sql_to_rel = SqlToRel::new(&context_provider);
