@@ -21,8 +21,9 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::projection::ProjectionTargets;
-use super::{add_offset_to_expr, ProjectionMapping};
+use super::ProjectionMapping;
 use crate::expressions::{Column, Literal};
+use crate::physical_expr::add_offset_to_expr;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};

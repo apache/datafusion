@@ -18,11 +18,34 @@
 use std::sync::Arc;
 
 use crate::create_physical_expr;
+use crate::expressions::Column;
+
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{DFSchema, HashMap};
 use datafusion_expr::execution_props::ExecutionProps;
-pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-pub use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
+
 use itertools::izip;
+
+pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+
+/// Adds the `offset` value to `Column` indices inside `expr`. This function is
+/// generally used during the update of the right table schema in join operations.
+pub fn add_offset_to_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    offset: usize,
+) -> Arc<dyn PhysicalExpr> {
+    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+        Some(col) => Ok(Transformed::yes(Arc::new(Column::new(
+            col.name(),
+            offset + col.index(),
+        )))),
+        None => Ok(Transformed::no(e)),
+    })
+    .data()
+    .unwrap()
+    // Note that we can safely unwrap here since our transform always returns
+    // an `Ok` value.
+}
 
 /// This function is similar to the `contains` method of `Vec`. It finds
 /// whether `expr` is among `physical_exprs`.

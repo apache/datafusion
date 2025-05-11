@@ -128,9 +128,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::equivalence::convert_to_orderings;
     use crate::equivalence::tests::create_test_schema;
-    use crate::equivalence::{add_offset_to_expr, convert_to_orderings};
     use crate::expressions::col;
+    use crate::physical_expr::add_offset_to_expr;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Fields, Schema};

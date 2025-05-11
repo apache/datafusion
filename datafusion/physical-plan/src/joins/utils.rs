@@ -49,10 +49,11 @@ use datafusion_common::{
     plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::{
+    add_offset_to_expr, LexOrdering, PhysicalExpr, PhysicalExprRef,
+};
 
 use crate::joins::SharedBitmapBuilder;
 use crate::projection::ProjectionExec;

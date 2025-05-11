@@ -20,7 +20,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
-use crate::equivalence::add_offset_to_expr;
+use crate::physical_expr::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr};
 
 use arrow::compute::SortOptions;
