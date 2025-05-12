@@ -262,7 +262,7 @@ impl NestedLoopJoinExec {
         )?;
 
         let mut output_partitioning =
-            asymmetric_join_output_partitioning(left, right, &join_type);
+            asymmetric_join_output_partitioning(left, right, &join_type)?;
 
         let emission_type = if left.boundedness().is_unbounded() {
             EmissionType::Final

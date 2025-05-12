@@ -164,7 +164,8 @@ impl CrossJoinExec {
         let output_partitioning = adjust_right_output_partitioning(
             right.output_partitioning(),
             left.schema().fields.len(),
-        );
+        )
+        .unwrap();
 
         PlanProperties::new(
             eq_properties,

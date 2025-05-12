@@ -113,18 +113,18 @@ fn check_join_set_is_valid(
 pub fn adjust_right_output_partitioning(
     right_partitioning: &Partitioning,
     left_columns_len: usize,
-) -> Partitioning {
-    match right_partitioning {
+) -> Result<Partitioning> {
+    let result = match right_partitioning {
         Partitioning::Hash(exprs, size) => {
             let new_exprs = exprs
                 .iter()
                 .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len as _))
-                .collect::<Result<_>>()
-                .unwrap();
+                .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
         }
         result => result.clone(),
-    }
+    };
+    Ok(result)
 }
 
 /// Calculate the output ordering of a given join operation.
@@ -1257,35 +1257,36 @@ pub(crate) fn symmetric_join_output_partitioning(
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
     join_type: &JoinType,
-) -> Partitioning {
+) -> Result<Partitioning> {
     let left_columns_len = left.schema().fields.len();
     let left_partitioning = left.output_partitioning();
     let right_partitioning = right.output_partitioning();
-    match join_type {
+    let result = match join_type {
         JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
             left_partitioning.clone()
         }
         JoinType::RightSemi | JoinType::RightAnti => right_partitioning.clone(),
         JoinType::Inner | JoinType::Right => {
-            adjust_right_output_partitioning(right_partitioning, left_columns_len)
+            adjust_right_output_partitioning(right_partitioning, left_columns_len)?
         }
         JoinType::Full => {
             // We could also use left partition count as they are necessarily equal.
             Partitioning::UnknownPartitioning(right_partitioning.partition_count())
         }
-    }
+    };
+    Ok(result)
 }
 
 pub(crate) fn asymmetric_join_output_partitioning(
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
     join_type: &JoinType,
-) -> Partitioning {
-    match join_type {
+) -> Result<Partitioning> {
+    let result = match join_type {
         JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
             right.output_partitioning(),
             left.schema().fields().len(),
-        ),
+        )?,
         JoinType::RightSemi | JoinType::RightAnti => right.output_partitioning().clone(),
         JoinType::Left
         | JoinType::LeftSemi
@@ -1294,7 +1295,8 @@ pub(crate) fn asymmetric_join_output_partitioning(
         | JoinType::LeftMark => Partitioning::UnknownPartitioning(
             right.output_partitioning().partition_count(),
         ),
-    }
+    };
+    Ok(result)
 }
 
 /// Trait for incrementally generating Join output.

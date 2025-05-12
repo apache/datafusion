@@ -312,7 +312,7 @@ impl SortMergeJoinExec {
         )?;
 
         let output_partitioning =
-            symmetric_join_output_partitioning(left, right, &join_type);
+            symmetric_join_output_partitioning(left, right, &join_type)?;
 
         Ok(PlanProperties::new(
             eq_properties,
