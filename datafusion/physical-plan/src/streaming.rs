@@ -27,7 +27,7 @@ use crate::execution_plan::{Boundedness, EmissionType};
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    all_alias_free_columns, new_projections_for_columns, update_expr, ProjectionExec,
+    all_alias_free_columns, new_projections_for_columns, update_ordering, ProjectionExec,
 };
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
@@ -306,15 +306,10 @@ impl ExecutionPlan for StreamingTableExec {
         );
 
         let mut lex_orderings = vec![];
-        for mut ordering in self.projected_output_ordering().into_iter() {
-            for sort_expr in ordering.iter_mut() {
-                let Some(new_sort_expr) =
-                    update_expr(&sort_expr.expr, projection.expr(), false)?
-                else {
-                    return Ok(None);
-                };
-                sort_expr.expr = new_sort_expr;
-            }
+        for ordering in self.projected_output_ordering().into_iter() {
+            let Some(ordering) = update_ordering(ordering, projection.expr())? else {
+                return Ok(None);
+            };
             lex_orderings.push(ordering);
         }
 

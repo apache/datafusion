@@ -17,34 +17,38 @@
 
 use std::sync::Arc;
 
-use crate::create_physical_expr;
-use crate::expressions::Column;
+use crate::expressions::{self, Column};
+use crate::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 
+use arrow::compute::SortOptions;
+use arrow::datatypes::Schema;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{plan_err, Result};
 use datafusion_common::{DFSchema, HashMap};
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::{Expr, SortExpr};
 
 use itertools::izip;
 
+// Exports:
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
 /// generally used during the update of the right table schema in join operations.
 pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
-    offset: usize,
-) -> Arc<dyn PhysicalExpr> {
+    offset: isize,
+) -> Result<Arc<dyn PhysicalExpr>> {
     expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
-        Some(col) => Ok(Transformed::yes(Arc::new(Column::new(
-            col.name(),
-            offset + col.index(),
-        )))),
+        Some(col) => {
+            let Some(idx) = col.index().checked_add_signed(offset) else {
+                return plan_err!("Column index overflow");
+            };
+            Ok(Transformed::yes(Arc::new(Column::new(col.name(), idx))))
+        }
         None => Ok(Transformed::no(e)),
     })
     .data()
-    .unwrap()
-    // Note that we can safely unwrap here since our transform always returns
-    // an `Ok` value.
 }
 
 /// This function is similar to the `contains` method of `Vec`. It finds
@@ -83,26 +87,21 @@ pub fn physical_exprs_bag_equal(
     multi_set_lhs == multi_set_rhs
 }
 
-use crate::{expressions, LexOrdering, PhysicalSortExpr};
-use arrow::compute::SortOptions;
-use arrow::datatypes::Schema;
-use datafusion_common::plan_err;
-use datafusion_common::Result;
-use datafusion_expr::{Expr, SortExpr};
-
-/// Converts logical sort expressions to physical sort expressions
+/// Converts logical sort expressions to physical sort expressions.
 ///
-/// This function transforms a collection of logical sort expressions into their physical
-/// representation that can be used during query execution.
+/// This function transforms a collection of logical sort expressions into their
+/// physical representation that can be used during query execution.
 ///
 /// # Arguments
 ///
-/// * `schema` - The schema containing column definitions
-/// * `sort_order` - A collection of logical sort expressions grouped into lexicographic orderings
+/// * `schema` - The schema containing column definitions.
+/// * `sort_order` - A collection of logical sort expressions grouped into
+///   lexicographic orderings.
 ///
 /// # Returns
 ///
-/// A vector of lexicographic orderings for physical execution, or an error if the transformation fails
+/// A vector of lexicographic orderings for physical execution, or an error if
+/// the transformation fails.
 ///
 /// # Examples
 ///
@@ -142,13 +141,8 @@ pub fn create_ordering(
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {
                     Ok(expr) => {
-                        sort_exprs.push(PhysicalSortExpr {
-                            expr,
-                            options: SortOptions {
-                                descending: !sort.asc,
-                                nulls_first: sort.nulls_first,
-                            },
-                        });
+                        let opts = SortOptions::new(!sort.asc, sort.nulls_first);
+                        sort_exprs.push(PhysicalSortExpr::new(expr, opts));
                     }
                     // Cannot find expression in the projected_schema, stop iterating
                     // since rest of the orderings are violated
@@ -169,6 +163,21 @@ pub fn create_ordering(
     Ok(all_sort_orders)
 }
 
+pub fn add_offset_to_ordering(
+    ordering: LexOrdering,
+    offset: isize,
+) -> Result<LexOrdering> {
+    let updated_exprs = ordering
+        .into_iter()
+        .map(|mut sort_expr| {
+            sort_expr.expr = add_offset_to_expr(sort_expr.expr, offset)?;
+            Ok(sort_expr)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // Can safely unwrap since adding an offset is a one-to-one operation:
+    Ok(LexOrdering::new(updated_exprs).unwrap())
+}
+
 /// Create a physical sort expression from a logical expression
 pub fn create_physical_sort_expr(
     e: &SortExpr,
@@ -176,11 +185,8 @@ pub fn create_physical_sort_expr(
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
     create_physical_expr(&e.expr, input_dfschema, execution_props).map(|expr| {
-        let options = SortOptions {
-            descending: !e.asc,
-            nulls_first: e.nulls_first,
-        };
-        PhysicalSortExpr { expr, options }
+        let options = SortOptions::new(!e.asc, e.nulls_first);
+        PhysicalSortExpr::new(expr, options)
     })
 }
 

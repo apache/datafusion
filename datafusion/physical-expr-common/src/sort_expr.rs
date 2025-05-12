@@ -415,12 +415,6 @@ impl Deref for LexOrdering {
     }
 }
 
-impl DerefMut for LexOrdering {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.exprs.as_mut_slice()
-    }
-}
-
 impl Display for LexOrdering {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let mut first = true;

@@ -231,25 +231,10 @@ impl EquivalenceClass {
         }
     }
 
-    /// Returns true if this equivalence class contains the given expression.
-    pub fn contains(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        self.exprs.contains(expr)
-    }
-
-    /// Returns true if this equivalence class has any entries in common with
+    /// Returns whether this equivalence class has any entries in common with
     /// `other`.
     pub fn contains_any(&self, other: &Self) -> bool {
         self.exprs.intersection(&other.exprs).next().is_some()
-    }
-
-    /// Returns the number of items in this equivalence class.
-    pub fn len(&self) -> usize {
-        self.exprs.len()
-    }
-
-    /// Returns whether this equivalence class is empty.
-    pub fn is_empty(&self) -> bool {
-        self.exprs.is_empty()
     }
 
     /// Returns whether this equivalence class is trivial, meaning that it is
@@ -259,20 +244,23 @@ impl EquivalenceClass {
         self.exprs.is_empty() || (self.exprs.len() == 1 && self.constant.is_none())
     }
 
-    /// Iterate over all elements in this class (in some arbitrary order).
-    pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn PhysicalExpr>> {
-        self.exprs.iter()
-    }
-
     /// Return a new equivalence class that have the specified offset added to
     /// each expression (used when schemas are appended such as in joins)
-    pub fn with_offset(&self, offset: usize) -> Self {
+    pub fn with_offset(&self, offset: isize) -> Self {
         let new_exprs = self
             .exprs
             .iter()
             .cloned()
-            .map(|e| add_offset_to_expr(e, offset));
+            .map(|e| add_offset_to_expr(e, offset).unwrap());
         Self::new(new_exprs)
+    }
+}
+
+impl Deref for EquivalenceClass {
+    type Target = IndexSet<Arc<dyn PhysicalExpr>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.exprs
     }
 }
 
@@ -787,7 +775,7 @@ impl EquivalenceGroup {
                     self.iter().cloned().chain(
                         right_equivalences
                             .iter()
-                            .map(|cls| cls.with_offset(left_size)),
+                            .map(|cls| cls.with_offset(left_size as _)),
                     ),
                 );
                 // In we have an inner join, expressions in the "on" condition

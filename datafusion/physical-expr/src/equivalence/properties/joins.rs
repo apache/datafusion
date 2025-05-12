@@ -119,7 +119,7 @@ pub fn updated_right_ordering_equivalence_class(
         join_type,
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right
     ) {
-        right_oeq_class.add_offset(left_size);
+        right_oeq_class.add_offset(left_size as _);
     }
 }
 
@@ -143,9 +143,9 @@ mod tests {
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
-        let offset = schema.fields.len();
-        let col_a2 = &add_offset_to_expr(Arc::clone(col_a), offset);
-        let col_b2 = &add_offset_to_expr(Arc::clone(col_b), offset);
+        let offset = schema.fields.len() as _;
+        let col_a2 = &add_offset_to_expr(Arc::clone(col_a), offset)?;
+        let col_b2 = &add_offset_to_expr(Arc::clone(col_b), offset)?;
         let option_asc = SortOptions {
             descending: false,
             nulls_first: false,

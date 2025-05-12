@@ -24,13 +24,14 @@ use crate::utils::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, Result};
+use datafusion_common::{internal_err, HashSet, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{add_offset_to_ordering, EquivalenceProperties};
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
+    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
@@ -281,19 +282,27 @@ fn pushdown_requirement_to_children(
         Ok(Some(vec![Some(parent_required); plan.children().len()]))
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         let left_columns_len = smj.left().schema().fields().len();
-        let parent_ordering = LexOrdering::from(parent_required.first().clone());
+        let parent_ordering: Vec<PhysicalSortExpr> = parent_required
+            .first()
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect();
         let eqp = smj.properties().equivalence_properties();
         match expr_source_side(eqp, parent_ordering, smj.join_type(), left_columns_len) {
             Some((JoinSide::Left, ordering)) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required.into_single(),
-                ordering,
+                LexOrdering::new(ordering).unwrap(),
                 JoinSide::Left,
             ),
-            Some((JoinSide::Right, mut ordering)) => {
+            Some((JoinSide::Right, ordering)) => {
                 let right_offset =
                     smj.schema().fields.len() - smj.right().schema().fields.len();
-                ordering = shift_right_ordering(ordering, right_offset)?;
+                let ordering = add_offset_to_ordering(
+                    LexOrdering::new(ordering).unwrap(),
+                    -(right_offset as isize),
+                )?;
                 try_pushdown_requirements_to_join(
                     smj,
                     parent_required.into_single(),
@@ -447,7 +456,7 @@ fn try_pushdown_requirements_to_join(
         smj.left().schema().fields.len(),
         &smj.maintains_input_order(),
         Some(probe_side),
-    );
+    )?;
     let mut smj_eqs = smj.properties().equivalence_properties().clone();
     if let Some(new_output_ordering) = new_output_ordering {
         // smj will have this ordering when its input changes.
@@ -472,10 +481,10 @@ fn try_pushdown_requirements_to_join(
 
 fn expr_source_side(
     eqp: &EquivalenceProperties,
-    mut ordering: LexOrdering,
+    mut ordering: Vec<PhysicalSortExpr>,
     join_type: JoinType,
     left_columns_len: usize,
-) -> Option<(JoinSide, LexOrdering)> {
+) -> Option<(JoinSide, Vec<PhysicalSortExpr>)> {
     // TODO: Handle the case where a prefix of the ordering comes from the left
     //       and a suffix from the right.
     match join_type {
@@ -543,22 +552,6 @@ fn expr_source_side(
             .all(|e| e.expr.as_any().is::<Column>())
             .then_some((JoinSide::Right, ordering)),
     }
-}
-
-fn shift_right_ordering(
-    mut parent_ordering: LexOrdering,
-    left_columns_len: usize,
-) -> Result<LexOrdering> {
-    for req in parent_ordering.iter_mut() {
-        let Some(col) = req.expr.as_any().downcast_ref::<Column>() else {
-            return plan_err!(
-                "Expect to shift all the parent required column indexes for SortMergeJoin"
-            );
-        };
-        let offset = col.index() - left_columns_len;
-        req.expr = Arc::new(Column::new(col.name(), offset));
-    }
-    Ok(parent_ordering)
 }
 
 /// Handles the custom pushdown of parent-required sorting requirements down to

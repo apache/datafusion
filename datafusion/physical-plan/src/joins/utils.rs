@@ -25,7 +25,9 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::projection::ProjectionExec;
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
 };
@@ -52,11 +54,10 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    add_offset_to_expr, LexOrdering, PhysicalExpr, PhysicalExprRef,
+    add_offset_to_expr, add_offset_to_ordering, LexOrdering, PhysicalExpr,
+    PhysicalExprRef,
 };
 
-use crate::joins::SharedBitmapBuilder;
-use crate::projection::ProjectionExec;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -117,30 +118,12 @@ pub fn adjust_right_output_partitioning(
         Partitioning::Hash(exprs, size) => {
             let new_exprs = exprs
                 .iter()
-                .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len))
-                .collect();
+                .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len as _))
+                .collect::<Result<_>>()
+                .unwrap();
             Partitioning::Hash(new_exprs, *size)
         }
         result => result.clone(),
-    }
-}
-
-fn offset_ordering(
-    ordering: &LexOrdering,
-    join_type: &JoinType,
-    offset: usize,
-) -> LexOrdering {
-    match join_type {
-        // In the case below, right ordering should be offsetted with the left
-        // side length, since we append the right table to the left table.
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let mut ordering = ordering.clone();
-            for sort_expr in ordering.iter_mut() {
-                sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
-            }
-            ordering
-        }
-        _ => ordering.clone(),
     }
 }
 
@@ -152,43 +135,53 @@ pub fn calculate_join_output_ordering(
     left_columns_len: usize,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
-) -> Option<LexOrdering> {
+) -> Result<Option<LexOrdering>> {
     match maintains_input_order {
         [true, false] => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
-                if let Some(right_ordering) = right_ordering {
+                if let Some(right_ordering) = right_ordering.cloned() {
                     let right_offset =
-                        offset_ordering(right_ordering, &join_type, left_columns_len);
+                        add_offset_to_ordering(right_ordering, left_columns_len as _)?;
                     return if let Some(left_ordering) = left_ordering {
                         let mut result = left_ordering.clone();
                         result.extend(right_offset);
-                        Some(result)
+                        Ok(Some(result))
                     } else {
-                        Some(right_offset)
+                        Ok(Some(right_offset))
                     };
                 }
             }
-            left_ordering.cloned()
+            Ok(left_ordering.cloned())
         }
         [false, true] => {
             // Special case, we can prefix ordering of left side with the ordering of right side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
-                return if let Some(right_ordering) = right_ordering {
+                return if let Some(right_ordering) = right_ordering.cloned() {
                     let mut right_offset =
-                        offset_ordering(right_ordering, &join_type, left_columns_len);
+                        add_offset_to_ordering(right_ordering, left_columns_len as _)?;
                     if let Some(left_ordering) = left_ordering {
                         right_offset.extend(left_ordering.clone());
                     }
-                    Some(right_offset)
+                    Ok(Some(right_offset))
                 } else {
-                    left_ordering.cloned()
+                    Ok(left_ordering.cloned())
                 };
             }
-            right_ordering.map(|o| offset_ordering(o, &join_type, left_columns_len))
+            right_ordering
+                .map(|o| match join_type {
+                    JoinType::Inner
+                    | JoinType::Left
+                    | JoinType::Full
+                    | JoinType::Right => {
+                        add_offset_to_ordering(o.clone(), left_columns_len as _)
+                    }
+                    _ => Ok(o.clone()),
+                })
+                .transpose()
         }
         // Doesn't maintain ordering, output ordering is None.
-        [false, false] => None,
+        [false, false] => Ok(None),
         [true, true] => unreachable!("Cannot maintain ordering of both sides"),
         _ => unreachable!("Join operators can not have more than two children"),
     }
@@ -2330,7 +2323,7 @@ mod tests {
                     left_columns_len,
                     maintains_input_order,
                     probe_side,
-                ),
+                )?,
                 expected[i]
             );
         }

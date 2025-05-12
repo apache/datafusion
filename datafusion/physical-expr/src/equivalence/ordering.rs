@@ -20,11 +20,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
-use crate::physical_expr::add_offset_to_expr;
-use crate::{LexOrdering, PhysicalExpr};
+use crate::{add_offset_to_ordering, LexOrdering, PhysicalExpr};
 
 use arrow::compute::SortOptions;
-use datafusion_common::HashSet;
+use datafusion_common::{HashSet, Result};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 /// An `OrderingEquivalenceClass` keeps track of distinct alternative orderings
@@ -169,12 +168,13 @@ impl OrderingEquivalenceClass {
 
     /// Adds `offset` value to the index of each expression inside this
     /// ordering equivalence class.
-    pub fn add_offset(&mut self, offset: usize) {
-        for ordering in self.orderings.iter_mut() {
-            for sort_expr in ordering.iter_mut() {
-                sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
-            }
-        }
+    pub fn add_offset(&mut self, offset: isize) {
+        let orderings = std::mem::take(&mut self.orderings);
+        self.orderings = orderings
+            .into_iter()
+            .map(|ordering| add_offset_to_ordering(ordering, offset))
+            .collect::<Result<_>>()
+            .unwrap();
     }
 
     /// Gets sort options associated with this expression if it is a leading
