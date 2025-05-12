@@ -51,25 +51,9 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
         batch1.num_rows()
     );
 
-    println!("==> Creating schema adapter");
-    let adapter = NestedStructSchemaAdapterFactory::create_adapter(
-        schema4.clone(),
-        schema4.clone(),
-    );
-    println!("==> Schema adapter created");
-
-    println!("==> Mapping schema");
-    let (mapping, _) = adapter
-        .map_schema(&schema1.clone())
-        .expect("map schema failed");
-    println!("==> Schema mapped successfully");
-
-    println!("==> Mapping batch");
-    let mapped_batch = mapping.map_batch(batch1)?;
-    println!(
-        "==> Batch mapped successfully with {} rows",
-        mapped_batch.num_rows()
-    );
+    println!("==> Creating schema adapter factory");
+    let adapter_factory = NestedStructSchemaAdapterFactory::from_schema(schema4.clone());
+    println!("==> Schema adapter factory created");
 
     let path1 = "test_data1.parquet";
     println!("==> Removing existing file if present: {}", path1);
@@ -77,7 +61,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     println!("==> File removal attempted");
 
     println!("==> Creating DataFrame from batch");
-    let df1 = ctx.read_batch(mapped_batch)?;
+    let df1 = ctx.read_batch(batch1)?;
     println!("==> DataFrame created successfully");
 
     println!("==> Writing first parquet file to {}", path1);
@@ -122,7 +106,8 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
     )
-    .with_schema(schema4.as_ref().clone().into());
+    .with_schema(schema4.as_ref().clone().into())
+    .with_schema_adapter(adapter_factory);
 
     println!("==> About to infer config");
     println!(
