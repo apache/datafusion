@@ -712,10 +712,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?;
 
                 if data_types.is_empty() {
-                    for dt in plan.get_parameter_types()?.into_values().into_iter() {
-                        if let Some(dt) = dt {
-                            data_types.push(dt);
-                        }
+                    for dt in plan.get_parameter_types()?.into_values().flatten() {
+                        data_types.push(dt);
                     }
                     data_types.sort();
                     planner_context.with_prepare_param_data_types(data_types.clone());
