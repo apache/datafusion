@@ -38,10 +38,10 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
 
     println!("==> Creating schema1 (simple additionalInfo structure)");
     let schema1 = create_schema1();
-    let schema2 = create_schema2();
+    let schema2 = create_schema4();
 
     let batch1 = create_batch1(&schema1)?;
-    let adapter = NestedStructSchemaAdapterFactory::create_appropriate_adapter(
+    let adapter = NestedStructSchemaAdapterFactory::create_adapter(
         schema2.clone(),
         schema2.clone(),
     );
@@ -176,7 +176,7 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     Ok(())
 }
 
-fn create_schema2() -> Arc<Schema> {
+fn create_schema4() -> Arc<Schema> {
     let schema2 = Arc::new(Schema::new(vec![
         Field::new("component", DataType::Utf8, true),
         Field::new("message", DataType::Utf8, true),
@@ -258,28 +258,17 @@ fn create_batch1(schema1: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
 
 fn create_schema1() -> Arc<Schema> {
     let schema1 = Arc::new(Schema::new(vec![
-        Field::new("component", DataType::Utf8, true),
-        Field::new("message", DataType::Utf8, true),
-        Field::new("stack", DataType::Utf8, true),
+        Field::new("body", DataType::Utf8, true),
+        Field::new("method", DataType::Utf8, true),
+        Field::new("status", DataType::Utf8, true),
+        Field::new("status_code", DataType::Float64, true),
+        Field::new("time_taken", DataType::Float64, true),
         Field::new("timestamp", DataType::Utf8, true),
+        Field::new("uid", DataType::Utf8, true),
+        Field::new("url", DataType::Utf8, true),
         Field::new(
             "timestamp_utc",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            true,
-        ),
-        Field::new(
-            "additionalInfo",
-            DataType::Struct(
-                vec![
-                    Field::new("location", DataType::Utf8, true),
-                    Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    ),
-                ]
-                .into(),
-            ),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             true,
         ),
     ]));
