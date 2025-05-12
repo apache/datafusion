@@ -138,14 +138,10 @@ impl OrderingEquivalenceClass {
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        self.orderings
-            .iter()
-            .cloned()
-            .reduce(|mut cat, o| {
-                cat.extend(o);
-                cat
-            })
-            .map(|o| o.collapse())
+        self.orderings.iter().cloned().reduce(|mut cat, o| {
+            cat.extend(o);
+            cat
+        })
     }
 
     // Append orderings in `other` to all existing orderings in this ordering

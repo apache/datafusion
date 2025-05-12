@@ -995,10 +995,7 @@ impl EquivalenceProperties {
         });
 
         // Simplify each ordering by removing redundant sections:
-        orderings
-            .chain(projected_orderings)
-            .map(|lex_ordering| lex_ordering.collapse())
-            .collect()
+        orderings.chain(projected_orderings).collect()
     }
 
     /// Projects constraints according to the given projection mapping.

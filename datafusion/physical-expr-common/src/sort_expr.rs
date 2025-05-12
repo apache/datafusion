@@ -328,7 +328,9 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 ///
 /// For example, a `vec![a ASC, b DESC]` represents a lexicographical ordering
 /// that first sorts by column `a` in ascending order, then by column `b` in
-/// descending order.
+/// descending order. The ordering is non-degenerate, meaning it contains at
+/// least one element, and it is duplicate-free, meaning it does not contain
+/// multiple entries for the same column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexOrdering {
     exprs: Vec<PhysicalSortExpr>,
@@ -338,7 +340,10 @@ impl LexOrdering {
     /// Creates a new [`LexOrdering`] from the given vector of sort expressions.
     /// If the vector is empty, returns `None`.
     pub fn new(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
-        let exprs = exprs.into_iter().collect::<Vec<_>>();
+        let exprs = exprs
+            .into_iter()
+            .unique_by(|s| Arc::clone(&s.expr))
+            .collect::<Vec<_>>();
         (!exprs.is_empty()).then(|| Self { exprs })
     }
 
@@ -356,18 +361,6 @@ impl LexOrdering {
     /// without reallocating.
     pub fn capacity(&self) -> usize {
         self.exprs.capacity()
-    }
-
-    /// Constructs a duplicate-free `LexOrdering` by filtering out entries with
-    /// the same physical expression inside. For example, `[a ASC, a DESC]`
-    /// collapses to `[a ASC]`.
-    pub fn collapse(mut self) -> Self {
-        self.exprs = self
-            .exprs
-            .into_iter()
-            .unique_by(|s| Arc::clone(&s.expr))
-            .collect();
-        self
     }
 
     /// Truncates the `LexOrdering`, keeping only the first `len` elements.
