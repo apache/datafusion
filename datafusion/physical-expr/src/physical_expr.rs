@@ -163,21 +163,6 @@ pub fn create_ordering(
     Ok(all_sort_orders)
 }
 
-pub fn add_offset_to_ordering(
-    ordering: LexOrdering,
-    offset: isize,
-) -> Result<LexOrdering> {
-    let updated_exprs = ordering
-        .into_iter()
-        .map(|mut sort_expr| {
-            sort_expr.expr = add_offset_to_expr(sort_expr.expr, offset)?;
-            Ok(sort_expr)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    // Can safely unwrap since adding an offset is a one-to-one operation:
-    Ok(LexOrdering::new(updated_exprs).unwrap())
-}
-
 /// Create a physical sort expression from a logical expression
 pub fn create_physical_sort_expr(
     e: &SortExpr,
@@ -199,6 +184,19 @@ pub fn create_physical_sort_exprs(
     exprs
         .iter()
         .map(|e| create_physical_sort_expr(e, input_dfschema, execution_props))
+        .collect()
+}
+
+pub fn add_offset_to_physical_sort_exprs(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    offset: isize,
+) -> Result<Vec<PhysicalSortExpr>> {
+    sort_exprs
+        .into_iter()
+        .map(|mut sort_expr| {
+            sort_expr.expr = add_offset_to_expr(sort_expr.expr, offset)?;
+            Ok(sort_expr)
+        })
         .collect()
 }
 

@@ -54,7 +54,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    add_offset_to_expr, add_offset_to_ordering, LexOrdering, PhysicalExpr,
+    add_offset_to_expr, add_offset_to_physical_sort_exprs, LexOrdering, PhysicalExpr,
     PhysicalExprRef,
 };
 
@@ -141,14 +141,16 @@ pub fn calculate_join_output_ordering(
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 if let Some(right_ordering) = right_ordering.cloned() {
-                    let right_offset =
-                        add_offset_to_ordering(right_ordering, left_columns_len as _)?;
+                    let right_offset = add_offset_to_physical_sort_exprs(
+                        right_ordering,
+                        left_columns_len as _,
+                    )?;
                     return if let Some(left_ordering) = left_ordering {
                         let mut result = left_ordering.clone();
                         result.extend(right_offset);
                         Ok(Some(result))
                     } else {
-                        Ok(Some(right_offset))
+                        Ok(LexOrdering::new(right_offset))
                     };
                 }
             }
@@ -158,27 +160,31 @@ pub fn calculate_join_output_ordering(
             // Special case, we can prefix ordering of left side with the ordering of right side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 return if let Some(right_ordering) = right_ordering.cloned() {
-                    let mut right_offset =
-                        add_offset_to_ordering(right_ordering, left_columns_len as _)?;
+                    let mut right_offset = add_offset_to_physical_sort_exprs(
+                        right_ordering,
+                        left_columns_len as _,
+                    )?;
                     if let Some(left_ordering) = left_ordering {
                         right_offset.extend(left_ordering.clone());
                     }
-                    Ok(Some(right_offset))
+                    Ok(LexOrdering::new(right_offset))
                 } else {
                     Ok(left_ordering.cloned())
                 };
             }
-            right_ordering
-                .map(|o| match join_type {
-                    JoinType::Inner
-                    | JoinType::Left
-                    | JoinType::Full
-                    | JoinType::Right => {
-                        add_offset_to_ordering(o.clone(), left_columns_len as _)
-                    }
-                    _ => Ok(o.clone()),
-                })
-                .transpose()
+            let Some(right_ordering) = right_ordering else {
+                return Ok(None);
+            };
+            match join_type {
+                JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+                    add_offset_to_physical_sort_exprs(
+                        right_ordering.clone(),
+                        left_columns_len as _,
+                    )
+                    .map(LexOrdering::new)
+                }
+                _ => Ok(Some(right_ordering.clone())),
+            }
         }
         // Doesn't maintain ordering, output ordering is None.
         [false, false] => Ok(None),

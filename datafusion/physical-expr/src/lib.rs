@@ -54,7 +54,7 @@ pub use equivalence::{
 };
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
-    add_offset_to_expr, add_offset_to_ordering, create_ordering,
+    add_offset_to_expr, add_offset_to_physical_sort_exprs, create_ordering,
     create_physical_sort_expr, create_physical_sort_exprs, physical_exprs_bag_equal,
     physical_exprs_contains, physical_exprs_equal,
 };

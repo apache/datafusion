@@ -20,7 +20,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
-use crate::{add_offset_to_ordering, LexOrdering, PhysicalExpr};
+use crate::{add_offset_to_physical_sort_exprs, LexOrdering, PhysicalExpr};
 
 use arrow::compute::SortOptions;
 use datafusion_common::{HashSet, Result};
@@ -170,10 +170,12 @@ impl OrderingEquivalenceClass {
     /// ordering equivalence class.
     pub fn add_offset(&mut self, offset: isize) -> Result<()> {
         let orderings = std::mem::take(&mut self.orderings);
-        self.orderings = orderings
+        for ordering_result in orderings
             .into_iter()
-            .map(|ordering| add_offset_to_ordering(ordering, offset))
-            .collect::<Result<_>>()?;
+            .map(|o| add_offset_to_physical_sort_exprs(o, offset))
+        {
+            self.orderings.extend(LexOrdering::new(ordering_result?));
+        }
         Ok(())
     }
 
