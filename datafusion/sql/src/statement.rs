@@ -710,7 +710,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     *statement,
                     &mut planner_context,
                 )?;
-
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
                     data_types,
