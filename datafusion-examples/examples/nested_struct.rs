@@ -31,19 +31,18 @@ use std::error::Error;
 use std::fs;
 use std::sync::Arc;
 // Remove the tokio::test attribute to make this a regular async function
-async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dyn Error>>
-{
+async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     println!("==> Starting test function");
     let ctx = SessionContext::new();
     println!("==> Session context created");
 
     println!("==> Creating schema1 (simple additionalInfo structure)");
     let schema1 = create_schema1();
-    println!("==> Schema1 created: {:?}", schema1);
+    println!("==> Schema1 created");
 
     println!("==> Creating schema4");
     let schema4 = create_schema4();
-    println!("==> Schema4 created: {:?}", schema4);
+    println!("==> Schema4 created");
 
     println!("==> Creating batch from schema1");
     let batch1 = create_batch(&schema1)?;
@@ -257,58 +256,6 @@ fn create_array_for_field(
     }
 }
 
-fn create_schema4_old() -> Arc<Schema> {
-    let schema2 = Arc::new(Schema::new(vec![
-        Field::new("component", DataType::Utf8, true),
-        Field::new("message", DataType::Utf8, true),
-        Field::new("stack", DataType::Utf8, true),
-        Field::new("timestamp", DataType::Utf8, true),
-        Field::new(
-            "timestamp_utc",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            true,
-        ),
-        Field::new(
-            "additionalInfo",
-            DataType::Struct(
-                vec![
-                    Field::new("location", DataType::Utf8, true),
-                    Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    ),
-                    Field::new(
-                        "reason",
-                        DataType::Struct(
-                            vec![
-                                Field::new("_level", DataType::Float64, true),
-                                Field::new(
-                                    "details",
-                                    DataType::Struct(
-                                        vec![
-                                            Field::new("rurl", DataType::Utf8, true),
-                                            Field::new("s", DataType::Float64, true),
-                                            Field::new("t", DataType::Utf8, true),
-                                        ]
-                                        .into(),
-                                    ),
-                                    true,
-                                ),
-                            ]
-                            .into(),
-                        ),
-                        true,
-                    ),
-                ]
-                .into(),
-            ),
-            true,
-        ),
-    ]));
-    schema2
-}
-
 fn create_schema1() -> Arc<Schema> {
     let schema1 = Arc::new(Schema::new(vec![
         Field::new("body", DataType::Utf8, true),
@@ -503,7 +450,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rt = tokio::runtime::Runtime::new()?;
 
     // Run the function in the runtime
-    rt.block_on(async { test_datafusion_schema_evolution_with_compaction().await })?;
+    rt.block_on(async { test_datafusion_schema_evolution().await })?;
 
     println!("Example completed successfully!");
     Ok(())
