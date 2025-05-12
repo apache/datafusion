@@ -270,7 +270,7 @@ impl Stream for AsyncTestRecordBatchStream {
                 None => std::task::Poll::Ready(None),
             },
             Err(e) => std::task::Poll::Ready(Some(Err(DataFusionError::Execution(
-                format!("Unable receive record batch: {e}"),
+                format!("Unable to receive record batch: {e}"),
             )))),
         }
     }
