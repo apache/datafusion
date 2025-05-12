@@ -57,7 +57,7 @@ pub fn join_equivalence_properties(
                     &mut right_oeq_class,
                     join_type,
                     left_size,
-                );
+                )?;
 
                 // Right side ordering equivalence properties should be prepended
                 // with those of the left side while constructing output ordering
@@ -78,7 +78,7 @@ pub fn join_equivalence_properties(
                 &mut right_oeq_class,
                 join_type,
                 left_size,
-            );
+            )?;
             // In this special case, left side ordering can be prefixed with
             // the right side ordering.
             if let (Some(JoinSide::Right), JoinType::Inner) = (probe_side, join_type) {
@@ -114,13 +114,14 @@ pub fn updated_right_ordering_equivalence_class(
     right_oeq_class: &mut OrderingEquivalenceClass,
     join_type: &JoinType,
     left_size: usize,
-) {
+) -> Result<()> {
     if matches!(
         join_type,
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right
     ) {
-        right_oeq_class.add_offset(left_size as _);
+        right_oeq_class.add_offset(left_size as _)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -271,7 +272,7 @@ mod tests {
             &mut right_oeq_class,
             &join_type,
             left_columns_len,
-        );
+        )?;
         join_eq_properties.add_orderings(right_oeq_class);
         let result = join_eq_properties.oeq_class().clone();
 

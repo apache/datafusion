@@ -168,13 +168,13 @@ impl OrderingEquivalenceClass {
 
     /// Adds `offset` value to the index of each expression inside this
     /// ordering equivalence class.
-    pub fn add_offset(&mut self, offset: isize) {
+    pub fn add_offset(&mut self, offset: isize) -> Result<()> {
         let orderings = std::mem::take(&mut self.orderings);
         self.orderings = orderings
             .into_iter()
             .map(|ordering| add_offset_to_ordering(ordering, offset))
-            .collect::<Result<_>>()
-            .unwrap();
+            .collect::<Result<_>>()?;
+        Ok(())
     }
 
     /// Gets sort options associated with this expression if it is a leading
