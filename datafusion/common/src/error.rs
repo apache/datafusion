@@ -671,6 +671,20 @@ impl DataFusionError {
         queue.push_back(self);
         ErrorIterator { queue }
     }
+
+    /// Converts input to a [`GenericError`],
+    /// handling both regular values and pre-boxed errors to avoid double-boxing.
+    ///
+    /// The input must implement [`Into<GenericError>`], which includes:
+    /// [`Error`] types (implementing `std::error::Error + Send + Sync + 'static`)
+    /// [`String`] and &str (automatically converted to errors)
+    /// [`Box<dyn Error + Send + Sync>`] (passed through without additional boxing)
+    pub fn box_error_if_needed<E>(err: E) -> GenericError
+    where
+        E: Into<GenericError>,
+    {
+        err.into()
+    }
 }
 
 /// A builder for [`DataFusionError`]
@@ -922,9 +936,10 @@ macro_rules! schema_err {
 // Exposes a macro to create `DataFusionError::External` with optional backtrace
 #[macro_export]
 macro_rules! external_datafusion_err {
-    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+    ($CONVERTIBLE_TO_ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let boxed_err = $crate::DataFusionError::box_error_if_needed($CONVERTIBLE_TO_ERR);
         let err = $crate::error::DataFusionError::External(
-            Box::new($ERR),
+            boxed_err,
             Some($crate::error::DataFusionError::get_back_trace())
         );
         $(

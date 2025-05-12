@@ -143,11 +143,7 @@ impl PrintOptions {
         format_options: &FormatOptions,
     ) -> Result<()> {
         if self.format == PrintFormat::Table {
-            let err = std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "PrintFormat::Table is not implemented",
-            );
-            return external_err!(err);
+            return external_err!("PrintFormat::Table is not implemented");
         };
 
         let stdout = std::io::stdout();
