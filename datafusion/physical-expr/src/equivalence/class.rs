@@ -22,12 +22,12 @@ use std::vec::IntoIter;
 
 use super::projection::ProjectionTargets;
 use super::ProjectionMapping;
-use crate::expressions::{Column, Literal};
+use crate::expressions::Literal;
 use crate::physical_expr::add_offset_to_expr;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{HashMap, JoinType, ScalarValue};
+use datafusion_common::{HashMap, JoinType, Result, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
@@ -244,15 +244,19 @@ impl EquivalenceClass {
         self.exprs.is_empty() || (self.exprs.len() == 1 && self.constant.is_none())
     }
 
-    /// Return a new equivalence class that have the specified offset added to
-    /// each expression (used when schemas are appended such as in joins)
-    pub fn with_offset(&self, offset: isize) -> Self {
-        let new_exprs = self
+    /// Adds the given offset to all columns in the expressions inside this
+    /// class. This is used when schemas are appended, e.g. in joins.
+    pub fn with_offset(&self, offset: isize) -> Result<Self> {
+        let mut cls = Self::default();
+        for expr_result in self
             .exprs
             .iter()
             .cloned()
-            .map(|e| add_offset_to_expr(e, offset).unwrap());
-        Self::new(new_exprs)
+            .map(|e| add_offset_to_expr(e, offset))
+        {
+            cls.push(expr_result?);
+        }
+        Ok(cls)
     }
 }
 
@@ -308,19 +312,7 @@ pub struct EquivalenceGroup {
 impl EquivalenceGroup {
     /// Creates an equivalence group from the given equivalence classes.
     pub fn new(classes: impl IntoIterator<Item = EquivalenceClass>) -> Self {
-        let classes = classes.into_iter().collect::<Vec<_>>();
-        let mut result = Self {
-            map: classes
-                .iter()
-                .enumerate()
-                .flat_map(|(idx, cls)| {
-                    cls.iter().map(move |expr| (Arc::clone(expr), idx))
-                })
-                .collect(),
-            classes,
-        };
-        result.remove_redundant_entries();
-        result
+        classes.into_iter().collect::<Vec<_>>().into()
     }
 
     /// Adds `expr` as a constant expression to this equivalence group.
@@ -768,14 +760,15 @@ impl EquivalenceGroup {
         join_type: &JoinType,
         left_size: usize,
         on: &[(PhysicalExprRef, PhysicalExprRef)],
-    ) -> Self {
-        match join_type {
+    ) -> Result<Self> {
+        let group = match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
                 let mut result = Self::new(
                     self.iter().cloned().chain(
                         right_equivalences
                             .iter()
-                            .map(|cls| cls.with_offset(left_size as _)),
+                            .map(|cls| cls.with_offset(left_size as _))
+                            .collect::<Result<Vec<_>>>()?,
                     ),
                 );
                 // In we have an inner join, expressions in the "on" condition
@@ -784,22 +777,8 @@ impl EquivalenceGroup {
                     for (lhs, rhs) in on.iter() {
                         let new_lhs = Arc::clone(lhs);
                         // Rewrite rhs to point to the right side of the join:
-                        let new_rhs = Arc::clone(rhs)
-                            .transform(|expr| {
-                                if let Some(column) =
-                                    expr.as_any().downcast_ref::<Column>()
-                                {
-                                    let new_column = Arc::new(Column::new(
-                                        column.name(),
-                                        column.index() + left_size,
-                                    ));
-                                    return Ok(Transformed::yes(new_column as _));
-                                }
-
-                                Ok(Transformed::no(expr))
-                            })
-                            .data()
-                            .unwrap();
+                        let new_rhs =
+                            add_offset_to_expr(Arc::clone(rhs), left_size as _)?;
                         result.add_equal_conditions(new_lhs, new_rhs);
                     }
                 }
@@ -807,7 +786,8 @@ impl EquivalenceGroup {
             }
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => self.clone(),
             JoinType::RightSemi | JoinType::RightAnti => right_equivalences.clone(),
-        }
+        };
+        Ok(group)
     }
 
     /// Checks if two expressions are equal directly or through equivalence
@@ -896,11 +876,28 @@ impl Display for EquivalenceGroup {
     }
 }
 
+impl From<Vec<EquivalenceClass>> for EquivalenceGroup {
+    fn from(classes: Vec<EquivalenceClass>) -> Self {
+        let mut result = Self {
+            map: classes
+                .iter()
+                .enumerate()
+                .flat_map(|(idx, cls)| {
+                    cls.iter().map(move |expr| (Arc::clone(expr), idx))
+                })
+                .collect(),
+            classes,
+        };
+        result.remove_redundant_entries();
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{binary, col, lit, BinaryExpr, Literal};
+    use crate::expressions::{binary, col, lit, BinaryExpr, Column, Literal};
     use arrow::datatypes::{DataType, Field, Schema};
 
     use datafusion_common::{Result, ScalarValue};
@@ -944,8 +941,7 @@ mod tests {
                 })
                 .map(EquivalenceClass::new)
                 .collect::<Vec<_>>();
-            let mut eq_groups = EquivalenceGroup::new(entries.clone());
-            eq_groups.bridge_classes();
+            let eq_groups: EquivalenceGroup = entries.clone().into();
             let eq_groups = eq_groups.classes;
             let err_msg = format!(
                 "error in test entries: {:?}, expected: {:?}, actual:{:?}",

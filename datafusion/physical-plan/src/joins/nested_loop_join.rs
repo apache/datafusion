@@ -259,7 +259,7 @@ impl NestedLoopJoinExec {
             None,
             // No on columns in nested loop join
             &[],
-        );
+        )?;
 
         let mut output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type);

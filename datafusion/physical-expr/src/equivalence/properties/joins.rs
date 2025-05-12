@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{equivalence::OrderingEquivalenceClass, PhysicalExprRef};
-use arrow::datatypes::SchemaRef;
-use datafusion_common::{JoinSide, JoinType};
-
 use super::EquivalenceProperties;
+use crate::{equivalence::OrderingEquivalenceClass, PhysicalExprRef};
+
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{JoinSide, JoinType, Result};
 
 /// Calculate ordering equivalence properties for the given join operation.
 pub fn join_equivalence_properties(
@@ -30,7 +30,7 @@ pub fn join_equivalence_properties(
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
-) -> EquivalenceProperties {
+) -> Result<EquivalenceProperties> {
     let left_size = left.schema.fields.len();
     let mut result = EquivalenceProperties::new(join_schema);
     result.add_equivalence_group(left.eq_group().join(
@@ -38,7 +38,7 @@ pub fn join_equivalence_properties(
         join_type,
         left_size,
         on,
-    ));
+    )?);
 
     let EquivalenceProperties {
         oeq_class: left_oeq_class,
@@ -100,7 +100,7 @@ pub fn join_equivalence_properties(
         [true, true] => unreachable!("Cannot maintain ordering of both sides"),
         _ => unreachable!("Join operators can not have more than two children"),
     }
-    result
+    Ok(result)
 }
 
 /// In the context of a join, update the right side `OrderingEquivalenceClass`
@@ -204,7 +204,7 @@ mod tests {
                 &[true, false],
                 Some(JoinSide::Left),
                 &[],
-            );
+            )?;
             let err_msg =
                 format!("expected: {:?}, actual:{:?}", expected, &join_eq.oeq_class);
             assert_eq!(join_eq.oeq_class.len(), expected.len(), "{}", err_msg);

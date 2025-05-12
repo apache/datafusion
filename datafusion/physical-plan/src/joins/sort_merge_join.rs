@@ -207,7 +207,7 @@ impl SortMergeJoinExec {
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
         let cache =
-            Self::compute_properties(&left, &right, Arc::clone(&schema), join_type, &on);
+            Self::compute_properties(&left, &right, Arc::clone(&schema), join_type, &on)?;
         Ok(Self {
             left,
             right,
@@ -299,7 +299,7 @@ impl SortMergeJoinExec {
         schema: SchemaRef,
         join_type: JoinType,
         join_on: JoinOnRef,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
@@ -309,17 +309,17 @@ impl SortMergeJoinExec {
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
             join_on,
-        );
+        )?;
 
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             EmissionType::Incremental,
             boundedness_from_children([left, right]),
-        )
+        ))
     }
 
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {

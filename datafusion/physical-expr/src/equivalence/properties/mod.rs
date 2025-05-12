@@ -1225,7 +1225,7 @@ impl EquivalenceProperties {
         // Update the schema, the equivalence group and the ordering equivalence
         // class:
         self.schema = schema;
-        self.eq_group = EquivalenceGroup::new(eq_classes);
+        self.eq_group = eq_classes.into();
         self.oeq_class = new_orderings.into();
         Ok(self)
     }

@@ -154,7 +154,9 @@ impl CrossJoinExec {
             &[false, false],
             None,
             &[],
-        );
+        )
+        // This `unwrap` is safe as we only add a positive offset to columns.
+        .unwrap();
 
         // Get output partitioning:
         // TODO: Optimize the cross join implementation to generate M * N
