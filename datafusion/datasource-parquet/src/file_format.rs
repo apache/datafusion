@@ -1577,3 +1577,75 @@ fn create_max_min_accs(
         .collect();
     (max_values, min_values)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    use arrow::datatypes::DataType;
+    use parquet::schema::parser::parse_message_type;
+
+    #[test]
+    fn coerce_int96_to_resolution_with_complex_types() {
+        let spark_schema = "
+        message spark_schema {
+          optional int96 c0;
+          optional group c1 {
+            optional int96 c0;
+          }
+          optional group c2 {
+            optional group c0 (LIST) {
+              repeated group list {
+                optional int96 element;
+              }
+            }
+          }
+          optional group c3 (LIST) {
+            repeated group list {
+              optional int96 element;
+            }
+          }
+          optional group c4 (LIST) {
+            repeated group list {
+              optional group element {
+                optional int96 c0;
+              }
+            }
+          }
+        }
+        ";
+
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+        let result =
+            coerce_int96_to_resolution(&descr, &arrow_schema, &TimeUnit::Microsecond)
+                .unwrap();
+
+        result
+            .flattened_fields()
+            .iter()
+            .for_each(|field| match field.data_type() {
+                DataType::Timestamp(TimeUnit::Microsecond, None) => {}
+                DataType::Struct(fields) => {
+                    assert_eq!(
+                        fields[0].data_type(),
+                        &DataType::Timestamp(TimeUnit::Microsecond, None)
+                    )
+                }
+                DataType::List(field) => {
+                    assert_eq!(
+                        field.data_type(),
+                        &DataType::Timestamp(TimeUnit::Microsecond, None)
+                    )
+                }
+                _ => {
+                    assert!(false);
+                }
+            })
+    }
+}
