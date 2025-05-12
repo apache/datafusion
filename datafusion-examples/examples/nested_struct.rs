@@ -26,6 +26,7 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::nested_schema_adapter::NestedStructSchemaAdapterFactory;
+use datafusion::datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion::prelude::*;
 use std::error::Error;
 use std::fs;
@@ -52,7 +53,8 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     );
 
     println!("==> Creating schema adapter factory");
-    let adapter_factory = NestedStructSchemaAdapterFactory::from_schema(schema4.clone());
+    let adapter_factory: Arc<dyn SchemaAdapterFactory> =
+        Arc::new(NestedStructSchemaAdapterFactory);
     println!("==> Schema adapter factory created");
 
     let path1 = "test_data1.parquet";
@@ -74,15 +76,23 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     )
     .await?;
     println!("==> Successfully wrote first parquet file");
-    println!("==> Creating schema2 (extended additionalInfo with nested reason field)");
-
-    let batch2 = create_batch(&schema4)?;
-
+    
+    // Create and write path2 (schema2)
+    println!("==> Creating schema2 (with query_params field)");
+    let schema2 = create_schema2();
+    println!("==> Schema2 created");
+    
+    println!("==> Creating batch from schema2");
+    let batch2 = create_batch(&schema2)?;
+    println!("==> Batch2 created successfully with {} rows", batch2.num_rows());
+    
     let path2 = "test_data2.parquet";
+    println!("==> Removing existing file if present: {}", path2);
     let _ = fs::remove_file(path2);
-
+    
+    println!("==> Creating DataFrame from batch2");
     let df2 = ctx.read_batch(batch2)?;
-    println!("==> Writing second parquet file to {}", path2);
+    println!("==> Writing schema2 parquet file to {}", path2);
     df2.write_parquet(
         path2,
         DataFrameWriteOptions::default()
@@ -91,13 +101,58 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
         None,
     )
     .await?;
-    println!("==> Successfully wrote second parquet file");
+    println!("==> Successfully wrote schema2 parquet file");
+    
+    // Create and write path3 (schema3)
+    println!("==> Creating schema3 (with query_params and error fields)");
+    let schema3 = create_schema3();
+    println!("==> Schema3 created");
+    
+    println!("==> Creating batch from schema3");
+    let batch3 = create_batch(&schema3)?;
+    println!("==> Batch3 created successfully with {} rows", batch3.num_rows());
+    
+    let path3 = "test_data3.parquet";
+    println!("==> Removing existing file if present: {}", path3);
+    let _ = fs::remove_file(path3);
+    
+    println!("==> Creating DataFrame from batch3");
+    let df3 = ctx.read_batch(batch3)?;
+    println!("==> Writing schema3 parquet file to {}", path3);
+    df3.write_parquet(
+        path3,
+        DataFrameWriteOptions::default()
+            .with_single_file_output(true)
+            .with_sort_by(vec![col("timestamp_utc").sort(true, true)]),
+        None,
+    )
+    .await?;
+    println!("==> Successfully wrote schema3 parquet file");
+    
+    println!("==> Creating schema4 (with expanded query_params and error fields)");
 
-    let paths_str = vec![path1.to_string(), path2.to_string()];
+    let batch4 = create_batch(&schema4)?;
+
+    let path4 = "test_data4.parquet";
+    let _ = fs::remove_file(path4);
+
+    let df4 = ctx.read_batch(batch4)?;
+    println!("==> Writing schema4 parquet file to {}", path4);
+    df4.write_parquet(
+        path4,
+        DataFrameWriteOptions::default()
+            .with_single_file_output(true)
+            .with_sort_by(vec![col("timestamp_utc").sort(true, true)]),
+        None,
+    )
+    .await?;
+    println!("==> Successfully wrote schema4 parquet file");
+
+    let paths_str = vec![path1.to_string(), path2.to_string(), path3.to_string(), path4.to_string()];
     println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
-    println!("==> Using schema2 for files with different schemas");
+    println!("==> Using schema4 for files with different schemas");
     println!(
-        "==> Schema difference: additionalInfo in schema1 doesn't have 'reason' field"
+        "==> Schema difference: schema evolution from basic to expanded fields"
     );
 
     let config = ListingTableConfig::new_with_multi_paths(
@@ -107,7 +162,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
             .collect::<Result<Vec<_>, _>>()?,
     )
     .with_schema(schema4.as_ref().clone().into())
-    .with_schema_adapter(adapter_factory);
+    .with_schema_adapter_factory(adapter_factory);
 
     println!("==> About to infer config");
     println!(
@@ -181,64 +236,11 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
 
     let _ = fs::remove_file(path1);
     let _ = fs::remove_file(path2);
+    let _ = fs::remove_file(path3);
+    let _ = fs::remove_file(path4);
     let _ = fs::remove_file(compacted_path);
 
     Ok(())
-}
-
-fn create_batch(schema: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
-    // Create arrays for each field in the schema
-    let columns = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            println!("==> field_name: {}", field.name());
-            create_array_for_field(field, 1)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Create record batch with the generated arrays
-    RecordBatch::try_new(schema.clone(), columns).map_err(|e| e.into())
-}
-
-/// Creates an appropriate array for a given field with the specified length
-fn create_array_for_field(
-    field: &Field,
-    length: usize,
-) -> Result<Arc<dyn Array>, Box<dyn Error>> {
-    match field.data_type() {
-        DataType::Utf8 => {
-            // Create a default string value based on field name
-            let default_value = format!("{}_{}", field.name(), 1);
-            Ok(Arc::new(StringArray::from(vec![
-                Some(default_value);
-                length
-            ])))
-        }
-        DataType::Float64 => {
-            // Default float value
-            Ok(Arc::new(Float64Array::from(vec![Some(1.0); length])))
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, tz) => {
-            // Default timestamp (2021-12-31T12:00:00Z)
-            let array =
-                TimestampMillisecondArray::from(vec![Some(1640995200000); length]);
-            // Create the array with the same timezone as specified in the field
-            Ok(Arc::new(array.with_data_type(DataType::Timestamp(
-                TimeUnit::Millisecond,
-                tz.clone(),
-            ))))
-        }
-        DataType::Struct(fields) => {
-            // Create arrays for each field in the struct
-            let struct_arrays = fields
-                .iter()
-                .map(|f| {
-                    let array = create_array_for_field(f, length)?;
-                    Ok((f.clone(), array))
-                })
-                .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-
             Ok(Arc::new(StructArray::from(struct_arrays)))
         }
         _ => Err(format!("Unsupported data type: {}", field.data_type()).into()),
