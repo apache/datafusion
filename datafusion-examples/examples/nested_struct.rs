@@ -38,12 +38,12 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
 
     println!("==> Creating schema1 (simple additionalInfo structure)");
     let schema1 = create_schema1();
-    let schema2 = create_schema4();
+    let schema4 = create_schema4();
 
     let batch1 = create_batch1(&schema1)?;
     let adapter = NestedStructSchemaAdapterFactory::create_adapter(
-        schema2.clone(),
-        schema2.clone(),
+        schema4.clone(),
+        schema4.clone(),
     );
 
     let (mapping, _) = adapter
@@ -67,7 +67,7 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     println!("==> Successfully wrote first parquet file");
     println!("==> Creating schema2 (extended additionalInfo with nested reason field)");
 
-    let batch2 = create_batch2(&schema2)?;
+    let batch2 = create_batch2(&schema4)?;
 
     let path2 = "test_data2.parquet";
     let _ = fs::remove_file(path2);
@@ -97,7 +97,7 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
     )
-    .with_schema(schema2.as_ref().clone().into());
+    .with_schema(schema4.as_ref().clone().into());
 
     println!("==> About to infer config");
     println!(
@@ -153,7 +153,7 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     let config = ListingTableConfig::new_with_multi_paths(vec![ListingTableUrl::parse(
         compacted_path,
     )?])
-    .with_schema(schema2.as_ref().clone().into())
+    .with_schema(schema4.as_ref().clone().into())
     .infer(&new_ctx.state())
     .await?;
 
@@ -176,7 +176,7 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     Ok(())
 }
 
-fn create_schema4() -> Arc<Schema> {
+fn create_schema4_old() -> Arc<Schema> {
     let schema2 = Arc::new(Schema::new(vec![
         Field::new("component", DataType::Utf8, true),
         Field::new("message", DataType::Utf8, true),
@@ -273,6 +273,70 @@ fn create_schema1() -> Arc<Schema> {
         ),
     ]));
     schema1
+}
+
+/// Creates a schema with basic HTTP request fields plus a query_params struct field
+fn create_schema2() -> Arc<Schema> {
+    // Get the base schema from create_schema1
+    let schema1 = create_schema1();
+
+    // Convert to a vector of fields
+    let mut fields = schema1.fields().to_vec();
+
+    // Add the query_params field
+    fields.push(Field::new(
+        "query_params",
+        DataType::Struct(vec![Field::new("customer_id", DataType::Utf8, true)].into()),
+        true,
+    ));
+
+    // Create a new schema with the extended fields
+    Arc::new(Schema::new(fields))
+}
+
+/// Creates a schema with HTTP request fields, query_params struct field, and an error field
+fn create_schema3() -> Arc<Schema> {
+    // Get the base schema from create_schema2
+    let schema2 = create_schema2();
+
+    // Convert to a vector of fields
+    let mut fields = schema2.fields().to_vec();
+
+    // Add the error field
+    fields.push(Field::new("error", DataType::Utf8, true));
+
+    // Create a new schema with the extended fields
+    Arc::new(Schema::new(fields))
+}
+
+/// Creates a schema with HTTP request fields, expanded query_params struct with additional fields, and an error field
+fn create_schema4() -> Arc<Schema> {
+    // Get the base schema from create_schema1 (we can't use schema3 directly since we need to modify query_params)
+    let schema1 = create_schema1();
+
+    // Convert to a vector of fields
+    let mut fields = schema1.fields().to_vec();
+
+    // Add the expanded query_params field with additional fields
+    fields.push(Field::new(
+        "query_params",
+        DataType::Struct(
+            vec![
+                Field::new("customer_id", DataType::Utf8, true),
+                Field::new("document_type", DataType::Utf8, true),
+                Field::new("fetch_from_source", DataType::Utf8, true),
+                Field::new("source_system", DataType::Utf8, true),
+            ]
+            .into(),
+        ),
+        true,
+    ));
+
+    // Add the error field
+    fields.push(Field::new("error", DataType::Utf8, true));
+
+    // Create a new schema with the extended fields
+    Arc::new(Schema::new(fields))
 }
 
 fn create_batch2(schema2: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
