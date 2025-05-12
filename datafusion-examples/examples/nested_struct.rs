@@ -31,129 +31,85 @@ use datafusion::prelude::*;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
-// Remove the tokio::test attribute to make this a regular async function
+
+/// Helper function to create a RecordBatch from a Schema and log the process
+async fn create_and_write_parquet_file(
+    ctx: &SessionContext,
+    schema: &Arc<Schema>,
+    schema_name: &str,
+    file_path: &str,
+) -> Result<(), Box<dyn Error>> {
+    println!("==> Creating {}", schema_name);
+    println!("==> {} created", schema_name);
+
+    println!("==> Creating batch from {}", schema_name);
+    let batch = create_batch(schema)?;
+    println!(
+        "==> Batch created successfully with {} rows",
+        batch.num_rows()
+    );
+
+    println!("==> Removing existing file if present: {}", file_path);
+    let _ = fs::remove_file(file_path);
+
+    println!("==> Creating DataFrame from batch");
+    let df = ctx.read_batch(batch)?;
+    println!("==> Writing {} parquet file to {}", schema_name, file_path);
+
+    df.write_parquet(
+        file_path,
+        DataFrameWriteOptions::default()
+            .with_single_file_output(true)
+            .with_sort_by(vec![col("timestamp_utc").sort(true, true)]),
+        None,
+    )
+    .await?;
+
+    println!("==> Successfully wrote {} parquet file", schema_name);
+    Ok(())
+}
+
 async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     println!("==> Starting test function");
     let ctx = SessionContext::new();
     println!("==> Session context created");
 
-    println!("==> Creating schema1 (simple additionalInfo structure)");
+    // Create schemas
     let schema1 = create_schema1();
-    println!("==> Schema1 created");
-
-    println!("==> Creating schema4");
+    let schema2 = create_schema2();
+    let schema3 = create_schema3();
     let schema4 = create_schema4();
-    println!("==> Schema4 created");
 
-    println!("==> Creating batch from schema1");
-    let batch1 = create_batch(&schema1)?;
-    println!(
-        "==> Batch created successfully with {} rows",
-        batch1.num_rows()
-    );
-
+    // Create schema adapter factory
     println!("==> Creating schema adapter factory");
     let adapter_factory: Arc<dyn SchemaAdapterFactory> =
         Arc::new(NestedStructSchemaAdapterFactory);
     println!("==> Schema adapter factory created");
 
-    let path1 = "test_data1.parquet";
-    println!("==> Removing existing file if present: {}", path1);
-    let _ = fs::remove_file(path1);
-    println!("==> File removal attempted");
+    // Define file paths in an array for easier management
+    let test_files = [
+        "test_data1.parquet",
+        "test_data2.parquet",
+        "test_data3.parquet",
+        "test_data4.parquet",
+    ];
+    let [path1, path2, path3, path4] = test_files; // Destructure for individual access
 
-    println!("==> Creating DataFrame from batch");
-    let df1 = ctx.read_batch(batch1)?;
-    println!("==> DataFrame created successfully");
+    // Create and write parquet files for each schema
+    create_and_write_parquet_file(&ctx, &schema1, "schema1", path1).await?;
+    create_and_write_parquet_file(&ctx, &schema2, "schema2", path2).await?;
+    create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
+    create_and_write_parquet_file(&ctx, &schema4, "schema4", path4).await?;
 
-    println!("==> Writing first parquet file to {}", path1);
-    df1.write_parquet(
-        path1,
-        DataFrameWriteOptions::default()
-            .with_single_file_output(true)
-            .with_sort_by(vec![col("timestamp_utc").sort(true, true)]),
-        None,
-    )
-    .await?;
-    println!("==> Successfully wrote first parquet file");
-    
-    // Create and write path2 (schema2)
-    println!("==> Creating schema2 (with query_params field)");
-    let schema2 = create_schema2();
-    println!("==> Schema2 created");
-    
-    println!("==> Creating batch from schema2");
-    let batch2 = create_batch(&schema2)?;
-    println!("==> Batch2 created successfully with {} rows", batch2.num_rows());
-    
-    let path2 = "test_data2.parquet";
-    println!("==> Removing existing file if present: {}", path2);
-    let _ = fs::remove_file(path2);
-    
-    println!("==> Creating DataFrame from batch2");
-    let df2 = ctx.read_batch(batch2)?;
-    println!("==> Writing schema2 parquet file to {}", path2);
-    df2.write_parquet(
-        path2,
-        DataFrameWriteOptions::default()
-            .with_single_file_output(true)
-            .with_sort_by(vec![col("timestamp_utc").sort(true, true)]),
-        None,
-    )
-    .await?;
-    println!("==> Successfully wrote schema2 parquet file");
-    
-    // Create and write path3 (schema3)
-    println!("==> Creating schema3 (with query_params and error fields)");
-    let schema3 = create_schema3();
-    println!("==> Schema3 created");
-    
-    println!("==> Creating batch from schema3");
-    let batch3 = create_batch(&schema3)?;
-    println!("==> Batch3 created successfully with {} rows", batch3.num_rows());
-    
-    let path3 = "test_data3.parquet";
-    println!("==> Removing existing file if present: {}", path3);
-    let _ = fs::remove_file(path3);
-    
-    println!("==> Creating DataFrame from batch3");
-    let df3 = ctx.read_batch(batch3)?;
-    println!("==> Writing schema3 parquet file to {}", path3);
-    df3.write_parquet(
-        path3,
-        DataFrameWriteOptions::default()
-            .with_single_file_output(true)
-            .with_sort_by(vec![col("timestamp_utc").sort(true, true)]),
-        None,
-    )
-    .await?;
-    println!("==> Successfully wrote schema3 parquet file");
-    
-    println!("==> Creating schema4 (with expanded query_params and error fields)");
-
-    let batch4 = create_batch(&schema4)?;
-
-    let path4 = "test_data4.parquet";
-    let _ = fs::remove_file(path4);
-
-    let df4 = ctx.read_batch(batch4)?;
-    println!("==> Writing schema4 parquet file to {}", path4);
-    df4.write_parquet(
-        path4,
-        DataFrameWriteOptions::default()
-            .with_single_file_output(true)
-            .with_sort_by(vec![col("timestamp_utc").sort(true, true)]),
-        None,
-    )
-    .await?;
-    println!("==> Successfully wrote schema4 parquet file");
-
-    let paths_str = vec![path1.to_string(), path2.to_string(), path3.to_string(), path4.to_string()];
+    let paths_str = vec![
+        path1.to_string(),
+        path2.to_string(),
+        path3.to_string(),
+        path4.to_string(),
+    ];
     println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
     println!("==> Using schema4 for files with different schemas");
-    println!(
-        "==> Schema difference: schema evolution from basic to expanded fields"
-    );
+    println!("==> Schema difference: schema evolution from basic to expanded fields");
 
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
@@ -199,7 +155,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let results = df.clone().collect().await?;
     println!("==> Successfully collected results");
 
-    assert_eq!(results[0].num_rows(), 2);
+    assert_eq!(results[0].num_rows(), 4); // Now we have 4 rows, one from each schema
 
     let compacted_path = "test_data_compacted.parquet";
     let _ = fs::remove_file(compacted_path);
@@ -231,16 +187,67 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
         .await?;
     let compacted_results = df.collect().await?;
 
-    assert_eq!(compacted_results[0].num_rows(), 2);
+    assert_eq!(compacted_results[0].num_rows(), 4);
     assert_eq!(results, compacted_results);
 
-    let _ = fs::remove_file(path1);
-    let _ = fs::remove_file(path2);
-    let _ = fs::remove_file(path3);
-    let _ = fs::remove_file(path4);
-    let _ = fs::remove_file(compacted_path);
+    // Clean up all files
+    for path in [path1, path2, path3, path4, compacted_path] {
+        let _ = fs::remove_file(path);
+    }
 
     Ok(())
+}
+
+fn create_batch(schema: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
+    // Create arrays for each field in the schema
+    let columns = schema
+        .fields()
+        .iter()
+        .map(|field| create_array_for_field(field, 1))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Create record batch with the generated arrays
+    RecordBatch::try_new(schema.clone(), columns).map_err(|e| e.into())
+}
+
+/// Creates an appropriate array for a given field with the specified length
+fn create_array_for_field(
+    field: &Field,
+    length: usize,
+) -> Result<Arc<dyn Array>, Box<dyn Error>> {
+    match field.data_type() {
+        DataType::Utf8 => {
+            // Create a default string value based on field name
+            let default_value = format!("{}_{}", field.name(), 1);
+            Ok(Arc::new(StringArray::from(vec![
+                Some(default_value);
+                length
+            ])))
+        }
+        DataType::Float64 => {
+            // Default float value
+            Ok(Arc::new(Float64Array::from(vec![Some(1.0); length])))
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+            // Default timestamp (2021-12-31T12:00:00Z)
+            let array =
+                TimestampMillisecondArray::from(vec![Some(1640995200000); length]);
+            // Create the array with the same timezone as specified in the field
+            Ok(Arc::new(array.with_data_type(DataType::Timestamp(
+                TimeUnit::Millisecond,
+                tz.clone(),
+            ))))
+        }
+        DataType::Struct(fields) => {
+            // Create arrays for each field in the struct
+            let struct_arrays = fields
+                .iter()
+                .map(|f| {
+                    let array = create_array_for_field(f, length)?;
+                    Ok((f.clone(), array))
+                })
+                .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+
             Ok(Arc::new(StructArray::from(struct_arrays)))
         }
         _ => Err(format!("Unsupported data type: {}", field.data_type()).into()),
@@ -271,8 +278,6 @@ fn create_schema2() -> Arc<Schema> {
     // Get the base schema from create_schema1
     let schema1 = create_schema1();
 
-    // Convert to a vector of fields
-    let fields = schema1.fields().to_vec();
     // Create a new vector of fields from schema1
     let mut fields = schema1
         .fields()
