@@ -131,23 +131,20 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // StringArray UTF8
         let args_string_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, false);
-        c.bench_function(
-            &format!("strpos_StringArray_utf8_str_len_{str_len}"),
-            |b| {
-                b.iter(|| {
-                    black_box(strpos.invoke_with_args(ScalarFunctionArgs {
-                        args: args_string_utf8.clone(),
-                        arg_fields: vec![&Field::new(
-                            "a",
-                            args_string_utf8[0].data_type(),
-                            true,
-                        )],
-                        number_rows: n_rows,
-                        return_field: &Field::new("f", DataType::Int32, true),
-                    }))
-                })
-            },
-        );
+        c.bench_function(&format!("strpos_StringArray_utf8_str_len_{str_len}"), |b| {
+            b.iter(|| {
+                black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                    args: args_string_utf8.clone(),
+                    arg_fields: vec![&Field::new(
+                        "a",
+                        args_string_utf8[0].data_type(),
+                        true,
+                    )],
+                    number_rows: n_rows,
+                    return_field: &Field::new("f", DataType::Int32, true),
+                }))
+            })
+        });
 
         // StringViewArray ASCII only
         let args_string_view_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, true);

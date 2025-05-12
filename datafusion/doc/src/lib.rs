@@ -148,8 +148,7 @@ impl Documentation {
         // Related UDFs
         if let Some(related_udf) = self.related_udfs.clone() {
             related_udf.iter().for_each(|udf| {
-                result
-                    .push_str(format!("\n    related_udf(name = \"{udf}\"),").as_ref());
+                result.push_str(format!("\n    related_udf(name = \"{udf}\"),").as_ref());
             });
         }
 

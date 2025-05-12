@@ -5280,11 +5280,7 @@ digraph {
             )?;
 
             let fields = join.schema.fields();
-            assert_eq!(
-                fields.len(),
-                6,
-                "Expected 6 fields for {join_type:?} join"
-            );
+            assert_eq!(fields.len(), 6, "Expected 6 fields for {join_type:?} join");
 
             for (i, field) in fields.iter().enumerate() {
                 let expected_nullable = match (i, &join_type) {

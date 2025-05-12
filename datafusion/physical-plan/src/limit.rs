@@ -164,9 +164,7 @@ impl ExecutionPlan for GlobalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!(
-            "Start GlobalLimitExec::execute for partition: {partition}"
-        );
+        trace!("Start GlobalLimitExec::execute for partition: {partition}");
         // GlobalLimitExec has a single output partition
         if 0 != partition {
             return internal_err!("GlobalLimitExec invalid partition {partition}");

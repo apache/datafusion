@@ -1145,10 +1145,7 @@ mod tests {
 
     fn csv_line(line_number: usize) -> Bytes {
         let (int_value, float_value, bool_value, char_value) = csv_values(line_number);
-        format!(
-            "{int_value},{float_value},{bool_value},{char_value}\n"
-        )
-        .into()
+        format!("{int_value},{float_value},{bool_value},{char_value}\n").into()
     }
 
     fn csv_values(line_number: usize) -> (i32, f64, bool, String) {

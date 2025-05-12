@@ -582,9 +582,7 @@ fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> 
     };
 
     Regex::new(&pattern).map_err(|_| {
-        ArrowError::ComputeError(format!(
-            "Regular expression did not compile: {pattern}"
-        ))
+        ArrowError::ComputeError(format!("Regular expression did not compile: {pattern}"))
     })
 }
 

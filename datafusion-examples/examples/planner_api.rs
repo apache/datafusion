@@ -104,9 +104,7 @@ async fn to_physical_plan_step_by_step_demo(
         &ctx.state(),
         |_, _| (),
     )?;
-    println!(
-        "Optimized logical plan:\n\n{optimized_logical_plan:?}\n\n"
-    );
+    println!("Optimized logical plan:\n\n{optimized_logical_plan:?}\n\n");
 
     // Create the physical plan
     let physical_plan = ctx

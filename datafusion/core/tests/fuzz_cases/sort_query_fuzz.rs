@@ -524,9 +524,7 @@ impl SortFuzzerTestGenerator {
         println!("    Number of partitions: {num_partitions}");
         println!("    Batch size: {}", init_state.approx_batch_num_rows / 2);
         println!("    Memory limit: {memory_limit_str}");
-        println!(
-            "    Per partition memory limit: {per_partition_limit_str}"
-        );
+        println!("    Per partition memory limit: {per_partition_limit_str}");
         println!(
             "    Sort spill reservation bytes: {}",
             human_readable_size(sort_spill_reservation_bytes)
