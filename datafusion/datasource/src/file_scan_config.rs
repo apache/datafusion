@@ -2499,8 +2499,7 @@ mod tests {
                 );
 
                 println!(
-                    "Distribution - min files: {}, max files: {}",
-                    min_size, max_size
+                    "Distribution - min files: {min_size}, max files: {max_size}"
                 );
             }
         }

@@ -985,9 +985,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     options.row_count = Some(statistics.num_containers());
 
     trace!(
-        "Creating statistics batch for {:#?} with {:#?}",
-        required_columns,
-        arrays
+        "Creating statistics batch for {required_columns:#?} with {arrays:#?}"
     );
 
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
@@ -2320,8 +2318,7 @@ mod tests {
             let was_new = fields.insert(field);
             if !was_new {
                 panic!(
-                    "Duplicate field in required schema: {:?}. Previous fields:\n{:#?}",
-                    field, fields
+                    "Duplicate field in required schema: {field:?}. Previous fields:\n{fields:#?}"
                 );
             }
         }
@@ -2826,7 +2823,7 @@ mod tests {
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut required_columns);
         assert_eq!(predicate_expr.to_string(), expected_expr);
-        println!("required_columns: {:#?}", required_columns); // for debugging assertions below
+        println!("required_columns: {required_columns:#?}"); // for debugging assertions below
                                                                // c1 < 1 should add c1_min
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
@@ -5155,7 +5152,7 @@ mod tests {
         statistics: &TestStatistics,
         expected: &[bool],
     ) {
-        println!("Pruning with expr: {}", expr);
+        println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
         let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();

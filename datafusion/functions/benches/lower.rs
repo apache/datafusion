@@ -44,7 +44,7 @@ fn create_args2(size: usize) -> Vec<ColumnarValue> {
     let mut items = Vec::with_capacity(size);
     items.push("农历新年".to_string());
     for i in 1..size {
-        items.push(format!("DATAFUSION {}", i));
+        items.push(format!("DATAFUSION {i}"));
     }
     let array = Arc::new(StringArray::from(items)) as ArrayRef;
     vec![ColumnarValue::Array(array)]
@@ -58,11 +58,11 @@ fn create_args3(size: usize) -> Vec<ColumnarValue> {
     let mut items = Vec::with_capacity(size);
     let half = size / 2;
     for i in 0..half {
-        items.push(format!("DATAFUSION {}", i));
+        items.push(format!("DATAFUSION {i}"));
     }
     items.push("Ⱦ".to_string());
     for i in half + 1..size {
-        items.push(format!("DATAFUSION {}", i));
+        items.push(format!("DATAFUSION {i}"));
     }
     let array = Arc::new(StringArray::from(items)) as ArrayRef;
     vec![ColumnarValue::Array(array)]
@@ -131,7 +131,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
-        c.bench_function(&format!("lower_all_values_are_ascii: {}", size), |b| {
+        c.bench_function(&format!("lower_all_values_are_ascii: {size}"), |b| {
             b.iter(|| {
                 let args_cloned = args.clone();
                 black_box(lower.invoke_with_args(ScalarFunctionArgs {
@@ -152,7 +152,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
         c.bench_function(
-            &format!("lower_the_first_value_is_nonascii: {}", size),
+            &format!("lower_the_first_value_is_nonascii: {size}"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
@@ -175,7 +175,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
         c.bench_function(
-            &format!("lower_the_middle_value_is_nonascii: {}", size),
+            &format!("lower_the_middle_value_is_nonascii: {size}"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
@@ -210,8 +210,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
                     c.bench_function(
-                        &format!("lower_all_values_are_ascii_string_views: size: {}, str_len: {}, null_density: {}, mixed: {}",
-                     size, str_len, null_density, mixed),
+                        &format!("lower_all_values_are_ascii_string_views: size: {size}, str_len: {str_len}, null_density: {null_density}, mixed: {mixed}"),
                         |b| b.iter(|| {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
@@ -225,8 +224,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
                     let args = create_args4(size, str_len, *null_density, mixed);
                     c.bench_function(
-                        &format!("lower_all_values_are_ascii_string_views: size: {}, str_len: {}, null_density: {}, mixed: {}",
-                     size, str_len, null_density, mixed),
+                        &format!("lower_all_values_are_ascii_string_views: size: {size}, str_len: {str_len}, null_density: {null_density}, mixed: {mixed}"),
                         |b| b.iter(|| {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{

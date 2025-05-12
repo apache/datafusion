@@ -735,9 +735,7 @@ fn test_default_expressions() -> Result<()> {
         assert_eq!(
             input_exprs.len(),
             ret_exprs.len(),
-            "\nInput expressions: {:?}\nReturned expressions: {:?}",
-            input_exprs,
-            ret_exprs
+            "\nInput expressions: {input_exprs:?}\nReturned expressions: {ret_exprs:?}"
         );
 
         // Compares each returned expression with original input expressions

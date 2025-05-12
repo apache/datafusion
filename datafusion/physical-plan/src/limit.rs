@@ -110,7 +110,7 @@ impl DisplayAs for GlobalLimitExec {
             }
             DisplayFormatType::TreeRender => {
                 if let Some(fetch) = self.fetch {
-                    writeln!(f, "limit={}", fetch)?;
+                    writeln!(f, "limit={fetch}")?;
                 }
                 write!(f, "skip={}", self.skip)
             }
@@ -165,8 +165,7 @@ impl ExecutionPlan for GlobalLimitExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!(
-            "Start GlobalLimitExec::execute for partition: {}",
-            partition
+            "Start GlobalLimitExec::execute for partition: {partition}"
         );
         // GlobalLimitExec has a single output partition
         if 0 != partition {

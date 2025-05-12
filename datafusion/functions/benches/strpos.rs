@@ -112,7 +112,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringArray ASCII only
         let args_string_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, false);
         c.bench_function(
-            &format!("strpos_StringArray_ascii_str_len_{}", str_len),
+            &format!("strpos_StringArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(strpos.invoke_with_args(ScalarFunctionArgs {
@@ -132,7 +132,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringArray UTF8
         let args_string_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, false);
         c.bench_function(
-            &format!("strpos_StringArray_utf8_str_len_{}", str_len),
+            &format!("strpos_StringArray_utf8_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(strpos.invoke_with_args(ScalarFunctionArgs {
@@ -152,7 +152,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringViewArray ASCII only
         let args_string_view_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, true);
         c.bench_function(
-            &format!("strpos_StringViewArray_ascii_str_len_{}", str_len),
+            &format!("strpos_StringViewArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(strpos.invoke_with_args(ScalarFunctionArgs {
@@ -172,7 +172,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringViewArray UTF8
         let args_string_view_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, true);
         c.bench_function(
-            &format!("strpos_StringViewArray_utf8_str_len_{}", str_len),
+            &format!("strpos_StringViewArray_utf8_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(strpos.invoke_with_args(ScalarFunctionArgs {

@@ -198,8 +198,7 @@ impl AggregationFuzzer {
             // propagate errors
             join_handle.map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "AggregationFuzzer task error: {:?}",
-                    e
+                    "AggregationFuzzer task error: {e:?}"
                 ))
             })??;
         }

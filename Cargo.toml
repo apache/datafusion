@@ -213,6 +213,7 @@ large_futures = "warn"
 used_underscore_binding = "warn"
 or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
+uninlined_format_args = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }

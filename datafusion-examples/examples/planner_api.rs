@@ -96,7 +96,7 @@ async fn to_physical_plan_step_by_step_demo(
         ctx.state().config_options(),
         |_, _| (),
     )?;
-    println!("Analyzed logical plan:\n\n{:?}\n\n", analyzed_logical_plan);
+    println!("Analyzed logical plan:\n\n{analyzed_logical_plan:?}\n\n");
 
     // Optimize the analyzed logical plan
     let optimized_logical_plan = ctx.state().optimizer().optimize(
@@ -105,8 +105,7 @@ async fn to_physical_plan_step_by_step_demo(
         |_, _| (),
     )?;
     println!(
-        "Optimized logical plan:\n\n{:?}\n\n",
-        optimized_logical_plan
+        "Optimized logical plan:\n\n{optimized_logical_plan:?}\n\n"
     );
 
     // Create the physical plan
