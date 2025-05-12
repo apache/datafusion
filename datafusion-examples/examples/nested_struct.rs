@@ -206,7 +206,10 @@ fn create_batch(schema: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
     let columns = schema
         .fields()
         .iter()
-        .map(|field| create_array_for_field(field, 1))
+        .map(|field| {
+            println!("==> field_name: {}", field.name());
+            create_array_for_field(field, 1)
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     // Create record batch with the generated arrays
@@ -231,14 +234,15 @@ fn create_array_for_field(
             // Default float value
             Ok(Arc::new(Float64Array::from(vec![Some(1.0); length])))
         }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => {
             // Default timestamp (2021-12-31T12:00:00Z)
-            Ok(Arc::new(TimestampMillisecondArray::from(vec![
-                Some(
-                    1640995200000
-                );
-                length
-            ])))
+            let array =
+                TimestampMillisecondArray::from(vec![Some(1640995200000); length]);
+            // Create the array with the same timezone as specified in the field
+            Ok(Arc::new(array.with_data_type(DataType::Timestamp(
+                TimeUnit::Millisecond,
+                tz.clone(),
+            ))))
         }
         DataType::Struct(fields) => {
             // Create arrays for each field in the struct
