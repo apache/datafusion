@@ -221,7 +221,7 @@ fn create_array_for_field(
                 .iter()
                 .map(|f| {
                     let array = create_array_for_field(f, length)?;
-                    Ok((Arc::new(f.clone()), array))
+                    Ok((f.clone(), array))
                 })
                 .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
 
