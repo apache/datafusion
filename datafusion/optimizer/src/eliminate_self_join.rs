@@ -219,12 +219,16 @@ mod tests {
         }};
     }
 
-    fn test_table_scan() -> Result<LogicalPlan> {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::UInt32, false),
-            Field::new("department", DataType::Utf8, false),
+    fn employees_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, false),
-        ]);
+            Field::new("department", DataType::Utf8, false),
+        ])
+    }
+
+    fn self_join_on_unique_key_with_filter() -> Result<LogicalPlan> {
+        let schema = employees_schema();
         let left = table_scan(Some("employees"), &schema, None)?.build()?;
         let left = subquery_alias(left, TableReference::from("a"))?;
         let right = table_scan(Some("employees"), &schema, None)?.build()?;
@@ -254,7 +258,7 @@ mod tests {
 
     #[test]
     fn join_on_unique_key_with_filter() -> Result<()> {
-        let plan = test_table_scan()?;
+        let plan = self_join_on_unique_key_with_filter()?;
 
         assert_optimized_plan_equal!(plan, @r#"
         Projection: a.id
