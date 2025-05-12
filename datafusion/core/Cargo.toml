@@ -160,12 +160,12 @@ rand_distr = "0.4.3"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.34.2"
+sysinfo = "0.35.1"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.29.0", features = ["fs"] }
+nix = { version = "0.30.1", features = ["fs"] }
 
 [[bench]]
 harness = false

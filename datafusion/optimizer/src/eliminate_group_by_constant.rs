@@ -117,6 +117,7 @@ mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
+    use crate::OptimizerContext;
 
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
@@ -135,9 +136,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateGroupByConstant::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateGroupByConstant::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
