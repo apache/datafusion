@@ -131,10 +131,9 @@ impl OptimizerRule for EliminateSelfJoin {
                 ref filter,
                 ..
             }) if join_type == JoinType::Inner
-                && join_constraint == JoinConstraint::Using
-                // TODO: equality of `inner` `apachearrow::datatypes::SchemaRef` doesn't
-                // mean equality of the tables
-                && left.schema().inner() == right.schema().inner() =>
+                && join_constraint == JoinConstraint::Using =>
+            // TODO: equality of `inner` `apachearrow::datatypes::SchemaRef` doesn't
+            // mean equality of the tables
             {
                 // TODO: Check if left and right are the same table
                 // If `on` includes a column with a unique constraint, we can eliminate the self join
