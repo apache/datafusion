@@ -18,6 +18,7 @@
 use datafusion::sql::parser::{DFParserBuilder, Statement};
 use sqllogictest::{AsyncDB, Record};
 use sqlparser::ast::{SetExpr, Statement as SqlStatement};
+use sqlparser::dialect::dialect_from_str;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -99,10 +100,11 @@ pub fn should_skip_record<D: AsyncDB>(
         _ => return false,
     };
 
-    let Ok(Ok(Some(statement))) = DFParserBuilder::new(sql)
-        .build()
-        .map(|mut v| v.parse_statements().map(|mut v| v.pop_front()))
-    else {
+    let statement = if let Some(statement) = parse_or_none(sql, "Postgres") {
+        statement
+    } else if let Some(statement) = parse_or_none(sql, "generic") {
+        statement
+    } else {
         return false;
     };
 
@@ -147,4 +149,15 @@ pub fn should_skip_record<D: AsyncDB>(
     }
 
     true
+}
+
+fn parse_or_none(sql: &str, dialect: &str) -> Option<Statement> {
+    let Ok(Ok(Some(statement))) = DFParserBuilder::new(sql)
+        .with_dialect(dialect_from_str(dialect).unwrap().as_ref())
+        .build()
+        .map(|mut v| v.parse_statements().map(|mut v| v.pop_front()))
+    else {
+        return None;
+    };
+    Some(statement)
 }
