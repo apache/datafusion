@@ -21,10 +21,13 @@ use std::sync::Arc;
 
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use arrow::datatypes::Field;
-use datafusion_common::{tree_node::Transformed, HashSet, Result};
+use datafusion_common::{
+    tree_node::{Transformed, TreeNode},
+    HashSet, Result,
+};
 use datafusion_expr::{
     builder::subquery_alias, Expr, Filter, Join, JoinConstraint, JoinType, LogicalPlan,
-    SubqueryAlias, TableScan,
+    Projection, SubqueryAlias, TableScan,
 };
 
 #[derive(Default, Debug)]
@@ -44,45 +47,46 @@ fn is_unique_constraint(field: &Field) -> bool {
     field.name() == "id"
 }
 
+fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> Result<TableScan> {
+    let filters = left_scan
+        .filters
+        .iter()
+        .chain(right_scan.filters.iter())
+        .cloned()
+        .collect();
+    // FIXME: double iteration over the filters
+    let projection = match (&left_scan.projection, &right_scan.projection) {
+        (Some(left_projection), Some(right_projection)) => Some(
+            left_projection
+                .iter()
+                .chain(right_projection.iter())
+                .cloned()
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>(),
+        ),
+        (Some(left_projection), None) => Some(left_projection.clone()),
+        (None, Some(right_projection)) => Some(right_projection.clone()),
+        (None, None) => None,
+    };
+    let fetch = match (left_scan.fetch, right_scan.fetch) {
+        (Some(left_fetch), Some(right_fetch)) => Some(left_fetch.max(right_fetch)),
+        (Some(rows), None) | (None, Some(rows)) => Some(rows),
+        (None, None) => None,
+    };
+    TableScan::try_new(
+        left_scan.table_name.clone(),
+        Arc::clone(&left_scan.source),
+        projection,
+        filters,
+        fetch,
+    )
+}
+
 fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<LogicalPlan> {
     match (left, right) {
         (LogicalPlan::TableScan(left_scan), LogicalPlan::TableScan(right_scan)) => {
-            let filters = left_scan
-                .filters
-                .iter()
-                .chain(right_scan.filters.iter())
-                .cloned()
-                .collect();
-            // FIXME: double iteration over the filters
-            let projection = match (&left_scan.projection, &right_scan.projection) {
-                (Some(left_projection), Some(right_projection)) => Some(
-                    left_projection
-                        .iter()
-                        .chain(right_projection.iter())
-                        .cloned()
-                        .collect::<HashSet<_>>()
-                        .into_iter()
-                        .collect::<Vec<_>>(),
-                ),
-                (Some(left_projection), None) => Some(left_projection.clone()),
-                (None, Some(right_projection)) => Some(right_projection.clone()),
-                (None, None) => None,
-            };
-            let fetch = match (left_scan.fetch, right_scan.fetch) {
-                (Some(left_fetch), Some(right_fetch)) => {
-                    Some(left_fetch.max(right_fetch))
-                }
-                (Some(rows), None) | (None, Some(rows)) => Some(rows),
-                (None, None) => None,
-            };
-            let table_scan = TableScan::try_new(
-                left_scan.table_name.clone(),
-                Arc::clone(&left_scan.source),
-                projection,
-                filters,
-                fetch,
-            )
-            .unwrap();
+            let table_scan = merge_table_scans(left_scan, right_scan).ok()?;
             Some(LogicalPlan::TableScan(table_scan))
         }
         (
@@ -99,6 +103,37 @@ fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<LogicalPlan> {
             let plan = optimize(left_input, right_input)?;
             subquery_alias(plan, left_alias.clone()).ok()
         }
+        (
+            LogicalPlan::Projection(Projection {
+                expr: left_expr,
+                input: left_input,
+                ..
+            }),
+            LogicalPlan::TableScan(right_scan),
+        ) => {
+            // Modify the projection to include the right scan
+            let left_input = left_input
+                .as_ref()
+                .clone()
+                .transform_up(|plan| match &plan {
+                    // TODO: Should this be done once?
+                    LogicalPlan::TableScan(left_scan)
+                        if left_scan.table_name == right_scan.table_name =>
+                    {
+                        if let Ok(table_scan) = merge_table_scans(left_scan, right_scan) {
+                            Ok(Transformed::yes(LogicalPlan::TableScan(table_scan)))
+                        } else {
+                            Ok(Transformed::no(plan))
+                        }
+                    }
+                    _ => Ok(Transformed::no(plan)),
+                })
+                .ok()?;
+            let projection =
+                Projection::try_new(left_expr.clone(), Arc::new(left_input.data)).ok()?;
+            Some(LogicalPlan::Projection(projection))
+        }
+        (LogicalPlan::TableScan(_), LogicalPlan::Projection(_)) => optimize(right, left),
         _ => None,
     }
 }
@@ -194,6 +229,7 @@ mod tests {
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Column, Result};
+    use datafusion_expr::builder::project;
     use datafusion_expr::builder::subquery_alias;
     use datafusion_expr::table_scan;
     use datafusion_expr::JoinConstraint;
@@ -288,6 +324,7 @@ mod tests {
     #[test]
     fn test_unique_key_with_filter() -> Result<()> {
         let plan = unique_key_with_filter()?;
+        println!("{}", plan.display_indent());
 
         assert_optimized_plan_equal!(plan, @r#"
         Projection: a.id
@@ -300,6 +337,7 @@ mod tests {
     #[test]
     fn test_unique_key_with_subquery_filter() -> Result<()> {
         let plan = unique_key_with_subquery_filter()?;
+        println!("{}", plan.display_indent());
 
         assert_optimized_plan_equal!(plan, @r#"
         Projection: a.id
