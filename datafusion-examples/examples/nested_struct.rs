@@ -40,7 +40,7 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     let schema1 = create_schema1();
     let schema4 = create_schema4();
 
-    let batch1 = create_batch1(&schema1)?;
+    let batch1 = create_batch(&schema1)?;
     let adapter = NestedStructSchemaAdapterFactory::create_adapter(
         schema4.clone(),
         schema4.clone(),
@@ -176,6 +176,61 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     Ok(())
 }
 
+fn create_batch(schema: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
+    // Create arrays for each field in the schema
+    let columns = schema
+        .fields()
+        .iter()
+        .map(|field| create_array_for_field(field, 1))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Create record batch with the generated arrays
+    RecordBatch::try_new(schema.clone(), columns).map_err(|e| e.into())
+}
+
+/// Creates an appropriate array for a given field with the specified length
+fn create_array_for_field(
+    field: &Field,
+    length: usize,
+) -> Result<Arc<dyn Array>, Box<dyn Error>> {
+    match field.data_type() {
+        DataType::Utf8 => {
+            // Create a default string value based on field name
+            let default_value = format!("{}_{}", field.name(), 1);
+            Ok(Arc::new(StringArray::from(vec![
+                Some(default_value);
+                length
+            ])))
+        }
+        DataType::Float64 => {
+            // Default float value
+            Ok(Arc::new(Float64Array::from(vec![Some(1.0); length])))
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            // Default timestamp (2021-12-31T12:00:00Z)
+            Ok(Arc::new(TimestampMillisecondArray::from(vec![
+                Some(
+                    1640995200000
+                );
+                length
+            ])))
+        }
+        DataType::Struct(fields) => {
+            // Create arrays for each field in the struct
+            let struct_arrays = fields
+                .iter()
+                .map(|f| {
+                    let array = create_array_for_field(f, length)?;
+                    Ok((Arc::new(f.clone()), array))
+                })
+                .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+
+            Ok(Arc::new(StructArray::from(struct_arrays)))
+        }
+        _ => Err(format!("Unsupported data type: {}", field.data_type()).into()),
+    }
+}
+
 fn create_schema4_old() -> Arc<Schema> {
     let schema2 = Arc::new(Schema::new(vec![
         Field::new("component", DataType::Utf8, true),
@@ -228,34 +283,6 @@ fn create_schema4_old() -> Arc<Schema> {
     schema2
 }
 
-fn create_batch1(schema1: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
-    let batch1 = RecordBatch::try_new(
-        schema1.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![Some("component1")])),
-            Arc::new(StringArray::from(vec![Some("message1")])),
-            Arc::new(StringArray::from(vec![Some("stack_trace")])),
-            Arc::new(StringArray::from(vec![Some("2025-02-18T00:00:00Z")])),
-            Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-            Arc::new(StructArray::from(vec![
-                (
-                    Arc::new(Field::new("location", DataType::Utf8, true)),
-                    Arc::new(StringArray::from(vec![Some("USA")])) as Arc<dyn Array>,
-                ),
-                (
-                    Arc::new(Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    )),
-                    Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-                ),
-            ])),
-        ],
-    )?;
-    Ok(batch1)
-}
-
 fn create_schema1() -> Arc<Schema> {
     let schema1 = Arc::new(Schema::new(vec![
         Field::new("body", DataType::Utf8, true),
@@ -281,7 +308,13 @@ fn create_schema2() -> Arc<Schema> {
     let schema1 = create_schema1();
 
     // Convert to a vector of fields
-    let mut fields = schema1.fields().to_vec();
+    let fields = schema1.fields().to_vec();
+    // Create a new vector of fields from schema1
+    let mut fields = schema1
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect::<Vec<Field>>();
 
     // Add the query_params field
     fields.push(Field::new(
@@ -300,7 +333,11 @@ fn create_schema3() -> Arc<Schema> {
     let schema2 = create_schema2();
 
     // Convert to a vector of fields
-    let mut fields = schema2.fields().to_vec();
+    let mut fields = schema2
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect::<Vec<Field>>();
 
     // Add the error field
     fields.push(Field::new("error", DataType::Utf8, true));
@@ -315,7 +352,11 @@ fn create_schema4() -> Arc<Schema> {
     let schema1 = create_schema1();
 
     // Convert to a vector of fields
-    let mut fields = schema1.fields().to_vec();
+    let mut fields = schema1
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect::<Vec<Field>>();
 
     // Add the expanded query_params field with additional fields
     fields.push(Field::new(
