@@ -227,7 +227,7 @@ mod tests {
         ])
     }
 
-    fn self_join_on_unique_key_with_filter() -> Result<LogicalPlan> {
+    fn unique_key_with_filter() -> Result<LogicalPlan> {
         let schema = employees_schema();
         let left = table_scan(Some("employees"), &schema, None)?.build()?;
         let left = subquery_alias(left, TableReference::from("a"))?;
@@ -257,8 +257,8 @@ mod tests {
     }
 
     #[test]
-    fn join_on_unique_key_with_filter() -> Result<()> {
-        let plan = self_join_on_unique_key_with_filter()?;
+    fn test_unique_key_with_filter() -> Result<()> {
+        let plan = unique_key_with_filter()?;
 
         assert_optimized_plan_equal!(plan, @r#"
         Projection: a.id
