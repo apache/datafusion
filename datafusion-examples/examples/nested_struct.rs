@@ -35,26 +35,52 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
 {
     println!("==> Starting test function");
     let ctx = SessionContext::new();
+    println!("==> Session context created");
 
     println!("==> Creating schema1 (simple additionalInfo structure)");
     let schema1 = create_schema1();
-    let schema4 = create_schema4();
+    println!("==> Schema1 created: {:?}", schema1);
 
+    println!("==> Creating schema4");
+    let schema4 = create_schema4();
+    println!("==> Schema4 created: {:?}", schema4);
+
+    println!("==> Creating batch from schema1");
     let batch1 = create_batch(&schema1)?;
+    println!(
+        "==> Batch created successfully with {} rows",
+        batch1.num_rows()
+    );
+
+    println!("==> Creating schema adapter");
     let adapter = NestedStructSchemaAdapterFactory::create_adapter(
         schema4.clone(),
         schema4.clone(),
     );
+    println!("==> Schema adapter created");
 
+    println!("==> Mapping schema");
     let (mapping, _) = adapter
         .map_schema(&schema1.clone())
         .expect("map schema failed");
+    println!("==> Schema mapped successfully");
+
+    println!("==> Mapping batch");
     let mapped_batch = mapping.map_batch(batch1)?;
+    println!(
+        "==> Batch mapped successfully with {} rows",
+        mapped_batch.num_rows()
+    );
 
     let path1 = "test_data1.parquet";
+    println!("==> Removing existing file if present: {}", path1);
     let _ = fs::remove_file(path1);
+    println!("==> File removal attempted");
 
+    println!("==> Creating DataFrame from batch");
     let df1 = ctx.read_batch(mapped_batch)?;
+    println!("==> DataFrame created successfully");
+
     println!("==> Writing first parquet file to {}", path1);
     df1.write_parquet(
         path1,
