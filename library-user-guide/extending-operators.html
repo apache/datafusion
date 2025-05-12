@@ -521,9 +521,26 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#about-datafusion-wheel">
+   About DataFusion µWheel
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#optimizing-logical-plan">
+     Optimizing Logical Plan
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -570,7 +587,43 @@
 -->
 <section id="extending-datafusion-s-operators-custom-logicalplan-and-execution-plans">
 <h1>Extending DataFusion’s operators: custom LogicalPlan and Execution Plans<a class="headerlink" href="#extending-datafusion-s-operators-custom-logicalplan-and-execution-plans" title="Link to this heading">¶</a></h1>
-<p>Coming soon</p>
+<p>DataFusion supports extension of operators by transforming logical plan and execution plan through customized <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html">optimizer rules</a>. This section will use the µWheel project to illustrate such capabilities.</p>
+<section id="about-datafusion-wheel">
+<h2>About DataFusion µWheel<a class="headerlink" href="#about-datafusion-wheel" title="Link to this heading">¶</a></h2>
+<p><a class="reference external" href="https://github.com/uwheel/datafusion-uwheel/tree/main">DataFusion µWheel</a> is a native DataFusion optimizer which improves query performance for time-based analytics through fast temporal aggregation and pruning using custom indices. The integration of µWheel into DataFusion is a joint effort with the DataFusion community.</p>
+<section id="optimizing-logical-plan">
+<h3>Optimizing Logical Plan<a class="headerlink" href="#optimizing-logical-plan" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">rewrite</span></code> function transforms logical plans by identifying temporal patterns and aggregation functions that match the stored wheel indices. When match is found, it queries the corresponding index to retrieve pre-computed aggregate values, stores these results in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemTable.html">MemTable</a>, and returns as a new <code class="docutils literal notranslate"><span class="pre">LogicalPlan::TableScan</span></code>. If no match is found, the original plan proceeds unchanged through DataFusion’s standard execution path.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="p">,</span><span class="n">ignore</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">rewrite</span><span class="p">(</span>
+<span class="w">  </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">  </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="w">  </span><span class="n">_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Transformed</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Attemps to rewrite a logical plan to a uwheel-based plan that either provides</span>
+<span class="w">    </span><span class="c1">// plan-time aggregates or skips execution based on min/max pruning.</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">rewritten</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">try_rewrite</span><span class="p">(</span><span class="o">&amp;</span><span class="n">plan</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Transformed</span><span class="p">::</span><span class="n">yes</span><span class="p">(</span><span class="n">rewritten</span><span class="p">))</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Transformed</span><span class="p">::</span><span class="n">no</span><span class="p">(</span><span class="n">plan</span><span class="p">))</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="p">,</span><span class="n">ignore</span>
+<span class="c1">// Converts a uwheel aggregate result to a TableScan with a MemTable as source</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">agg_to_table_scan</span><span class="p">(</span><span class="n">result</span><span class="p">:</span><span class="w"> </span><span class="kt">f64</span><span class="p">,</span><span class="w"> </span><span class="n">schema</span><span class="p">:</span><span class="w"> </span><span class="nc">SchemaRef</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Float64Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">result</span><span class="p">]);</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">record_batch</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RecordBatch</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">schema</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">data</span><span class="p">)])</span><span class="o">?</span><span class="p">;</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">df_schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DFSchema</span><span class="p">::</span><span class="n">try_from</span><span class="p">(</span><span class="n">schema</span><span class="p">.</span><span class="n">clone</span><span class="p">())</span><span class="o">?</span><span class="p">);</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="n">mem_table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MemTable</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">schema</span><span class="p">,</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="fm">vec!</span><span class="p">[</span><span class="n">record_batch</span><span class="p">]])</span><span class="o">?</span><span class="p">;</span>
+<span class="w">  </span><span class="n">mem_table_as_table_scan</span><span class="p">(</span><span class="n">mem_table</span><span class="p">,</span><span class="w"> </span><span class="n">df_schema</span><span class="p">)</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>To get a deeper dive into the usage of the µWheel project, visit the <a class="reference external" href="https://uwheel.rs/post/datafusion_uwheel/">blog post</a> by Max Meldrum.</p>
+</section>
+</section>
 </section>
 
 
