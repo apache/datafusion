@@ -169,6 +169,7 @@ impl OptimizerRule for EliminateSelfJoin {
                 }
                 // If we reach here, it means we can eliminate the self join
                 if let Some(plan) = optimize(left.as_ref(), right.as_ref()) {
+                    // TODO: since this is a `USING` join, do we have `filter` defined?
                     let plan = if let Some(filter) = filter {
                         LogicalPlan::Filter(Filter::try_new(
                             filter.clone(),
