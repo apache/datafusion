@@ -34,7 +34,7 @@ use std::sync::Arc;
 ///
 /// A scalar function produces a single row output for each row of input. This
 /// struct contains the information DataFusion needs to plan and invoke
-/// functions you supply such name, type signature, return type, and actual
+/// functions you supply such as name, type signature, return type, and actual
 /// implementation.
 ///
 /// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
@@ -42,11 +42,11 @@ use std::sync::Arc;
 /// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
 ///    access (examples in  [`advanced_udf.rs`]).
 ///
-/// See [`Self::call`] to invoke a `ScalarUDF` with arguments.
+/// See [`Self::call`] to create an `Expr` which invokes a `ScalarUDF` with arguments.
 ///
 /// # API Note
 ///
-/// This is a separate struct from `ScalarUDFImpl` to maintain backwards
+/// This is a separate struct from [`ScalarUDFImpl`] to maintain backwards
 /// compatibility with the older API.
 ///
 /// [`create_udf`]: crate::expr_fn::create_udf
@@ -451,9 +451,9 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Notes
     ///
-    /// Most UDFs should implement [`Self::return_type`] and not this
-    /// function as the output type for most functions only depends on the types
-    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
+    /// Most UDFs should implement [`Self::return_type`] and not this function,
+    /// as the output type for most functions only depends on the types of their
+    /// inputs (e.g. `sqrt(f32)` is always `f32`).
     ///
     /// This function can be used for more advanced cases such as:
     ///
@@ -547,13 +547,15 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
-    /// and thus any side effects (like divide by zero) may not be encountered
-    /// Setting this to true prevents certain optimizations such as common subexpression elimination
+    /// and thus any side effects (like divide by zero) may not be encountered.
+    ///
+    /// Setting this to true prevents certain optimizations such as common
+    /// subexpression elimination
     fn short_circuits(&self) -> bool {
         false
     }
 
-    /// Computes the output interval for a [`ScalarUDFImpl`], given the input
+    /// Computes the output [`Interval`] for a [`ScalarUDFImpl`], given the input
     /// intervals.
     ///
     /// # Parameters
@@ -569,9 +571,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Interval::make_unbounded(&DataType::Null)
     }
 
-    /// Updates bounds for child expressions, given a known interval for this
-    /// function. This is used to propagate constraints down through an expression
-    /// tree.
+    /// Updates bounds for child expressions, given a known [`Interval`]s for this
+    /// function.
+    ///
+    /// This function is used to propagate constraints down through an
+    /// expression tree.
     ///
     /// # Parameters
     ///
@@ -620,16 +624,19 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         }
     }
 
-    /// Whether the function preserves lexicographical ordering based on the input ordering
+    /// Returns true if the function preserves lexicographical ordering based on
+    /// the input ordering.
+    ///
+    /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
     fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(false)
     }
 
     /// Coerce arguments of a function call to types that the function can evaluate.
     ///
-    /// This function is only called if [`ScalarUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
-    /// UDFs should return one of the other variants of `TypeSignature` which handle common
-    /// cases
+    /// This function is only called if [`ScalarUDFImpl::signature`] returns
+    /// [`crate::TypeSignature::UserDefined`]. Most UDFs should return one of
+    /// the other variants of [`TypeSignature`] which handle common cases.
     ///
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
@@ -677,8 +684,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Returns the documentation for this Scalar UDF.
     ///
-    /// Documentation can be accessed programmatically as well as
-    /// generating publicly facing documentation.
+    /// Documentation can be accessed programmatically as well as generating
+    /// publicly facing documentation.
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
