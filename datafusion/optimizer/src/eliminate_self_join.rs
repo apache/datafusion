@@ -257,6 +257,35 @@ mod tests {
             .build()
     }
 
+    fn unique_key_with_subquery_filter() -> Result<LogicalPlan> {
+        let schema = employees_schema();
+
+        let right = table_scan(Some("employees"), &schema, None)?
+            .filter(col("department").eq(lit("HR")))?
+            .project(vec![col("id")])?
+            .alias("b")?
+            .build()?;
+
+        let plan = table_scan(Some("employees"), &schema, None)?
+            .alias("a")?
+            .join(
+                right,
+                JoinType::Inner,
+                (vec![Column::from_name("id")], vec![Column::from_name("id")]),
+                None,
+            )?
+            .build()?;
+        // TODO: double check if this monkey patch is needed. If only `join_keys` is specified, the `join_constraint` should be `Using`
+        let plan = match plan {
+            LogicalPlan::Join(mut join) => {
+                join.join_constraint = JoinConstraint::Using;
+                LogicalPlan::Join(join)
+            }
+            _ => panic!("Expected a Join"),
+        };
+        project(plan, vec![col("a.id")])
+    }
+
     #[test]
     fn test_unique_key_with_filter() -> Result<()> {
         let plan = unique_key_with_filter()?;
@@ -265,6 +294,18 @@ mod tests {
         Projection: a.id
           Filter: a.department = Utf8("HR")
             SubqueryAlias: a
+              TableScan: employees
+        "#)
+    }
+
+    #[test]
+    fn test_unique_key_with_subquery_filter() -> Result<()> {
+        let plan = unique_key_with_subquery_filter()?;
+
+        assert_optimized_plan_equal!(plan, @r#"
+        Projection: a.id
+          SubqueryAlias: a
+            Filter: a.department = Utf8("HR")
               TableScan: employees
         "#)
     }
