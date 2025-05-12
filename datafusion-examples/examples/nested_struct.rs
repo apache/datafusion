@@ -92,7 +92,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     println!("==> Successfully wrote first parquet file");
     println!("==> Creating schema2 (extended additionalInfo with nested reason field)");
 
-    let batch2 = create_batch2(&schema4)?;
+    let batch2 = create_batch(&schema4)?;
 
     let path2 = "test_data2.parquet";
     let _ = fs::remove_file(path2);
@@ -355,98 +355,6 @@ fn create_schema4() -> Arc<Schema> {
 
     // Create a new schema with the extended fields
     Arc::new(Schema::new(fields))
-}
-
-fn create_batch2(schema2: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
-    let batch2 = RecordBatch::try_new(
-        schema2.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![Some("component1")])),
-            Arc::new(StringArray::from(vec![Some("message1")])),
-            Arc::new(StringArray::from(vec![Some("stack_trace")])),
-            Arc::new(StringArray::from(vec![Some("2025-02-18T00:00:00Z")])),
-            Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-            Arc::new(StructArray::from(vec![
-                (
-                    Arc::new(Field::new("location", DataType::Utf8, true)),
-                    Arc::new(StringArray::from(vec![Some("USA")])) as Arc<dyn Array>,
-                ),
-                (
-                    Arc::new(Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    )),
-                    Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-                ),
-                (
-                    Arc::new(Field::new(
-                        "reason",
-                        DataType::Struct(
-                            vec![
-                                Field::new("_level", DataType::Float64, true),
-                                Field::new(
-                                    "details",
-                                    DataType::Struct(
-                                        vec![
-                                            Field::new("rurl", DataType::Utf8, true),
-                                            Field::new("s", DataType::Float64, true),
-                                            Field::new("t", DataType::Utf8, true),
-                                        ]
-                                        .into(),
-                                    ),
-                                    true,
-                                ),
-                            ]
-                            .into(),
-                        ),
-                        true,
-                    )),
-                    Arc::new(StructArray::from(vec![
-                        (
-                            Arc::new(Field::new("_level", DataType::Float64, true)),
-                            Arc::new(Float64Array::from(vec![Some(1.5)]))
-                                as Arc<dyn Array>,
-                        ),
-                        (
-                            Arc::new(Field::new(
-                                "details",
-                                DataType::Struct(
-                                    vec![
-                                        Field::new("rurl", DataType::Utf8, true),
-                                        Field::new("s", DataType::Float64, true),
-                                        Field::new("t", DataType::Utf8, true),
-                                    ]
-                                    .into(),
-                                ),
-                                true,
-                            )),
-                            Arc::new(StructArray::from(vec![
-                                (
-                                    Arc::new(Field::new("rurl", DataType::Utf8, true)),
-                                    Arc::new(StringArray::from(vec![Some(
-                                        "https://example.com",
-                                    )]))
-                                        as Arc<dyn Array>,
-                                ),
-                                (
-                                    Arc::new(Field::new("s", DataType::Float64, true)),
-                                    Arc::new(Float64Array::from(vec![Some(3.14)]))
-                                        as Arc<dyn Array>,
-                                ),
-                                (
-                                    Arc::new(Field::new("t", DataType::Utf8, true)),
-                                    Arc::new(StringArray::from(vec![Some("data")]))
-                                        as Arc<dyn Array>,
-                                ),
-                            ])),
-                        ),
-                    ])),
-                ),
-            ])),
-        ],
-    )?;
-    Ok(batch2)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
