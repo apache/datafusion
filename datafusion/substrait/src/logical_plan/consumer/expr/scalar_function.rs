@@ -54,23 +54,8 @@ pub async fn from_scalar_function(
                        f.arguments.len()
                     );
         }
-        // Some expressions are binary in DataFusion but take in a variadic number of args in Substrait.
-        // In those cases we iterate through all the arguments, applying the binary expression against them all
-        let combined_expr = args
-            .into_iter()
-            .fold(None, |combined_expr: Option<Expr>, arg: Expr| {
-                Some(match combined_expr {
-                    Some(expr) => Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(expr),
-                        op,
-                        right: Box::new(arg),
-                    }),
-                    None => arg,
-                })
-            })
-            .unwrap();
-
-        Ok(combined_expr)
+        // In those cases we build a balanced tree of BinaryExprs
+        Ok(arg_list_to_binary_op_tree(op, &args))
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
         builder.build(consumer, f, input_schema).await
     } else {
@@ -122,6 +107,31 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
         "bitwise_shift_left" => Some(Operator::BitwiseShiftLeft),
         _ => None,
     }
+}
+
+/// Build a balanced tree of binary operations from a binary operator and a list of arguments.
+///
+/// For example, `OR` `(a, b, c, d, e)` will be converted to: `OR(OR(a, OR(b, c)), OR(d, e))`.
+///
+/// `args` must not be empty.
+fn arg_list_to_binary_op_tree(
+    op: Operator,
+    args: &[Expr],
+) -> Expr {
+    if args.len() == 1 {
+        return args[0].clone();
+    } else if args.len() == 0 {
+        panic!("must not be called with empty args");
+    }
+    // Cut argument list in 2 balanced parts
+    let mid_idx = args.len() / 2;
+    let left = arg_list_to_binary_op_tree(op, &args[0..mid_idx]);
+    let right = arg_list_to_binary_op_tree(op, &args[mid_idx..]);
+    Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(left),
+        op,
+        right: Box::new(right),
+    })
 }
 
 /// Build [`Expr`] from its name and required inputs.
