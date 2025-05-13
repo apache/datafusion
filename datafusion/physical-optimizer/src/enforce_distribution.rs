@@ -1291,7 +1291,7 @@ pub fn ensure_distribution(
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(sort_req.clone());
+                    .ordering_satisfy_requirement(sort_req.clone())?;
 
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
@@ -1308,7 +1308,7 @@ pub fn ensure_distribution(
                                 .downcast_ref::<OutputRequirementExec>()
                                 .map(|output| output.fetch())
                                 .unwrap_or(None),
-                        );
+                        )?;
                     }
                 }
                 // Stop tracking distribution changing operators

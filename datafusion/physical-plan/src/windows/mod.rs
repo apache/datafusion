@@ -601,7 +601,7 @@ pub fn get_window_mode(
     {
         let mut req = partition_by_reqs.clone();
         req.extend(orderbys.iter().cloned().map(Into::into));
-        if req.is_empty() || input_eqs.ordering_satisfy_requirement(req) {
+        if req.is_empty() || input_eqs.ordering_satisfy_requirement(req)? {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {
                 InputOrderMode::Sorted

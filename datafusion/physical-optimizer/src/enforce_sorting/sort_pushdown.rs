@@ -124,7 +124,7 @@ fn pushdown_sorts_helper(
 
     let eqp = plan.equivalence_properties();
     let satisfy_parent =
-        eqp.ordering_satisfy_requirement(parent_requirement.first().clone());
+        eqp.ordering_satisfy_requirement(parent_requirement.first().clone())?;
 
     if is_sort(&plan) {
         let Some(sort_ordering) = plan.output_ordering().cloned() else {
@@ -234,7 +234,7 @@ fn pushdown_requirement_to_children(
                 // that's the case, we block the pushdown of sort operation.
                 if !plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(parent_required.into_single())
+                    .ordering_satisfy_requirement(parent_required.into_single())?
                 {
                     return Ok(None);
                 }
@@ -423,7 +423,7 @@ fn try_pushdown_requirements_to_join(
                 return Ok(None);
             };
             if !left_eq_properties
-                .ordering_satisfy_requirement(left_requirement.into_single())
+                .ordering_satisfy_requirement(left_requirement.into_single())?
             {
                 return Ok(None);
             }
@@ -440,7 +440,7 @@ fn try_pushdown_requirements_to_join(
                 return Ok(None);
             };
             if !right_eq_properties
-                .ordering_satisfy_requirement(right_requirement.into_single())
+                .ordering_satisfy_requirement(right_requirement.into_single())?
             {
                 return Ok(None);
             }
@@ -464,7 +464,7 @@ fn try_pushdown_requirements_to_join(
         // smj will have this ordering when its input changes.
         smj_eqs = smj_eqs.with_reorder(new_output_ordering);
     }
-    let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);
+    let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required)?;
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();
         let new_req = ordering.map(Into::into);

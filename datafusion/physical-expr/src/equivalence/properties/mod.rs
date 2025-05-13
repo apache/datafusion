@@ -477,15 +477,15 @@ impl EquivalenceProperties {
     pub fn ordering_satisfy_requirement(
         &self,
         given: impl IntoIterator<Item = PhysicalSortRequirement>,
-    ) -> bool {
+    ) -> Result<bool> {
         // First, standardize the given requirement:
         let Some(normal_reqs) = self.normalize_sort_requirements(given) else {
             // If the requirement vanishes after normalization, it is satisfied:
-            return true;
+            return Ok(true);
         };
         // Then, check whether given requirement is satisfied by constraints:
         if self.satisfied_by_constraints(&normal_reqs) {
-            return true;
+            return Ok(true);
         }
         let schema = self.schema();
         let mut eq_properties = self.clone();
@@ -505,7 +505,7 @@ impl EquivalenceProperties {
                 SortProperties::Unordered => false,
             };
             if !satisfy {
-                return false;
+                return Ok(false);
             }
             // Treat satisfied keys as constants in subsequent iterations. We
             // can do this because the "next" key only matters in a lexicographical
@@ -520,11 +520,9 @@ impl EquivalenceProperties {
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
             let const_expr = ConstExpr::from(element.expr);
-            eq_properties
-                .add_constants(std::iter::once(const_expr))
-                .unwrap();
+            eq_properties.add_constants(std::iter::once(const_expr))?;
         }
-        true
+        Ok(true)
     }
 
     /// Returns the number of consecutive sort expressions (starting from the

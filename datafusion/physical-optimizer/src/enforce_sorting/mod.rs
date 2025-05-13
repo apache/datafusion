@@ -417,7 +417,7 @@ pub fn parallelize_sorts(
         // deals with the children and their children and so on.
         requirements = requirements.children.swap_remove(0);
 
-        requirements = add_sort_above_with_check(requirements, sort_reqs, fetch);
+        requirements = add_sort_above_with_check(requirements, sort_reqs, fetch)?;
 
         let spm =
             SortPreservingMergeExec::new(sort_exprs, Arc::clone(&requirements.plan));
@@ -501,7 +501,7 @@ pub fn ensure_sorting(
         if let Some(required) = required_ordering {
             let eq_properties = child.plan.equivalence_properties();
             let req = required.into_single();
-            if !eq_properties.ordering_satisfy_requirement(req.clone()) {
+            if !eq_properties.ordering_satisfy_requirement(req.clone())? {
                 // Make sure we preserve the ordering requirements:
                 if physical_ordering.is_some() {
                     child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;

@@ -178,17 +178,19 @@ pub fn plan_with_order_breaking_variants(
     .map(|(node, maintains, required_ordering)| {
         // Replace with non-order preserving variants as long as ordering is
         // not required by intermediate operators:
-        if maintains
-            && (is_sort_preserving_merge(plan)
-                || !required_ordering.is_some_and(|required_ordering| {
-                    node.plan
-                        .equivalence_properties()
-                        .ordering_satisfy_requirement(required_ordering.into_single())
-                }))
-        {
-            plan_with_order_breaking_variants(node)
-        } else {
+        if !maintains {
             Ok(node)
+        } else if is_sort_preserving_merge(plan) {
+            plan_with_order_breaking_variants(node)
+        } else if let Some(required_ordering) = required_ordering {
+            let eqp = node.plan.equivalence_properties();
+            if !eqp.ordering_satisfy_requirement(required_ordering.into_single())? {
+                plan_with_order_breaking_variants(node)
+            } else {
+                Ok(node)
+            }
+        } else {
+            plan_with_order_breaking_variants(node)
         }
     })
     .collect::<Result<_>>()?;

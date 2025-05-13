@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use datafusion_common::Result;
 use datafusion_physical_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -64,15 +65,15 @@ pub fn add_sort_above_with_check<T: Clone + Default>(
     node: PlanContext<T>,
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
-) -> PlanContext<T> {
+) -> Result<PlanContext<T>> {
     if !node
         .plan
         .equivalence_properties()
-        .ordering_satisfy_requirement(sort_requirements.clone())
+        .ordering_satisfy_requirement(sort_requirements.clone())?
     {
-        add_sort_above(node, sort_requirements, fetch)
+        Ok(add_sort_above(node, sort_requirements, fetch))
     } else {
-        node
+        Ok(node)
     }
 }
 

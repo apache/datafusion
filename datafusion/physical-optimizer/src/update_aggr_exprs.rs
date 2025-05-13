@@ -170,7 +170,7 @@ fn try_convert_aggregate_if_better(
                         .iter()
                         .map(|e| e.clone().into())
                         .collect::<Vec<_>>(),
-                )) {
+                ))? {
                     // Existing ordering satisfies the aggregator requirements:
                     aggr_expr.with_beneficial_ordering(true)?.map(Arc::new)
                 } else if eq_properties.ordering_satisfy_requirement(concat_slices(
@@ -179,7 +179,7 @@ fn try_convert_aggregate_if_better(
                         .iter()
                         .map(|e| e.reverse().into())
                         .collect::<Vec<_>>(),
-                )) {
+                ))? {
                     // Converting to reverse enables more efficient execution
                     // given the existing ordering (if possible):
                     aggr_expr
