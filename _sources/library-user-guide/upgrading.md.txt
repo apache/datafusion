@@ -38,7 +38,7 @@ has been removed, so you will need to remove all references to it.
 `ScalarFunctionArgs` now contains a field called `arg_fields`. You can use this
 to access the metadata associated with the columnar values during invocation.
 
-### Physical Expression return field
+### Physical Expression return `Field`
 
 To support the changes to user defined functions processing metadata, the
 `PhysicalExpr` trait, which now must specify a return `Field` based on the input
@@ -55,6 +55,17 @@ If you implemented a custom `FileFormat` that uses a custom `FileSource` you wil
 See `ParquetSource::try_pushdown_filters` for an example of how to implement this.
 
 `FileFormat::supports_filters_pushdown` has been removed.
+
+### `ParquetExec`, `AvroExec`, `CsvExec`, `JsonExec` Removed
+
+`ParquetExec`, `AvroExec`, `CsvExec`, and `JsonExec` were deprecated in
+DataFusion 46 and are removed in DataFusion 48. This is sooner than the normal
+process described in the [API Deprecation Guidelines] because all the tests
+cover the new `DataSourceExec` rather than the older structures. As we evolve
+`DataSource`, the old structures began to show signs of "bit rotting" (not
+working but no one knows due to lack of test coverage).
+
+[api deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines
 
 ## DataFusion `47.0.0`
 

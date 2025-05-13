@@ -556,7 +556,12 @@
    </li>
    <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#physical-expression-return-field">
-     Physical Expression return field
+     Physical Expression return
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Field
+      </span>
+     </code>
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
@@ -572,6 +577,34 @@
        FileSource::try_pushdown_filters
       </span>
      </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#parquetexec-avroexec-csvexec-jsonexec-removed">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ParquetExec
+      </span>
+     </code>
+     ,
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       AvroExec
+      </span>
+     </code>
+     ,
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       CsvExec
+      </span>
+     </code>
+     ,
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       JsonExec
+      </span>
+     </code>
+     Removed
     </a>
    </li>
   </ul>
@@ -803,7 +836,7 @@ has been removed, so you will need to remove all references to it.</p>
 to access the metadata associated with the columnar values during invocation.</p>
 </section>
 <section id="physical-expression-return-field">
-<h3>Physical Expression return field<a class="headerlink" href="#physical-expression-return-field" title="Link to this heading">¶</a></h3>
+<h3>Physical Expression return <code class="docutils literal notranslate"><span class="pre">Field</span></code><a class="headerlink" href="#physical-expression-return-field" title="Link to this heading">¶</a></h3>
 <p>To support the changes to user defined functions processing metadata, the
 <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code> trait, which now must specify a return <code class="docutils literal notranslate"><span class="pre">Field</span></code> based on the input
 schema. To upgrade structs which implement <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code> you need to implement
@@ -818,6 +851,15 @@ If you implemented a custom <code class="docutils literal notranslate"><span cla
 <code class="docutils literal notranslate"><span class="pre">FileSource::try_pushdown_filters</span></code>.
 See <code class="docutils literal notranslate"><span class="pre">ParquetSource::try_pushdown_filters</span></code> for an example of how to implement this.</p>
 <p><code class="docutils literal notranslate"><span class="pre">FileFormat::supports_filters_pushdown</span></code> has been removed.</p>
+</section>
+<section id="parquetexec-avroexec-csvexec-jsonexec-removed">
+<h3><code class="docutils literal notranslate"><span class="pre">ParquetExec</span></code>, <code class="docutils literal notranslate"><span class="pre">AvroExec</span></code>, <code class="docutils literal notranslate"><span class="pre">CsvExec</span></code>, <code class="docutils literal notranslate"><span class="pre">JsonExec</span></code> Removed<a class="headerlink" href="#parquetexec-avroexec-csvexec-jsonexec-removed" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ParquetExec</span></code>, <code class="docutils literal notranslate"><span class="pre">AvroExec</span></code>, <code class="docutils literal notranslate"><span class="pre">CsvExec</span></code>, and <code class="docutils literal notranslate"><span class="pre">JsonExec</span></code> were deprecated in
+DataFusion 46 and are removed in DataFusion 48. This is sooner than the normal
+process described in the <a class="reference external" href="https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines">API Deprecation Guidelines</a> because all the tests
+cover the new <code class="docutils literal notranslate"><span class="pre">DataSourceExec</span></code> rather than the older structures. As we evolve
+<code class="docutils literal notranslate"><span class="pre">DataSource</span></code>, the old structures began to show signs of “bit rotting” (not
+working but no one knows due to lack of test coverage).</p>
 </section>
 </section>
 <section id="datafusion-47-0-0">
