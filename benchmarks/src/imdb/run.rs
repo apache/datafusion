@@ -471,7 +471,7 @@ impl RunOpt {
     fn partitions(&self) -> usize {
         self.common
             .partitions
-            .unwrap_or(get_available_parallelism())
+            .unwrap_or_else(get_available_parallelism)
     }
 }
 

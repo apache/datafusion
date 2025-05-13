@@ -72,11 +72,11 @@ impl CommonOpt {
     /// Modify the existing config appropriately
     pub fn update_config(&self, mut config: SessionConfig) -> SessionConfig {
         if let Some(batch_size) = self.batch_size {
-            config = config.with_batch_size(batch_size)
+            config = config.with_batch_size(batch_size);
         }
 
         if let Some(partitions) = self.partitions {
-            config = config.with_target_partitions(partitions)
+            config = config.with_target_partitions(partitions);
         }
 
         if let Some(sort_spill_reservation_bytes) = self.sort_spill_reservation_bytes {

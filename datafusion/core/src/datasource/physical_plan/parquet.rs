@@ -54,6 +54,7 @@ mod tests {
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
+    use datafusion_datasource::file::FileSource;
     use datafusion_datasource::{FileRange, PartitionedFile};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
@@ -139,7 +140,7 @@ mod tests {
             self.round_trip(batches).await.batches
         }
 
-        fn build_file_source(&self, file_schema: SchemaRef) -> Arc<ParquetSource> {
+        fn build_file_source(&self, file_schema: SchemaRef) -> Arc<dyn FileSource> {
             // set up predicate (this is normally done by a layer higher up)
             let predicate = self
                 .predicate
@@ -148,7 +149,7 @@ mod tests {
 
             let mut source = ParquetSource::default();
             if let Some(predicate) = predicate {
-                source = source.with_predicate(Arc::clone(&file_schema), predicate);
+                source = source.with_predicate(predicate);
             }
 
             if self.pushdown_predicate {
@@ -161,14 +162,14 @@ mod tests {
                 source = source.with_enable_page_index(true);
             }
 
-            Arc::new(source)
+            source.with_schema(Arc::clone(&file_schema))
         }
 
         fn build_parquet_exec(
             &self,
             file_schema: SchemaRef,
             file_group: FileGroup,
-            source: Arc<ParquetSource>,
+            source: Arc<dyn FileSource>,
         ) -> Arc<DataSourceExec> {
             let base_config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),

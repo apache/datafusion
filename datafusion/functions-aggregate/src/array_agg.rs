@@ -1057,7 +1057,7 @@ mod tests {
 
     fn print_nulls(sort: Vec<Option<String>>) -> Vec<String> {
         sort.into_iter()
-            .map(|v| v.unwrap_or("NULL".to_string()))
+            .map(|v| v.unwrap_or_else(|| "NULL".to_string()))
             .collect()
     }
 

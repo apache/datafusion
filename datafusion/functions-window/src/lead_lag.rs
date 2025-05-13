@@ -316,13 +316,13 @@ fn parse_default_value(
     input_exprs: &[Arc<dyn PhysicalExpr>],
     input_types: &[Field],
 ) -> Result<ScalarValue> {
-    let expr_type = parse_expr_field(input_types)?;
+    let expr_field = parse_expr_field(input_types)?;
     let unparsed = get_scalar_value_from_args(input_exprs, 2)?;
 
     unparsed
         .filter(|v| !v.data_type().is_null())
-        .map(|v| v.cast_to(expr_type.data_type()))
-        .unwrap_or(ScalarValue::try_from(expr_type.data_type()))
+        .map(|v| v.cast_to(expr_field.data_type()))
+        .unwrap_or_else(|| ScalarValue::try_from(expr_field.data_type()))
 }
 
 #[derive(Debug)]
