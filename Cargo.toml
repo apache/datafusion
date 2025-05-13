@@ -215,5 +215,5 @@ or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)", "cfg(tarpaulin_include)"] }
 unused_qualifications = "deny"
