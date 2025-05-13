@@ -3814,7 +3814,7 @@ impl fmt::Display for ScalarValue {
                                         array_value_to_string(arr.column(0), i).unwrap();
                                     let value =
                                         array_value_to_string(arr.column(1), i).unwrap();
-                                    buffer.push_back(format!("{}:{}", key, value));
+                                    buffer.push_back(format!("{key}:{value}"));
                                 }
                                 format!(
                                     "{{{}}}",
@@ -3833,7 +3833,7 @@ impl fmt::Display for ScalarValue {
                 )?
             }
             ScalarValue::Union(val, _fields, _mode) => match val {
-                Some((id, val)) => write!(f, "{}:{}", id, val)?,
+                Some((id, val)) => write!(f, "{id}:{val}")?,
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
@@ -4010,7 +4010,7 @@ impl fmt::Debug for ScalarValue {
                 write!(f, "DurationNanosecond(\"{self}\")")
             }
             ScalarValue::Union(val, _fields, _mode) => match val {
-                Some((id, val)) => write!(f, "Union {}:{}", id, val),
+                Some((id, val)) => write!(f, "Union {id}:{val}"),
                 None => write!(f, "Union(NULL)"),
             },
             ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
