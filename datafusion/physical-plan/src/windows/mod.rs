@@ -391,7 +391,7 @@ pub(crate) fn window_equivalence_properties(
                 if no_partitioning {
                     // Window function has a constant result across the table:
                     window_eq_properties
-                        .add_constants(std::iter::once(ConstExpr::from(window_col)))
+                        .add_constants(std::iter::once(ConstExpr::from(window_col)))?
                 } else {
                     // Window function results in a partial constant value in
                     // some ordering. Adjust the ordering equivalences accordingly:
@@ -513,7 +513,7 @@ pub fn get_best_fitting_window(
     let orderby_keys = window_exprs[0].order_by();
     let (should_reverse, input_order_mode) =
         if let Some((should_reverse, input_order_mode)) =
-            get_window_mode(partitionby_exprs, orderby_keys, input)
+            get_window_mode(partitionby_exprs, orderby_keys, input)?
         {
             (should_reverse, input_order_mode)
         } else {
@@ -581,7 +581,7 @@ pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
-) -> Option<(bool, InputOrderMode)> {
+) -> Result<Option<(bool, InputOrderMode)>> {
     let mut input_eqs = input.equivalence_properties().clone();
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     let partition_by_reqs = indices
@@ -593,7 +593,7 @@ pub fn get_window_mode(
         .collect::<Vec<_>>();
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().cloned().map(ConstExpr::from);
-    input_eqs.add_constants(const_exprs);
+    input_eqs.add_constants(const_exprs)?;
     let reverse_orderby_keys =
         orderby_keys.iter().map(|e| e.reverse()).collect::<Vec<_>>();
     for (should_swap, orderbys) in
@@ -610,10 +610,10 @@ pub fn get_window_mode(
             } else {
                 InputOrderMode::PartiallySorted(indices)
             };
-            return Some((should_swap, mode));
+            return Ok(Some((should_swap, mode)));
         }
     }
-    None
+    Ok(None)
 }
 
 fn sort_options_resolving_constant(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalSortExpr> {
@@ -1000,7 +1000,7 @@ mod tests {
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
             let res =
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded);
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?;
             // Since reversibility is not important in this test. Convert Option<(bool, InputOrderMode)> to Option<InputOrderMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
@@ -1165,7 +1165,7 @@ mod tests {
             }
 
             assert_eq!(
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded),
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?,
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );

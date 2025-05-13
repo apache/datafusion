@@ -250,7 +250,10 @@ impl EquivalenceProperties {
 
     /// Incorporates the given equivalence group to into the existing
     /// equivalence group within.
-    pub fn add_equivalence_group(&mut self, other_eq_group: EquivalenceGroup) -> Result<()> {
+    pub fn add_equivalence_group(
+        &mut self,
+        other_eq_group: EquivalenceGroup,
+    ) -> Result<()> {
         self.eq_group.extend(other_eq_group);
         // TODO: Normalization point.
         // Discover any new orderings based on the new equivalence classes:
@@ -279,7 +282,10 @@ impl EquivalenceProperties {
     }
 
     /// Track/register physical expressions with constant values.
-    pub fn add_constants(&mut self, constants: impl IntoIterator<Item = ConstExpr>) {
+    pub fn add_constants(
+        &mut self,
+        constants: impl IntoIterator<Item = ConstExpr>,
+    ) -> Result<()> {
         // Add the new constant to the equivalence group:
         for constant in constants {
             self.eq_group.add_constant(constant);
@@ -288,8 +294,9 @@ impl EquivalenceProperties {
         // Discover any new orderings based on the constants:
         for ordering in self.normalized_oeq_class() {
             let leading = Arc::clone(&ordering[0].expr);
-            self.discover_new_orderings(leading).unwrap();
+            self.discover_new_orderings(leading)?;
         }
+        Ok(())
     }
 
     /// Returns the ordering equivalence class within in normal form.
@@ -513,7 +520,9 @@ impl EquivalenceProperties {
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
             let const_expr = ConstExpr::from(element.expr);
-            eq_properties.add_constants(std::iter::once(const_expr));
+            eq_properties
+                .add_constants(std::iter::once(const_expr))
+                .unwrap();
         }
         true
     }
@@ -563,7 +572,9 @@ impl EquivalenceProperties {
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
             let const_expr = ConstExpr::from(element.expr);
-            eq_properties.add_constants(std::iter::once(const_expr));
+            eq_properties
+                .add_constants(std::iter::once(const_expr))
+                .unwrap();
         }
 
         // All sort expressions are satisfied, return full length:
@@ -1101,7 +1112,9 @@ impl EquivalenceProperties {
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
                 let const_expr = ConstExpr::from(Arc::clone(expr));
-                eq_properties.add_constants(std::iter::once(const_expr));
+                eq_properties
+                    .add_constants(std::iter::once(const_expr))
+                    .unwrap();
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.

@@ -97,7 +97,7 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
     // Define a and f are aliases
     eq_properties.add_equal_conditions(Arc::clone(col_a), Arc::clone(col_f))?;
     // Column e has constant value.
-    eq_properties.add_constants([ConstExpr::from(Arc::clone(col_e))]);
+    eq_properties.add_constants([ConstExpr::from(Arc::clone(col_e))])?;
 
     // Randomly order columns for sorting
     let mut rng = StdRng::seed_from_u64(seed);

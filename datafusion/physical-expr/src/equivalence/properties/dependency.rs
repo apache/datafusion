@@ -785,7 +785,7 @@ mod tests {
         let col_h = &col("h", &test_schema)?;
 
         // Add column h as constant
-        eq_properties.add_constants(vec![ConstExpr::from(Arc::clone(col_h))]);
+        eq_properties.add_constants(vec![ConstExpr::from(Arc::clone(col_h))])?;
 
         let test_cases = vec![
             // TEST CASE 1
@@ -983,7 +983,7 @@ mod tests {
                     }
                     properties.add_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
-                    );
+                    )?;
                     properties
                 },
                 // Constants before equal conditions
@@ -991,7 +991,7 @@ mod tests {
                     let mut properties = base_properties.clone();
                     properties.add_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
-                    );
+                    )?;
                     for [left, right] in case.equal_conditions {
                         properties.add_equal_conditions(left, right)?
                     }
@@ -1191,7 +1191,7 @@ mod tests {
         // Setup constant columns
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
-        eq_properties.add_constants([ConstExpr::from(Arc::clone(&col_a))]);
+        eq_properties.add_constants([ConstExpr::from(Arc::clone(&col_a))])?;
 
         let sort_exprs = vec![
             PhysicalSortExpr::new_default(col_a),
@@ -1333,7 +1333,7 @@ mod tests {
         let col_e = col("e", &schema)?;
 
         // Constants: c is constant
-        eq_properties.add_constants([ConstExpr::from(Arc::clone(&col_c))]);
+        eq_properties.add_constants([ConstExpr::from(Arc::clone(&col_c))])?;
 
         // Equality: b = d
         eq_properties.add_equal_conditions(Arc::clone(&col_b), Arc::clone(&col_d))?;

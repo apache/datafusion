@@ -528,7 +528,7 @@ impl AggregateExec {
             &mode,
             &input_order_mode,
             aggr_expr.as_slice(),
-        );
+        )?;
 
         Ok(AggregateExec {
             mode,
@@ -665,7 +665,7 @@ impl AggregateExec {
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
         aggr_exprs: &[Arc<AggregateFunctionExpr>],
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Construct equivalence properties:
         let mut eq_properties = input
             .equivalence_properties()
@@ -674,13 +674,11 @@ impl AggregateExec {
         // If the group by is empty, then we ensure that the operator will produce
         // only one row, and mark the generated result as a constant value.
         if group_expr_mapping.is_empty() {
-            let mut constants = eq_properties.constants().to_vec();
             let new_constants = aggr_exprs.iter().enumerate().map(|(idx, func)| {
                 let column = Arc::new(Column::new(func.name(), idx));
                 ConstExpr::from(column as Arc<dyn PhysicalExpr>)
             });
-            constants.extend(new_constants);
-            eq_properties.add_constants(constants);
+            eq_properties.add_constants(new_constants)?;
         }
 
         // Group by expression will be a distinct value after the aggregation.
@@ -719,12 +717,12 @@ impl AggregateExec {
             input.pipeline_behavior()
         };
 
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             emission_type,
             input.boundedness(),
-        )
+        ))
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
