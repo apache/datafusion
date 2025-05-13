@@ -25,26 +25,34 @@ use std::ops::Deref;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
+use crate::decorrelate::UN_MATCHED_ROW_INDICATOR;
 use crate::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use crate::utils::has_all_column_refs;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
 use arrow::compute::kernels::cmp::eq;
+use arrow::datatypes::Schema;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
     TreeNodeRewriter, TreeNodeVisitor,
 };
-use datafusion_common::{internal_err, not_impl_err, Column, Result};
+use datafusion_common::{
+    internal_err, not_impl_err, Column, DFSchemaRef, HashMap, Result,
+};
 use datafusion_expr::expr::Exists;
 use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::select_expr::SelectExpr;
-use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{
-    binary_expr, col, expr_fn, lit, Aggregate, BinaryExpr, Cast, Expr, JoinType,
-    LogicalPlan, LogicalPlanBuilder, Operator as ExprOperator, Subquery,
+use datafusion_expr::utils::{
+    conjunction, disjunction, split_conjunction, split_disjunction,
 };
+use datafusion_expr::{
+    binary_expr, col, expr_fn, lit, table_scan, Aggregate, BinaryExpr, Cast, Expr,
+    JoinType, LogicalPlan, LogicalPlanBuilder, Operator as ExprOperator, Subquery,
+};
+use datafusion_functions_aggregate::count;
 use datafusion_sql::unparser::Unparser;
+use datafusion_sql::TableReference;
 use indexmap::map::Entry;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
@@ -144,53 +152,48 @@ struct DependentJoin {
     join_conditions: Vec<Expr>,
     // join_type:
 }
-impl DependentJoin {
-    fn replace_right(
-        &mut self,
-        plan: LogicalPlan,
-        unnesting: &UnnestingInfo,
-        replacements: &IndexMap<Column, Column>,
-    ) {
-        self.right.plan = plan;
-        for col in unnesting.outer_refs.iter() {
-            let replacement = replacements.get(col).unwrap();
-            self.join_conditions.push(binary_expr(
-                Expr::Column(col.clone()),
-                ExprOperator::IsNotDistinctFrom,
-                Expr::Column(replacement.clone()),
-            ));
-        }
-    }
-    fn replace_left(
-        &mut self,
-        plan: LogicalPlan,
-        column_replacements: &IndexMap<Column, Column>,
-    ) {
-        self.left.plan = plan
-        // TODO:
-        // - update join condition
-        // - check if the relation with children should be removed
-    }
-}
+impl DependentJoin {}
 
 #[derive(Clone)]
 struct UnnestingInfo {
-    join: DependentJoin,
-    outer_refs: Vec<Column>,
-    domain: Vec<Column>,
+    // join: DependentJoin,
+    domain: LogicalPlan,
     parent: Option<Unnesting>,
 }
 #[derive(Clone)]
 struct Unnesting {
     info: Arc<UnnestingInfo>, // cclasses: union find data structure of equivalent columns
     equivalences: UnionFind,
-    replaces: IndexMap<Column, Column>,
+
+    // for each outer exprs on the left, the set of exprs
+    // on the right required pulling up for the join condition to happen
+    // i.e select * from t1 where t1.col1 = (
+    // select count(*) from t2 where t2.col1 > t1.col2 + t2.col2 or t1.col3 = t1.col2 or t1.col4=2 and t1.col3=1)
+    // we do this by split the complex expr into conjuctive sets
+    // for each of such set, if there exists any or binary operator
+    // we substitute the whole binary operator as true and add every expr appearing in the or condition
+    // to grouped_by
+    // and push every
+    pulled_up_columns: Vec<Column>,
+    //these predicates are disjunctive (combined by `Or` operator)
+    pulled_up_predicates: Vec<Expr>,
     // mapping from outer ref column to new column, if any
     // i.e in some subquery (
     // ... where outer.column_c=inner.column_a
     // )
     // and through union find we have outer.column_c = some_other_expr
     // we can substitute the inner query with inner.column_a=some_other_expr
+    replaces: IndexMap<Column, Column>,
+
+    join_conditions: Vec<Expr>,
+}
+impl Unnesting {
+    fn get_replaced_col(&self, col: &Column) -> Column {
+        match self.replaces.get(col) {
+            Some(col) => col.clone(),
+            None => col.clone(),
+        }
+    }
 }
 
 // TODO: looks like this function can be improved to allow more expr pull up
@@ -339,6 +342,14 @@ fn try_transform_subquery_to_join_expr(
 //         };
 //     }
 // }
+struct GeneralDecorrelationResult {
+    // i.e for aggregation, dependent columns are added to the projection for joining
+    added_columns: Vec<Expr>,
+    // the reason is, unnesting group by happen at lower nodes,
+    // but the filtering (if any) of such expr may happen higher node
+    // (because of known count_bug)
+    count_expr_map: HashSet<Expr>,
+}
 impl DependentJoinTracker {
     fn is_linear_operator(&self, plan: &LogicalPlan) -> bool {
         match plan {
@@ -509,12 +520,159 @@ impl DependentJoinTracker {
         Ok(())
     }
 
-    fn unnest(
+    fn general_decorrelate(
         &mut self,
-        node_id: usize,
+        node: &mut Operator,
         unnesting: &mut Unnesting,
-        outer_refs_from_parent: IndexSet<Column>,
-    ) -> Result<LogicalPlan> {
+        outer_refs_from_parent: &mut IndexSet<ColumnAccess>,
+    ) -> Result<()> {
+        if node.is_dependent_join_node {
+            unimplemented!("recursive unnest not implemented yet")
+        }
+
+        match &mut node.plan {
+            LogicalPlan::Subquery(sq) => {
+                let next_node = node.children.first().unwrap();
+                let mut only_child = self.nodes.swap_remove(next_node).unwrap();
+                self.general_decorrelate(
+                    &mut only_child,
+                    unnesting,
+                    outer_refs_from_parent,
+                )?;
+                *node = only_child;
+                return Ok(());
+            }
+            LogicalPlan::Aggregate(agg) => {
+                let is_static = agg.group_expr.is_empty(); // TODO: grouping set also needs to check is_static
+                let next_node = node.children.first().unwrap();
+                let mut only_child = self.nodes.swap_remove(next_node).unwrap();
+                self.general_decorrelate(
+                    &mut only_child,
+                    unnesting,
+                    outer_refs_from_parent,
+                )?;
+                agg.input = Arc::new(only_child.plan.clone());
+                self.nodes.insert(*next_node, only_child);
+
+                Self::rewrite_columns(agg.group_expr.iter_mut(), unnesting)?;
+                for col in unnesting.pulled_up_columns.iter() {
+                    let replaced_col = unnesting.get_replaced_col(col);
+                    agg.group_expr.push(Expr::Column(replaced_col.clone()));
+                }
+
+                let need_handle_count_bug = true;
+                if need_handle_count_bug {
+                    let un_matched_row = lit(true).alias(UN_MATCHED_ROW_INDICATOR);
+                    agg.group_expr.push(un_matched_row.clone());
+                    // unnesting.pulled_up_predicates.push(value);
+                }
+
+                if is_static {
+                    let join_condition = unnesting
+                        .pulled_up_predicates
+                        .iter()
+                        .map(|e| strip_outer_reference(e.clone()));
+                    // Building the Domain to join with the group by
+                    // TODO: maybe the construction of domain can happen somewhere else
+                    let new_plan = LogicalPlanBuilder::new(unnesting.info.domain.clone())
+                        .join_detailed(
+                            node.plan.clone(),
+                            JoinType::Left,
+                            (Vec::<Column>::new(), Vec::<Column>::new()),
+                            disjunction(join_condition),
+                            true,
+                        )?
+                        .build()?;
+                    println!("{}", new_plan);
+                    node.plan = new_plan;
+                    // self.remove_node(parent, node);
+
+                    // 01)Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END AS count(*)
+                    // TODO: how domain projection work
+                    // left = select distinct domain
+                    // right = new group by
+                    // if there exists count in the group by, the projection set should be something like
+                    //
+                    // 01)Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END AS count(*)
+                    // 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
+                } else {
+                    unimplemented!("non static aggregation sq decorrelation not implemented, i.e exists sq with count")
+                }
+            }
+            LogicalPlan::Filter(filter) => {
+                let disjunctions: Vec<Expr> = split_disjunction(&filter.predicate)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                let mut remained_expr = vec![];
+                // TODO: the paper mention there are 2 approaches to remove these dependent predicate
+                // - substitute the outer ref columns and push them to the parent node (i.e add them to aggregation node)
+                // - perform a join with domain directly here
+                // for now we only implement with the approach substituting
+
+                let mut pulled_up_columns = IndexSet::new();
+                for expr in disjunctions.iter() {
+                    if !expr.contains_outer() {
+                        remained_expr.push(expr.clone());
+                        continue;
+                    }
+                    // extract all columns mentioned in this expr
+                    // and push them up the dependent join
+
+                    unnesting.pulled_up_predicates.push(expr.clone());
+                    expr.clone().map_children(|e| {
+                        if let Expr::Column(ref col) = e {
+                            pulled_up_columns.insert(col.clone());
+                        }
+                        Ok(Transformed::no(e))
+                    })?;
+                }
+                filter.predicate = match disjunction(remained_expr) {
+                    Some(expr) => expr,
+                    None => lit(true),
+                };
+                unnesting.pulled_up_columns.extend(pulled_up_columns);
+                outer_refs_from_parent.retain(|ac| ac.node_id != node.id);
+                if !outer_refs_from_parent.is_empty() {
+                    let next_node = node.children.first().unwrap();
+                    let mut only_child = self.nodes.swap_remove(next_node).unwrap();
+                    self.general_decorrelate(
+                        &mut only_child,
+                        unnesting,
+                        outer_refs_from_parent,
+                    )?;
+                    self.nodes.insert(*next_node, only_child);
+                }
+                // TODO: add equivalences from select.predicate to info.cclasses
+                Self::rewrite_columns(vec![&mut filter.predicate].into_iter(), unnesting);
+                return Ok(());
+            }
+            LogicalPlan::Projection(proj) => {
+                let next_node = node.children.first().unwrap();
+                let mut only_child = self.nodes.swap_remove(next_node).unwrap();
+                // TODO: if the children of this node was added with some extra column (i.e)
+                // aggregation + group by dependent_column
+                // the projection exprs must also include these new expr
+                self.general_decorrelate(
+                    &mut only_child,
+                    unnesting,
+                    outer_refs_from_parent,
+                )?;
+
+                self.nodes.insert(*next_node, only_child);
+                proj.expr.extend(
+                    unnesting
+                        .pulled_up_columns
+                        .iter()
+                        .map(|c| Expr::Column(c.clone())),
+                );
+                Self::rewrite_columns(proj.expr.iter_mut(), unnesting);
+                return Ok(());
+            }
+            _ => {
+                unimplemented!()
+            }
+        };
         unimplemented!()
         // if unnesting.info.parent.is_some() {
         //     not_impl_err!("impl me")
@@ -528,17 +686,17 @@ impl DependentJoinTracker {
         // }
         // Ok(())
     }
-    fn right(&self, node: &Operator) -> &Operator {
+    fn right_owned(&mut self, node: &Operator) -> Operator {
         assert_eq!(2, node.children.len());
         // during the building of the tree, the subquery (right node) is always traversed first
         let node_id = node.children.first().unwrap();
-        return self.nodes.get(node_id).unwrap();
+        return self.nodes.swap_remove(node_id).unwrap();
     }
-    fn left(&self, node: &Operator) -> &Operator {
+    fn left_owned(&mut self, node: &Operator) -> Operator {
         assert_eq!(2, node.children.len());
         // during the building of the tree, the subquery (right node) is always traversed first
         let node_id = node.children.get(1).unwrap();
-        return self.nodes.get(node_id).unwrap();
+        return self.nodes.swap_remove(node_id).unwrap();
     }
     fn root_dependent_join_elimination(&mut self) -> Result<LogicalPlan> {
         let root = self.root.unwrap();
@@ -548,38 +706,34 @@ impl DependentJoinTracker {
             node.is_dependent_join_node,
             "need to handle the case root node is not dependent join node"
         );
+
         let unnesting_info = UnnestingInfo {
             parent: None,
-            join: DependentJoin {
-                original_expr: node.plan.clone(),
-                left: self.left(node).clone(),
-                right: self.right(node).clone(),
-                join_conditions: vec![],
-            },
-            domain: vec![],
-            outer_refs: vec![],
+            domain: node.plan.clone(), // dummy
         };
+
+        let mut outer_refs = node.access_tracker.clone();
         // let unnesting = Unnesting {
         //     info: Arc::new(unnesting),
         //     equivalences: UnionFind::new(),
         //     replaces: IndexMap::new(),
         // };
 
-        self.dependent_join_elimination(node.id, &unnesting_info, IndexSet::new())
+        self.dependent_join_elimination(node.id, &unnesting_info, &mut IndexSet::new())
     }
 
     fn column_accesses(&self, node_id: usize) -> Vec<&ColumnAccess> {
         let node = self.nodes.get(&node_id).unwrap();
         node.access_tracker.iter().collect()
     }
-    fn new_dependent_join(&self, node: &Operator) -> DependentJoin {
-        DependentJoin {
-            original_expr: node.plan.clone(),
-            left: self.left(node).clone(),
-            right: self.left(node).clone(),
-            join_conditions: vec![],
-        }
-    }
+    // fn new_dependent_join(&self, node: &Operator) -> DependentJoin {
+    //     DependentJoin {
+    //         original_expr: node.plan.clone(),
+    //         left: self.left(node).clone(),
+    //         right: self.right(node).clone(),
+    //         join_conditions: vec![],
+    //     }
+    // }
     fn get_subquery_children(
         &self,
         parent: &Operator,
@@ -692,26 +846,47 @@ impl DependentJoinTracker {
         }
     }
 
+    fn build_domain(&self, node: &Operator, left: &Operator) -> Result<LogicalPlan> {
+        let unique_outer_refs: Vec<Column> = node
+            .access_tracker
+            .iter()
+            .map(|c| c.col.clone())
+            .unique()
+            .collect();
+
+        // TODO: handle this correctly.
+        // the direct left child of root is not always the table scan node
+        // and there are many more table providing logical plan
+        let initial_domain = LogicalPlanBuilder::new(left.plan.clone())
+            .project(
+                unique_outer_refs
+                    .iter()
+                    .map(|col| SelectExpr::Expression(Expr::Column(col.clone()))),
+            )?
+            .build()?;
+        return Ok(initial_domain);
+    }
+
     fn dependent_join_elimination(
         &mut self,
         node: usize,
         unnesting: &UnnestingInfo,
-        outer_refs_from_parent: IndexSet<Column>,
+        outer_refs_from_parent: &mut IndexSet<ColumnAccess>,
     ) -> Result<LogicalPlan> {
         let parent = unnesting.parent.clone();
         let mut root_node = self.nodes.swap_remove(&node).unwrap();
-        // let plan = &root_node.plan;
-        // we have to do the reversed iter, because we know the subquery (right side of
-        // the dependent join) is always the first child of the node, and we want to visit
-        // the left side first
-
         let simple_unnest_result = self.simple_decorrelation(&mut root_node)?;
         if root_node.access_tracker.is_empty() {
             if parent.is_some() {
                 // for each projection of outer column moved up by simple_decorrelation
                 // replace them with the expr store inside parent.replaces
                 unimplemented!("simple dependent join not implemented for the case of recursive subquery");
-                return self.unnest(node, &mut parent.unwrap(), outer_refs_from_parent);
+                self.general_decorrelate(
+                    &mut root_node,
+                    &mut parent.unwrap(),
+                    outer_refs_from_parent,
+                )?;
+                return Ok(root_node.plan.clone());
             }
             return self
                 .build_join_from_simple_unnest(&mut root_node, simple_unnest_result);
@@ -719,54 +894,69 @@ impl DependentJoinTracker {
             // return Ok(dependent_join);
         }
 
-        let mut join = self.new_dependent_join(&root_node);
+        // let mut join = self.new_dependent_join(&root_node);
+        let mut left = self.left_owned(&root_node);
+        let mut right = self.right_owned(&root_node);
         if parent.is_some() {
+            unimplemented!("");
             // i.e exists (where inner.col_a = outer_col.b and other_nested_subquery...)
 
             let mut outer_ref_from_left = IndexSet::new();
-            let left = join.left.clone();
+            // let left = join.left.clone();
             for col_from_parent in outer_refs_from_parent.iter() {
                 if left
                     .plan
                     .all_out_ref_exprs()
-                    .contains(&Expr::Column(col_from_parent.clone()))
+                    .contains(&Expr::Column(col_from_parent.col))
                 {
                     outer_ref_from_left.insert(col_from_parent.clone());
                 }
             }
             let mut parent_unnesting = parent.clone().unwrap();
-            let new_left =
-                self.unnest(left.id, &mut parent_unnesting, outer_ref_from_left)?;
-            join.replace_left(new_left, &parent_unnesting.replaces);
+            self.general_decorrelate(
+                &mut left,
+                &mut parent_unnesting,
+                &mut outer_ref_from_left,
+            )?;
+            // join.replace_left(new_left, &parent_unnesting.replaces);
 
             // TODO: after imple simple_decorrelation, rewrite the projection pushed up column as well
         }
+        let domain = match parent {
+            None => self.build_domain(&root_node, &left)?,
+            Some(info) => {
+                unimplemented!()
+            }
+        };
+
         let new_unnesting_info = UnnestingInfo {
             parent: parent.clone(),
-            join: join.clone(),
-            domain: vec![],     // TODO: populate me
-            outer_refs: vec![], // TODO: populate me
+            domain,
+            // join: join.clone(),
+            // domain: vec![],     // TODO: populate me
         };
         let mut unnesting = Unnesting {
             info: Arc::new(new_unnesting_info.clone()),
+            join_conditions: vec![],
             equivalences: UnionFind {
                 parent: IndexMap::new(),
                 rank: IndexMap::new(),
             },
             replaces: IndexMap::new(),
+            pulled_up_columns: vec![],
+            pulled_up_predicates: vec![],
+            // outer_col_ref_map: HashMap::new(),
         };
-        let mut accesses: IndexSet<Column> = self
-            .column_accesses(node)
-            .iter()
-            .map(|a| a.col.clone())
-            .collect();
+        let mut accesses: IndexSet<ColumnAccess> = root_node.access_tracker.clone();
+        // .iter()
+        // .map(|a| a.col.clone())
+        // .collect();
         if parent.is_some() {
-            for col_access in outer_refs_from_parent {
-                if join
-                    .right
+            for col_access in outer_refs_from_parent.iter() {
+                if right
                     .plan
                     .all_out_ref_exprs()
-                    .contains(&Expr::Column(col_access.clone()))
+                    .contains(&Expr::Column(col_access.col.clone()))
                 {
                     accesses.insert(col_access.clone());
                 }
@@ -774,23 +964,46 @@ impl DependentJoinTracker {
             // add equivalences from join.condition to unnest.cclasses
         }
 
-        let new_right = self.unnest(join.right.id, &mut unnesting, accesses)?;
-        join.replace_right(new_right, &new_unnesting_info, &unnesting.replaces);
+        //TODO: add equivalences from join.condition to unnest.cclasses
+        self.general_decorrelate(&mut right, &mut unnesting, &mut accesses)?;
+        println!("temporary transformed result {:?}", self);
+        unimplemented!("implement relacing right node");
+        // join.replace_right(new_right, &new_unnesting_info, &unnesting.replaces);
         // for acc in new_unnesting_info.outer_refs{
         //     join.join_conditions.append(other);
         // }
-
-        unimplemented!()
     }
-    fn rewrite_columns(expr: Expr, unnesting: Unnesting) {
-        unimplemented!()
-        // expr.apply(|expr| {
-        //     if let Expr::OuterReferenceColumn(_, col) = expr {
-        //         set.insert(col);
-        //     }
-        //     Ok(TreeNodeRecursion::Continue)
-        // })
-        // .expect("traversal is infallible");
+    fn rewrite_columns<'a>(
+        exprs: impl Iterator<Item = &'a mut Expr>,
+        unnesting: &Unnesting,
+    ) -> Result<()> {
+        for expr in exprs {
+            *expr = expr
+                .clone()
+                .transform(|e| {
+                    match &e {
+                        Expr::Column(col) => {
+                            if let Some(replaced_by) = unnesting.replaces.get(col) {
+                                return Ok(Transformed::yes(Expr::Column(
+                                    replaced_by.clone(),
+                                )));
+                            }
+                        }
+                        Expr::OuterReferenceColumn(_, col) => {
+                            if let Some(replaced_by) = unnesting.replaces.get(col) {
+                                // TODO: no sure if we should use column or outer ref column here
+                                return Ok(Transformed::yes(Expr::Column(
+                                    replaced_by.clone(),
+                                )));
+                            }
+                        }
+                        _ => {}
+                    };
+                    Ok(Transformed::no(e))
+                })?
+                .data;
+        }
+        Ok(())
     }
     fn get_node_uncheck(&self, node_id: &usize) -> Operator {
         self.nodes.get(node_id).unwrap().clone()
@@ -806,6 +1019,8 @@ impl DependentJoinTracker {
             pulled_up_predicates: vec![],
         };
 
+        // the iteration should happen with the order of bottom up, so any node push up won't
+        // affect its children (by accident)
         let accesses_bottom_up = node.access_tracker.clone().sorted_by(|a, b| {
             if a.node_id < b.node_id {
                 Ordering::Greater
@@ -830,11 +1045,6 @@ impl DependentJoinTracker {
         }
 
         Ok(result)
-    }
-    fn build(&mut self, root: &LogicalPlan) -> Result<()> {
-        self.build_algebra_index(root.clone())?;
-        println!("{:?}", self);
-        Ok(())
     }
 }
 impl fmt::Debug for DependentJoinTracker {
@@ -949,17 +1159,16 @@ impl DependentJoinTracker {
     }
 
     // because the column providers are visited after column-accessor
-    // function visit_with_subqueries always visit the subquery before visiting the other child
+    // (function visit_with_subqueries always visit the subquery before visiting the other children)
     // we can always infer the LCA inside this function, by getting the deepest common parent
     fn conclude_lowest_dependent_join_node(&mut self, child_id: usize, col: &Column) {
         if let Some(accesses) = self.accessed_columns.get(col) {
             for access in accesses.iter() {
                 let mut cur_stack = self.stack.clone();
                 cur_stack.push(child_id);
-                // this is a dependen join node
+                // this is a dependent join node
                 let lca_node = Self::lca_from_stack(&cur_stack, &access.stack);
                 let node = self.nodes.get_mut(&lca_node).unwrap();
-                println!("inserting {}", access.node_id);
                 node.access_tracker.insert(ColumnAccess {
                     col: col.clone(),
                     node_id: access.node_id,
@@ -983,7 +1192,7 @@ impl DependentJoinTracker {
                 col: col.clone(),
             });
     }
-    fn build_algebra_index(&mut self, plan: LogicalPlan) -> Result<()> {
+    fn build(&mut self, plan: LogicalPlan) -> Result<()> {
         // let mut index = AlgebraIndex::default();
         plan.visit_with_subqueries(self)?;
         Ok(())
@@ -1007,19 +1216,6 @@ impl DependentJoinTracker {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, PartialOrd, Eq, Clone)]
-enum ColumnUsage {
-    Own(Column),
-    Outer(Column),
-}
-impl ColumnUsage {
-    fn debug(&self) -> String {
-        match self {
-            ColumnUsage::Own(col) => format!("\x1b[34m{}\x1b[0m", col.flat_name()),
-            ColumnUsage::Outer(col) => format!("\x1b[31m{}\x1b[0m", col.flat_name()),
-        }
-    }
-}
 impl ColumnAccess {
     fn debug(&self) -> String {
         format!("\x1b[31m{} ({})\x1b[0m", self.node_id, self.col)
@@ -1195,6 +1391,7 @@ mod tests {
         array::{Int32Array, StringArray},
         datatypes::{DataType as ArrowDataType, Field, Fields, Schema},
     };
+
     #[test]
     fn complex_1_level_decorrelate_in_subquery_with_count() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
@@ -1227,7 +1424,8 @@ mod tests {
             )?
             .build()?;
         let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        index.build(&input1)?;
+        index.build(input1)?;
+        println!("{:?}", index);
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
         Filter: outer_table.a > Int32(1) AND inner_table_lv1.mark\
@@ -1266,7 +1464,7 @@ mod tests {
             .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
             .build()?;
         let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        index.build(&input1)?;
+        index.build(input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
         Filter: outer_table.a > Int32(1) AND inner_table_lv1.mark\
@@ -1292,7 +1490,7 @@ mod tests {
             .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
             .build()?;
         let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        index.build(&input1)?;
+        index.build(input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
         Filter: outer_table.a > Int32(1) AND inner_table_lv1.mark\
@@ -1323,7 +1521,7 @@ mod tests {
             )?
             .build()?;
         let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        index.build(&input1)?;
+        index.build(input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
         Filter: outer_table.a > Int32(1)\
@@ -1367,7 +1565,7 @@ mod tests {
             )?
             .build()?;
         let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        index.build(&input1)?;
+        index.build(input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
         Filter: outer_table.a > Int32(1)\
