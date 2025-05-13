@@ -641,6 +641,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
     ///
+    /// [`TypeSignature`]: crate::TypeSignature
+    ///
     /// For example, if your function requires a floating point arguments, but the user calls
     /// it like `my_func(1::int)` (i.e. with `1` as an integer), coerce_types can return `[DataType::Float64]`
     /// to ensure the argument is converted to `1::double`
