@@ -11,6 +11,23 @@
 
 - In `JOIN ... USING (...)` expressions if any of join constraints is a unique key then other keys are redundant
 
+```rust
+#[derive(Debug)]
+struct AliasRenamer<'a> {
+    pub left: &'a TableReference,
+    pub right: &'a TableReference,
+}
+
+impl TreeNodeVisitor<'_> for AliasRenamer<'_> {
+    type Node = LogicalPlan;
+
+    fn f_up(&mut self, node: &'_ Self::Node) -> Result<TreeNodeRecursion> {
+        dbg!(node);
+        Ok(TreeNodeRecursion::Continue)
+    }
+}
+```
+
 ## Simple Case
 
 Simple `employees` table.
