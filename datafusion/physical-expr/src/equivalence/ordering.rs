@@ -609,7 +609,7 @@ mod tests {
                 .into_iter()
                 .map(|eq_class| EquivalenceClass::new(eq_class.into_iter().cloned()));
             let eq_group = EquivalenceGroup::new(classes);
-            eq_properties.add_equivalence_group(eq_group);
+            eq_properties.add_equivalence_group(eq_group)?;
 
             let constants = constants.into_iter().map(|expr| {
                 ConstExpr::new(Arc::clone(expr), AcrossPartitions::Uniform(None))

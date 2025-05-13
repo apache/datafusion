@@ -215,11 +215,11 @@ impl EquivalenceProperties {
     }
 
     /// Extends this `EquivalenceProperties` with the `other` object.
-    pub fn extend(mut self, other: Self) -> Self {
+    pub fn extend(mut self, other: Self) -> Result<Self> {
         self.constraints.extend(other.constraints);
-        self.add_equivalence_group(other.eq_group);
+        self.add_equivalence_group(other.eq_group)?;
         self.add_orderings(other.oeq_class);
-        self
+        Ok(self)
     }
 
     /// Clears (empties) the ordering equivalence class within this object.
@@ -250,14 +250,15 @@ impl EquivalenceProperties {
 
     /// Incorporates the given equivalence group to into the existing
     /// equivalence group within.
-    pub fn add_equivalence_group(&mut self, other_eq_group: EquivalenceGroup) {
+    pub fn add_equivalence_group(&mut self, other_eq_group: EquivalenceGroup) -> Result<()> {
         self.eq_group.extend(other_eq_group);
         // TODO: Normalization point.
         // Discover any new orderings based on the new equivalence classes:
         for ordering in self.normalized_oeq_class() {
             let leading = Arc::clone(&ordering[0].expr);
-            self.discover_new_orderings(leading).unwrap();
+            self.discover_new_orderings(leading)?;
         }
+        Ok(())
     }
 
     /// Adds a new equality condition into the existing equivalence group.

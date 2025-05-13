@@ -348,11 +348,11 @@ pub(crate) fn window_equivalence_properties(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,
     window_exprs: &[Arc<dyn WindowExpr>],
-) -> EquivalenceProperties {
+) -> Result<EquivalenceProperties> {
     // We need to update the schema, so we can't directly use input's equivalence
     // properties.
     let mut window_eq_properties = EquivalenceProperties::new(Arc::clone(schema))
-        .extend(input.equivalence_properties().clone());
+        .extend(input.equivalence_properties().clone())?;
 
     let window_schema_len = schema.fields.len();
     let input_schema_len = window_schema_len - window_exprs.len();
@@ -375,7 +375,7 @@ pub(crate) fn window_equivalence_properties(
         // the input plan's orderings, then we cannot further introduce any
         // new orderings for the window plan.
         if !no_partitioning && all_satisfied_lexs.is_empty() {
-            return window_eq_properties;
+            return Ok(window_eq_properties);
         } else if let Some(std_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
         {
             std_expr.add_equal_orderings(&mut window_eq_properties);
@@ -486,7 +486,7 @@ pub(crate) fn window_equivalence_properties(
             }
         }
     }
-    window_eq_properties
+    Ok(window_eq_properties)
 }
 
 /// Constructs the best-fitting windowing operator (a `WindowAggExec` or a

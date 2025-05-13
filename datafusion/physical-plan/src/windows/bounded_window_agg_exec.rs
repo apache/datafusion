@@ -126,7 +126,7 @@ impl BoundedWindowAggExec {
                 vec![]
             }
         };
-        let cache = Self::compute_properties(&input, &schema, &window_expr);
+        let cache = Self::compute_properties(&input, &schema, &window_expr)?;
         Ok(Self {
             input,
             window_expr,
@@ -194,9 +194,9 @@ impl BoundedWindowAggExec {
         input: &Arc<dyn ExecutionPlan>,
         schema: &SchemaRef,
         window_exprs: &[Arc<dyn WindowExpr>],
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = window_equivalence_properties(schema, input, window_exprs);
+        let eq_properties = window_equivalence_properties(schema, input, window_exprs)?;
 
         // As we can have repartitioning using the partition keys, this can
         // be either one or more than one, depending on the presence of
@@ -204,13 +204,13 @@ impl BoundedWindowAggExec {
         let output_partitioning = input.output_partitioning().clone();
 
         // Construct properties cache
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             // TODO: Emission type and boundedness information can be enhanced here
             input.pipeline_behavior(),
             input.boundedness(),
-        )
+        ))
     }
 
     pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {

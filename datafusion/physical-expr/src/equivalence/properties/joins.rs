@@ -38,7 +38,7 @@ pub fn join_equivalence_properties(
         join_type,
         left_size,
         on,
-    )?);
+    )?)?;
 
     let EquivalenceProperties {
         oeq_class: left_oeq_class,

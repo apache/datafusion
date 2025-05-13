@@ -82,7 +82,7 @@ impl WindowAggExec {
 
         let ordered_partition_by_indices =
             get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
-        let cache = Self::compute_properties(Arc::clone(&schema), &input, &window_expr);
+        let cache = Self::compute_properties(Arc::clone(&schema), &input, &window_expr)?;
         Ok(Self {
             input,
             window_expr,
@@ -123,9 +123,9 @@ impl WindowAggExec {
         schema: SchemaRef,
         input: &Arc<dyn ExecutionPlan>,
         window_exprs: &[Arc<dyn WindowExpr>],
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = window_equivalence_properties(&schema, input, window_exprs);
+        let eq_properties = window_equivalence_properties(&schema, input, window_exprs)?;
 
         // Get output partitioning:
         // Because we can have repartitioning using the partition keys this
@@ -133,13 +133,13 @@ impl WindowAggExec {
         let output_partitioning = input.output_partitioning().clone();
 
         // Construct properties cache:
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             // TODO: Emission type and boundedness information can be enhanced here
             EmissionType::Final,
             input.boundedness(),
-        )
+        ))
     }
 
     pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
