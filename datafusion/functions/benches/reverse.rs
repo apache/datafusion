@@ -41,7 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             false,
         );
         c.bench_function(
-            &format!("reverse_StringArray_ascii_str_len_{}", str_len),
+            &format!("reverse_StringArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
@@ -63,8 +63,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             gen_string_array(N_ROWS, str_len, NULL_DENSITY, NORMAL_UTF8_DENSITY, false);
         c.bench_function(
             &format!(
-                "reverse_StringArray_utf8_density_{}_str_len_{}",
-                NORMAL_UTF8_DENSITY, str_len
+                "reverse_StringArray_utf8_density_{NORMAL_UTF8_DENSITY}_str_len_{str_len}"
             ),
             |b| {
                 b.iter(|| {
@@ -91,7 +90,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             true,
         );
         c.bench_function(
-            &format!("reverse_StringViewArray_ascii_str_len_{}", str_len),
+            &format!("reverse_StringViewArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
@@ -113,8 +112,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             gen_string_array(N_ROWS, str_len, NULL_DENSITY, NORMAL_UTF8_DENSITY, true);
         c.bench_function(
             &format!(
-                "reverse_StringViewArray_utf8_density_{}_str_len_{}",
-                NORMAL_UTF8_DENSITY, str_len
+                "reverse_StringViewArray_utf8_density_{NORMAL_UTF8_DENSITY}_str_len_{str_len}"
             ),
             |b| {
                 b.iter(|| {

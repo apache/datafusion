@@ -144,7 +144,7 @@ async fn read_csv(ctx: &SessionContext) -> Result<()> {
     // and using the `enable_url_table` refer to local files directly
     let dyn_ctx = ctx.clone().enable_url_table();
     let csv_df = dyn_ctx
-        .sql(&format!("SELECT rating, unixtime FROM '{}'", file_path))
+        .sql(&format!("SELECT rating, unixtime FROM '{file_path}'"))
         .await?;
     csv_df.show().await?;
 
