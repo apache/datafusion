@@ -690,7 +690,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// Most UDFs should implement [`Self::return_type`] and not this
     /// function as the output type for most functions only depends on the types
-    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
+    /// of their inputs (e.g. `sum(f64)` is always `f64`).
     ///
     /// This function can be used for more advanced cases such as:
     ///
