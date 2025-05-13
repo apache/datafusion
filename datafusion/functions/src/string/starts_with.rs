@@ -141,7 +141,7 @@ impl ScalarUDFImpl for StartsWithFunc {
                 | ScalarValue::LargeUtf8(Some(pattern))
                 | ScalarValue::Utf8View(Some(pattern)) => {
                     let escaped_pattern = pattern.replace("%", "\\%");
-                    let like_pattern = format!("{}%", escaped_pattern);
+                    let like_pattern = format!("{escaped_pattern}%");
                     Expr::Literal(ScalarValue::Utf8(Some(like_pattern)))
                 }
                 _ => return Ok(ExprSimplifyResult::Original(args)),

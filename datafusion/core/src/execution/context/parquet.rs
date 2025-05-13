@@ -286,7 +286,7 @@ mod tests {
         let expected_path = binding[0].as_str();
         assert_eq!(
             read_df.unwrap_err().strip_backtrace(),
-            format!("Execution error: File path '{}' does not match the expected extension '.parquet'", expected_path)
+            format!("Execution error: File path '{expected_path}' does not match the expected extension '.parquet'")
         );
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
