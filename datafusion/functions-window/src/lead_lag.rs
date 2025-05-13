@@ -292,21 +292,23 @@ fn parse_expr(
     })
 }
 
+static NULL_FIELD: LazyLock<Field> =
+    LazyLock::new(|| Field::new("value", DataType::Null, true));
+
 /// Returns the field of the default value(if provided) when the
 /// expression is `NULL`.
 ///
 /// Otherwise, returns the expression field unchanged.
 fn parse_expr_field(input_fields: &[Field]) -> Result<Field> {
     assert!(!input_fields.is_empty());
-    let null_field = Field::new("value", DataType::Null, true);
-    let expr_field = input_fields.first().unwrap_or(&null_field);
+    let expr_field = input_fields.first().unwrap_or(&NULL_FIELD);
 
     // Handles the most common case where NULL is unexpected
     if !expr_field.data_type().is_null() {
         return Ok(expr_field.clone().with_nullable(true));
     }
 
-    let default_value_field = input_fields.get(2).unwrap_or(&null_field);
+    let default_value_field = input_fields.get(2).unwrap_or(&NULL_FIELD);
     Ok(default_value_field.clone().with_nullable(true))
 }
 
