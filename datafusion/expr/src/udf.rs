@@ -317,9 +317,9 @@ pub struct ScalarFunctionArgs<'a, 'b> {
 pub struct ReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
     pub arg_fields: &'a [Field],
-    /// Is argument `i` to the function a scalar (constant)
+    /// Is argument `i` to the function a scalar (constant)?
     ///
-    /// If argument `i` is not a scalar, it will be None
+    /// If the argument `i` is not a scalar, it will be None
     ///
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
@@ -448,10 +448,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// By default, this function calls [`Self::return_type`] with the
     /// types of each argument.
-    ///
+    /// 
     /// # Notes
     ///
-    /// Most UDFs should implement [`Self::return_type`] and not this
+    /// Most UDFs can implement [`Self::return_type`] and not this
     /// function as the output type for most functions only depends on the types
     /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
     ///
@@ -460,6 +460,26 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// 1. specifying nullability
     /// 2. return types based on the **values** of the arguments (rather than
     ///    their **types**.
+    ///
+    /// # Example creating `Field`
+    ///
+    /// Note the [`Field`] is ignored, except for structured types such as
+    /// `DataType::Struct`.
+    /// 
+    /// ```rust
+    /// # use arrow::datatypes::{DataType, Field}; 
+    /// # use datafusion_common::Result; 
+    /// # use datafusion_expr::ReturnFieldArgs;
+    /// # struct Example{};
+    /// # impl Example {
+    /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    ///   // report output is only nullable if any one of the arguments are nullable
+    ///   let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+    ///   let field = Field::new("ignored_name", DataType::Int32, true);
+    ///   Ok(field)
+    /// }
+    /// # }
+    /// ```
     ///
     /// # Output Type based on Values
     ///
