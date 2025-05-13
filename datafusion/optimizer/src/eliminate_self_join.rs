@@ -26,7 +26,7 @@ use datafusion_common::{
     HashSet, Result,
 };
 use datafusion_expr::{
-    builder::subquery_alias, Expr, Filter, Join, JoinConstraint, JoinType, LogicalPlan,
+    Expr, Filter, Join, JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder,
     Projection, SubqueryAlias, TableScan,
 };
 
@@ -96,12 +96,19 @@ fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<LogicalPlan> {
                 ..
             }),
             LogicalPlan::SubqueryAlias(SubqueryAlias {
-                input: right_input, ..
+                input: right_input,
+                alias: right_alias,
+                ..
             }),
         ) => {
-            // TODO: rename aliases used in the join
             let plan = optimize(left_input, right_input)?;
-            subquery_alias(plan, left_alias.clone()).ok()
+            LogicalPlanBuilder::new(plan)
+                .alias(left_alias.clone())
+                .unwrap()
+                .alias(right_alias.clone())
+                .unwrap()
+                .build()
+                .ok()
         }
         (
             LogicalPlan::Projection(Projection {
@@ -144,7 +151,7 @@ impl OptimizerRule for EliminateSelfJoin {
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
+        Some(ApplyOrder::BottomUp)
     }
 
     fn supports_rewrite(&self) -> bool {
@@ -324,27 +331,25 @@ mod tests {
     #[test]
     fn test_unique_key_with_filter() -> Result<()> {
         let plan = unique_key_with_filter()?;
-        println!("{}", plan.display_indent());
-
         assert_optimized_plan_equal!(plan, @r#"
         Projection: a.id
-          Filter: a.department = Utf8("HR")
-            SubqueryAlias: a
-              TableScan: employees
+          Filter: b.department = Utf8("HR")
+            SubqueryAlias: b
+              SubqueryAlias: a
+                TableScan: employees
         "#)
     }
 
     #[test]
     fn test_unique_key_with_subquery_filter() -> Result<()> {
         let plan = unique_key_with_subquery_filter()?;
-        println!("{}", plan.display_indent());
-
         assert_optimized_plan_equal!(plan, @r#"
         Projection: a.id
-          SubqueryAlias: a
-            Projection: employees.id
-              Filter: employees.department = Utf8("HR")
-                TableScan: employees
+          SubqueryAlias: b
+            SubqueryAlias: a
+              Projection: employees.id
+                Filter: employees.department = Utf8("HR")
+                  TableScan: employees
         "#)
     }
 }
