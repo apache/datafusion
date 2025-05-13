@@ -35,12 +35,7 @@ pub use datafusion_datasource_parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
 pub use datafusion_datasource_parquet::{ParquetFileMetrics, ParquetFileReaderFactory};
 
-#[allow(deprecated)]
-pub use arrow_file::ArrowExec;
 pub use arrow_file::ArrowSource;
-
-#[allow(deprecated)]
-pub use json::NdJsonExec;
 
 pub use json::{JsonOpener, JsonSource};
 
