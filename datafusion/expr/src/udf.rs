@@ -451,9 +451,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Notes
     ///
-    /// Most UDFs can implement [`Self::return_type`] and not this
-    /// function as the output type for most functions only depends on the types
-    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
+/// For the majority of UDFs, implementing [`Self::return_type`] is sufficient, 
+/// as the result type is typically a deterministic function of the input types 
+/// (e.g., `sqrt(f32)` consistently yields `f32`). Implementing this method directly 
+/// is generally unnecessary unless the return type depends on runtime values.
     ///
     /// This function can be used for more advanced cases such as:
     ///
