@@ -448,7 +448,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// By default, this function calls [`Self::return_type`] with the
     /// types of each argument.
-    /// 
+    ///
     /// # Notes
     ///
     /// Most UDFs can implement [`Self::return_type`] and not this
@@ -465,10 +465,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// Note the [`Field`] is ignored, except for structured types such as
     /// `DataType::Struct`.
-    /// 
+    ///
     /// ```rust
-    /// # use arrow::datatypes::{DataType, Field}; 
-    /// # use datafusion_common::Result; 
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::Result;
     /// # use datafusion_expr::ReturnFieldArgs;
     /// # struct Example{};
     /// # impl Example {
