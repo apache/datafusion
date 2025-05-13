@@ -70,7 +70,16 @@ pub trait DataSource: Send + Sync + Debug {
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
-    /// Return a copy of this DataSource with a new partitioning scheme
+    /// Return a copy of this DataSource with a new partitioning scheme.
+    ///
+    /// Returns `Ok(None)` (the default) if the partitioning cannot be changed.
+    /// Refer to [`ExecutionPlan::repartitioned`] for details on when None should be returned.
+    ///
+    /// Repartitioning should not change the output ordering, if this ordering exists.
+    /// Refer to [`MemorySourceConfig::repartition_preserving_order`](crate::memory::MemorySourceConfig)
+    /// and the FileSource's
+    /// [`FileGroupPartitioner::repartition_file_groups`](crate::file_groups::FileGroupPartitioner::repartition_file_groups)
+    /// for examples.
     fn repartitioned(
         &self,
         _target_partitions: usize,
@@ -162,6 +171,10 @@ impl ExecutionPlan for DataSourceExec {
         Ok(self)
     }
 
+    /// Implementation of [`ExecutionPlan::repartitioned`] which relies upon the inner [`DataSource::repartitioned`].
+    ///
+    /// If the data source does not support changing its partitioning, returns `Ok(None)` (the default). Refer
+    /// to [`ExecutionPlan::repartitioned`] for more details.
     fn repartitioned(
         &self,
         target_partitions: usize,
