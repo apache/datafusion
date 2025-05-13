@@ -87,9 +87,9 @@ h2o_big:                h2oai benchmark with large dataset (1e9 rows) for groupb
 h2o_small_join:         h2oai benchmark with small dataset (1e7 rows) for join,  default file format is csv
 h2o_medium_join:        h2oai benchmark with medium dataset (1e8 rows) for join, default file format is csv
 h2o_big_join:           h2oai benchmark with large dataset (1e9 rows) for join,  default file format is csv
-h2o_small_window:       h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
-h2o_medium_window:      h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
-h2o_big_window:         h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+h2o_small_window:       Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
+h2o_medium_window:      Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
+h2o_big_window:         Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
 imdb:                   Join Order Benchmark (JOB) using the IMDB dataset converted to parquet
 
 **********

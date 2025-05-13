@@ -546,8 +546,7 @@ cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '...
 
 
 ## h2o.ai benchmarks
-
-The h2o.ai benchmarks are a set of performance tests for groupby, join, and window operations. These benchmarks use synthetic data with configurable sizes (small: 1e7 rows, medium: 1e8 rows, big: 1e9 rows) to evaluate DataFusion's performance across different data scales.
+The h2o.ai benchmarks are a set of performance tests for groupby and join operations. Beyond the standard h2o benchmark, there is also an extended benchmark for window functions. These benchmarks use synthetic data with configurable sizes (small: 1e7 rows, medium: 1e8 rows, big: 1e9 rows) to evaluate DataFusion's performance across different data scales.
 
 Reference:
 - [H2O AI Benchmark](https://duckdb.org/2023/04/14/h2oai.html)
@@ -621,9 +620,9 @@ For example, to run query 1 with the small data generated above:
 cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/join.sql --query 1
 ```
 
-### h2o benchmarks for window
+### Extended h2o benchmarks for window
 
-H2o window benchmark uses the same dataset as the h2o join benchmark. There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`.
+This benchmark extends the h2o benchmark suite to evaluate window function performance. H2o window benchmark uses the same dataset as the h2o join benchmark. There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`.
 
 Here is a example to generate `small` dataset and run the benchmark. To run other 
 dataset size configuration, change the command similar to the previous example.
