@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::vec::Drain;
 use crate::logical_plan::consumer::{from_substrait_func_args, SubstraitConsumer};
 use datafusion::common::{not_impl_err, plan_err, substrait_err, DFSchema, ScalarValue};
 use datafusion::execution::FunctionRegistry;
@@ -55,7 +56,7 @@ pub async fn from_scalar_function(
                     );
         }
         // In those cases we build a balanced tree of BinaryExprs
-        Ok(arg_list_to_binary_op_tree(op, &args))
+        Ok(arg_list_to_binary_op_tree(op, args))
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
         builder.build(consumer, f, input_schema).await
     } else {
@@ -116,17 +117,32 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
 /// `args` must not be empty.
 fn arg_list_to_binary_op_tree(
     op: Operator,
-    args: &[Expr],
+    mut args: Vec<Expr>,
 ) -> Expr {
-    if args.len() == 1 {
-        return args[0].clone();
-    } else if args.len() == 0 {
+    let n_args = args.len();
+    let mut drained_args = args.drain(..);
+    _arg_list_to_binary_op_tree(op, &mut drained_args, n_args)
+}
+
+/// Helper function for [`arg_list_to_binary_op_tree`] implementation
+///
+/// `take_len` represents the number of elements to take from `args` before returning.
+/// We use `take_len` to avoid recursively building a `Take<Take<Take<...>>>` type.
+fn _arg_list_to_binary_op_tree(
+    op: Operator,
+    args: &mut Drain<Expr>,
+    take_len: usize,
+) -> Expr {
+    if take_len == 1 {
+        return args.next().unwrap();
+    } else if take_len == 0 {
         panic!("must not be called with empty args");
     }
     // Cut argument list in 2 balanced parts
-    let mid_idx = args.len() / 2;
-    let left = arg_list_to_binary_op_tree(op, &args[0..mid_idx]);
-    let right = arg_list_to_binary_op_tree(op, &args[mid_idx..]);
+    let left_take = take_len / 2;
+    let right_take = take_len - left_take;
+    let left = _arg_list_to_binary_op_tree(op, args, left_take);
+    let right = _arg_list_to_binary_op_tree(op, args, right_take);
     Expr::BinaryExpr(BinaryExpr {
         left: Box::new(left),
         op,
