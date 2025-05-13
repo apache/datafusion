@@ -493,8 +493,8 @@ impl AggregateExec {
         )?;
         new_requirements.extend(req);
 
-        let required_input_ordering = LexRequirement::new(new_requirements)
-            .map(|r| OrderingRequirements::new_soft(r.collapse()));
+        let required_input_ordering =
+            LexRequirement::new(new_requirements).map(OrderingRequirements::new_soft);
 
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each

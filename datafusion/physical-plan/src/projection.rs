@@ -47,7 +47,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -663,6 +663,8 @@ pub fn update_expr(
     new_expr.map(|e| (state == RewriteState::RewrittenValid).then_some(e))
 }
 
+/// Updates the given lexicographic ordering according to given projected
+/// expressions using the [`update_expr`] function.
 pub fn update_ordering(
     ordering: LexOrdering,
     projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
@@ -677,6 +679,24 @@ pub fn update_ordering(
         updated_exprs.push(sort_expr);
     }
     Ok(LexOrdering::new(updated_exprs))
+}
+
+/// Updates the given lexicographic requirement according to given projected
+/// expressions using the [`update_expr`] function.
+pub fn update_ordering_requirement(
+    reqs: LexRequirement,
+    projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
+) -> Result<Option<LexRequirement>> {
+    let mut updated_exprs = vec![];
+    for mut sort_expr in reqs.into_iter() {
+        let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
+        else {
+            return Ok(None);
+        };
+        sort_expr.expr = updated_expr;
+        updated_exprs.push(sort_expr);
+    }
+    Ok(LexRequirement::new(updated_exprs))
 }
 
 /// Downcasts all the expressions in `exprs` to `Column`s. If any of the given

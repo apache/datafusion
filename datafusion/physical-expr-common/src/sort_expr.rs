@@ -449,6 +449,13 @@ impl From<LexOrdering> for Vec<PhysicalSortExpr> {
 
 /// This object represents a lexicographical ordering requirement and contains
 /// a vector of `PhysicalSortRequirement` objects.
+///
+/// For example, a `vec![a Some(ASC), b None]` represents a lexicographical
+/// requirement that firsts imposes an ordering by column `a` in ascending
+/// order, then by column `b` in *any* (ascending or descending) order. The
+/// ordering is non-degenerate, meaning it contains at least one element, and
+/// it is duplicate-free, meaning it does not contain multiple entries for the
+/// same column.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexRequirement {
     reqs: Vec<PhysicalSortRequirement>,
@@ -477,18 +484,6 @@ impl LexRequirement {
     pub fn capacity(&self) -> usize {
         self.reqs.capacity()
     }
-
-    /// Constructs a duplicate-free `LexRequirement` by filtering out entries
-    /// with the same physical expression inside. For example, the requirement
-    /// `[a Some(ASC), a None]` collapses to `[a Some(ASC)]`.
-    pub fn collapse(mut self) -> Self {
-        self.reqs = self
-            .reqs
-            .into_iter()
-            .unique_by(|r| Arc::clone(&r.expr))
-            .collect();
-        self
-    }
 }
 
 impl<const N: usize> From<[PhysicalSortRequirement; N]> for LexRequirement {
@@ -507,12 +502,6 @@ impl Deref for LexRequirement {
 
     fn deref(&self) -> &Self::Target {
         self.reqs.as_slice()
-    }
-}
-
-impl DerefMut for LexRequirement {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.reqs.as_mut_slice()
     }
 }
 
@@ -617,6 +606,15 @@ impl OrderingRequirements {
     pub fn first(&self) -> &LexRequirement {
         match self {
             Self::Hard(alts) | Self::Soft(alts) => &alts[0],
+        }
+    }
+
+    /// Returns all alternatives as a vector of `LexRequirement` objects and a
+    /// boolean value indicating softness/hardness of the requirements.
+    pub fn get_alternatives(self) -> (Vec<LexRequirement>, bool) {
+        match self {
+            Self::Hard(alts) => (alts, false),
+            Self::Soft(alts) => (alts, true),
         }
     }
 }

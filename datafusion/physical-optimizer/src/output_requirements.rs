@@ -33,7 +33,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::projection::{
-    make_with_child, update_expr, ProjectionExec,
+    make_with_child, update_expr, update_ordering_requirement, ProjectionExec,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -219,16 +219,17 @@ impl ExecutionPlan for OutputRequirementExec {
         }
 
         let mut requirements = self.required_input_ordering().swap_remove(0);
-        if let Some(reqs) = requirements.as_mut() {
-            for lex in reqs.iter_mut() {
-                for item in lex.iter_mut() {
-                    let Some(new_expr) = update_expr(&item.expr, proj_exprs, false)?
-                    else {
-                        return Ok(None);
-                    };
-                    item.expr = new_expr;
-                }
+        if let Some(reqs) = requirements {
+            let mut updated_reqs = vec![];
+            let (lexes, soft) = reqs.get_alternatives();
+            for lex in lexes.into_iter() {
+                let Some(updated_lex) = update_ordering_requirement(lex, proj_exprs)?
+                else {
+                    return Ok(None);
+                };
+                updated_reqs.push(updated_lex);
             }
+            requirements = OrderingRequirements::new_alternatives(updated_reqs, soft);
         }
 
         let dist_req = match &self.required_input_distribution()[0] {
