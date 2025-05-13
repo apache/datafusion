@@ -24,11 +24,21 @@
 trap 'git checkout main' EXIT #checkout to main on exit
 ARG1=$1
 
+get_json_file_name() {
+  if [[ "$1" == "tpch" ]]; then
+    echo "tpch_sf1"
+  else
+    echo "$1"
+  fi
+}
+
 main(){
 timestamp=$(date +%s)
 lp_file="results/$ARG1-$timestamp.lp"
 mkdir -p results
 touch $lp_file
+
+json_file_name=$(get_json_file_name $ARG1)
 
 cp lineprotocol.py results/
 
@@ -44,7 +54,7 @@ major_version=$(echo "$output" | grep -oE '[0-9]+' | head -n1)
 echo "current major version: $major_version"  
 export RESULTS_DIR="results/$major_version.0.0"
 ./bench.sh run $ARG1
-python3 results/lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
+python3 results/lineprotocol.py $RESULTS_DIR/$json_file_name.json >> $lp_file
 
 # run for last 5 major releases
 for i in {1..5}; do
@@ -53,7 +63,7 @@ for i in {1..5}; do
     git checkout $((major_version-i)).0.0
     export RESULTS_DIR="results/$((major_version-i)).0.0"
     ./bench.sh run $ARG1
-    python3 results/lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
+    python3 results/lineprotocol.py $RESULTS_DIR/$json_file_name.json >> $lp_file
 done
 }
 
