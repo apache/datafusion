@@ -276,31 +276,22 @@ impl UnionEquivalentOrderingBuilder {
     }
 }
 
-/// Advances two iterators in parallel
-///
-/// If the next expressions are equal, the iterators are advanced and returns
-/// the matched expression .
-///
-/// Otherwise, the iterators are left unchanged and return `None`
+/// Advances two iterators in parallel if the next expressions are equal.
+/// Otherwise, the iterators are left unchanged and returns `None`.
 fn advance_if_match(
     iter1: &mut Peekable<Iter<PhysicalSortExpr>>,
     iter2: &mut Peekable<Iter<PhysicalSortExpr>>,
 ) -> Option<PhysicalSortExpr> {
-    if matches!((iter1.peek(), iter2.peek()), (Some(expr1), Some(expr2)) if expr1.eq(expr2))
-    {
-        iter1.next().unwrap();
+    let (expr1, expr2) = (iter1.peek()?, iter2.peek()?);
+    expr1.eq(expr2).then(|| {
+        iter1.next();
         iter2.next().cloned()
-    } else {
-        None
-    }
+    })
+    .flatten()
 }
 
-/// Advances the iterator with a constant
-///
-/// If the next expression  matches one of the constants, advances the iterator
-/// returning the matched expression
-///
-/// Otherwise, the iterator is left unchanged and returns `None`
+/// Advances the iterator with a constant if the next expression matches one of
+/// the constants. Otherwise, the iterator is left unchanged and returns `None`.
 fn advance_if_matches_constant(
     iter: &mut Peekable<Iter<PhysicalSortExpr>>,
     constants: &[ConstExpr],

@@ -246,7 +246,7 @@ impl EquivalenceClass {
 
     /// Adds the given offset to all columns in the expressions inside this
     /// class. This is used when schemas are appended, e.g. in joins.
-    pub fn with_offset(&self, offset: isize) -> Result<Self> {
+    pub fn try_with_offset(&self, offset: isize) -> Result<Self> {
         let mut cls = Self::default();
         for expr_result in self
             .exprs
@@ -767,7 +767,7 @@ impl EquivalenceGroup {
                     self.iter().cloned().chain(
                         right_equivalences
                             .iter()
-                            .map(|cls| cls.with_offset(left_size as _))
+                            .map(|cls| cls.try_with_offset(left_size as _))
                             .collect::<Result<Vec<_>>>()?,
                     ),
                 );
