@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::vec::Drain;
 use crate::logical_plan::consumer::{from_substrait_func_args, SubstraitConsumer};
 use datafusion::common::{not_impl_err, plan_err, substrait_err, DFSchema, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{expr, BinaryExpr, Expr, Like, Operator};
+use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
 use substrait::proto::function_argument::ArgType;
 
@@ -115,10 +115,7 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
 /// For example, `OR` `(a, b, c, d, e)` will be converted to: `OR(OR(a, OR(b, c)), OR(d, e))`.
 ///
 /// `args` must not be empty.
-fn arg_list_to_binary_op_tree(
-    op: Operator,
-    mut args: Vec<Expr>,
-) -> Expr {
+fn arg_list_to_binary_op_tree(op: Operator, mut args: Vec<Expr>) -> Expr {
     let n_args = args.len();
     let mut drained_args = args.drain(..);
     _arg_list_to_binary_op_tree(op, &mut drained_args, n_args)
