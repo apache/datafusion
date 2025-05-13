@@ -7,6 +7,8 @@
 - **TODO:** Check if the column references are the same
 - **TODO:** `ON` Check if the columns combined form a unique constraint similar to composite primary keys in PostgreSQL
 
+- Deduplication for `SubqueryAlias` and `Projection`
+
 ## Remarks
 
 - In `JOIN ... USING (...)` expressions if any of join constraints is a unique key then other keys are redundant
@@ -27,6 +29,8 @@ impl TreeNodeVisitor<'_> for AliasRenamer<'_> {
     }
 }
 ```
+
+- Combine `Projection` and `Projection` into one
 
 ## Simple Case
 
