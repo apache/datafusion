@@ -83,7 +83,7 @@ fn udf_roundtrip_with_registry() {
 
 #[test]
 #[should_panic(
-    expected = "No function registry provided to deserialize, so can not deserialize User Defined Function 'dummy'"
+    expected = "LogicalExtensionCodec is not provided for scalar function dummy"
 )]
 fn udf_roundtrip_without_registry() {
     let ctx = context_with_udf();

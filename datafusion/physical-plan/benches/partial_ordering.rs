@@ -40,7 +40,7 @@ fn bench_new_groups(c: &mut Criterion) {
     for num_columns in [1, 2, 4, 8] {
         let order_indices: Vec<usize> = (0..num_columns).collect();
 
-        group.bench_function(format!("order_indices_{}", num_columns), |b| {
+        group.bench_function(format!("order_indices_{num_columns}"), |b| {
             let batch_group_values = create_test_arrays(num_columns);
             let group_indices: Vec<usize> = (0..BATCH_SIZE).collect();
 

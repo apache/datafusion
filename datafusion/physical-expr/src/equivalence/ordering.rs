@@ -270,10 +270,10 @@ impl Display for OrderingEquivalenceClass {
         write!(f, "[")?;
         let mut iter = self.orderings.iter();
         if let Some(ordering) = iter.next() {
-            write!(f, "[{}]", ordering)?;
+            write!(f, "[{ordering}]")?;
         }
         for ordering in iter {
-            write!(f, ", [{}]", ordering)?;
+            write!(f, ", [{ordering}]")?;
         }
         write!(f, "]")
     }
@@ -617,12 +617,7 @@ mod tests {
             eq_properties.add_constants(constants)?;
 
             let reqs = convert_to_sort_exprs(&reqs);
-            assert_eq!(
-                eq_properties.ordering_satisfy(reqs)?,
-                expected,
-                "{}",
-                err_msg
-            );
+            assert_eq!(eq_properties.ordering_satisfy(reqs)?, expected, "{err_msg}");
         }
 
         Ok(())
@@ -675,14 +670,9 @@ mod tests {
 
         for (reqs, expected) in test_cases {
             let err_msg =
-                format!("error in test reqs: {:?}, expected: {:?}", reqs, expected,);
+                format!("error in test reqs: {reqs:?}, expected: {expected:?}",);
             let reqs = convert_to_sort_exprs(&reqs);
-            assert_eq!(
-                eq_properties.ordering_satisfy(reqs)?,
-                expected,
-                "{}",
-                err_msg
-            );
+            assert_eq!(eq_properties.ordering_satisfy(reqs)?, expected, "{err_msg}");
         }
 
         Ok(())
@@ -913,10 +903,9 @@ mod tests {
             let expected = convert_to_orderings(&expected);
             let actual = OrderingEquivalenceClass::from(orderings.clone());
             let err_msg = format!(
-                "orderings: {:?}, expected: {:?}, actual :{:?}",
-                orderings, expected, actual
+                "orderings: {orderings:?}, expected: {expected:?}, actual :{actual:?}"
             );
-            assert_eq!(actual.len(), expected.len(), "{}", err_msg);
+            assert_eq!(actual.len(), expected.len(), "{err_msg}");
             for elem in actual {
                 assert!(expected.contains(&elem), "{}", err_msg);
             }

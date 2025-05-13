@@ -39,10 +39,10 @@ impl Display for Dependencies {
         write!(f, "[")?;
         let mut iter = self.sort_exprs.iter();
         if let Some(dep) = iter.next() {
-            write!(f, "{}", dep)?;
+            write!(f, "{dep}")?;
         }
         for dep in iter {
-            write!(f, ", {}", dep)?;
+            write!(f, ", {dep}")?;
         }
         write!(f, "]")
     }
@@ -250,7 +250,7 @@ pub struct DependencyNode {
 impl Display for DependencyNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(target) = &self.target {
-            write!(f, "(target: {}, ", target)?;
+            write!(f, "(target: {target}, ")?;
         } else {
             write!(f, "(")?;
         }
@@ -659,7 +659,7 @@ mod tests {
                 "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
                 expr, expected, expr_props.sort_properties
             );
-            assert_eq!(expr_props.sort_properties, expected, "{}", err_msg);
+            assert_eq!(expr_props.sort_properties, expected, "{err_msg}");
         }
 
         Ok(())
@@ -1498,8 +1498,7 @@ mod tests {
             // Test that orderings are not satisfied before adding constraints
             for ordering in satisfied_orderings.clone() {
                 let err_msg = format!(
-                    "{}: ordering {:?} should not be satisfied before adding constraints",
-                    name, ordering
+                    "{name}: ordering {ordering:?} should not be satisfied before adding constraints",
                 );
                 assert!(!eq_properties.ordering_satisfy(ordering)?, "{err_msg}");
             }
@@ -1518,8 +1517,7 @@ mod tests {
             // Test that expected orderings are now satisfied
             for ordering in satisfied_orderings {
                 let err_msg = format!(
-                    "{}: ordering {:?} should be satisfied after adding constraints",
-                    name, ordering
+                    "{name}: ordering {ordering:?} should be satisfied after adding constraints",
                 );
                 assert!(eq_properties.ordering_satisfy(ordering)?, "{err_msg}");
             }
@@ -1527,8 +1525,7 @@ mod tests {
             // Test that unsatisfied orderings remain unsatisfied
             for ordering in unsatisfied_orderings {
                 let err_msg = format!(
-                    "{}: ordering {:?} should not be satisfied after adding constraints",
-                    name, ordering
+                    "{name}: ordering {ordering:?} should not be satisfied after adding constraints",
                 );
                 assert!(!eq_properties.ordering_satisfy(ordering)?, "{err_msg}");
             }

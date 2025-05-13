@@ -361,7 +361,7 @@ impl DisplayAs for SortMergeJoinExec {
                 let on = self
                     .on
                     .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
                 write!(
@@ -388,7 +388,7 @@ impl DisplayAs for SortMergeJoinExec {
                 if self.join_type() != JoinType::Inner {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
-                writeln!(f, "on={}", on)
+                writeln!(f, "on={on}")
             }
         }
     }

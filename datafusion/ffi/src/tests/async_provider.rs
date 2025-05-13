@@ -260,7 +260,7 @@ impl Stream for AsyncTestRecordBatchStream {
 
         if let Err(e) = this.batch_request.try_send(true) {
             return std::task::Poll::Ready(Some(Err(DataFusionError::Execution(
-                format!("Unable to send batch request, {}", e),
+                format!("Unable to send batch request, {e}"),
             ))));
         }
 
@@ -270,7 +270,7 @@ impl Stream for AsyncTestRecordBatchStream {
                 None => std::task::Poll::Ready(None),
             },
             Err(e) => std::task::Poll::Ready(Some(Err(DataFusionError::Execution(
-                format!("Unable receive record batch: {}", e),
+                format!("Unable to receive record batch: {e}"),
             )))),
         }
     }

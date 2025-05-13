@@ -2215,8 +2215,7 @@ mod tests {
 
             assert_eq!(
                 output_cardinality, expected,
-                "failure for join_type: {}",
-                join_type
+                "failure for join_type: {join_type}"
             );
         }
 

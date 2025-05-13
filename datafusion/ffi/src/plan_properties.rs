@@ -320,7 +320,7 @@ mod tests {
 
         let foreign_props: PlanProperties = local_props_ptr.try_into()?;
 
-        assert!(format!("{:?}", foreign_props) == format!("{:?}", original_props));
+        assert!(format!("{foreign_props:?}") == format!("{original_props:?}"));
 
         Ok(())
     }

@@ -52,7 +52,7 @@ impl Display for AcrossPartitions {
             AcrossPartitions::Heterogeneous => write!(f, "(heterogeneous)"),
             AcrossPartitions::Uniform(value) => {
                 if let Some(val) = value {
-                    write!(f, "(uniform: {})", val)
+                    write!(f, "(uniform: {val})")
                 } else {
                     write!(f, "(uniform: unknown)")
                 }
@@ -127,7 +127,7 @@ impl ConstExpr {
                     } else {
                         write!(f, ",")?;
                     }
-                    write!(f, "{}", const_expr)?;
+                    write!(f, "{const_expr}")?;
                 }
                 Ok(())
             }
@@ -282,7 +282,7 @@ impl Display for EquivalenceClass {
         write!(f, "{{")?;
         write!(f, "members: {}", format_physical_expr_list(&self.exprs))?;
         if let Some(across) = &self.constant {
-            write!(f, ", constant: {}", across)?;
+            write!(f, ", constant: {across}")?;
         }
         write!(f, "}}")
     }
@@ -867,10 +867,10 @@ impl Display for EquivalenceGroup {
         write!(f, "[")?;
         let mut iter = self.iter();
         if let Some(cls) = iter.next() {
-            write!(f, "{}", cls)?;
+            write!(f, "{cls}")?;
         }
         for cls in iter {
-            write!(f, ", {}", cls)?;
+            write!(f, ", {cls}")?;
         }
         write!(f, "]")
     }
@@ -925,7 +925,7 @@ mod tests {
                 .into_iter()
                 .map(|entry| {
                     entry.into_iter().map(|idx| {
-                        let c = Column::new(format!("col_{}", idx).as_str(), idx);
+                        let c = Column::new(format!("col_{idx}").as_str(), idx);
                         Arc::new(c) as _
                     })
                 })
@@ -935,7 +935,7 @@ mod tests {
                 .into_iter()
                 .map(|entry| {
                     entry.into_iter().map(|idx| {
-                        let c = Column::new(format!("col_{}", idx).as_str(), idx);
+                        let c = Column::new(format!("col_{idx}").as_str(), idx);
                         Arc::new(c) as _
                     })
                 })
@@ -944,12 +944,11 @@ mod tests {
             let eq_groups: EquivalenceGroup = entries.clone().into();
             let eq_groups = eq_groups.classes;
             let err_msg = format!(
-                "error in test entries: {:?}, expected: {:?}, actual:{:?}",
-                entries, expected, eq_groups
+                "error in test entries: {entries:?}, expected: {expected:?}, actual:{eq_groups:?}"
             );
-            assert_eq!(eq_groups.len(), expected.len(), "{}", err_msg);
+            assert_eq!(eq_groups.len(), expected.len(), "{err_msg}");
             for idx in 0..eq_groups.len() {
-                assert_eq!(&eq_groups[idx], &expected[idx], "{}", err_msg);
+                assert_eq!(&eq_groups[idx], &expected[idx], "{err_msg}");
             }
         }
         Ok(())
@@ -957,7 +956,7 @@ mod tests {
 
     #[test]
     fn test_remove_redundant_entries_eq_group() -> Result<()> {
-        let c = |idx| Arc::new(Column::new(format!("col_{}", idx).as_str(), idx)) as _;
+        let c = |idx| Arc::new(Column::new(format!("col_{idx}").as_str(), idx)) as _;
         let entries = [
             EquivalenceClass::new([c(1), c(1), lit(20)]),
             EquivalenceClass::new([lit(30), lit(30)]),
@@ -1166,8 +1165,7 @@ mod tests {
             let actual = eq_group.exprs_equal(&left, &right);
             assert_eq!(
                 actual, expected,
-                "{}: Failed comparing {:?} and {:?}, expected {}, got {}",
-                description, left, right, expected, actual
+                "{description}: Failed comparing {left:?} and {right:?}, expected {expected}, got {actual}"
             );
         }
 
