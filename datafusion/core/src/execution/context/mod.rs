@@ -1069,8 +1069,7 @@ impl SessionContext {
             }
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "Unknown runtime configuration: {}",
-                    variable
+                    "Unknown runtime configuration: {variable}"
                 )))
             }
         }
@@ -1091,8 +1090,7 @@ impl SessionContext {
         let (number, unit) = limit.split_at(limit.len() - 1);
         let number: f64 = number.parse().map_err(|_| {
             DataFusionError::Plan(format!(
-                "Failed to parse number from memory limit '{}'",
-                limit
+                "Failed to parse number from memory limit '{limit}'"
             ))
         })?;
 
@@ -1101,8 +1099,7 @@ impl SessionContext {
             "M" => Ok((number * 1024.0 * 1024.0) as usize),
             "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
             _ => Err(DataFusionError::Plan(format!(
-                "Unsupported unit '{}' in memory limit '{}'",
-                unit, limit
+                "Unsupported unit '{unit}' in memory limit '{limit}'"
             ))),
         }
     }
@@ -1711,7 +1708,7 @@ impl FunctionRegistry for SessionContext {
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
-        self.state.read().expr_planners()
+        self.state.read().expr_planners().to_vec()
     }
 
     fn register_expr_planner(

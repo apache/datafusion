@@ -248,7 +248,7 @@ impl ExecutionPlan for UnionExec {
             }
         }
 
-        warn!("Error in Union: Partition {} not found", partition);
+        warn!("Error in Union: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in Union")
     }
@@ -481,7 +481,7 @@ impl ExecutionPlan for InterleaveExec {
             )));
         }
 
-        warn!("Error in InterleaveExec: Partition {} not found", partition);
+        warn!("Error in InterleaveExec: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in InterleaveExec")
     }
@@ -924,7 +924,7 @@ mod tests {
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
         let rhs_orderings = rhs.oeq_class();
-        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
+        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{err_msg}");
         for rhs_ordering in rhs_orderings.iter() {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
         }

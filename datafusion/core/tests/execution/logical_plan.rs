@@ -96,7 +96,7 @@ where
     T: Debug,
 {
     let [element] = elements else {
-        panic!("Expected exactly one element, got {:?}", elements);
+        panic!("Expected exactly one element, got {elements:?}");
     };
     element
 }

@@ -991,8 +991,7 @@ impl Unparser<'_> {
         if let Expr::Alias(Alias { expr, .. }) = expr {
             if let Expr::Column(Column { name, .. }) = expr.as_ref() {
                 if let Some(prefix) = name.strip_prefix(UNNEST_PLACEHOLDER) {
-                    if prefix.starts_with(&format!("({}(", OUTER_REFERENCE_COLUMN_PREFIX))
-                    {
+                    if prefix.starts_with(&format!("({OUTER_REFERENCE_COLUMN_PREFIX}(")) {
                         return Some(UnnestInputType::OuterReference);
                     }
                     return Some(UnnestInputType::Scalar);

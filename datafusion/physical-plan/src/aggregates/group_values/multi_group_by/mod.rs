@@ -1756,11 +1756,9 @@ mod tests {
                 (i, actual_line),
                 (i, expected_line),
                 "Inconsistent result\n\n\
-                 Actual batch:\n{}\n\
-                 Expected batch:\n{}\n\
+                 Actual batch:\n{formatted_actual_batch}\n\
+                 Expected batch:\n{formatted_expected_batch}\n\
                  ",
-                formatted_actual_batch,
-                formatted_expected_batch,
             );
         }
     }

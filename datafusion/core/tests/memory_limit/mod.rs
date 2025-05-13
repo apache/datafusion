@@ -458,7 +458,9 @@ async fn test_stringview_external_sort() {
         .with_memory_pool(Arc::new(FairSpillPool::new(60 * 1024 * 1024)));
     let runtime = builder.build_arc().unwrap();
 
-    let config = SessionConfig::new().with_sort_spill_reservation_bytes(40 * 1024 * 1024);
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(40 * 1024 * 1024)
+        .with_repartition_file_scans(false);
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
     ctx.register_table("t", Arc::new(table)).unwrap();
@@ -601,7 +603,7 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let spill_count = plan.metrics().unwrap().spill_count().unwrap();
     let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
 
-    println!("spill count {}, spill bytes {}", spill_count, spilled_bytes);
+    println!("spill count {spill_count}, spill bytes {spilled_bytes}");
     assert!(spill_count > 0);
     assert!((spilled_bytes as u64) < disk_spill_limit);
 
