@@ -37,9 +37,6 @@ pub use datafusion_datasource_parquet::{ParquetFileMetrics, ParquetFileReaderFac
 
 pub use arrow_file::ArrowSource;
 
-#[allow(deprecated)]
-pub use json::NdJsonExec;
-
 pub use json::{JsonOpener, JsonSource};
 
 pub use csv::{CsvOpener, CsvSource};
