@@ -342,8 +342,9 @@ mod tests {
         assert_optimized_plan_equal!(plan, @r#"
         Projection: a.id
           SubqueryAlias: a
-            Filter: a.department = Utf8("HR")
-              TableScan: employees
+            Projection: employees.id
+              Filter: employees.department = Utf8("HR")
+                TableScan: employees
         "#)
     }
 }
