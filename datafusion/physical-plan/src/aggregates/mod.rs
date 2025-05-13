@@ -1143,7 +1143,7 @@ pub fn get_finer_aggregate_exprs_requirement(
         if let Some(finer) = forward_finer {
             if !finer {
                 continue;
-            } else if eq_properties.ordering_satisfy(aggr_req.clone()) {
+            } else if eq_properties.ordering_satisfy(aggr_req.clone())? {
                 requirement = Some(aggr_req);
                 continue;
             }
@@ -1166,7 +1166,7 @@ pub fn get_finer_aggregate_exprs_requirement(
             if let Some(finer) = determine_finer(&requirement, &rev_aggr_req) {
                 if !finer {
                     *aggr_expr = Arc::new(reverse_aggr_expr);
-                } else if eq_properties.ordering_satisfy(rev_aggr_req.clone()) {
+                } else if eq_properties.ordering_satisfy(rev_aggr_req.clone())? {
                     *aggr_expr = Arc::new(reverse_aggr_expr);
                     requirement = Some(rev_aggr_req);
                 } else {

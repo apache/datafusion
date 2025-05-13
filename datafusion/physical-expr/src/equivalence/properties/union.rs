@@ -71,8 +71,8 @@ fn calculate_union_binary(
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
     let mut orderings = UnionEquivalentOrderingBuilder::new();
-    orderings.add_satisfied_orderings(&lhs, &rhs);
-    orderings.add_satisfied_orderings(&rhs, &lhs);
+    orderings.add_satisfied_orderings(&lhs, &rhs)?;
+    orderings.add_satisfied_orderings(&rhs, &lhs)?;
     let orderings = orderings.build();
 
     let mut eq_properties = EquivalenceProperties::new(lhs.schema);
@@ -145,7 +145,7 @@ impl UnionEquivalentOrderingBuilder {
         &mut self,
         source: &EquivalenceProperties,
         properties: &EquivalenceProperties,
-    ) {
+    ) -> Result<()> {
         let constants = source.constants();
         let properties_constants = properties.constants();
         for mut ordering in source.normalized_oeq_class() {
@@ -156,7 +156,7 @@ impl UnionEquivalentOrderingBuilder {
                     &constants,
                     properties,
                     &properties_constants,
-                ) {
+                )? {
                     AddedOrdering::Yes => break,
                     AddedOrdering::No(ordering) => {
                         let mut sort_exprs: Vec<_> = ordering.into();
@@ -170,6 +170,7 @@ impl UnionEquivalentOrderingBuilder {
                 }
             }
         }
+        Ok(())
     }
 
     /// Adds `ordering`, potentially augmented with `constants`, if it satisfies
@@ -186,12 +187,12 @@ impl UnionEquivalentOrderingBuilder {
         constants: &[ConstExpr],
         properties: &EquivalenceProperties,
         properties_constants: &[ConstExpr],
-    ) -> AddedOrdering {
-        if properties.ordering_satisfy(ordering.clone()) {
+    ) -> Result<AddedOrdering> {
+        if properties.ordering_satisfy(ordering.clone())? {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
-            AddedOrdering::Yes
+            Ok(AddedOrdering::Yes)
         } else if self.try_find_augmented_ordering(
             &ordering,
             constants,
@@ -199,9 +200,9 @@ impl UnionEquivalentOrderingBuilder {
             properties_constants,
         ) {
             // Augmented with constants to match the properties.
-            AddedOrdering::Yes
+            Ok(AddedOrdering::Yes)
         } else {
-            AddedOrdering::No(ordering)
+            Ok(AddedOrdering::No(ordering))
         }
     }
 

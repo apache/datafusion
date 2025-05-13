@@ -772,7 +772,7 @@ impl MemorySourceConfig {
         target_partitions: usize,
         output_ordering: LexOrdering,
     ) -> Result<Option<Vec<Vec<RecordBatch>>>> {
-        if !self.eq_properties().ordering_satisfy(output_ordering) {
+        if !self.eq_properties().ordering_satisfy(output_ordering)? {
             Ok(None)
         } else {
             let total_num_batches =

@@ -283,7 +283,7 @@ fn replace_with_partial_sort(
 
     let mut common_prefix_length = 0;
     while child_eq_properties
-        .ordering_satisfy(sort_exprs[0..common_prefix_length + 1].to_vec())
+        .ordering_satisfy(sort_exprs[0..common_prefix_length + 1].to_vec())?
     {
         common_prefix_length += 1;
     }
@@ -481,7 +481,7 @@ pub fn ensure_sorting(
     if requirements.children.is_empty() {
         return Ok(Transformed::no(requirements));
     }
-    let maybe_requirements = analyze_immediate_sort_removal(requirements);
+    let maybe_requirements = analyze_immediate_sort_removal(requirements)?;
     requirements = if !maybe_requirements.transformed {
         maybe_requirements.data
     } else {
@@ -556,23 +556,19 @@ pub fn ensure_sorting(
 /// Otherwise, returns the original plan
 fn analyze_immediate_sort_removal(
     mut node: PlanWithCorrespondingSort,
-) -> Transformed<PlanWithCorrespondingSort> {
+) -> Result<Transformed<PlanWithCorrespondingSort>> {
     let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() else {
-        return Transformed::no(node);
+        return Ok(Transformed::no(node));
     };
     let sort_input = sort_exec.input();
     // Check if the sort is unnecessary:
-    if !sort_exec
-        .properties()
-        .output_ordering()
-        .is_none_or(|ordering| {
-            sort_input
-                .equivalence_properties()
-                .ordering_satisfy(ordering.clone())
-        })
-    {
-        return Transformed::no(node);
-    };
+    let properties = sort_exec.properties();
+    if let Some(ordering) = properties.output_ordering().cloned() {
+        let eqp = sort_input.equivalence_properties();
+        if !eqp.ordering_satisfy(ordering)? {
+            return Ok(Transformed::no(node));
+        }
+    }
     node.plan = if !sort_exec.preserve_partitioning()
         && sort_input.output_partitioning().partition_count() > 1
     {
@@ -589,12 +585,7 @@ fn analyze_immediate_sort_removal(
         node.children = node.children.swap_remove(0).children;
         if let Some(fetch) = sort_exec.fetch() {
             // If the sort has a fetch, we need to add a limit:
-            if sort_exec
-                .properties()
-                .output_partitioning()
-                .partition_count()
-                == 1
-            {
+            if properties.output_partitioning().partition_count() == 1 {
                 Arc::new(GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch)))
             } else {
                 Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
@@ -607,7 +598,7 @@ fn analyze_immediate_sort_removal(
         child.data = false;
     }
     node.data = false;
-    Transformed::yes(node)
+    Ok(Transformed::yes(node))
 }
 
 /// Adjusts a [`WindowAggExec`] or a [`BoundedWindowAggExec`] to determine

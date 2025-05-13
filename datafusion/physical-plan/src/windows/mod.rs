@@ -364,13 +364,17 @@ pub(crate) fn window_equivalence_properties(
         // Collect columns defining partitioning, and construct all `SortOptions`
         // variations for them. Then, we will check each one whether it satisfies
         // the existing ordering provided by the input plan.
-        let all_satisfied_lexs = partitioning_exprs
+        let mut all_satisfied_lexs = vec![];
+        for lex in partitioning_exprs
             .iter()
             .map(|pb_order| sort_options_resolving_constant(Arc::clone(pb_order)))
             .multi_cartesian_product()
             .filter_map(LexOrdering::new)
-            .filter(|lex| window_eq_properties.ordering_satisfy(lex.clone()))
-            .collect::<Vec<_>>();
+        {
+            if window_eq_properties.ordering_satisfy(lex.clone())? {
+                all_satisfied_lexs.push(lex);
+            }
+        }
         // If there is a partitioning, and no possible ordering cannot satisfy
         // the input plan's orderings, then we cannot further introduce any
         // new orderings for the window plan.
@@ -453,20 +457,24 @@ pub(crate) fn window_equivalence_properties(
                 // utilize set-monotonicity since the set shrinks as the frame
                 // boundary starts "touching" the end of the table.
                 else if frame.is_causal() {
-                    let mut args_all_lexs = sliding_expr
+                    let args_all_lexs = sliding_expr
                         .get_aggregate_expr()
                         .expressions()
                         .into_iter()
                         .map(sort_options_resolving_constant)
                         .multi_cartesian_product();
 
-                    let mut asc = false;
-                    if args_all_lexs.any(|order| {
+                    let (mut asc, mut satisfied) = (false, false);
+                    for order in args_all_lexs {
                         if let Some(f) = order.first() {
                             asc = !f.options.descending;
                         }
-                        window_eq_properties.ordering_satisfy(order)
-                    }) {
+                        if window_eq_properties.ordering_satisfy(order)? {
+                            satisfied = true;
+                            break;
+                        }
+                    }
+                    if satisfied {
                         let increasing =
                             set_monotonicity.eq(&SetMonotonicity::Increasing);
                         let window_col = Column::new(expr.name(), i + input_schema_len);

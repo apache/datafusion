@@ -181,7 +181,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                         // Check whether ordering_satisfy API result and
                         // experimental result matches.
                         assert_eq!(
-                            projected_eq.ordering_satisfy(ordering),
+                            projected_eq.ordering_satisfy(ordering)?,
                             expected,
                             "{}",
                             err_msg

@@ -179,19 +179,16 @@ pub fn plan_with_order_breaking_variants(
         // Replace with non-order preserving variants as long as ordering is
         // not required by intermediate operators:
         if !maintains {
-            Ok(node)
+            return Ok(node);
         } else if is_sort_preserving_merge(plan) {
-            plan_with_order_breaking_variants(node)
+            return plan_with_order_breaking_variants(node);
         } else if let Some(required_ordering) = required_ordering {
             let eqp = node.plan.equivalence_properties();
-            if !eqp.ordering_satisfy_requirement(required_ordering.into_single())? {
-                plan_with_order_breaking_variants(node)
-            } else {
-                Ok(node)
+            if eqp.ordering_satisfy_requirement(required_ordering.into_single())? {
+                return Ok(node);
             }
-        } else {
-            plan_with_order_breaking_variants(node)
         }
+        plan_with_order_breaking_variants(node)
     })
     .collect::<Result<_>>()?;
     sort_input.data = false;
@@ -280,21 +277,18 @@ pub fn replace_with_order_preserving_variants(
     )?;
 
     // If the alternate plan makes this sort unnecessary, accept the alternate:
-    if requirements.plan.output_ordering().is_none_or(|ordering| {
-        alternate_plan
-            .plan
-            .equivalence_properties()
-            .ordering_satisfy(ordering.clone())
-    }) {
-        for child in alternate_plan.children.iter_mut() {
-            child.data = false;
+    if let Some(ordering) = requirements.plan.output_ordering() {
+        let eqp = alternate_plan.plan.equivalence_properties();
+        if !eqp.ordering_satisfy(ordering.clone())? {
+            // The alternate plan does not help, use faster order-breaking variants:
+            alternate_plan = plan_with_order_breaking_variants(alternate_plan)?;
+            alternate_plan.data = false;
+            requirements.children = vec![alternate_plan];
+            return Ok(Transformed::yes(requirements));
         }
-        Ok(Transformed::yes(alternate_plan))
-    } else {
-        // The alternate plan does not help, use faster order-breaking variants:
-        alternate_plan = plan_with_order_breaking_variants(alternate_plan)?;
-        alternate_plan.data = false;
-        requirements.children = vec![alternate_plan];
-        Ok(Transformed::yes(requirements))
     }
+    for child in alternate_plan.children.iter_mut() {
+        child.data = false;
+    }
+    Ok(Transformed::yes(alternate_plan))
 }

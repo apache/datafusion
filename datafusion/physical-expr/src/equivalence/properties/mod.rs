@@ -439,13 +439,13 @@ impl EquivalenceProperties {
     pub fn ordering_satisfy(
         &self,
         given: impl IntoIterator<Item = PhysicalSortExpr>,
-    ) -> bool {
+    ) -> Result<bool> {
         // First, standardize the given ordering:
         let Some(normal_ordering) = self.normalize_sort_exprs(given) else {
             // If the ordering vanishes after normalization, it is satisfied:
-            return true;
+            return Ok(true);
         };
-        normal_ordering.len() == self.common_sort_prefix_length(normal_ordering)
+        Ok(normal_ordering.len() == self.common_sort_prefix_length(normal_ordering)?)
     }
 
     /// Iteratively checks whether the given sort requirement is satisfied by
@@ -527,13 +527,13 @@ impl EquivalenceProperties {
 
     /// Returns the number of consecutive sort expressions (starting from the
     /// left) that are satisfied by the existing ordering.
-    fn common_sort_prefix_length(&self, normal_ordering: LexOrdering) -> usize {
+    fn common_sort_prefix_length(&self, normal_ordering: LexOrdering) -> Result<usize> {
         let full_length = normal_ordering.len();
         // Check whether the given ordering is satisfied by constraints:
         if self.satisfied_by_constraints_ordering(&normal_ordering) {
             // If constraints satisfy all sort expressions, return the full
             // length:
-            return full_length;
+            return Ok(full_length);
         }
         let schema = self.schema();
         let mut eq_properties = self.clone();
@@ -555,7 +555,7 @@ impl EquivalenceProperties {
             if !satisfy {
                 // As soon as one sort expression is unsatisfied, return how
                 // many we've satisfied so far:
-                return idx;
+                return Ok(idx);
             }
             // Treat satisfied keys as constants in subsequent iterations. We
             // can do this because the "next" key only matters in a lexicographical
@@ -570,13 +570,10 @@ impl EquivalenceProperties {
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
             let const_expr = ConstExpr::from(element.expr);
-            eq_properties
-                .add_constants(std::iter::once(const_expr))
-                .unwrap();
+            eq_properties.add_constants(std::iter::once(const_expr))?
         }
-
         // All sort expressions are satisfied, return full length:
-        full_length
+        Ok(full_length)
     }
 
     /// Determines the longest normal prefix of `ordering` satisfied by the
@@ -585,19 +582,19 @@ impl EquivalenceProperties {
     pub fn extract_common_sort_prefix(
         &self,
         ordering: LexOrdering,
-    ) -> (Vec<PhysicalSortExpr>, bool) {
+    ) -> Result<(Vec<PhysicalSortExpr>, bool)> {
         // First, standardize the given ordering:
         let Some(normal_ordering) = self.normalize_sort_exprs(ordering) else {
             // If the ordering vanishes after normalization, it is satisfied:
-            return (vec![], true);
+            return Ok((vec![], true));
         };
-        let prefix_len = self.common_sort_prefix_length(normal_ordering.clone());
+        let prefix_len = self.common_sort_prefix_length(normal_ordering.clone())?;
         let flag = prefix_len == normal_ordering.len();
         let mut sort_exprs: Vec<_> = normal_ordering.into();
         if !flag {
             sort_exprs.truncate(prefix_len);
         }
-        (sort_exprs, flag)
+        Ok((sort_exprs, flag))
     }
 
     /// Checks if the sort expressions are satisfied by any of the table

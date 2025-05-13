@@ -1005,7 +1005,7 @@ mod tests {
                     .collect::<Result<Vec<_>>>()?;
 
                 assert_eq!(
-                    properties.ordering_satisfy(sort),
+                    properties.ordering_satisfy(sort)?,
                     case.should_satisfy_ordering,
                     "failed test '{}'",
                     case.name
@@ -1501,7 +1501,7 @@ mod tests {
                     "{}: ordering {:?} should not be satisfied before adding constraints",
                     name, ordering
                 );
-                assert!(!eq_properties.ordering_satisfy(ordering), "{err_msg}");
+                assert!(!eq_properties.ordering_satisfy(ordering)?, "{err_msg}");
             }
 
             // Add base ordering
@@ -1521,7 +1521,7 @@ mod tests {
                     "{}: ordering {:?} should be satisfied after adding constraints",
                     name, ordering
                 );
-                assert!(eq_properties.ordering_satisfy(ordering), "{err_msg}");
+                assert!(eq_properties.ordering_satisfy(ordering)?, "{err_msg}");
             }
 
             // Test that unsatisfied orderings remain unsatisfied
@@ -1530,7 +1530,7 @@ mod tests {
                     "{}: ordering {:?} should not be satisfied after adding constraints",
                     name, ordering
                 );
-                assert!(!eq_properties.ordering_satisfy(ordering), "{err_msg}");
+                assert!(!eq_properties.ordering_satisfy(ordering)?, "{err_msg}");
             }
         }
 

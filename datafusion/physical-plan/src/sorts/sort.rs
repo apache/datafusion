@@ -977,7 +977,8 @@ impl SortExec {
     pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
         let preserve_partitioning = false;
         let (cache, sort_prefix) =
-            Self::compute_properties(&input, expr.clone(), preserve_partitioning);
+            Self::compute_properties(&input, expr.clone(), preserve_partitioning)
+                .unwrap();
         Self {
             expr,
             input,
@@ -1075,10 +1076,10 @@ impl SortExec {
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
         preserve_partitioning: bool,
-    ) -> (PlanProperties, Vec<PhysicalSortExpr>) {
+    ) -> Result<(PlanProperties, Vec<PhysicalSortExpr>)> {
         let (sort_prefix, sort_satisfied) = input
             .equivalence_properties()
-            .extract_common_sort_prefix(sort_exprs.clone());
+            .extract_common_sort_prefix(sort_exprs.clone())?;
 
         // The emission type depends on whether the input is already sorted:
         // - If already fully sorted, we can emit results in the same way as the input
@@ -1116,7 +1117,7 @@ impl SortExec {
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        (
+        Ok((
             PlanProperties::new(
                 eq_properties,
                 output_partitioning,
@@ -1124,7 +1125,7 @@ impl SortExec {
                 boundedness,
             ),
             sort_prefix,
-        )
+        ))
     }
 }
 
@@ -1229,7 +1230,7 @@ impl ExecutionPlan for SortExec {
         let sort_satisfied = self
             .input
             .equivalence_properties()
-            .ordering_satisfy(self.expr.clone());
+            .ordering_satisfy(self.expr.clone())?;
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(

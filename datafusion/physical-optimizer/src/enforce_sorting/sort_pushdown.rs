@@ -335,7 +335,7 @@ fn pushdown_requirement_to_children(
         let old_ordering = spm_eqs.output_ordering().unwrap();
         // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
         spm_eqs = spm_eqs.with_reorder(new_ordering);
-        if spm_eqs.ordering_satisfy(old_ordering) {
+        if spm_eqs.ordering_satisfy(old_ordering)? {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
             Ok(Some(vec![Some(parent_required)]))
