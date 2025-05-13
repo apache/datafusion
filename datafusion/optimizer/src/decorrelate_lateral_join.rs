@@ -78,6 +78,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     }
 
     match join.right.apply_with_subqueries(|p| {
+        // TODO: support outer joins
         if p.contains_outer_reference() {
             Ok(TreeNodeRecursion::Stop)
         } else {
