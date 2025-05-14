@@ -653,6 +653,8 @@ impl ScalarFunction {
 
 impl ScalarFunction {
     /// Create a new `ScalarFunction` from a [`ScalarUDF`]
+    ///
+    /// [`ScalarUDF`]: crate::ScalarUDF
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
         Self { func: udf, args }
     }
@@ -2462,7 +2464,7 @@ impl Display for SchemaDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -2613,7 +2615,7 @@ impl Display for SchemaDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -2651,7 +2653,7 @@ impl Display for SchemaDisplay<'_> {
                             write!(f, "{name}")
                         }
                         Err(e) => {
-                            write!(f, "got error from window_function_schema_name {}", e)
+                            write!(f, "got error from window_function_schema_name {e}")
                         }
                     }
                 }
@@ -2672,7 +2674,7 @@ impl Display for SchemaDisplay<'_> {
                     )?;
 
                     if let Some(null_treatment) = null_treatment {
-                        write!(f, " {}", null_treatment)?;
+                        write!(f, " {null_treatment}")?;
                     }
 
                     if !partition_by.is_empty() {
@@ -2866,7 +2868,7 @@ impl Display for SqlDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -3028,10 +3030,10 @@ impl Display for Expr {
                 WindowFunctionDefinition::AggregateUDF(fun) => {
                     match fun.window_function_display_name(params) {
                         Ok(name) => {
-                            write!(f, "{}", name)
+                            write!(f, "{name}")
                         }
                         Err(e) => {
-                            write!(f, "got error from window_function_display_name {}", e)
+                            write!(f, "got error from window_function_display_name {e}")
                         }
                     }
                 }
@@ -3047,7 +3049,7 @@ impl Display for Expr {
                     fmt_function(f, &fun.to_string(), false, args, true)?;
 
                     if let Some(nt) = null_treatment {
-                        write!(f, "{}", nt)?;
+                        write!(f, "{nt}")?;
                     }
 
                     if !partition_by.is_empty() {
@@ -3068,10 +3070,10 @@ impl Display for Expr {
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.display_name(params) {
                     Ok(name) => {
-                        write!(f, "{}", name)
+                        write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from display_name {}", e)
+                        write!(f, "got error from display_name {e}")
                     }
                 }
             }
