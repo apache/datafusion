@@ -595,11 +595,7 @@ pub(crate) mod tests {
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         // Consume the expression and ensure we don't crash
-        let _ = consumer
-            .consume_scalar_function(&func, &df_schema)
-            .await
-            .expect("This should succeed");
-
+        let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
         Ok(())
     }
 }

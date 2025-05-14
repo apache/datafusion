@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::logical_plan::consumer::{from_substrait_func_args, SubstraitConsumer};
-use datafusion::common::{not_impl_err, plan_err, substrait_err, DFSchema, ScalarValue};
+use datafusion::common::Result;
+use datafusion::common::{
+    not_impl_err, plan_err, substrait_err, DFSchema, DataFusionError, ScalarValue,
+};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{expr, BinaryExpr, Expr, Like, Operator};
 use std::vec::Drain;
@@ -27,7 +30,7 @@ pub async fn from_scalar_function(
     consumer: &impl SubstraitConsumer,
     f: &ScalarFunction,
     input_schema: &DFSchema,
-) -> datafusion::common::Result<Expr> {
+) -> Result<Expr> {
     let Some(fn_signature) = consumer
         .get_extensions()
         .functions
@@ -49,14 +52,14 @@ pub async fn from_scalar_function(
             args,
         )))
     } else if let Some(op) = name_to_op(fn_name) {
-        if f.arguments.len() < 2 {
+        if args.len() < 2 {
             return not_impl_err!(
                         "Expect at least two arguments for binary operator {op:?}, the provided number of operators is {:?}",
                        f.arguments.len()
                     );
         }
         // In those cases we build a balanced tree of BinaryExprs
-        Ok(arg_list_to_binary_op_tree(op, args))
+        arg_list_to_binary_op_tree(op, args)
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
         builder.build(consumer, f, input_schema).await
     } else {
@@ -115,36 +118,40 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
 /// For example, `OR` `(a, b, c, d, e)` will be converted to: `OR(OR(a, OR(b, c)), OR(d, e))`.
 ///
 /// `args` must not be empty.
-fn arg_list_to_binary_op_tree(op: Operator, mut args: Vec<Expr>) -> Expr {
+fn arg_list_to_binary_op_tree(op: Operator, mut args: Vec<Expr>) -> Result<Expr> {
     let n_args = args.len();
     let mut drained_args = args.drain(..);
-    _arg_list_to_binary_op_tree(op, &mut drained_args, n_args)
+    arg_list_to_binary_op_tree_inner(op, &mut drained_args, n_args)
 }
 
 /// Helper function for [`arg_list_to_binary_op_tree`] implementation
 ///
 /// `take_len` represents the number of elements to take from `args` before returning.
 /// We use `take_len` to avoid recursively building a `Take<Take<Take<...>>>` type.
-fn _arg_list_to_binary_op_tree(
+fn arg_list_to_binary_op_tree_inner(
     op: Operator,
     args: &mut Drain<Expr>,
     take_len: usize,
-) -> Expr {
+) -> Result<Expr> {
     if take_len == 1 {
-        return args.next().unwrap();
+        return args.next().ok_or_else(|| {
+            DataFusionError::Substrait(
+                "Expected one more available element in iterator, found none".to_string(),
+            )
+        });
     } else if take_len == 0 {
-        panic!("must not be called with empty args");
+        return substrait_err!("Cannot build binary operation tree with 0 arguments");
     }
     // Cut argument list in 2 balanced parts
     let left_take = take_len / 2;
     let right_take = take_len - left_take;
-    let left = _arg_list_to_binary_op_tree(op, args, left_take);
-    let right = _arg_list_to_binary_op_tree(op, args, right_take);
-    Expr::BinaryExpr(BinaryExpr {
+    let left = arg_list_to_binary_op_tree_inner(op, args, left_take)?;
+    let right = arg_list_to_binary_op_tree_inner(op, args, right_take)?;
+    Ok(Expr::BinaryExpr(BinaryExpr {
         left: Box::new(left),
         op,
         right: Box::new(right),
-    })
+    }))
 }
 
 /// Build [`Expr`] from its name and required inputs.
@@ -169,7 +176,7 @@ impl BuiltinExprBuilder {
         consumer: &impl SubstraitConsumer,
         f: &ScalarFunction,
         input_schema: &DFSchema,
-    ) -> datafusion::common::Result<Expr> {
+    ) -> Result<Expr> {
         match self.expr_name.as_str() {
             "like" => Self::build_like_expr(consumer, false, f, input_schema).await,
             "ilike" => Self::build_like_expr(consumer, true, f, input_schema).await,
@@ -189,7 +196,7 @@ impl BuiltinExprBuilder {
         fn_name: &str,
         f: &ScalarFunction,
         input_schema: &DFSchema,
-    ) -> datafusion::common::Result<Expr> {
+    ) -> Result<Expr> {
         if f.arguments.len() != 1 {
             return substrait_err!("Expect one argument for {fn_name} expr");
         }
@@ -223,7 +230,7 @@ impl BuiltinExprBuilder {
         case_insensitive: bool,
         f: &ScalarFunction,
         input_schema: &DFSchema,
-    ) -> datafusion::common::Result<Expr> {
+    ) -> Result<Expr> {
         let fn_name = if case_insensitive { "ILIKE" } else { "LIKE" };
         if f.arguments.len() != 2 && f.arguments.len() != 3 {
             return substrait_err!("Expect two or three arguments for `{fn_name}` expr");
