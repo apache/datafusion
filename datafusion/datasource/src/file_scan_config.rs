@@ -1162,6 +1162,12 @@ impl PartitionColumnProjector {
         let expected_cols =
             self.projected_schema.fields().len() - self.projected_partition_indexes.len();
 
+        // Add debug statement to log column counts
+        println!(
+            "==> file_batch.columns().len(): {}, expected_cols: {}",
+            file_batch.columns().len(),
+            expected_cols
+        );
         if file_batch.columns().len() != expected_cols {
             return exec_err!(
                 "Unexpected batch schema from file, expected {} cols but got {}",
