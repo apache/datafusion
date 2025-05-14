@@ -646,19 +646,29 @@ fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarV
             }
         }
     }
-    // use force_clone to free array reference
-    Ok(extreme.force_clone())
+
+    Ok(extreme)
 }
 
 macro_rules! min_max_generic {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
         if $VALUE.is_null() {
-            $DELTA.clone()
+            let mut delta_copy = $DELTA.clone();
+            // When the new value won we want to compact it to
+            // avoid storing the entire input
+            delta_copy.compact();
+            delta_copy
         } else if $DELTA.is_null() {
             $VALUE.clone()
         } else {
             match $VALUE.partial_cmp(&$DELTA) {
-                Some(choose_min_max!($OP)) => $DELTA.clone(),
+                Some(choose_min_max!($OP)) => {
+                    // When the new value won we want to compact it to
+                    // avoid storing the entire input
+                    let mut delta_copy = $DELTA.clone();
+                    delta_copy.compact();
+                    delta_copy
+                }
                 _ => $VALUE.clone(),
             }
         }
