@@ -663,18 +663,18 @@ pub fn coerce_int96_to_resolution(
                         ));
                     }
                 }
-                _ => {
-                    let parquet_path = parquet_path.concat();
-                    if let Some(&Type::INT96) = parquet_fields.get(parquet_path.as_str())
+                _ => match field_ref.data_type() {
+                    DataType::Timestamp(TimeUnit::Nanosecond, None)
+                        if parquet_fields.get(parquet_path.concat().as_str())
+                            == Some(&Type::INT96) =>
                     {
                         parent_fields.borrow_mut().push(field_with_new_type(
                             field_ref,
                             DataType::Timestamp(*time_unit, None),
                         ));
-                    } else {
-                        parent_fields.borrow_mut().push(Arc::clone(field_ref));
                     }
-                }
+                    _ => parent_fields.borrow_mut().push(Arc::clone(field_ref)),
+                },
             }
         }
         assert_eq!(fields.borrow().len(), file_schema.fields.len());
@@ -1684,7 +1684,58 @@ mod tests {
     use parquet::schema::parser::parse_message_type;
 
     #[test]
-    fn coerce_int96_to_resolution_with_complex_types() {
+    fn coerce_int96_to_resolution_with_mixed_timestamps() {
+        // Unclear if Spark (or other writer) could generate a file with mixed timestamps like this,
+        // but we want to test the scenario just in case.
+        let spark_schema = "
+        message spark_schema {
+          optional int96 c0;
+          optional int64 c1 (TIMESTAMP(NANOS,true));
+          optional int64 c2 (TIMESTAMP(NANOS,false));
+          optional int64 c3 (TIMESTAMP(MILLIS,true));
+          optional int64 c4 (TIMESTAMP(MILLIS,false));
+          optional int64 c5 (TIMESTAMP(MICROS,true));
+          optional int64 c6 (TIMESTAMP(MICROS,false));
+        }
+        ";
+
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+        let result =
+            coerce_int96_to_resolution(&descr, &arrow_schema, &TimeUnit::Microsecond)
+                .unwrap();
+
+        // Only the first field (c0) should be converted to a microsecond timestamp because
+        let expected_schema = Schema::new(vec![
+            Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new(
+                "c1",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c2", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            Field::new(
+                "c3",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c4", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new(
+                "c5",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c6", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        ]);
+
+        assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn coerce_int96_to_resolution_with_nested_types() {
         let spark_schema = "
         message spark_schema {
           optional int96 c0;
