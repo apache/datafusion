@@ -605,6 +605,20 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     let eq_res = arrow::compute::kernels::cmp::eq(&arr1_trimmed, &arr2_trimmed).ok()?;
 
     for j in 0..lt_res.len() {
+        // In Postgres, NULL values in lists are always considered to be greater than non-NULL values:
+        //
+        // $ SELECT ARRAY[NULL]::integer[] > ARRAY[1]
+        // true
+        //
+        // These next two if statements are introduced for replicating Postgres behavior, as
+        // arrow::compute does not account for this.
+        if arr1_trimmed.is_null(j) && !arr2_trimmed.is_null(j) {
+            return Some(Ordering::Greater);
+        }
+        if !arr1_trimmed.is_null(j) && arr2_trimmed.is_null(j) {
+            return Some(Ordering::Less);
+        }
+
         if lt_res.is_valid(j) && lt_res.value(j) {
             return Some(Ordering::Less);
         }
@@ -4875,6 +4889,24 @@ mod tests {
                 ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
                     Some(1),
                     Some(2),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    None,
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
                 ])]),
             ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));

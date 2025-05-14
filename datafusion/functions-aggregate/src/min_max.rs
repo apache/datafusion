@@ -616,7 +616,8 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
-        DataType::Struct(_) => min_max_batch_struct(values, Ordering::Greater)?,
+        DataType::Struct(_) => min_max_batch_generic(values, Ordering::Greater)?,
+        DataType::List(_) => min_max_batch_generic(values, Ordering::Greater)?,
         DataType::Dictionary(_, _) => {
             let values = values.as_any_dictionary().values();
             min_batch(values)?
@@ -625,7 +626,7 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
     })
 }
 
-fn min_max_batch_struct(array: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
+fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
     if array.len() == array.null_count() {
         return ScalarValue::try_from(array.data_type());
     }
@@ -649,7 +650,7 @@ fn min_max_batch_struct(array: &ArrayRef, ordering: Ordering) -> Result<ScalarVa
     Ok(extreme.force_clone())
 }
 
-macro_rules! min_max_struct {
+macro_rules! min_max_generic {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
         if $VALUE.is_null() {
             $DELTA.clone()
@@ -703,7 +704,8 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 max_binary
             )
         }
-        DataType::Struct(_) => min_max_batch_struct(values, Ordering::Less)?,
+        DataType::Struct(_) => min_max_batch_generic(values, Ordering::Less)?,
+        DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::Dictionary(_, _) => {
             let values = values.as_any_dictionary().values();
             max_batch(values)?
@@ -983,7 +985,14 @@ macro_rules! min_max {
                 lhs @ ScalarValue::Struct(_),
                 rhs @ ScalarValue::Struct(_),
             ) => {
-                min_max_struct!(lhs, rhs, $OP)
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
+            (
+                lhs @ ScalarValue::List(_),
+                rhs @ ScalarValue::List(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
             }
             e => {
                 return internal_err!(
