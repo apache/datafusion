@@ -1512,8 +1512,16 @@ impl Expr {
             |expr| {
                 // f_up: unalias on up so we can remove nested aliases like
                 // `(x as foo) as bar`
-                if let Expr::Alias(Alias { expr, .. }) = expr {
-                    Ok(Transformed::yes(*expr))
+                if let Expr::Alias(alias) = expr {
+                    match alias
+                        .metadata
+                        .as_ref()
+                        .map(|h| h.is_empty())
+                        .unwrap_or(true)
+                    {
+                        true => Ok(Transformed::yes(*alias.expr)),
+                        false => Ok(Transformed::no(Expr::Alias(alias))),
+                    }
                 } else {
                     Ok(Transformed::no(expr))
                 }

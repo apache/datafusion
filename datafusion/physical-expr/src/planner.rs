@@ -32,7 +32,7 @@ use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
-    binary_expr, lit, Between, BinaryExpr, Expr, Like, Operator, TryCast,
+    binary_expr, lit, Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, TryCast,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -109,16 +109,29 @@ pub fn create_physical_expr(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let input_schema: &Schema = &input_dfschema.into();
+    // let expr_field = e.to_field(input_dfschema)?.1;
+    let metadata = e.metadata(input_dfschema)?;
+    let metadata = match metadata.is_empty() {
+        true => None,
+        false => Some(metadata),
+    };
 
     match e {
         Expr::Alias(Alias { expr, .. }) => {
-            Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+            if let Expr::Literal(v) = expr.as_ref() {
+                Ok(Arc::new(Literal::new_with_metadata(v.clone(), metadata)))
+            } else {
+                Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+            }
         }
         Expr::Column(c) => {
             let idx = input_dfschema.index_of_column(c)?;
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
+        Expr::Literal(value) => Ok(Arc::new(Literal::new_with_metadata(
+            value.clone(),
+            metadata.clone(),
+        ))),
         Expr::ScalarVariable(_, variable_names) => {
             if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {

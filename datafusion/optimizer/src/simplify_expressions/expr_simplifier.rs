@@ -227,12 +227,16 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         mut expr: Expr,
     ) -> Result<(Transformed<Expr>, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
-        let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
+
+        let mut const_evaluator = ConstEvaluator::try_new(
+            self.info.execution_props(),
+            self.info.get_schema().unwrap_or(&DFSchema::empty()),
+        )?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
         if self.canonicalize {
-            expr = expr.rewrite(&mut Canonicalizer::new()).data()?
+            expr = expr.rewrite(&mut Canonicalizer::new()).data()?;
         }
 
         // Evaluating constants can enable new simplifications and
@@ -249,14 +253,17 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
                 .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
             expr = data;
             num_cycles += 1;
+
             // Track if any transformation occurred
             has_transformed = has_transformed || transformed;
             if !transformed || num_cycles >= self.max_simplifier_cycles {
                 break;
             }
         }
+
         // shorten inlist should be started after other inlist rules are applied
         expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
+
         Ok((
             Transformed::new_transformed(expr, has_transformed),
             num_cycles,
@@ -586,12 +593,16 @@ impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
     /// `execution_props`.
-    pub fn try_new(execution_props: &'a ExecutionProps) -> Result<Self> {
+    pub fn try_new(
+        execution_props: &'a ExecutionProps,
+        input_schema: &DFSchema,
+    ) -> Result<Self> {
         // The dummy column name is unused and doesn't matter as only
         // expressions without column references can be evaluated
         static DUMMY_COL_NAME: &str = ".";
+
         let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
-        let input_schema = DFSchema::try_from(schema.clone())?;
+        let input_schema = input_schema.clone();
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
         let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
@@ -639,8 +650,10 @@ impl<'a> ConstEvaluator<'a> {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
+            Expr::Alias(datafusion_expr::expr::Alias { metadata, .. }) => {
+                metadata.as_ref().map(|h| h.is_empty()).unwrap_or(true)
+            }
             Expr::Literal(_)
-            | Expr::Alias(..)
             | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)

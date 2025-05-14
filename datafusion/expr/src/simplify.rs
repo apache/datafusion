@@ -18,7 +18,7 @@
 //! Structs and traits to provide the information needed for expression simplification.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 
 use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
 
@@ -40,6 +40,9 @@ pub trait SimplifyInfo {
 
     /// Returns data type of this expr needed for determining optimized int type of a value
     fn get_data_type(&self, expr: &Expr) -> Result<DataType>;
+
+    /// Returns the Schema which may be needed to evalute an Expr
+    fn get_schema(&self) -> Option<&DFSchema>;
 }
 
 /// Provides simplification information based on DFSchema and
@@ -105,6 +108,10 @@ impl SimplifyInfo for SimplifyContext<'_> {
 
     fn execution_props(&self) -> &ExecutionProps {
         self.props
+    }
+
+    fn get_schema(&self) -> Option<&DFSchema> {
+        self.schema.as_ref().map(|v| v.as_ref())
     }
 }
 

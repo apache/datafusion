@@ -18,11 +18,13 @@
 //! Literal expressions for physical operations
 
 use std::any::Any;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
+use arrow::datatypes::Field;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -34,15 +36,37 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 
 /// Represents a literal value
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Literal {
     value: ScalarValue,
+    metadata: Option<HashMap<String, String>>,
+}
+
+impl Hash for Literal {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let ordered_metadata = self
+            .metadata
+            .as_ref()
+            .map(|m| m.iter().collect::<BTreeMap<_, _>>());
+        self.value.hash(state);
+        ordered_metadata.hash(state);
+    }
 }
 
 impl Literal {
     /// Create a literal value expression
     pub fn new(value: ScalarValue) -> Self {
-        Self { value }
+        Self {
+            value,
+            metadata: None,
+        }
+    }
+
+    pub fn new_with_metadata(
+        value: ScalarValue,
+        metadata: Option<HashMap<String, String>>,
+    ) -> Self {
+        Self { value, metadata }
     }
 
     /// Get the scalar value
@@ -69,6 +93,20 @@ impl PhysicalExpr for Literal {
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
         Ok(self.value.is_null())
+    }
+
+    fn return_field(&self, _input_schema: &Schema) -> Result<Field> {
+        let mut field = Field::new(
+            format!("{self}"),
+            self.value.data_type(),
+            self.value.is_null(),
+        );
+
+        if let Some(metadata) = &self.metadata {
+            field = field.with_metadata(metadata.clone());
+        }
+
+        Ok(field)
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
