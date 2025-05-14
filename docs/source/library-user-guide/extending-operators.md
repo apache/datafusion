@@ -53,155 +53,135 @@ The same answer can be produced more efficiently by simply keeping track of the 
 
 The following example illustrates the implementation of a `TopK` node:
 
-### LogicalPlan Node Definition
-
-- This section defines the custom logical plan node `TopKPlanNode`, which represents the `TopK` operation.
-- It includes trait implementations like `UserDefinedLogicalNodeCore` and Debug.
-  **Code:**
-
 ```rust
-use datafusion::common::{
-    cast::{as_int64_array, as_string_array},
-    tree_node::Transformed,
-    types::TypeSignature::Extension,
-    DataFusionError,
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::task::{Context, Poll};
+use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
+
+use arrow::{
+    array::{Int64Array, StringArray},
+    datatypes::SchemaRef,
+    record_batch::RecordBatch,
+    util::pretty::pretty_format_batches,
 };
-use datafusion::execution::{SessionState, TaskContext};
-use datafusion::logical_expr::{
-    FetchType, LogicalPlan, LogicalPlan::Sort, UserDefinedLogicalNode,
+use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::{
+    common::cast::{as_int64_array, as_string_array},
+    common::{arrow_datafusion_err, internal_err, DFSchemaRef},
+    error::{DataFusionError, Result},
+    execution::{
+        context::{QueryPlanner, SessionState, TaskContext},
+        runtime_env::RuntimeEnv,
+    },
+    logical_expr::{
+        Expr, Extension, LogicalPlan, Sort, UserDefinedLogicalNode,
+        UserDefinedLogicalNodeCore,
+    },
+    optimizer::{OptimizerConfig, OptimizerRule},
+    physical_expr::EquivalenceProperties,
+    physical_plan::{
+        DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+        PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    },
+    physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
+    prelude::{SessionConfig, SessionContext},
 };
-use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_plan::{
-    execution_plan::{Boundedness, EmissionType},
-    internal_err, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
-};
-use datafusion::physical_planner::{
-    DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
-};
-use arrow::array::{Int64Array, StringArray};
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::ScalarValue;
+use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
+use datafusion_optimizer::optimizer::ApplyOrder;
+use datafusion_optimizer::AnalyzerRule;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+
 use async_trait::async_trait;
-use futures::Stream;
-use std::{
-    any::Any,
-    collections::BTreeMap,
-    fmt::{self, Debug},
-    sync::Arc,
-    task::{Context, Poll},
-};
-use datafusion::physical_planner::planner::QueryPlanner;
+use futures::{Stream, StreamExt};
 
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
+struct TopKPlanNode {
+    k: usize,
+    input: LogicalPlan,
+    /// The sort expression (this example only supports a single sort
+    /// expr)
+    expr: SortExpr,
 
-#[derive(Debug)]
-struct TopKQueryPlanner {}
-
-#[async_trait]
-impl QueryPlanner for TopKQueryPlanner {
-    /// Given a `LogicalPlan` created from above, create an
-    /// `ExecutionPlan` suitable for execution
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Teach the default physical planner how to plan TopK nodes.
-        let physical_planner =
-            DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-                TopKPlanner {},
-            )]);
-        // Delegate most work of physical planning to the default physical planner
-        physical_planner
-            .create_physical_plan(logical_plan, session_state)
-            .await
-    }
-}
-```
-
-### Optimizer Rule
-
-- Implements the `TopKOptimizerRule` to detect a `Limit` followed by a Sort and replace it with the `TopKPlanNode`.
-- Includes the logic for transforming the logical plan.
-  code:
-
-```rust
-use std::sync::Arc;
-use datafusion::logical_expr::{Expr, Extension};
-use datafusion::logical_expr::Limit;
-use datafusion::logical_expr::Sort as LogicalSort;
-use crate::invariant_mock::InvariantMock;
-#[derive(Default, Debug)]
-struct TopKOptimizerRule {
     /// A testing-only hashable fixture.
+    /// For actual use, define the [`Invariant`] in the [`UserDefinedLogicalNodeCore::invariants`].
     invariant_mock: Option<InvariantMock>,
 }
 
-impl OptimizerRule for TopKOptimizerRule {
-    fn name(&self) -> &str {
-        "topk"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
-    // Example rewrite pass to insert a user defined LogicalPlanNode
-    fn rewrite(
-        &self,
-        plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        // Note: this code simply looks for the pattern of a Limit followed by a
-        // Sort and replaces it by a TopK node. It does not handle many
-        // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
-        let LogicalPlan::Limit(ref limit) = plan else {
-            return Ok(Transformed::no(plan));
-        };
-        let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
-            return Ok(Transformed::no(plan));
-        };
-
-        if let LogicalPlan::Sort(Sort {
-            ref expr,
-            ref input,
-            ..
-        }) = limit.input.as_ref()
-        {
-            if expr.len() == 1 {
-                // we found a sort with a single sort expr, replace with a a TopK
-                return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                    node: Arc::new(TopKPlanNode {
-                        k: fetch,
-                        input: input.as_ref().clone(),
-                        expr: expr[0].clone(),
-                        invariant_mock: self.invariant_mock.clone(),
-                    }),
-                })));
-            }
-        }
-
-        Ok(Transformed::no(plan))
+impl Debug for TopKPlanNode {
+    /// For TopK, use explain format for the Debug format. Other types
+    /// of nodes may
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        UserDefinedLogicalNodeCore::fmt_for_explain(self, f)
     }
 }
-```
 
-### Physical planner
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+struct InvariantMock {
+    should_fail_invariant: bool,
+    kind: InvariantLevel,
+}
 
--The `TopKPlanner` is implemented to map the custom logical plan node (`TopKPlanNode`) to a physical execution plan (`TopKExec`).
+impl UserDefinedLogicalNodeCore for TopKPlanNode {
+    fn name(&self) -> &str {
+        "TopK"
+    }
 
-```rust
-use std::sync::Arc;
-use async_trait::async_trait;
-use datafusion::execution::{SessionState, TaskContext};
-use datafusion::logical_expr::LogicalPlan;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner, ExtensionPlanner};
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+
+    /// Schema for TopK is the same as the input
+    fn schema(&self) -> &DFSchemaRef {
+        self.input.schema()
+    }
+
+    fn check_invariants(&self, check: InvariantLevel, _plan: &LogicalPlan) -> Result<()> {
+        if let Some(InvariantMock {
+            should_fail_invariant,
+            kind,
+        }) = self.invariant_mock.clone()
+        {
+            if should_fail_invariant && check == kind {
+                return internal_err!("node fails check, such as improper inputs");
+            }
+        }
+        Ok(())
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![self.expr.expr.clone()]
+    }
+
+    /// For example: `TopK: k=10`
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "TopK: k={}", self.k)
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        mut exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
+        assert_eq!(inputs.len(), 1, "input size inconsistent");
+        assert_eq!(exprs.len(), 1, "expression size inconsistent");
+        Ok(Self {
+            k: self.k,
+            input: inputs.swap_remove(0),
+            expr: self.expr.with_expr(exprs.swap_remove(0)),
+            invariant_mock: self.invariant_mock.clone(),
+        })
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
+    }
+}
+
+/// Physical planner for TopK nodes
 struct TopKPlanner {}
 
 #[async_trait]
@@ -230,21 +210,9 @@ impl ExtensionPlanner for TopKPlanner {
         )
     }
 }
-```
 
-### Physical Execution Plan
-
-- Defines the physical execution operator `TopKExec` and its properties.
-- Implements the `ExecutionPlan` trait to describe how the operator is executed.
-  code:
-
-```rust
-use datafusion::physical_plan::{Distribution, ExecutionPlan, PlanProperties};
-use datafusion::execution::TaskContext;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter; // if used instead of a custom stream
-use datafusion::error::Result;
-use datafusion::common::internal_err;
-
+/// Physical operator that implements TopK for u64 data types. This
+/// code is not general and is meant as an illustration only
 struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
     /// The maximum number of values
@@ -343,14 +311,8 @@ impl ExecutionPlan for TopKExec {
         Ok(Statistics::new_unknown(&self.schema()))
     }
 }
-```
 
-### Execution Logic
-
-- Implements the `TopKReade`r, which processes input batches to calculate the top `k` values.
-- Contains helper functions like `add_row`, `remove_lowest_value`, and `accumulate_batch` for execution logic.
-
-```rust
+// A very specialized TopK implementation
 struct TopKReader {
     /// The input to read data from
     input: SendableRecordBatchStream,
@@ -459,6 +421,56 @@ impl Stream for TopKReader {
 impl RecordBatchStream for TopKReader {
     fn schema(&self) -> SchemaRef {
         self.input.schema()
+    }
+}
+
+#[derive(Default, Debug)]
+struct MyAnalyzerRule {}
+
+impl AnalyzerRule for MyAnalyzerRule {
+    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+        Self::analyze_plan(plan)
+    }
+
+    fn name(&self) -> &str {
+        "my_analyzer_rule"
+    }
+}
+
+impl MyAnalyzerRule {
+    fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
+        plan.transform(|plan| {
+            Ok(match plan {
+                LogicalPlan::Projection(projection) => {
+                    let expr = Self::analyze_expr(projection.expr.clone())?;
+                    Transformed::yes(LogicalPlan::Projection(Projection::try_new(
+                        expr,
+                        projection.input,
+                    )?))
+                }
+                _ => Transformed::no(plan),
+            })
+        })
+        .data()
+    }
+
+    fn analyze_expr(expr: Vec<Expr>) -> Result<Vec<Expr>> {
+        expr.into_iter()
+            .map(|e| {
+                e.transform(|e| {
+                    Ok(match e {
+                        Expr::Literal(ScalarValue::Int64(i)) => {
+                            // transform to UInt64
+                            Transformed::yes(Expr::Literal(ScalarValue::UInt64(
+                                i.map(|i| i as u64),
+                            )))
+                        }
+                        _ => Transformed::no(e),
+                    })
+                })
+                .data()
+            })
+            .collect()
     }
 }
 ```
