@@ -19,7 +19,6 @@
 
 # Extending DataFusion's operators: custom LogicalPlan and Execution Plans
 
-
 This section contains an end-to-end demonstration of creating a user-defined operator in DataFusion. Specifically, it shows how to define a `TopKNode` that implements `ExtensionPlanNode`, add an `OptimizerRule` to rewrite a `LogicalPlan` to use that node, create an `ExecutionPlan`, and finally produce results.
 
 ## TopK Background:
@@ -28,7 +27,7 @@ Note: DataFusion contains a highly optimized version of the `TopK` operator, but
 
 [DataFusion repository]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.TopK.html
 
-"Top K" operator is a common query optimization used for queries such as "find the top 3 customers by revenue".  The(simplified) SQL for such a query might be:
+"Top K" operator is a common query optimization used for queries such as "find the top 3 customers by revenue". The(simplified) SQL for such a query might be:
 
 ```sql
 explain SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
@@ -475,6 +474,7 @@ impl MyAnalyzerRule {
     }
 }
 ```
+
 DataFusion supports extension of operators by transforming logical plan and execution plan through customized [optimizer rules](https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html). This section will use the µWheel project to illustrate such capabilities.
 
 ## About DataFusion µWheel
@@ -513,4 +513,3 @@ fn agg_to_table_scan(result: f64, schema: SchemaRef) -> Result<LogicalPlan> {
 ```
 
 To get a deeper dive into the usage of the µWheel project, visit the [blog post](https://uwheel.rs/post/datafusion_uwheel/) by Max Meldrum.
-
