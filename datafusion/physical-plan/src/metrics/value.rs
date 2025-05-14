@@ -29,6 +29,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use datafusion_common::instant::Instant;
+use datafusion_execution::memory_pool::human_readable_size;
 use parking_lot::Mutex;
 
 /// A counter to record things such as number of input or output rows
@@ -554,10 +555,13 @@ impl Display for MetricValue {
         match self {
             Self::OutputRows(count)
             | Self::SpillCount(count)
-            | Self::SpilledBytes(count)
             | Self::SpilledRows(count)
             | Self::Count { count, .. } => {
                 write!(f, "{count}")
+            }
+            Self::SpilledBytes(count) => {
+                let readable_count = human_readable_size(count.value());
+                write!(f, "{readable_count}")
             }
             Self::CurrentMemoryUsage(gauge) | Self::Gauge { gauge, .. } => {
                 write!(f, "{gauge}")
@@ -581,6 +585,7 @@ impl Display for MetricValue {
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
+    use datafusion_execution::memory_pool::units::MB;
 
     use super::*;
 
@@ -603,6 +608,20 @@ mod tests {
         for value in &values {
             assert_eq!("42", value.to_string(), "value {value:?}");
         }
+    }
+
+    #[test]
+    fn test_display_spilled_bytes() {
+        let count = Count::new();
+        let spilled_byte = MetricValue::SpilledBytes(count.clone());
+
+        assert_eq!("0.0 B", spilled_byte.to_string());
+
+        count.add((100 * MB) as usize);
+        assert_eq!("100.0 MB", spilled_byte.to_string());
+
+        count.add((0.5 * MB as f64) as usize);
+        assert_eq!("100.5 MB", spilled_byte.to_string());
     }
 
     #[test]

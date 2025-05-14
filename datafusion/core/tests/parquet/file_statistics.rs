@@ -165,7 +165,7 @@ async fn load_table_stats_with_session_level_cache() {
 async fn list_files_with_session_level_cache() {
     let p_name = "alltypes_plain.parquet";
     let testdata = datafusion::test_util::parquet_test_data();
-    let filename = format!("{}/{}", testdata, p_name);
+    let filename = format!("{testdata}/{p_name}");
 
     let temp_path1 = tempdir()
         .unwrap()
@@ -173,7 +173,7 @@ async fn list_files_with_session_level_cache() {
         .into_os_string()
         .into_string()
         .unwrap();
-    let temp_filename1 = format!("{}/{}", temp_path1, p_name);
+    let temp_filename1 = format!("{temp_path1}/{p_name}");
 
     let temp_path2 = tempdir()
         .unwrap()
@@ -181,7 +181,7 @@ async fn list_files_with_session_level_cache() {
         .into_os_string()
         .into_string()
         .unwrap();
-    let temp_filename2 = format!("{}/{}", temp_path2, p_name);
+    let temp_filename2 = format!("{temp_path2}/{p_name}");
 
     fs::copy(filename.clone(), temp_filename1).expect("panic");
     fs::copy(filename, temp_filename2).expect("panic");

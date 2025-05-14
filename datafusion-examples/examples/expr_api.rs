@@ -147,8 +147,7 @@ fn evaluate_demo() -> Result<()> {
     ])) as _;
     assert!(
         matches!(&result, ColumnarValue::Array(r) if r == &expected_result),
-        "result: {:?}",
-        result
+        "result: {result:?}"
     );
 
     Ok(())

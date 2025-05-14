@@ -23,8 +23,7 @@ use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
-    should_enable_page_index, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory,
+    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
@@ -230,8 +229,7 @@ impl FileOpener for ParquetOpener {
                     Ok(None) => {}
                     Err(e) => {
                         debug!(
-                            "Ignoring error building row filter for '{:?}': {}",
-                            predicate, e
+                            "Ignoring error building row filter for '{predicate:?}': {e}"
                         );
                     }
                 };
@@ -439,4 +437,16 @@ async fn load_page_index<T: AsyncFileReader>(
         // No need to load the page index again, just return the existing metadata
         Ok(reader_metadata)
     }
+}
+
+fn should_enable_page_index(
+    enable_page_index: bool,
+    page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
+) -> bool {
+    enable_page_index
+        && page_pruning_predicate.is_some()
+        && page_pruning_predicate
+            .as_ref()
+            .map(|p| p.filter_number() > 0)
+            .unwrap_or(false)
 }
