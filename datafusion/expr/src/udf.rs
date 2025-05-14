@@ -464,7 +464,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Example creating `Field`
     ///
-    /// Note the [`Field`] is ignored, except for structured types such as
+    /// Note the name of the [`Field`] is ignored, except for structured types such as
     /// `DataType::Struct`.
     ///
     /// ```rust
