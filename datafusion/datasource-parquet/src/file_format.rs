@@ -21,7 +21,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Debug;
-use std::ops::{Deref, Range};
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -578,30 +578,30 @@ pub fn coerce_int96_to_resolution(
     }
 
     type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
-
-    let max_level = None;
+    type StackContext<'a> = (
+        usize,
+        Vec<&'a str>,
+        &'a FieldRef,
+        NestedFields,
+        Option<NestedFields>,
+    );
 
     let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
 
     let transformed_schema = {
-        let max_level = match max_level.unwrap_or(usize::MAX) {
-            0 => usize::MAX,
-            val => val,
-        };
+        // let max_level = match max_level.unwrap_or(usize::MAX) {
+        //     0 => usize::MAX,
+        //     val => val,
+        // };
+        let max_level = usize::MAX;
         // TODO: Only DFS fields that need it.
-        let mut stack: Vec<(
-            usize,
-            Vec<&str>,
-            &FieldRef,
-            NestedFields,
-            Option<NestedFields>,
-        )> = file_schema
+        let mut stack: Vec<StackContext> = file_schema
             .fields()
             .iter()
             .rev()
             .map(|f| {
                 let name_vec: Vec<&str> = vec![f.name()];
-                (0, name_vec, f, fields.clone(), None)
+                (0, name_vec, f, Rc::clone(&fields), None)
             })
             .collect();
 
@@ -628,7 +628,7 @@ pub fn coerce_int96_to_resolution(
                             parquet_path.clone(),
                             field_ref,
                             parent_fields,
-                            Some(child_fields.clone()),
+                            Some(Rc::clone(&child_fields)),
                         ));
                         // Need to zip these in reverse to maintain original order
                         for fff in ff.into_iter().rev() {
@@ -639,7 +639,7 @@ pub fn coerce_int96_to_resolution(
                                 depth + 1,
                                 parquet_path,
                                 fff,
-                                child_fields.clone(),
+                                Rc::clone(&child_fields),
                                 None,
                             ));
                         }
@@ -651,7 +651,7 @@ pub fn coerce_int96_to_resolution(
                         assert_eq!(child_fields.borrow().len(), 1);
                         let updated_field = Field::new_list(
                             field_ref.name(),
-                            child_fields.borrow()[0].clone(),
+                            Arc::clone(&child_fields.borrow()[0]),
                             field_ref.is_nullable(),
                         );
                         parent_fields.borrow_mut().push(Arc::new(updated_field));
@@ -664,7 +664,7 @@ pub fn coerce_int96_to_resolution(
                             parquet_path.clone(),
                             field_ref,
                             parent_fields,
-                            Some(child_fields.clone()),
+                            Some(Rc::clone(&child_fields)),
                         ));
                         let mut parquet_path = parquet_path.clone();
                         parquet_path.push(".");
@@ -673,7 +673,7 @@ pub fn coerce_int96_to_resolution(
                             depth + 1,
                             parquet_path.clone(),
                             ff,
-                            child_fields.clone(),
+                            Rc::clone(&child_fields),
                             None,
                         ));
                     }
@@ -687,7 +687,7 @@ pub fn coerce_int96_to_resolution(
                             DataType::Timestamp(*time_unit, None),
                         ));
                     } else {
-                        parent_fields.borrow_mut().push(field_ref.clone());
+                        parent_fields.borrow_mut().push(Arc::clone(field_ref));
                     }
                 }
             }
@@ -710,7 +710,7 @@ pub fn coerce_int96_to_resolution(
         .fields
         .iter()
         .for_each(|field| println!("{:?}", field));
-    
+
     Some(transformed_schema)
 }
 
