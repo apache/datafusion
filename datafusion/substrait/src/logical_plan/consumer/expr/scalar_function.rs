@@ -287,19 +287,22 @@ impl BuiltinExprBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::arg_list_to_binary_op_tree;
+    use crate::extensions::Extensions;
+    use crate::logical_plan::consumer::tests::TEST_SESSION_STATE;
+    use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::{DFSchema, Result, ScalarValue};
+    use datafusion::logical_expr::{Expr, Operator};
+    use insta::assert_snapshot;
+    use substrait::proto::expression::literal::LiteralType;
+    use substrait::proto::expression::{Literal, RexType, ScalarFunction};
     use substrait::proto::function_argument::ArgType;
     use substrait::proto::{Expression, FunctionArgument};
-    use substrait::proto::expression::{Literal, RexType, ScalarFunction};
-    use substrait::proto::expression::literal::LiteralType;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::DFSchema;
-    use crate::extensions::Extensions;
-    use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
-    use crate::logical_plan::consumer::tests::TEST_SESSION_STATE;
 
     /// Test that large argument lists for binary operations do not crash the consumer
     #[tokio::test]
-    async fn test_binary_op_large_argument_list() -> datafusion::common::Result<()> {
+    async fn test_binary_op_large_argument_list() -> Result<()> {
         // Build substrait extensions (we are using only one function)
         let mut extensions = Extensions::default();
         extensions.functions.insert(0, String::from("or:bool_bool"));
@@ -328,6 +331,39 @@ mod tests {
 
         // Consume the expression and ensure we don't crash
         let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
+        Ok(())
+    }
+
+    fn n(n: i64) -> Expr {
+        Expr::Literal(ScalarValue::Int64(Some(n)))
+    }
+
+    #[test]
+    fn arg_list_to_binary_op_tree_1_arg() -> Result<()> {
+        let expr = arg_list_to_binary_op_tree(Operator::Or, vec![n(1)])?;
+        assert_snapshot!(expr.to_string(), @"Int64(1)");
+        Ok(())
+    }
+
+    #[test]
+    fn arg_list_to_binary_op_tree_2_args() -> Result<()> {
+        let expr = arg_list_to_binary_op_tree(Operator::Or, vec![n(1), n(2)])?;
+        assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2)");
+        Ok(())
+    }
+
+    #[test]
+    fn arg_list_to_binary_op_tree_3_args() -> Result<()> {
+        let expr = arg_list_to_binary_op_tree(Operator::Or, vec![n(1), n(2), n(3)])?;
+        assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2) OR Int64(3)");
+        Ok(())
+    }
+
+    #[test]
+    fn arg_list_to_binary_op_tree_4_args() -> Result<()> {
+        let expr =
+            arg_list_to_binary_op_tree(Operator::Or, vec![n(1), n(2), n(3), n(4)])?;
+        assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2) OR Int64(3) OR Int64(4)");
         Ok(())
     }
 }
