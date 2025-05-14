@@ -39,22 +39,22 @@ async fn create_and_write_parquet_file(
     schema_name: &str,
     file_path: &str,
 ) -> Result<(), Box<dyn Error>> {
-    println!("==> Creating {}", schema_name);
-    println!("==> {} created", schema_name);
+    println!("==> Creating {schema_name}");
+    println!("==> {schema_name} created");
 
-    println!("==> Creating batch from {}", schema_name);
+    println!("==> Creating batch from {schema_name}");
     let batch = create_batch(schema)?;
     println!(
         "==> Batch created successfully with {} rows",
         batch.num_rows()
     );
 
-    println!("==> Removing existing file if present: {}", file_path);
+    println!("==> Removing existing file if present: {file_path}");
     let _ = fs::remove_file(file_path);
 
     println!("==> Creating DataFrame from batch");
     let df = ctx.read_batch(batch)?;
-    println!("==> Writing {} parquet file to {}", schema_name, file_path);
+    println!("==> Writing {schema_name} parquet file to {file_path}");
 
     df.write_parquet(
         file_path,
@@ -65,7 +65,7 @@ async fn create_and_write_parquet_file(
     )
     .await?;
 
-    println!("==> Successfully wrote {} parquet file", schema_name);
+    println!("==> Successfully wrote {schema_name} parquet file");
     Ok(())
 }
 
@@ -107,7 +107,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
         path3.to_string(),
         path4.to_string(),
     ];
-    println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
+    println!("==> Creating ListingTableConfig for paths: {paths_str:?}");
     println!("==> Using schema4 for files with different schemas");
     println!("==> Schema difference: schema evolution from basic to expanded fields");
 
@@ -160,7 +160,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let compacted_path = "test_data_compacted.parquet";
     let _ = fs::remove_file(compacted_path);
 
-    println!("==> writing compacted parquet file to {}", compacted_path);
+    println!("==> writing compacted parquet file to {compacted_path}");
     df.write_parquet(
         compacted_path,
         DataFrameWriteOptions::default()
@@ -255,7 +255,7 @@ fn create_array_for_field(
 }
 
 fn create_schema1() -> Arc<Schema> {
-    let schema1 = Arc::new(Schema::new(vec![
+    Arc::new(Schema::new(vec![
         Field::new("body", DataType::Utf8, true),
         Field::new("method", DataType::Utf8, true),
         Field::new("status", DataType::Utf8, true),
@@ -269,8 +269,7 @@ fn create_schema1() -> Arc<Schema> {
             DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             true,
         ),
-    ]));
-    schema1
+    ]))
 }
 
 /// Creates a schema with basic HTTP request fields plus a query_params struct field
