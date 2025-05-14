@@ -162,25 +162,24 @@ impl PhysicalSortExpr {
         requirement: &PhysicalSortRequirement,
         schema: &Schema,
     ) -> bool {
-        let opts = &requirement.options;
         self.expr.eq(&requirement.expr)
-            && if self.expr.nullable(schema).unwrap_or(true) {
-                opts.is_none_or(|opts| self.options == opts)
-            } else {
-                // If the column is not nullable, NULLS FIRST/LAST is not important.
-                opts.is_none_or(|opts| self.options.descending == opts.descending)
-            }
+            && requirement.options.is_none_or(|opts| {
+                options_compatible(
+                    &self.options,
+                    &opts,
+                    self.expr.nullable(schema).unwrap_or(true),
+                )
+            })
     }
 
     /// Checks whether this sort expression satisfies the given `sort_expr`.
     pub fn satisfy_expr(&self, sort_expr: &Self, schema: &Schema) -> bool {
         self.expr.eq(&sort_expr.expr)
-            && if self.expr.nullable(schema).unwrap_or(true) {
-                self.options == sort_expr.options
-            } else {
-                // If the column is not nullable, NULLS FIRST/LAST is not important.
-                self.options.descending == sort_expr.options.descending
-            }
+            && options_compatible(
+                &self.options,
+                &sort_expr.options,
+                self.expr.nullable(schema).unwrap_or(true),
+            )
     }
 }
 
@@ -200,6 +199,20 @@ impl Hash for PhysicalSortExpr {
 impl Display for PhysicalSortExpr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{} {}", self.expr, to_str(&self.options))
+    }
+}
+
+/// Returns whether the given two [`SortOptions`] are compatible.
+pub fn options_compatible(
+    options_lhs: &SortOptions,
+    options_rhs: &SortOptions,
+    nullable: bool,
+) -> bool {
+    if nullable {
+        options_lhs == options_rhs
+    } else {
+        // If the column is not nullable, NULLS FIRST/LAST is not important.
+        options_lhs.descending == options_rhs.descending
     }
 }
 

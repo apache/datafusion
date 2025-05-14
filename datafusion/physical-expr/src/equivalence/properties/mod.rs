@@ -43,6 +43,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_err, Constraint, Constraints, HashMap, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_physical_expr_common::sort_expr::options_compatible;
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
 use indexmap::IndexSet;
@@ -495,11 +496,10 @@ impl EquivalenceProperties {
                 sort_properties, ..
             } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
             let satisfy = match sort_properties {
-                SortProperties::Ordered(options) => {
-                    let sort_expr =
-                        PhysicalSortExpr::new(Arc::clone(&element.expr), options);
-                    sort_expr.satisfy(&element, schema)
-                }
+                SortProperties::Ordered(options) => element.options.is_none_or(|opts| {
+                    let nullable = element.expr.nullable(schema).unwrap_or(true);
+                    options_compatible(&options, &opts, nullable)
+                }),
                 // Singleton expressions satisfies any requirement.
                 SortProperties::Singleton => true,
                 SortProperties::Unordered => false,
@@ -543,11 +543,11 @@ impl EquivalenceProperties {
                 sort_properties, ..
             } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
             let satisfy = match sort_properties {
-                SortProperties::Ordered(options) => {
-                    let sort_expr =
-                        PhysicalSortExpr::new(Arc::clone(&element.expr), options);
-                    sort_expr.satisfy_expr(&element, schema)
-                }
+                SortProperties::Ordered(options) => options_compatible(
+                    &options,
+                    &element.options,
+                    element.expr.nullable(schema).unwrap_or(true),
+                ),
                 // Singleton expressions satisfies any ordering.
                 SortProperties::Singleton => true,
                 SortProperties::Unordered => false,
