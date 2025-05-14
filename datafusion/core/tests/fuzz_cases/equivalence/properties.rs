@@ -84,10 +84,9 @@ fn test_find_longest_permutation_random() -> Result<()> {
                 );
 
                 let err_msg = format!(
-                    "Error in test case ordering:{:?}, eq_properties: {}",
-                    ordering, eq_properties
+                    "Error in test case ordering:{ordering:?}, eq_properties: {eq_properties}"
                 );
-                assert_eq!(ordering.len(), indices.len(), "{}", err_msg);
+                assert_eq!(ordering.len(), indices.len(), "{err_msg}");
                 // Since ordered section satisfies schema, we expect
                 // that result will be same after sort (e.g sort was unnecessary).
                 assert!(

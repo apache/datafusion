@@ -121,7 +121,7 @@ impl RepartitionExecState {
         let mut channels = HashMap::with_capacity(txs.len());
         for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
             let reservation = Arc::new(Mutex::new(
-                MemoryConsumer::new(format!("{}[{partition}]", name))
+                MemoryConsumer::new(format!("{name}[{partition}]"))
                     .register(context.memory_pool()),
             ));
             channels.insert(partition, (tx, rx, reservation));
@@ -517,11 +517,10 @@ impl DisplayAs for RepartitionExec {
                     self.input.output_partitioning().partition_count();
                 let output_partition_count = self.partitioning().partition_count();
                 let input_to_output_partition_str =
-                    format!("{} -> {}", input_partition_count, output_partition_count);
+                    format!("{input_partition_count} -> {output_partition_count}");
                 writeln!(
                     f,
-                    "partition_count(in->out)={}",
-                    input_to_output_partition_str
+                    "partition_count(in->out)={input_to_output_partition_str}"
                 )?;
 
                 if self.preserve_order {
@@ -632,9 +631,7 @@ impl ExecutionPlan for RepartitionExec {
             };
 
             trace!(
-                "Before returning stream in {}::execute for partition: {}",
-                name,
-                partition
+                "Before returning stream in {name}::execute for partition: {partition}"
             );
 
             if preserve_order {
@@ -656,7 +653,7 @@ impl ExecutionPlan for RepartitionExec {
                 // input partitions to this partition:
                 let fetch = None;
                 let merge_reservation =
-                    MemoryConsumer::new(format!("{}[Merge {partition}]", name))
+                    MemoryConsumer::new(format!("{name}[Merge {partition}]"))
                         .register(context.memory_pool());
                 StreamingMergeBuilder::new()
                     .with_streams(input_streams)

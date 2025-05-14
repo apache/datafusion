@@ -1143,17 +1143,14 @@ mod test {
         match analyzer.execute_and_check(plan, &options, |_, _| {}) {
             Ok(succeeded_plan) => {
                 panic!(
-                    "Expected a type coercion error, but analysis succeeded: \n{:#?}",
-                    succeeded_plan
+                    "Expected a type coercion error, but analysis succeeded: \n{succeeded_plan:#?}"
                 );
             }
             Err(e) => {
                 let msg = e.to_string();
                 assert!(
                     msg.contains(expected_substr),
-                    "Error did not contain expected substring.\n  expected to find: `{}`\n  actual error: `{}`",
-                    expected_substr,
-                    msg
+                    "Error did not contain expected substring.\n  expected to find: `{expected_substr}`\n  actual error: `{msg}`"
                 );
             }
         }

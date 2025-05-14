@@ -507,11 +507,7 @@ where
             Some((name, val)) if name == pn => part_values.push(val),
             _ => {
                 debug!(
-                    "Ignoring file: file_path='{}', table_path='{}', part='{}', partition_col='{}'",
-                    file_path,
-                    table_path,
-                    part,
-                    pn,
+                    "Ignoring file: file_path='{file_path}', table_path='{table_path}', part='{part}', partition_col='{pn}'",
                 );
                 return None;
             }
