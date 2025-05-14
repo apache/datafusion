@@ -24,10 +24,14 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::{
-    common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    common, execution_plan::Boundedness, DisplayAs, DisplayFormatType, ExecutionPlan,
+    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
+};
+use crate::{
+    execution_plan::EmissionType,
+    stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter},
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -152,12 +156,11 @@ impl MockExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -171,6 +174,10 @@ impl DisplayAs for MockExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "MockExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -248,6 +255,13 @@ impl ExecutionPlan for MockExec {
 
     // Panics if one of the batches is an error
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema));
+        }
         let data: Result<Vec<_>> = self
             .data
             .iter()
@@ -315,11 +329,11 @@ impl BarrierExec {
         schema: SchemaRef,
         data: &[Vec<RecordBatch>],
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(data.len()),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -333,6 +347,10 @@ impl DisplayAs for BarrierExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BarrierExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -394,6 +412,13 @@ impl ExecutionPlan for BarrierExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema));
+        }
         Ok(common::compute_record_batch_statistics(
             &self.data,
             &self.schema,
@@ -427,12 +452,11 @@ impl ErrorExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -446,6 +470,10 @@ impl DisplayAs for ErrorExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ErrorExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -509,12 +537,11 @@ impl StatisticsExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(2),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -533,6 +560,10 @@ impl DisplayAs for StatisticsExec {
                     self.schema.fields().len(),
                     self.stats.num_rows,
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -573,11 +604,19 @@ impl ExecutionPlan for StatisticsExec {
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
     }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        Ok(if partition.is_some() {
+            Statistics::new_unknown(&self.schema)
+        } else {
+            self.stats.clone()
+        })
+    }
 }
 
 /// Execution plan that emits streams that block forever.
 ///
-/// This is useful to test shutdown / cancelation behavior of certain execution plans.
+/// This is useful to test shutdown / cancellation behavior of certain execution plans.
 #[derive(Debug)]
 pub struct BlockingExec {
     /// Schema that is mocked by this plan.
@@ -610,12 +649,11 @@ impl BlockingExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(n_partitions),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -629,6 +667,10 @@ impl DisplayAs for BlockingExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BlockingExec",)
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -714,8 +756,6 @@ pub async fn assert_strong_count_converges_to_zero<T>(refs: Weak<T>) {
     .unwrap();
 }
 
-///
-
 /// Execution plan that emits streams that panics.
 ///
 /// This is useful to test panic handling of certain execution plans.
@@ -754,13 +794,12 @@ impl PanicExec {
         schema: SchemaRef,
         batches_until_panics: &[usize],
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
         let num_partitions = batches_until_panics.len();
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(num_partitions),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -774,6 +813,10 @@ impl DisplayAs for PanicExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "PanicExec",)
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

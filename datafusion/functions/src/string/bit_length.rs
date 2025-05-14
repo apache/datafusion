@@ -18,14 +18,33 @@
 use arrow::compute::kernels::length::bit_length;
 use arrow::datatypes::DataType;
 use std::any::Any;
-use std::sync::OnceLock;
 
 use crate::utils::utf8_to_int_type;
-use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_common::types::logical_string;
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the bit length of a string.",
+    syntax_example = "bit_length(str)",
+    sql_example = r#"```sql
+> select bit_length('datafusion');
++--------------------------------+
+| bit_length(Utf8("datafusion")) |
++--------------------------------+
+| 80                             |
++--------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "length"),
+    related_udf(name = "octet_length")
+)]
 #[derive(Debug)]
 pub struct BitLengthFunc {
     signature: Signature,
@@ -40,7 +59,12 @@ impl Default for BitLengthFunc {
 impl BitLengthFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -62,15 +86,10 @@ impl ScalarUDFImpl for BitLengthFunc {
         utf8_to_int_type(&arg_types[0], "bit_length")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 1 {
-            return exec_err!(
-                "bit_length function requires 1 argument, got {}",
-                args.len()
-            );
-        }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [array] = take_function_args(self.name(), &args.args)?;
 
-        match &args[0] {
+        match array {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
@@ -79,38 +98,15 @@ impl ScalarUDFImpl for BitLengthFunc {
                 ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
                     ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
                 )),
-                _ => unreachable!(),
+                ScalarValue::Utf8View(v) => Ok(ColumnarValue::Scalar(
+                    ScalarValue::Int32(v.as_ref().map(|x| (x.len() * 8) as i32)),
+                )),
+                _ => unreachable!("bit length"),
             },
         }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_bit_length_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_bit_length_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the bit length of a string.")
-            .with_syntax_example("bit_length(str)")
-            .with_sql_example(
-                r#"```sql
-> select bit_length('datafusion');
-+--------------------------------+
-| bit_length(Utf8("datafusion")) |
-+--------------------------------+
-| 80                             |
-+--------------------------------+
-```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("length")
-            .with_related_udf("octet_length")
-            .build()
-            .unwrap()
-    })
 }

@@ -24,9 +24,10 @@ use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    DisplayAs, ExecutionMode, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::{Boundedness, CardinalityEffect};
 use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
@@ -34,7 +35,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -86,7 +86,9 @@ impl GlobalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
-            ExecutionMode::Bounded,                 // Execution Mode
+            input.pipeline_behavior(),
+            // Limit operations are always bounded since they output a finite number of rows
+            Boundedness::Bounded,
         )
     }
 }
@@ -105,6 +107,12 @@ impl DisplayAs for GlobalLimitExec {
                     self.skip,
                     self.fetch.map_or("None".to_string(), |x| x.to_string())
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "limit={fetch}")?;
+                }
+                write!(f, "skip={}", self.skip)
             }
         }
     }
@@ -156,10 +164,7 @@ impl ExecutionPlan for GlobalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!(
-            "Start GlobalLimitExec::execute for partition: {}",
-            partition
-        );
+        trace!("Start GlobalLimitExec::execute for partition: {partition}");
         // GlobalLimitExec has a single output partition
         if 0 != partition {
             return internal_err!("GlobalLimitExec invalid partition {partition}");
@@ -185,8 +190,11 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(
-            self.input.statistics()?,
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)?.with_fetch(
             self.schema(),
             self.fetch,
             self.skip,
@@ -242,7 +250,9 @@ impl LocalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
-            ExecutionMode::Bounded,                 // Execution Mode
+            input.pipeline_behavior(),
+            // Limit operations are always bounded since they output a finite number of rows
+            Boundedness::Bounded,
         )
     }
 }
@@ -256,6 +266,9 @@ impl DisplayAs for LocalLimitExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "LocalLimitExec: fetch={}", self.fetch)
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "limit={}", self.fetch)
             }
         }
     }
@@ -321,8 +334,11 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(
-            self.input.statistics()?,
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)?.with_fetch(
             self.schema(),
             Some(self.fetch),
             0,
@@ -476,8 +492,8 @@ mod tests {
     use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-    use arrow_array::RecordBatchOptions;
-    use arrow_schema::Schema;
+    use arrow::array::RecordBatchOptions;
+    use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalExpr;
@@ -752,7 +768,7 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        Ok(offset.statistics()?.num_rows)
+        Ok(offset.partition_statistics(None)?.num_rows)
     }
 
     pub fn build_group_by(
@@ -792,7 +808,7 @@ mod tests {
             fetch,
         );
 
-        Ok(offset.statistics()?.num_rows)
+        Ok(offset.partition_statistics(None)?.num_rows)
     }
 
     async fn row_number_statistics_for_local_limit(
@@ -805,7 +821,7 @@ mod tests {
 
         let offset = LocalLimitExec::new(csv, fetch);
 
-        Ok(offset.statistics()?.num_rows)
+        Ok(offset.partition_statistics(None)?.num_rows)
     }
 
     /// Return a RecordBatch with a single array with row_count sz

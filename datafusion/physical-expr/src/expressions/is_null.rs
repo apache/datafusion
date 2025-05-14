@@ -17,25 +17,35 @@
 
 //! IS NULL expression
 
-use std::hash::{Hash, Hasher};
-use std::{any::Any, sync::Arc};
-
+use crate::PhysicalExpr;
 use arrow::{
-    datatypes::{DataType, Schema},
+    datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
-
-use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 /// IS NULL expression
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct IsNullExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for IsNullExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.arg.eq(&other.arg)
+    }
+}
+
+impl Hash for IsNullExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.arg.hash(state);
+    }
 }
 
 impl IsNullExpr {
@@ -82,6 +92,10 @@ impl PhysicalExpr for IsNullExpr {
         }
     }
 
+    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+        self.arg.return_field(input_schema)
+    }
+
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![&self.arg]
     }
@@ -93,18 +107,9 @@ impl PhysicalExpr for IsNullExpr {
         Ok(Arc::new(IsNullExpr::new(Arc::clone(&children[0]))))
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for IsNullExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.arg.eq(&x.arg))
-            .unwrap_or(false)
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.arg.fmt_sql(f)?;
+        write!(f, " IS NULL")
     }
 }
 
@@ -117,13 +122,13 @@ pub fn is_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 mod tests {
     use super::*;
     use crate::expressions::col;
-    use arrow::{
-        array::{BooleanArray, StringArray},
-        datatypes::*,
+    use arrow::array::{
+        Array, BooleanArray, Float64Array, Int32Array, StringArray, UnionArray,
     };
-    use arrow_array::{Array, Float64Array, Int32Array, UnionArray};
-    use arrow_buffer::ScalarBuffer;
+    use arrow::buffer::ScalarBuffer;
+    use arrow::datatypes::*;
     use datafusion_common::cast::as_boolean_array;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn is_null_op() -> Result<()> {
@@ -212,5 +217,19 @@ mod tests {
 
         let expected = &BooleanArray::from(vec![false, true, false, true, false, true]);
         assert_eq!(expected, &result);
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+
+        // expression: "a is null"
+        let expr = is_null(col("a", &schema)?).unwrap();
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "a@0 IS NULL");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "a IS NULL");
+
+        Ok(())
     }
 }

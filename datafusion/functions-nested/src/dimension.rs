@@ -17,23 +17,27 @@
 
 //! [`ScalarUDFImpl`] definitions for array_dims and array_ndims functions.
 
-use arrow::array::{
-    Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait, UInt64Array,
+use arrow::array::{Array, ArrayRef, ListArray, UInt64Array};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, Null, UInt64},
+    UInt64Type,
 };
-use arrow::datatypes::{DataType, UInt64Type};
 use std::any::Any;
 
-use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::cast::{
+    as_fixed_size_list_array, as_large_list_array, as_list_array,
+};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
-use arrow_schema::Field;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_common::utils::list_ndims;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-use std::sync::{Arc, OnceLock};
+use datafusion_macros::user_doc;
+use itertools::Itertools;
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArrayDims,
@@ -43,16 +47,39 @@ make_udf_expr_and_func!(
     array_dims_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array of the array's dimensions.",
+    syntax_example = "array_dims(array)",
+    sql_example = r#"```sql
+> select array_dims([[1, 2, 3], [4, 5, 6]]);
++---------------------------------+
+| array_dims(List([1,2,3,4,5,6])) |
++---------------------------------+
+| [2, 3]                          |
++---------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArrayDims {
+pub struct ArrayDims {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayDims {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayDims {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::arrays(1, None, Volatility::Immutable),
             aliases: vec!["list_dims".to_string()],
         }
     }
@@ -70,19 +97,15 @@ impl ScalarUDFImpl for ArrayDims {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => {
-                List(Arc::new(Field::new("item", UInt64, true)))
-            }
-            _ => {
-                return plan_err!("The array_dims function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::new_list(UInt64, true))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_dims_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_dims_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -90,37 +113,8 @@ impl ScalarUDFImpl for ArrayDims {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_dims_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_dims_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Returns an array of the array's dimensions.",
-            )
-            .with_syntax_example("array_dims(array)")
-            .with_sql_example(
-                r#"```sql
-> select array_dims([[1, 2, 3], [4, 5, 6]]);
-+---------------------------------+
-| array_dims(List([1,2,3,4,5,6])) |
-+---------------------------------+
-| [2, 3]                          |
-+---------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 make_udf_expr_and_func!(
@@ -131,6 +125,24 @@ make_udf_expr_and_func!(
     array_ndims_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the number of dimensions of the array.",
+    syntax_example = "array_ndims(array, element)",
+    sql_example = r#"```sql
+> select array_ndims([[1, 2, 3], [4, 5, 6]]);
++----------------------------------+
+| array_ndims(List([1,2,3,4,5,6])) |
++----------------------------------+
+| 2                                |
++----------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "element", description = "Array element.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayNdims {
     signature: Signature,
@@ -139,7 +151,7 @@ pub(super) struct ArrayNdims {
 impl ArrayNdims {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::arrays(1, None, Volatility::Immutable),
             aliases: vec![String::from("list_ndims")],
         }
     }
@@ -157,17 +169,15 @@ impl ScalarUDFImpl for ArrayNdims {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
-            _ => {
-                return plan_err!("The array_ndims function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(UInt64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_ndims_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_ndims_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -175,103 +185,49 @@ impl ScalarUDFImpl for ArrayNdims {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_ndims_doc())
+        self.doc()
     }
-}
-
-fn get_array_ndims_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Returns the number of dimensions of the array.",
-            )
-            .with_syntax_example("array_ndims(array, element)")
-            .with_sql_example(
-                r#"```sql
-> select array_ndims([[1, 2, 3], [4, 5, 6]]);
-+----------------------------------+
-| array_ndims(List([1,2,3,4,5,6])) |
-+----------------------------------+
-| 2                                |
-+----------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "element",
-                "Array element.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 /// Array_dims SQL function
 pub fn array_dims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_dims needs one argument");
-    }
-
-    let data = match args[0].data_type() {
-        List(_) => {
-            let array = as_list_array(&args[0])?;
-            array
-                .iter()
-                .map(compute_array_dims)
-                .collect::<Result<Vec<_>>>()?
-        }
-        LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            array
-                .iter()
-                .map(compute_array_dims)
-                .collect::<Result<Vec<_>>>()?
-        }
-        array_type => {
-            return exec_err!("array_dims does not support type '{array_type:?}'");
+    let [array] = take_function_args("array_dims", args)?;
+    let data: Vec<_> = match array.data_type() {
+        List(_) => as_list_array(&array)?
+            .iter()
+            .map(compute_array_dims)
+            .try_collect()?,
+        LargeList(_) => as_large_list_array(&array)?
+            .iter()
+            .map(compute_array_dims)
+            .try_collect()?,
+        FixedSizeList(..) => as_fixed_size_list_array(&array)?
+            .iter()
+            .map(compute_array_dims)
+            .try_collect()?,
+        arg_type => {
+            return exec_err!("array_dims does not support type {arg_type}");
         }
     };
 
     let result = ListArray::from_iter_primitive::<UInt64Type, _, _>(data);
-
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(result))
 }
 
 /// Array_ndims SQL function
 pub fn array_ndims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_ndims needs one argument");
+    let [array] = take_function_args("array_ndims", args)?;
+
+    fn general_list_ndims(array: &ArrayRef) -> Result<ArrayRef> {
+        let ndims = list_ndims(array.data_type());
+        let data = vec![ndims; array.len()];
+        let result = UInt64Array::new(data.into(), array.nulls().cloned());
+        Ok(Arc::new(result))
     }
 
-    fn general_list_ndims<O: OffsetSizeTrait>(
-        array: &GenericListArray<O>,
-    ) -> Result<ArrayRef> {
-        let mut data = Vec::new();
-        let ndims = datafusion_common::utils::list_ndims(array.data_type());
-
-        for arr in array.iter() {
-            if arr.is_some() {
-                data.push(Some(ndims))
-            } else {
-                data.push(None)
-            }
-        }
-
-        Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
-    }
-    match args[0].data_type() {
-        List(_) => {
-            let array = as_list_array(&args[0])?;
-            general_list_ndims::<i32>(array)
-        }
-        LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            general_list_ndims::<i64>(array)
-        }
-        array_type => exec_err!("array_ndims does not support type {array_type:?}"),
+    match array.data_type() {
+        Null => Ok(Arc::new(UInt64Array::new_null(array.len()))),
+        List(_) | LargeList(_) | FixedSizeList(..) => general_list_ndims(array),
+        arg_type => exec_err!("array_ndims does not support type {arg_type}"),
     }
 }

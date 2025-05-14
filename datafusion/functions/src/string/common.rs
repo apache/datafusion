@@ -23,11 +23,10 @@ use std::sync::Arc;
 use crate::strings::make_and_append_view;
 use arrow::array::{
     new_null_array, Array, ArrayRef, GenericStringArray, GenericStringBuilder,
-    OffsetSizeTrait, StringBuilder, StringViewArray,
+    NullBufferBuilder, OffsetSizeTrait, StringBuilder, StringViewArray,
 };
-use arrow::buffer::Buffer;
+use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
-use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
@@ -61,7 +60,7 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
                 str::trim_start_matches::<&[char]>(input, pattern.as_ref());
             // `ltrimmed_str` is actually `input`[start_offset..],
             // so `start_offset` = len(`input`) - len(`ltrimmed_str`)
-            let start_offset = input.as_bytes().len() - ltrimmed_str.as_bytes().len();
+            let start_offset = input.len() - ltrimmed_str.len();
 
             (ltrimmed_str, start_offset as u32)
         },
@@ -78,7 +77,7 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
                 str::trim_start_matches::<&[char]>(input, pattern.as_ref());
             // `btrimmed_str` can be got by rtrim(ltrim(`input`)),
             // so its `start_offset` should be same as ltrim situation above
-            let start_offset = input.as_bytes().len() - ltrimmed_str.as_bytes().len();
+            let start_offset = input.len() - ltrimmed_str.len();
             let btrimmed_str =
                 str::trim_end_matches::<&[char]>(ltrimmed_str, pattern.as_ref());
 

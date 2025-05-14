@@ -20,16 +20,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{
-    common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
-    Statistics,
-};
-use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
-
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
+use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::array::{ArrayRef, NullArray};
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow_array::RecordBatchOptions;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -96,11 +93,12 @@ impl PlaceholderRowExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-        // Get output partitioning:
-        let output_partitioning = Self::output_partitioning_helper(n_partitions);
-
-        PlanProperties::new(eq_properties, output_partitioning, ExecutionMode::Bounded)
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Self::output_partitioning_helper(n_partitions),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
     }
 }
 
@@ -114,6 +112,8 @@ impl DisplayAs for PlaceholderRowExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "PlaceholderRowExec")
             }
+
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }
@@ -166,6 +166,13 @@ impl ExecutionPlan for PlaceholderRowExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         let batch = self
             .data()
             .expect("Create single row placeholder RecordBatch should not fail");
@@ -180,7 +187,8 @@ impl ExecutionPlan for PlaceholderRowExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{test, with_new_children_if_necessary};
+    use crate::test;
+    use crate::with_new_children_if_necessary;
 
     #[test]
     fn with_new_children() -> Result<()> {

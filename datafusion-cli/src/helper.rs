@@ -22,15 +22,12 @@ use std::borrow::Cow;
 
 use crate::highlighter::{NoSyntaxHighlighter, SyntaxHighlighter};
 
-use datafusion::common::sql_datafusion_err;
-use datafusion::error::DataFusionError;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
-use datafusion::sql::sqlparser::parser::ParserError;
 
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::error::ReadlineError;
-use rustyline::highlight::Highlighter;
+use rustyline::highlight::{CmdKind, Highlighter};
 use rustyline::hint::Hinter;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Helper, Result};
@@ -63,15 +60,6 @@ impl CliHelper {
 
     fn validate_input(&self, input: &str) -> Result<ValidationResult> {
         if let Some(sql) = input.strip_suffix(';') {
-            let sql = match unescape_input(sql) {
-                Ok(sql) => sql,
-                Err(err) => {
-                    return Ok(ValidationResult::Invalid(Some(format!(
-                        "  🤔 Invalid statement: {err}",
-                    ))))
-                }
-            };
-
             let dialect = match dialect_from_str(&self.dialect) {
                 Some(dialect) => dialect,
                 None => {
@@ -118,8 +106,8 @@ impl Highlighter for CliHelper {
         self.highlighter.highlight(line, pos)
     }
 
-    fn highlight_char(&self, line: &str, pos: usize, forced: bool) -> bool {
-        self.highlighter.highlight_char(line, pos, forced)
+    fn highlight_char(&self, line: &str, pos: usize, kind: CmdKind) -> bool {
+        self.highlighter.highlight_char(line, pos, kind)
     }
 }
 
@@ -166,40 +154,8 @@ impl Validator for CliHelper {
 
 impl Helper for CliHelper {}
 
-/// Unescape input string from readline.
-///
-/// The data read from stdio will be escaped, so we need to unescape the input before executing the input
-pub fn unescape_input(input: &str) -> datafusion::error::Result<String> {
-    let mut chars = input.chars();
-
-    let mut result = String::with_capacity(input.len());
-    while let Some(char) = chars.next() {
-        if char == '\\' {
-            if let Some(next_char) = chars.next() {
-                // https://static.rust-lang.org/doc/master/reference.html#literals
-                result.push(match next_char {
-                    '0' => '\0',
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    '\\' => '\\',
-                    _ => {
-                        return Err(sql_datafusion_err!(ParserError::TokenizerError(
-                            format!("unsupported escape char: '\\{}'", next_char)
-                        )))
-                    }
-                });
-            }
-        } else {
-            result.push(char);
-        }
-    }
-
-    Ok(result)
-}
-
 /// Splits a string which consists of multiple queries.
-pub(crate) fn split_from_semicolon(sql: String) -> Vec<String> {
+pub(crate) fn split_from_semicolon(sql: &str) -> Vec<String> {
     let mut commands = Vec::new();
     let mut current_command = String::new();
     let mut in_single_quote = false;
@@ -310,14 +266,13 @@ mod tests {
          )?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
-        // should be invalid
         let result = readline_direct(
-             Cursor::new(
-                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' '\u{07}');"
-                     .as_bytes()),
-             &validator,
-         )?;
-        assert!(matches!(result, ValidationResult::Invalid(Some(_))));
+            Cursor::new(
+                r"select '\', '\\', '\\\\\', 'dsdsds\\\\', '\t', '\0', '\n';".as_bytes(),
+            ),
+            &validator,
+        )?;
+        assert!(matches!(result, ValidationResult::Valid(None)));
 
         Ok(())
     }
@@ -346,15 +301,15 @@ mod tests {
     fn test_split_from_semicolon() {
         let sql = "SELECT 1; SELECT 2;";
         let expected = vec!["SELECT 1;", "SELECT 2;"];
-        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+        assert_eq!(split_from_semicolon(sql), expected);
 
         let sql = r#"SELECT ";";"#;
         let expected = vec![r#"SELECT ";";"#];
-        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+        assert_eq!(split_from_semicolon(sql), expected);
 
         let sql = "SELECT ';';";
         let expected = vec!["SELECT ';';"];
-        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+        assert_eq!(split_from_semicolon(sql), expected);
 
         let sql = r#"SELECT 1; SELECT 'value;value'; SELECT 1 as "text;text";"#;
         let expected = vec![
@@ -362,18 +317,18 @@ mod tests {
             "SELECT 'value;value';",
             r#"SELECT 1 as "text;text";"#,
         ];
-        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+        assert_eq!(split_from_semicolon(sql), expected);
 
         let sql = "";
         let expected: Vec<String> = Vec::new();
-        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+        assert_eq!(split_from_semicolon(sql), expected);
 
         let sql = "SELECT 1";
         let expected = vec!["SELECT 1;"];
-        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+        assert_eq!(split_from_semicolon(sql), expected);
 
         let sql = "SELECT 1;   ";
         let expected = vec!["SELECT 1;"];
-        assert_eq!(split_from_semicolon(sql.to_string()), expected);
+        assert_eq!(split_from_semicolon(sql), expected);
     }
 }

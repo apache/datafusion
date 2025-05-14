@@ -17,13 +17,13 @@
 
 use std::any::Any;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
+use crate::physical_expr::PhysicalExpr;
 
 use arrow::compute::{can_cast_types, CastOptions};
-use arrow::datatypes::{DataType, DataType::*, Schema};
+use arrow::datatypes::{DataType, DataType::*, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
@@ -42,7 +42,7 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 };
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct CastExpr {
     /// The expression to cast
     pub expr: Arc<dyn PhysicalExpr>,
@@ -50,6 +50,23 @@ pub struct CastExpr {
     cast_type: DataType,
     /// Cast options
     cast_options: CastOptions<'static>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for CastExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr)
+            && self.cast_type.eq(&other.cast_type)
+            && self.cast_options.eq(&other.cast_options)
+    }
+}
+
+impl Hash for CastExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.cast_type.hash(state);
+        self.cast_options.hash(state);
+    }
 }
 
 impl CastExpr {
@@ -127,6 +144,13 @@ impl PhysicalExpr for CastExpr {
         value.cast_to(&self.cast_type, Some(&self.cast_options))
     }
 
+    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+        Ok(self
+            .expr
+            .return_field(input_schema)?
+            .with_data_type(self.cast_type.clone()))
+    }
+
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![&self.expr]
     }
@@ -160,13 +184,6 @@ impl PhysicalExpr for CastExpr {
         ]))
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.expr.hash(&mut s);
-        self.cast_type.hash(&mut s);
-        self.cast_options.hash(&mut s);
-    }
-
     /// A [`CastExpr`] preserves the ordering of its child if the cast is done
     /// under the same datatype family.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
@@ -184,18 +201,13 @@ impl PhysicalExpr for CastExpr {
             Ok(ExprProperties::new_unknown().with_range(unbounded))
         }
     }
-}
 
-impl PartialEq<dyn Any> for CastExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.expr.eq(&x.expr)
-                    && self.cast_type == x.cast_type
-                    && self.cast_options == x.cast_options
-            })
-            .unwrap_or(false)
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CAST(")?;
+        self.expr.fmt_sql(f)?;
+        write!(f, " AS {:?}", self.cast_type)?;
+
+        write!(f, ")")
     }
 }
 
@@ -245,6 +257,8 @@ mod tests {
         },
         datatypes::*,
     };
+    use datafusion_common::assert_contains;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -398,6 +412,45 @@ mod tests {
             [Some(123), Some(222), Some(0), Some(400), Some(500), None],
             None
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_decimal_to_decimal_overflow() -> Result<()> {
+        let array = vec![Some(123456789)];
+
+        let decimal_array = array
+            .clone()
+            .into_iter()
+            .collect::<Decimal128Array>()
+            .with_precision_and_scale(10, 3)?;
+
+        let schema = Schema::new(vec![Field::new("a", Decimal128(10, 3), false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(decimal_array)],
+        )?;
+        let expression =
+            cast_with_options(col("a", &schema)?, &schema, Decimal128(6, 2), None)?;
+        let e = expression.evaluate(&batch).unwrap_err(); // panics on OK
+        assert_contains!(
+            e.to_string(),
+            "Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"
+        );
+
+        let expression_safe = cast_with_options(
+            col("a", &schema)?,
+            &schema,
+            Decimal128(6, 2),
+            Some(DEFAULT_SAFE_CAST_OPTIONS),
+        )?;
+        let result_safe = expression_safe
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("failed to convert to array");
+
+        assert!(result_safe.is_null(0));
 
         Ok(())
     }
@@ -727,6 +780,28 @@ mod tests {
         let expression =
             cast_with_options(col("a", &schema)?, &schema, Decimal128(38, 38), None)?;
         expression.evaluate(&batch)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
+
+        // Test numeric casting
+        let expr = cast(col("a", &schema)?, &schema, Int64)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "CAST(a@0 AS Int64)");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "CAST(a AS Int64)");
+
+        // Test string casting
+        let schema = Schema::new(vec![Field::new("b", Utf8, true)]);
+        let expr = cast(col("b", &schema)?, &schema, Int32)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "CAST(b@0 AS Int32)");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "CAST(b AS Int32)");
+
         Ok(())
     }
 }

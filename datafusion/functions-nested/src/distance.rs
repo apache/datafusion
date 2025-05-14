@@ -17,26 +17,30 @@
 
 //! [ScalarUDFImpl] definitions for array_distance function.
 
-use crate::utils::{downcast_arg, make_scalar_function};
-use arrow_array::{
+use crate::utils::make_scalar_function;
+use arrow::array::{
     Array, ArrayRef, Float64Array, LargeListArray, ListArray, OffsetSizeTrait,
 };
-use arrow_schema::DataType;
-use arrow_schema::DataType::{FixedSizeList, Float64, LargeList, List};
-use core::any::type_name;
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, Null},
+};
 use datafusion_common::cast::{
     as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
     as_int64_array,
 };
-use datafusion_common::utils::coerced_fixed_size_list_to_list;
-use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_common::utils::{coerced_type_with_base_type_only, ListCoercion};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, plan_err, utils::take_function_args, Result,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_macros::user_doc;
+use itertools::Itertools;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArrayDistance,
@@ -46,10 +50,37 @@ make_udf_expr_and_func!(
     array_distance_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the Euclidean distance between two input arrays of equal length.",
+    syntax_example = "array_distance(array1, array2)",
+    sql_example = r#"```sql
+> select array_distance([1, 2], [1, 4]);
++------------------------------------+
+| array_distance(List([1,2], [1,4])) |
++------------------------------------+
+| 2.0                                |
++------------------------------------+
+```"#,
+    argument(
+        name = "array1",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array2",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArrayDistance {
+pub struct ArrayDistance {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayDistance {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayDistance {
@@ -74,30 +105,33 @@ impl ScalarUDFImpl for ArrayDistance {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Ok(Float64),
-            _ => exec_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return exec_err!("array_distance expects exactly two arguments");
-        }
-        let mut result = Vec::new();
-        for arg_type in arg_types {
-            match arg_type {
-                List(_) | LargeList(_) | FixedSizeList(_, _) => result.push(coerced_fixed_size_list_to_list(arg_type)),
-                _ => return exec_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
+        let [_, _] = take_function_args(self.name(), arg_types)?;
+        let coercion = Some(&ListCoercion::FixedSizedListToList);
+        let arg_types = arg_types.iter().map(|arg_type| {
+            if matches!(arg_type, Null | List(_) | LargeList(_) | FixedSizeList(..)) {
+                Ok(coerced_type_with_base_type_only(
+                    arg_type,
+                    &DataType::Float64,
+                    coercion,
+                ))
+            } else {
+                plan_err!("{} does not support type {arg_type}", self.name())
             }
-        }
+        });
 
-        Ok(result)
+        arg_types.try_collect()
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_distance_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_distance_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -105,53 +139,17 @@ impl ScalarUDFImpl for ArrayDistance {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_distance_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_distance_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Returns the Euclidean distance between two input arrays of equal length.",
-            )
-            .with_syntax_example("array_distance(array1, array2)")
-            .with_sql_example(
-                r#"```sql
-> select array_distance([1, 2], [1, 4]);
-+------------------------------------+
-| array_distance(List([1,2], [1,4])) |
-+------------------------------------+
-| 2.0                                |
-+------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array1",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "array2",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 pub fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_distance expects exactly two arguments");
-    }
-
-    match (&args[0].data_type(), &args[1].data_type()) {
+    let [array1, array2] = take_function_args("array_distance", args)?;
+    match (array1.data_type(), array2.data_type()) {
         (List(_), List(_)) => general_array_distance::<i32>(args),
         (LargeList(_), LargeList(_)) => general_array_distance::<i64>(args),
-        (array_type1, array_type2) => {
-            exec_err!("array_distance does not support types '{array_type1:?}' and '{array_type2:?}'")
+        (arg_type1, arg_type2) => {
+            exec_err!("array_distance does not support types {arg_type1} and {arg_type2}")
         }
     }
 }
@@ -247,7 +245,7 @@ fn compute_array_distance(
 /// Converts an array of any numeric type to a Float64Array.
 fn convert_to_f64_array(array: &ArrayRef) -> Result<Float64Array> {
     match array.data_type() {
-        Float64 => Ok(as_float64_array(array)?.clone()),
+        DataType::Float64 => Ok(as_float64_array(array)?.clone()),
         DataType::Float32 => {
             let array = as_float32_array(array)?;
             let converted: Float64Array =

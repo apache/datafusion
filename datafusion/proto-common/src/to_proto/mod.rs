@@ -97,7 +97,6 @@ impl TryFrom<&Field> for protobuf::Field {
             nullable: field.is_nullable(),
             children: Vec::new(),
             metadata: field.metadata().clone(),
-            dict_id: field.dict_id().unwrap_or(0),
             dict_ordered: field.dict_is_ordered().unwrap_or(false),
         })
     }
@@ -748,6 +747,7 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
         protobuf::ColumnStats {
             min_value: Some(protobuf::Precision::from(&s.min_value)),
             max_value: Some(protobuf::Precision::from(&s.max_value)),
+            sum_value: Some(protobuf::Precision::from(&s.sum_value)),
             null_count: Some(protobuf::Precision::from(&s.null_count)),
             distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
         }
@@ -818,10 +818,12 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
             max_row_group_size: value.max_row_group_size as u64,
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
+            statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
             encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
             bloom_filter_on_read: value.bloom_filter_on_read,
@@ -833,6 +835,8 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
+            skip_arrow_metadata: value.skip_arrow_metadata,
+            coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
         })
     }
 }
@@ -855,6 +859,7 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
                 .statistics_enabled
                 .clone()
                 .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| {
                 protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
                     v as u32,
@@ -921,13 +926,14 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
                 .newlines_in_values
                 .map_or_else(Vec::new, |h| vec![h as u8]),
             compression: compression.into(),
-            schema_infer_max_rec: opts.schema_infer_max_rec as u64,
+            schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
             date_format: opts.date_format.clone().unwrap_or_default(),
             datetime_format: opts.datetime_format.clone().unwrap_or_default(),
             timestamp_format: opts.timestamp_format.clone().unwrap_or_default(),
             timestamp_tz_format: opts.timestamp_tz_format.clone().unwrap_or_default(),
             time_format: opts.time_format.clone().unwrap_or_default(),
             null_value: opts.null_value.clone().unwrap_or_default(),
+            null_regex: opts.null_regex.clone().unwrap_or_default(),
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
         })
     }
@@ -940,7 +946,7 @@ impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
         let compression: protobuf::CompressionTypeVariant = opts.compression.into();
         Ok(protobuf::JsonOptions {
             compression: compression.into(),
-            schema_infer_max_rec: opts.schema_infer_max_rec as u64,
+            schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
         })
     }
 }

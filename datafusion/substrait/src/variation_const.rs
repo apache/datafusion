@@ -23,7 +23,7 @@
 //!
 //! The rules of type variations here are:
 //! - Default type reference is 0. It is used when the actual type is the same with the original type.
-//! - Extended variant type references start from 1, and ususlly increase by 1.
+//! - Extended variant type references start from 1, and usually increase by 1.
 //!
 //! TODO: Definitions here are not the final form. All the non-system-preferred variations will be defined
 //! using [simple extensions] as per the [spec of type_variations](https://substrait.io/types/type_variations/)

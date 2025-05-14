@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::mem::size_of_val;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::compute::{filter, is_not_null};
@@ -27,15 +27,14 @@ use arrow::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
         Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
-    datatypes::DataType,
+    datatypes::{DataType, Field, Schema},
 };
-use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
     downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
-    DataFusionError, Result, ScalarValue,
+    Result, ScalarValue,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_APPROXIMATE;
+use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
@@ -46,24 +45,57 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
+use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 
 /// Computes the approximate percentile continuous of a set of numbers
 pub fn approx_percentile_cont(
-    expression: Expr,
+    order_by: Sort,
     percentile: Expr,
     centroids: Option<Expr>,
 ) -> Expr {
+    let expr = order_by.expr.clone();
+
     let args = if let Some(centroids) = centroids {
-        vec![expression, percentile, centroids]
+        vec![expr, percentile, centroids]
     } else {
-        vec![expression, percentile]
+        vec![expr, percentile]
     };
-    approx_percentile_cont_udaf().call(args)
+
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        approx_percentile_cont_udaf(),
+        args,
+        false,
+        None,
+        Some(vec![order_by]),
+        None,
+    ))
 }
 
+#[user_doc(
+    doc_section(label = "Approximate Functions"),
+    description = "Returns the approximate percentile of input values using the t-digest algorithm.",
+    syntax_example = "approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)",
+    sql_example = r#"```sql
+> SELECT approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++-----------------------------------------------------------------------+
+| approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) |
++-----------------------------------------------------------------------+
+| 65.0                                                                  |
++-----------------------------------------------------------------------+
+```"#,
+    standard_argument(name = "expression",),
+    argument(
+        name = "percentile",
+        description = "Percentile to compute. Must be a float value between 0 and 1 (inclusive)."
+    ),
+    argument(
+        name = "centroids",
+        description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
+    )
+)]
 pub struct ApproxPercentileCont {
     signature: Signature,
 }
@@ -109,6 +141,19 @@ impl ApproxPercentileCont {
         args: AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
         let percentile = validate_input_percentile_expr(&args.exprs[1])?;
+
+        let is_descending = args
+            .ordering_req
+            .first()
+            .map(|sort_expr| sort_expr.options.descending)
+            .unwrap_or(false);
+
+        let percentile = if is_descending {
+            1.0 - percentile
+        } else {
+            percentile
+        };
+
         let tdigest_max_size = if args.exprs.len() == 3 {
             Some(validate_input_max_size_expr(&args.exprs[2])?)
         } else {
@@ -209,7 +254,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     }
 
     #[allow(rustdoc::private_intra_doc_links)]
-    /// See [`TDigest::to_scalar_state()`] for a description of the serialised
+    /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
@@ -240,7 +285,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             ),
             Field::new_list(
                 format_state_name(args.name, "centroids"),
-                Field::new("item", DataType::Float64, true),
+                Field::new_list_field(DataType::Float64, true),
                 false,
             ),
         ])
@@ -271,35 +316,17 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         Ok(arg_types[0].clone())
     }
 
-    fn documentation(&self) -> Option<&Documentation> {
-        Some(get_approx_percentile_cont_doc())
+    fn supports_null_handling_clause(&self) -> bool {
+        false
     }
-}
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+    fn is_ordered_set_aggregate(&self) -> bool {
+        true
+    }
 
-fn get_approx_percentile_cont_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_APPROXIMATE)
-            .with_description(
-                "Returns the approximate percentile of input values using the t-digest algorithm.",
-            )
-            .with_syntax_example("approx_percentile_cont(expression, percentile, centroids)")
-            .with_sql_example(r#"```sql
-> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
-+-------------------------------------------------+
-| approx_percentile_cont(column_name, 0.75, 100)  |
-+-------------------------------------------------+
-| 65.0                                            |
-+-------------------------------------------------+
-```"#)
-            .with_standard_argument("expression", None)
-            .with_argument("percentile", "Percentile to compute. Must be a float value between 0 and 1 (inclusive).")
-            .with_argument("centroids", "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory.")
-            .build()
-            .unwrap()
-    })
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 #[derive(Debug)]
@@ -495,7 +522,7 @@ impl Accumulator for ApproxPercentileAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::DataType;
+    use arrow::datatypes::DataType;
 
     use datafusion_functions_aggregate_common::tdigest::TDigest;
 

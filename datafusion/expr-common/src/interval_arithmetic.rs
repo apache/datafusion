@@ -17,15 +17,18 @@
 
 //! Interval arithmetic library
 
-use crate::operator::Operator;
-use crate::type_coercion::binary::get_result_type;
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
+use crate::operator::Operator;
+use crate::type_coercion::binary::{comparison_coercion_numeric, BinaryTypeCoercer};
+
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{
     DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, TimeUnit,
+    MAX_DECIMAL128_FOR_EACH_PRECISION, MAX_DECIMAL256_FOR_EACH_PRECISION,
+    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION,
 };
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use datafusion_common::{internal_err, Result, ScalarValue};
@@ -76,6 +79,22 @@ macro_rules! get_extreme_value {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::$extreme))
             }
+            DataType::Decimal128(precision, scale) => ScalarValue::Decimal128(
+                Some(
+                    paste::paste! {[<$extreme _DECIMAL128_FOR_EACH_PRECISION>]}
+                        [*precision as usize],
+                ),
+                *precision,
+                *scale,
+            ),
+            DataType::Decimal256(precision, scale) => ScalarValue::Decimal256(
+                Some(
+                    paste::paste! {[<$extreme _DECIMAL256_FOR_EACH_PRECISION>]}
+                        [*precision as usize],
+                ),
+                *precision,
+                *scale,
+            ),
             _ => unreachable!(),
         }
     };
@@ -150,12 +169,12 @@ macro_rules! value_transition {
 ///    limits after any operation, they either become unbounded or they are fixed
 ///    to the maximum/minimum value of the datatype, depending on the direction
 ///    of the overflowing endpoint, opting for the safer choice.
-///  
+///
 /// 4. **Floating-point special cases**:
 ///    - `INF` values are converted to `NULL`s while constructing an interval to
 ///      ensure consistency, with other data types.
 ///    - `NaN` (Not a Number) results are conservatively result in unbounded
-///       endpoints.
+///      endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
     lower: ScalarValue,
@@ -387,11 +406,16 @@ impl Interval {
 
         // There must be no way to create an interval whose endpoints have
         // different types.
-        assert!(
+        debug_assert!(
             lower_type == upper_type,
             "Interval bounds have different types: {lower_type} != {upper_type}"
         );
         lower_type
+    }
+
+    /// Checks if the interval is unbounded (on either side).
+    pub fn is_unbounded(&self) -> bool {
+        self.lower.is_null() || self.upper.is_null()
     }
 
     /// Casts this interval to `data_type` using `cast_options`.
@@ -518,7 +542,10 @@ impl Interval {
     ///       to an error.
     pub fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
+        if BinaryTypeCoercer::new(&self.data_type(), &Operator::Eq, &rhs.data_type())
+            .get_result_type()
+            .is_err()
+        {
             internal_err!(
                 "Interval data types must be compatible for equality checks, lhs:{}, rhs:{}",
                 self.data_type(),
@@ -579,7 +606,7 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible data types for logical conjunction"),
+            _ => internal_err!("Incompatible data types for logical disjunction"),
         }
     }
 
@@ -624,7 +651,7 @@ impl Interval {
         let upper = min_of_bounds(&self.upper, &rhs.upper);
 
         // New lower and upper bounds must always construct a valid interval.
-        assert!(
+        debug_assert!(
             (lower.is_null() || upper.is_null() || (lower <= upper)),
             "The intersection of two intervals can not be an invalid interval"
         );
@@ -632,26 +659,70 @@ impl Interval {
         Ok(Some(Self { lower, upper }))
     }
 
-    /// Decide if this interval certainly contains, possibly contains, or can't
-    /// contain a [`ScalarValue`] (`other`) by returning `[true, true]`,
-    /// `[false, true]` or `[false, false]` respectively.
+    /// Compute the union of this interval with the given interval.
     ///
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub fn contains_value<T: Borrow<ScalarValue>>(&self, other: T) -> Result<bool> {
+    pub fn union<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
+            return internal_err!(
+                "Cannot calculate the union of intervals with different data types, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
+            );
+        };
+
+        let lower = if self.lower.is_null()
+            || (!rhs.lower.is_null() && self.lower <= rhs.lower)
+        {
+            self.lower.clone()
+        } else {
+            rhs.lower.clone()
+        };
+        let upper = if self.upper.is_null()
+            || (!rhs.upper.is_null() && self.upper >= rhs.upper)
+        {
+            self.upper.clone()
+        } else {
+            rhs.upper.clone()
+        };
+
+        // New lower and upper bounds must always construct a valid interval.
+        debug_assert!(
+            (lower.is_null() || upper.is_null() || (lower <= upper)),
+            "The union of two intervals can not be an invalid interval"
+        );
+
+        Ok(Self { lower, upper })
+    }
+
+    /// Decide if this interval contains a [`ScalarValue`] (`other`) by returning `true` or `false`.
+    pub fn contains_value<T: Borrow<ScalarValue>>(&self, other: T) -> Result<bool> {
+        let rhs = other.borrow();
+
+        let (lhs_lower, lhs_upper, rhs) = if self.data_type().eq(&rhs.data_type()) {
+            (&self.lower, &self.upper, rhs)
+        } else if let Some(common_type) =
+            comparison_coercion_numeric(&self.data_type(), &rhs.data_type())
+        {
+            (
+                &self.lower.cast_to(&common_type)?,
+                &self.upper.cast_to(&common_type)?,
+                &rhs.cast_to(&common_type)?,
+            )
+        } else {
             return internal_err!(
                 "Data types must be compatible for containment checks, lhs:{}, rhs:{}",
                 self.data_type(),
                 rhs.data_type()
             );
-        }
+        };
 
         // We only check the upper bound for a `None` value because `None`
         // values are less than `Some` values according to Rust.
-        Ok(&self.lower <= rhs && (self.upper.is_null() || rhs <= &self.upper))
+        Ok(lhs_lower <= rhs && (lhs_upper.is_null() || rhs <= lhs_upper))
     }
 
     /// Decide if this interval is a superset of, overlaps with, or
@@ -689,7 +760,9 @@ impl Interval {
     /// choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt = get_result_type(&self.data_type(), &Operator::Plus, &rhs.data_type())?;
+        let dt =
+            BinaryTypeCoercer::new(&self.data_type(), &Operator::Plus, &rhs.data_type())
+                .get_result_type()?;
 
         Ok(Self::new(
             add_bounds::<false>(&dt, &self.lower, &rhs.lower),
@@ -704,7 +777,9 @@ impl Interval {
     /// each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt = get_result_type(&self.data_type(), &Operator::Minus, &rhs.data_type())?;
+        let dt =
+            BinaryTypeCoercer::new(&self.data_type(), &Operator::Minus, &rhs.data_type())
+                .get_result_type()?;
 
         Ok(Self::new(
             sub_bounds::<false>(&dt, &self.lower, &rhs.upper),
@@ -800,6 +875,17 @@ impl Interval {
         }
     }
 
+    /// Computes the width of this interval; i.e. the difference between its
+    /// bounds. For unbounded intervals, this function will return a `NULL`
+    /// `ScalarValue` If the underlying data type doesn't support subtraction,
+    /// this function will return an error.
+    pub fn width(&self) -> Result<ScalarValue> {
+        let dt = self.data_type();
+        let width_dt =
+            BinaryTypeCoercer::new(&dt, &Operator::Minus, &dt).get_result_type()?;
+        Ok(sub_bounds::<true>(&width_dt, &self.upper, &self.lower))
+    }
+
     /// Returns the cardinality of this interval, which is the number of all
     /// distinct points inside it. This function returns `None` if:
     /// - The interval is unbounded from either side, or
@@ -849,10 +935,10 @@ impl Interval {
     /// This method computes the arithmetic negation of the interval, reflecting
     /// it about the origin of the number line. This operation swaps and negates
     /// the lower and upper bounds of the interval.
-    pub fn arithmetic_negate(self) -> Result<Self> {
+    pub fn arithmetic_negate(&self) -> Result<Self> {
         Ok(Self {
-            lower: self.upper().clone().arithmetic_negate()?,
-            upper: self.lower().clone().arithmetic_negate()?,
+            lower: self.upper.arithmetic_negate()?,
+            upper: self.lower.arithmetic_negate()?,
         })
     }
 }
@@ -860,6 +946,18 @@ impl Interval {
 impl Display for Interval {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "[{}, {}]", self.lower, self.upper)
+    }
+}
+
+impl From<ScalarValue> for Interval {
+    fn from(value: ScalarValue) -> Self {
+        Self::new(value.clone(), value)
+    }
+}
+
+impl From<&ScalarValue> for Interval {
+    fn from(value: &ScalarValue) -> Self {
+        Self::new(value.to_owned(), value.to_owned())
     }
 }
 
@@ -873,6 +971,7 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::Lt => lhs.lt(rhs),
         Operator::LtEq => lhs.lt_eq(rhs),
         Operator::And => lhs.and(rhs),
+        Operator::Or => lhs.or(rhs),
         Operator::Plus => lhs.add(rhs),
         Operator::Minus => lhs.sub(rhs),
         Operator::Multiply => lhs.mul(rhs),
@@ -1008,17 +1107,20 @@ fn handle_overflow<const UPPER: bool>(
     lhs: &ScalarValue,
     rhs: &ScalarValue,
 ) -> ScalarValue {
-    let zero = ScalarValue::new_zero(dt).unwrap();
+    let lhs_zero = ScalarValue::new_zero(&lhs.data_type()).unwrap();
+    let rhs_zero = ScalarValue::new_zero(&rhs.data_type()).unwrap();
     let positive_sign = match op {
         Operator::Multiply | Operator::Divide => {
-            lhs.lt(&zero) && rhs.lt(&zero) || lhs.gt(&zero) && rhs.gt(&zero)
+            lhs.lt(&lhs_zero) && rhs.lt(&rhs_zero)
+                || lhs.gt(&lhs_zero) && rhs.gt(&rhs_zero)
         }
-        Operator::Plus => lhs.ge(&zero),
+        Operator::Plus => lhs.ge(&lhs_zero),
         Operator::Minus => lhs.ge(rhs),
         _ => {
             unreachable!()
         }
     };
+
     match (UPPER, positive_sign) {
         (true, true) | (false, false) => ScalarValue::try_from(dt).unwrap(),
         (true, false) => {
@@ -1091,11 +1193,11 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
     match value {
         // f32/f64::NEG_INF/INF and f32/f64::NaN values should not emerge at this point.
         Float32(Some(val)) => {
-            assert!(val.is_finite(), "Non-standardized floating point usage");
+            debug_assert!(val.is_finite(), "Non-standardized floating point usage");
             Float32(Some(if INC { next_up(val) } else { next_down(val) }))
         }
         Float64(Some(val)) => {
-            assert!(val.is_finite(), "Non-standardized floating point usage");
+            debug_assert!(val.is_finite(), "Non-standardized floating point usage");
             Float64(Some(if INC { next_up(val) } else { next_down(val) }))
         }
         Int8(Some(val)) => Int8(Some(increment_decrement::<INC, i8>(val))),
@@ -1247,7 +1349,7 @@ pub fn satisfy_greater(
     } else {
         right.upper.clone()
     };
-
+    // No possibility to create an invalid interval:
     Ok(Some((
         Interval::new(new_left_lower, left.upper.clone()),
         Interval::new(right.lower.clone(), new_right_upper),
@@ -1594,9 +1696,9 @@ impl Display for NullableInterval {
         match self {
             Self::Null { .. } => write!(f, "NullableInterval: {{NULL}}"),
             Self::MaybeNull { values } => {
-                write!(f, "NullableInterval: {} U {{NULL}}", values)
+                write!(f, "NullableInterval: {values} U {{NULL}}")
             }
-            Self::NotNull { values } => write!(f, "NullableInterval: {}", values),
+            Self::NotNull { values } => write!(f, "NullableInterval: {values}"),
         }
     }
 }
@@ -1832,9 +1934,15 @@ impl NullableInterval {
 
 #[cfg(test)]
 mod tests {
-    use crate::interval_arithmetic::{next_value, prev_value, satisfy_greater, Interval};
+    use crate::{
+        interval_arithmetic::{
+            handle_overflow, next_value, prev_value, satisfy_greater, Interval,
+        },
+        operator::Operator,
+    };
 
     use arrow::datatypes::DataType;
+    use datafusion_common::rounding::{next_down, next_up};
     use datafusion_common::{Result, ScalarValue};
 
     #[test]
@@ -2500,6 +2608,126 @@ mod tests {
     }
 
     #[test]
+    fn union_test() -> Result<()> {
+        let possible_cases = vec![
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(2000_i64))?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(Some(1000_i64), None)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1500_i64))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
+                Interval::make(Some(500_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(0_i64))?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(999_i64))?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1500_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1499_i64))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(1000_i64))?,
+                Interval::make(Some(2000_i64), Some(3000_i64))?,
+                Interval::make(Some(0_i64), Some(3000_i64))?,
+            ),
+            (
+                Interval::make(None, Some(2000_u64))?,
+                Interval::make(Some(500_u64), None)?,
+                Interval::make(Some(0_u64), None)?,
+            ),
+            (
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), None)?,
+                Interval::make(Some(0_u64), None)?,
+            ),
+            (
+                Interval::make(Some(1000.0_f32), None)?,
+                Interval::make(None, Some(1000.0_f32))?,
+                Interval::make_unbounded(&DataType::Float32)?,
+            ),
+            (
+                Interval::make(Some(1000.0_f32), Some(1500.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(1500.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(1500.0_f32))?,
+            ),
+            (
+                Interval::try_new(
+                    prev_value(ScalarValue::Float32(Some(1.0))),
+                    prev_value(ScalarValue::Float32(Some(1.0))),
+                )?,
+                Interval::make(Some(1.0_f32), Some(1.0_f32))?,
+                Interval::try_new(
+                    prev_value(ScalarValue::Float32(Some(1.0))),
+                    ScalarValue::Float32(Some(1.0)),
+                )?,
+            ),
+            (
+                Interval::try_new(
+                    next_value(ScalarValue::Float32(Some(1.0))),
+                    next_value(ScalarValue::Float32(Some(1.0))),
+                )?,
+                Interval::make(Some(1.0_f32), Some(1.0_f32))?,
+                Interval::try_new(
+                    ScalarValue::Float32(Some(1.0)),
+                    next_value(ScalarValue::Float32(Some(1.0))),
+                )?,
+            ),
+            (
+                Interval::make(Some(-1000.0_f64), Some(1500.0_f64))?,
+                Interval::make(Some(-1500.0_f64), Some(2000.0_f64))?,
+                Interval::make(Some(-1500.0_f64), Some(2000.0_f64))?,
+            ),
+            (
+                Interval::make(Some(16.0_f64), Some(32.0_f64))?,
+                Interval::make(Some(32.0_f64), Some(64.0_f64))?,
+                Interval::make(Some(16.0_f64), Some(64.0_f64))?,
+            ),
+        ];
+        for (first, second, expected) in possible_cases {
+            println!("{first}");
+            println!("{second}");
+            assert_eq!(first.union(second)?, expected)
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_contains() -> Result<()> {
         let possible_cases = vec![
             (
@@ -2556,6 +2784,43 @@ mod tests {
         ];
         for (first, second, expected) in possible_cases {
             assert_eq!(first.contains(second)?, expected)
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_contains_value() -> Result<()> {
+        let possible_cases = vec![
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Int32(Some(50)),
+                true,
+            ),
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Int32(Some(150)),
+                false,
+            ),
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Float64(Some(50.)),
+                true,
+            ),
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Float64(Some(next_down(100.))),
+                true,
+            ),
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Float64(Some(next_up(100.))),
+                false,
+            ),
+        ];
+
+        for (interval, value, expected) in possible_cases {
+            assert_eq!(interval.contains_value(value)?, expected)
         }
 
         Ok(())
@@ -3109,6 +3374,120 @@ mod tests {
     }
 
     #[test]
+    fn test_overflow_handling() -> Result<()> {
+        // Test integer overflow handling:
+        let dt = DataType::Int32;
+        let op = Operator::Plus;
+        let lhs = ScalarValue::Int32(Some(i32::MAX));
+        let rhs = ScalarValue::Int32(Some(1));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int32(None));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int32(Some(i32::MAX)));
+
+        // Test float overflow handling:
+        let dt = DataType::Float32;
+        let op = Operator::Multiply;
+        let lhs = ScalarValue::Float32(Some(f32::MAX));
+        let rhs = ScalarValue::Float32(Some(2.0));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(None));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(Some(f32::MAX)));
+
+        // Test float underflow handling:
+        let lhs = ScalarValue::Float32(Some(f32::MIN));
+        let rhs = ScalarValue::Float32(Some(2.0));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(Some(f32::MIN)));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(None));
+
+        // Test integer underflow handling:
+        let dt = DataType::Int64;
+        let op = Operator::Minus;
+        let lhs = ScalarValue::Int64(Some(i64::MIN));
+        let rhs = ScalarValue::Int64(Some(1));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int64(Some(i64::MIN)));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int64(None));
+
+        // Test unsigned integer handling:
+        let dt = DataType::UInt32;
+        let op = Operator::Minus;
+        let lhs = ScalarValue::UInt32(Some(0));
+        let rhs = ScalarValue::UInt32(Some(1));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::UInt32(Some(0)));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::UInt32(None));
+
+        // Test decimal handling:
+        let dt = DataType::Decimal128(38, 35);
+        let op = Operator::Plus;
+        let lhs =
+            ScalarValue::Decimal128(Some(54321543215432154321543215432154321), 35, 35);
+        let rhs = ScalarValue::Decimal128(Some(10000), 20, 0);
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal128(None, 38, 35));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(
+            result,
+            ScalarValue::Decimal128(Some(99999999999999999999999999999999999999), 38, 35)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_width_of_intervals() -> Result<()> {
+        let intervals = [
+            (
+                Interval::make(Some(0.25_f64), Some(0.50_f64))?,
+                ScalarValue::from(0.25_f64),
+            ),
+            (
+                Interval::make(Some(0.5_f64), Some(1.0_f64))?,
+                ScalarValue::from(0.5_f64),
+            ),
+            (
+                Interval::make(Some(1.0_f64), Some(2.0_f64))?,
+                ScalarValue::from(1.0_f64),
+            ),
+            (
+                Interval::make(Some(32.0_f64), Some(64.0_f64))?,
+                ScalarValue::from(32.0_f64),
+            ),
+            (
+                Interval::make(Some(-0.50_f64), Some(-0.25_f64))?,
+                ScalarValue::from(0.25_f64),
+            ),
+            (
+                Interval::make(Some(-32.0_f64), Some(-16.0_f64))?,
+                ScalarValue::from(16.0_f64),
+            ),
+            (
+                Interval::make(Some(-0.50_f64), Some(0.25_f64))?,
+                ScalarValue::from(0.75_f64),
+            ),
+            (
+                Interval::make(Some(-32.0_f64), Some(16.0_f64))?,
+                ScalarValue::from(48.0_f64),
+            ),
+            (
+                Interval::make(Some(-32_i64), Some(16_i64))?,
+                ScalarValue::from(48_i64),
+            ),
+        ];
+        for (interval, expected) in intervals {
+            assert_eq!(interval.width()?, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_cardinality_of_intervals() -> Result<()> {
         // In IEEE 754 standard for floating-point arithmetic, if we keep the sign and exponent fields same,
         // we can represent 4503599627370496+1 different numbers by changing the mantissa
@@ -3338,14 +3717,14 @@ mod tests {
     #[test]
     fn test_interval_display() {
         let interval = Interval::make(Some(0.25_f32), Some(0.50_f32)).unwrap();
-        assert_eq!(format!("{}", interval), "[0.25, 0.5]");
+        assert_eq!(format!("{interval}"), "[0.25, 0.5]");
 
         let interval = Interval::try_new(
             ScalarValue::Float32(Some(f32::NEG_INFINITY)),
             ScalarValue::Float32(Some(f32::INFINITY)),
         )
         .unwrap();
-        assert_eq!(format!("{}", interval), "[NULL, NULL]");
+        assert_eq!(format!("{interval}"), "[NULL, NULL]");
     }
 
     macro_rules! capture_mode_change {

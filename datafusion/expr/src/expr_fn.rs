@@ -19,15 +19,16 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction, WindowFunctionParams,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
     StateFieldsArgs,
 };
+use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
+    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
     ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
@@ -37,7 +38,7 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
+use datafusion_common::{plan_err, Column, Result, ScalarValue, Spans, TableReference};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use sqlparser::ast::NullTreatment;
@@ -120,19 +121,13 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 /// let p = wildcard();
 /// assert_eq!(p.to_string(), "*")
 /// ```
-pub fn wildcard() -> Expr {
-    Expr::Wildcard {
-        qualifier: None,
-        options: WildcardOptions::default(),
-    }
+pub fn wildcard() -> SelectExpr {
+    SelectExpr::Wildcard(WildcardOptions::default())
 }
 
 /// Create an '*' [`Expr::Wildcard`] expression with the wildcard options
-pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
-    Expr::Wildcard {
-        qualifier: None,
-        options,
-    }
+pub fn wildcard_with_options(options: WildcardOptions) -> SelectExpr {
+    SelectExpr::Wildcard(options)
 }
 
 /// Create an 't.*' [`Expr::Wildcard`] expression that matches all columns from a specific table
@@ -145,22 +140,16 @@ pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
 /// let p = qualified_wildcard(TableReference::bare("t"));
 /// assert_eq!(p.to_string(), "t.*")
 /// ```
-pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
-    Expr::Wildcard {
-        qualifier: Some(qualifier.into()),
-        options: WildcardOptions::default(),
-    }
+pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> SelectExpr {
+    SelectExpr::QualifiedWildcard(qualifier.into(), WildcardOptions::default())
 }
 
 /// Create an 't.*' [`Expr::Wildcard`] expression with the wildcard options
 pub fn qualified_wildcard_with_options(
     qualifier: impl Into<TableReference>,
     options: WildcardOptions,
-) -> Expr {
-    Expr::Wildcard {
-        qualifier: Some(qualifier.into()),
-        options,
-    }
+) -> SelectExpr {
+    SelectExpr::QualifiedWildcard(qualifier.into(), options)
 }
 
 /// Return a new expression `left <op> right`
@@ -248,6 +237,7 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
+            spans: Spans::new(),
         },
         negated: false,
     })
@@ -260,6 +250,7 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
+            spans: Spans::new(),
         },
         negated: true,
     })
@@ -273,6 +264,7 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
         Subquery {
             subquery,
             outer_ref_columns,
+            spans: Spans::new(),
         },
         false,
     ))
@@ -286,6 +278,7 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
         Subquery {
             subquery,
             outer_ref_columns,
+            spans: Spans::new(),
         },
         true,
     ))
@@ -297,6 +290,7 @@ pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::ScalarSubquery(Subquery {
         subquery,
         outer_ref_columns,
+        spans: Spans::new(),
     })
 }
 
@@ -416,9 +410,10 @@ pub struct SimpleScalarUDF {
 
 impl Debug for SimpleScalarUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("ScalarUDF")
+        f.debug_struct("SimpleScalarUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
+            .field("return_type", &self.return_type)
             .field("fun", &"<FUNC>")
             .finish()
     }
@@ -434,10 +429,24 @@ impl SimpleScalarUDF {
         volatility: Volatility,
         fun: ScalarFunctionImplementation,
     ) -> Self {
-        let name = name.into();
-        let signature = Signature::exact(input_types, volatility);
-        Self {
+        Self::new_with_signature(
             name,
+            Signature::exact(input_types, volatility),
+            return_type,
+            fun,
+        )
+    }
+
+    /// Create a new `SimpleScalarUDF` from a name, signature, return type and
+    /// implementation. Implementing [`ScalarUDFImpl`] allows more flexibility
+    pub fn new_with_signature(
+        name: impl Into<String>,
+        signature: Signature,
+        return_type: DataType,
+        fun: ScalarFunctionImplementation,
+    ) -> Self {
+        Self {
+            name: name.into(),
             signature,
             return_type,
             fun,
@@ -462,8 +471,8 @@ impl ScalarUDFImpl for SimpleScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        (self.fun)(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        (self.fun)(&args.args)
     }
 }
 
@@ -506,16 +515,17 @@ pub struct SimpleAggregateUDF {
 
 impl Debug for SimpleAggregateUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("AggregateUDF")
+        f.debug_struct("SimpleAggregateUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
+            .field("return_type", &self.return_type)
             .field("fun", &"<FUNC>")
             .finish()
     }
 }
 
 impl SimpleAggregateUDF {
-    /// Create a new `AggregateUDFImpl` from a name, input types, return type, state type and
+    /// Create a new `SimpleAggregateUDF` from a name, input types, return type, state type and
     /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
     pub fn new(
         name: impl Into<String>,
@@ -536,6 +546,8 @@ impl SimpleAggregateUDF {
         }
     }
 
+    /// Create a new `SimpleAggregateUDF` from a name, signature, return type, state type and
+    /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
     pub fn new_with_signature(
         name: impl Into<String>,
         signature: Signature,
@@ -808,20 +820,28 @@ impl ExprFuncBuilder {
 
         let fun_expr = match fun {
             ExprFuncKind::Aggregate(mut udaf) => {
-                udaf.order_by = order_by;
-                udaf.filter = filter.map(Box::new);
-                udaf.distinct = distinct;
-                udaf.null_treatment = null_treatment;
+                udaf.params.order_by = order_by;
+                udaf.params.filter = filter.map(Box::new);
+                udaf.params.distinct = distinct;
+                udaf.params.null_treatment = null_treatment;
                 Expr::AggregateFunction(udaf)
             }
-            ExprFuncKind::Window(mut udwf) => {
+            ExprFuncKind::Window(WindowFunction {
+                fun,
+                params: WindowFunctionParams { args, .. },
+            }) => {
                 let has_order_by = order_by.as_ref().map(|o| !o.is_empty());
-                udwf.order_by = order_by.unwrap_or_default();
-                udwf.partition_by = partition_by.unwrap_or_default();
-                udwf.window_frame =
-                    window_frame.unwrap_or(WindowFrame::new(has_order_by));
-                udwf.null_treatment = null_treatment;
-                Expr::WindowFunction(udwf)
+                Expr::WindowFunction(WindowFunction {
+                    fun,
+                    params: WindowFunctionParams {
+                        args,
+                        partition_by: partition_by.unwrap_or_default(),
+                        order_by: order_by.unwrap_or_default(),
+                        window_frame: window_frame
+                            .unwrap_or_else(|| WindowFrame::new(has_order_by)),
+                        null_treatment,
+                    },
+                })
             }
         };
 

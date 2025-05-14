@@ -18,26 +18,50 @@
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
+use super::{error::Result, normalize, DFSqlLogicTestError};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
-use log::info;
+use indicatif::ProgressBar;
+use log::Level::{Debug, Info};
+use log::{debug, log_enabled, warn};
 use sqllogictest::DBOutput;
-
-use super::{error::Result, normalize, DFSqlLogicTestError};
+use tokio::time::Instant;
 
 use crate::engines::output::{DFColumnType, DFOutput};
+use crate::is_spark_path;
 
 pub struct DataFusion {
     ctx: SessionContext,
     relative_path: PathBuf,
+    pb: ProgressBar,
 }
 
 impl DataFusion {
-    pub fn new(ctx: SessionContext, relative_path: PathBuf) -> Self {
-        Self { ctx, relative_path }
+    pub fn new(ctx: SessionContext, relative_path: PathBuf, pb: ProgressBar) -> Self {
+        Self {
+            ctx,
+            relative_path,
+            pb,
+        }
+    }
+
+    fn update_slow_count(&self) {
+        let msg = self.pb.message();
+        let split: Vec<&str> = msg.split(" ").collect();
+        let mut current_count = 0;
+
+        if split.len() > 2 {
+            // third match will be current slow count
+            current_count = split[2].parse::<i32>().unwrap();
+        }
+
+        current_count += 1;
+
+        self.pb
+            .set_message(format!("{} - {} took > 500 ms", split[0], current_count));
     }
 }
 
@@ -47,12 +71,32 @@ impl sqllogictest::AsyncDB for DataFusion {
     type ColumnType = DFColumnType;
 
     async fn run(&mut self, sql: &str) -> Result<DFOutput> {
-        info!(
-            "[{}] Running query: \"{}\"",
-            self.relative_path.display(),
-            sql
-        );
-        run_query(&self.ctx, sql).await
+        if log_enabled!(Debug) {
+            debug!(
+                "[{}] Running query: \"{}\"",
+                self.relative_path.display(),
+                sql
+            );
+        }
+
+        let start = Instant::now();
+        let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
+        let duration = start.elapsed();
+
+        if duration.gt(&Duration::from_millis(500)) {
+            self.update_slow_count();
+        }
+
+        self.pb.inc(1);
+
+        if log_enabled!(Info) && duration.gt(&Duration::from_secs(2)) {
+            warn!(
+                "[{}] Running query took more than 2 sec ({duration:?}): \"{sql}\"",
+                self.relative_path.display()
+            );
+        }
+
+        result
     }
 
     /// Engine name of current database.
@@ -68,9 +112,15 @@ impl sqllogictest::AsyncDB for DataFusion {
     async fn sleep(dur: Duration) {
         tokio::time::sleep(dur).await;
     }
+
+    async fn shutdown(&mut self) {}
 }
 
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
+async fn run_query(
+    ctx: &SessionContext,
+    is_spark_path: bool,
+    sql: impl Into<String>,
+) -> Result<DFOutput> {
     let df = ctx.sql(sql.into().as_str()).await?;
     let task_ctx = Arc::new(df.task_ctx());
     let plan = df.create_physical_plan().await?;
@@ -78,7 +128,7 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOut
     let stream = execute_stream(plan, task_ctx)?;
     let types = normalize::convert_schema_to_types(stream.schema().fields());
     let results: Vec<RecordBatch> = collect(stream).await?;
-    let rows = normalize::convert_batches(results)?;
+    let rows = normalize::convert_batches(results, is_spark_path)?;
 
     if rows.is_empty() && types.is_empty() {
         Ok(DBOutput::StatementComplete(0))

@@ -22,7 +22,9 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
+use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
     create_window_expr, schema_add_window_field, BoundedWindowAggExec, WindowAggExec,
@@ -30,28 +32,29 @@ use datafusion::physical_plan::windows::{
 use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 use datafusion::physical_plan::{collect, InputOrderMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::HashMap;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
 use datafusion_expr::{
-    BuiltInWindowFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion_functions_window::nth_value::{
+    first_value_udwf, last_value_udwf, nth_value_udwf,
+};
+use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use test_utils::add_empty_batches;
-
-use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
-use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use hashbrown::HashMap;
+
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use test_utils::add_empty_batches;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn window_bounded_window_random_comparison() -> Result<()> {
@@ -62,23 +65,23 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
     // In sorted mode physical plans are in the form for WindowAggExec
     //```
     // WindowAggExec
-    //   MemoryExec]
+    //   DataSourceExec]
     // ```
     // and in the form for BoundedWindowAggExec
     // ```
     // BoundedWindowAggExec
-    //   MemoryExec
+    //   DataSourceExec
     // ```
     // In Linear and PartiallySorted mode physical plans are in the form for WindowAggExec
     //```
     // WindowAggExec
     //   SortExec(required by window function)
-    //     MemoryExec]
+    //     DataSourceExec]
     // ```
     // and in the form for BoundedWindowAggExec
     // ```
     // BoundedWindowAggExec
-    //   MemoryExec
+    //   DataSourceExec
     // ```
     let test_cases = vec![
         (vec!["a"], vec!["a"], Sorted),
@@ -157,11 +160,8 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
     // Remove empty batches:
     batches.retain(|batch| batch.num_rows() > 0);
     let schema = batches[0].schema();
-    let memory_exec = Arc::new(MemoryExec::try_new(
-        &[batches.clone()],
-        schema.clone(),
-        None,
-    )?);
+    let memory_exec =
+        MemorySourceConfig::try_new_exec(&[batches.clone()], schema.clone(), None)?;
 
     // Different window functions to test causality
     let window_functions = vec![
@@ -293,13 +293,11 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
                     vec![window_expr],
                     memory_exec.clone(),
-                    vec![],
                     Linear,
+                    false,
                 )?);
                 let task_ctx = ctx.task_ctx();
-                let mut collected_results =
-                    collect(running_window_exec, task_ctx).await?;
-                collected_results.retain(|batch| batch.num_rows() > 0);
+                let collected_results = collect(running_window_exec, task_ctx).await?;
                 let input_batch_sizes = batches
                     .iter()
                     .map(|batch| batch.num_rows())
@@ -308,6 +306,8 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     .iter()
                     .map(|batch| batch.num_rows())
                     .collect::<Vec<_>>();
+                // There should be no empty batches at results
+                assert!(result_batch_sizes.iter().all(|e| *e > 0));
                 if causal {
                     // For causal window frames, we can generate results immediately
                     // for each input batch. Hence, batch sizes should match.
@@ -418,27 +418,21 @@ fn get_random_function(
     window_fn_map.insert(
         "first_value",
         (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(first_value_udwf()),
             vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "last_value",
         (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::LastValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(last_value_udwf()),
             vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "nth_value",
         (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::NthValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(nth_value_udwf()),
             vec![
                 arg.clone(),
                 lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
@@ -621,7 +615,7 @@ async fn run_window_test(
             options: SortOptions::default(),
         })
     }
-    for order_by_expr in &orderby_exprs.inner {
+    for order_by_expr in &orderby_exprs {
         if !sort_keys.contains(order_by_expr) {
             sort_keys.push(order_by_expr.clone())
         }
@@ -642,8 +636,8 @@ async fn run_window_test(
             options: Default::default(),
         },
     ]);
-    let mut exec1 = Arc::new(
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None)?
+    let mut exec1 = DataSourceExec::from_data_source(
+        MemorySourceConfig::try_new(&[vec![concat_input_record]], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
     ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
@@ -666,10 +660,10 @@ async fn run_window_test(
             false,
         )?],
         exec1,
-        vec![],
+        false,
     )?) as _;
-    let exec2 = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)?
+    let exec2 = DataSourceExec::from_data_source(
+        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
     );
     let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
@@ -684,16 +678,16 @@ async fn run_window_test(
             false,
         )?],
         exec2,
-        vec![],
         search_mode.clone(),
+        false,
     )?) as _;
     let task_ctx = ctx.task_ctx();
     let collected_usual = collect(usual_window_exec, task_ctx.clone()).await?;
     let collected_running = collect(running_window_exec, task_ctx)
         .await?
         .into_iter()
-        .filter(|b| b.num_rows() > 0)
         .collect::<Vec<_>>();
+    assert!(collected_running.iter().all(|rb| rb.num_rows() > 0));
 
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.
@@ -734,7 +728,7 @@ async fn run_window_test(
             for (line1, line2) in
                 usual_formatted_sorted.iter().zip(running_formatted_sorted)
             {
-                println!("{:?}   ---   {:?}", line1, line2);
+                println!("{line1:?}   ---   {line2:?}");
             }
             unreachable!();
         }

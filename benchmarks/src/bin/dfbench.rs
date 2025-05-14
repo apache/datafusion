@@ -33,17 +33,22 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use datafusion_benchmarks::{clickbench, imdb, parquet_filter, sort, tpch};
+use datafusion_benchmarks::{
+    cancellation, clickbench, h2o, imdb, parquet_filter, sort, sort_tpch, tpch,
+};
 
 #[derive(Debug, StructOpt)]
 #[structopt(about = "benchmark command")]
 enum Options {
-    Tpch(tpch::RunOpt),
-    TpchConvert(tpch::ConvertOpt),
+    Cancellation(cancellation::RunOpt),
     Clickbench(clickbench::RunOpt),
+    H2o(h2o::RunOpt),
+    Imdb(imdb::RunOpt),
     ParquetFilter(parquet_filter::RunOpt),
     Sort(sort::RunOpt),
-    Imdb(imdb::RunOpt),
+    SortTpch(sort_tpch::RunOpt),
+    Tpch(tpch::RunOpt),
+    TpchConvert(tpch::ConvertOpt),
 }
 
 // Main benchmark runner entrypoint
@@ -52,11 +57,14 @@ pub async fn main() -> Result<()> {
     env_logger::init();
 
     match Options::from_args() {
-        Options::Tpch(opt) => opt.run().await,
-        Options::TpchConvert(opt) => opt.run().await,
+        Options::Cancellation(opt) => opt.run().await,
         Options::Clickbench(opt) => opt.run().await,
+        Options::H2o(opt) => opt.run().await,
+        Options::Imdb(opt) => opt.run().await,
         Options::ParquetFilter(opt) => opt.run().await,
         Options::Sort(opt) => opt.run().await,
-        Options::Imdb(opt) => opt.run().await,
+        Options::SortTpch(opt) => opt.run().await,
+        Options::Tpch(opt) => opt.run().await,
+        Options::TpchConvert(opt) => opt.run().await,
     }
 }

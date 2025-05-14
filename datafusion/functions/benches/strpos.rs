@@ -18,8 +18,9 @@
 extern crate criterion;
 
 use arrow::array::{StringArray, StringViewArray};
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use rand::distributions::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
@@ -111,35 +112,56 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringArray ASCII only
         let args_string_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, false);
         c.bench_function(
-            &format!("strpos_StringArray_ascii_str_len_{}", str_len),
+            &format!("strpos_StringArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_ascii))
+                    black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_ascii.clone(),
+                        arg_fields: vec![&Field::new(
+                            "a",
+                            args_string_ascii[0].data_type(),
+                            true,
+                        )],
+                        number_rows: n_rows,
+                        return_field: &Field::new("f", DataType::Int32, true),
+                    }))
                 })
             },
         );
 
         // StringArray UTF8
         let args_string_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, false);
-        c.bench_function(
-            &format!("strpos_StringArray_utf8_str_len_{}", str_len),
-            |b| {
-                b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_utf8))
-                })
-            },
-        );
+        c.bench_function(&format!("strpos_StringArray_utf8_str_len_{str_len}"), |b| {
+            b.iter(|| {
+                black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                    args: args_string_utf8.clone(),
+                    arg_fields: vec![&Field::new(
+                        "a",
+                        args_string_utf8[0].data_type(),
+                        true,
+                    )],
+                    number_rows: n_rows,
+                    return_field: &Field::new("f", DataType::Int32, true),
+                }))
+            })
+        });
 
         // StringViewArray ASCII only
         let args_string_view_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, true);
         c.bench_function(
-            &format!("strpos_StringViewArray_ascii_str_len_{}", str_len),
+            &format!("strpos_StringViewArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_view_ascii))
+                    black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_view_ascii.clone(),
+                        arg_fields: vec![&Field::new(
+                            "a",
+                            args_string_view_ascii[0].data_type(),
+                            true,
+                        )],
+                        number_rows: n_rows,
+                        return_field: &Field::new("f", DataType::Int32, true),
+                    }))
                 })
             },
         );
@@ -147,11 +169,19 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringViewArray UTF8
         let args_string_view_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, true);
         c.bench_function(
-            &format!("strpos_StringViewArray_utf8_str_len_{}", str_len),
+            &format!("strpos_StringViewArray_utf8_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_view_utf8))
+                    black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_view_utf8.clone(),
+                        arg_fields: vec![&Field::new(
+                            "a",
+                            args_string_view_utf8[0].data_type(),
+                            true,
+                        )],
+                        number_rows: n_rows,
+                        return_field: &Field::new("f", DataType::Int32, true),
+                    }))
                 })
             },
         );

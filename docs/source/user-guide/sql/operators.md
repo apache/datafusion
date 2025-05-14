@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Operators
+# Operators and Literals
 
 ## Numerical Operators
 
@@ -110,6 +110,7 @@ Modulo (remainder)
 - [<= (less than or equal to)](#op_le)
 - [> (greater than)](#op_gt)
 - [>= (greater than or equal to)](#op_ge)
+- [<=> (three-way comparison, alias for IS NOT DISTINCT FROM)](#op_spaceship)
 - [IS DISTINCT FROM](#is-distinct-from)
 - [IS NOT DISTINCT FROM](#is-not-distinct-from)
 - [~ (regex match)](#op_re_match)
@@ -205,6 +206,48 @@ Greater Than or Equal To
 +----------------------+
 | true                 |
 +----------------------+
+```
+
+(op_spaceship)=
+
+### `<=>`
+
+Three-way comparison operator. A NULL-safe operator that returns true if both operands are equal or both are NULL, false otherwise.
+
+```sql
+> SELECT NULL <=> NULL;
++--------------------------------+
+| NULL IS NOT DISTINCT FROM NULL |
++--------------------------------+
+| true                           |
++--------------------------------+
+```
+
+```sql
+> SELECT 1 <=> NULL;
++------------------------------------+
+| Int64(1) IS NOT DISTINCT FROM NULL |
++------------------------------------+
+| false                              |
++------------------------------------+
+```
+
+```sql
+> SELECT 1 <=> 2;
++----------------------------------------+
+| Int64(1) IS NOT DISTINCT FROM Int64(2) |
++----------------------------------------+
+| false                                  |
++----------------------------------------+
+```
+
+```sql
+> SELECT 1 <=> 1;
++----------------------------------------+
+| Int64(1) IS NOT DISTINCT FROM Int64(1) |
++----------------------------------------+
+| true                                   |
++----------------------------------------+
 ```
 
 ### `IS DISTINCT FROM`
@@ -508,4 +551,65 @@ Array Is Contained By
 +-------------------------------------------------------------------------+
 | true                                                                    |
 +-------------------------------------------------------------------------+
+```
+
+## Literals
+
+Use single quotes for literal values. For example, the string `foo bar` is
+referred to using `'foo bar'`
+
+```sql
+select 'foo';
+```
+
+### Escaping
+
+Unlike many other languages, SQL literals do not by default support C-style escape
+sequences such as `\n` for newline. Instead all characters in a `'` string are treated
+literally.
+
+To escape `'` in SQL literals, use `''`:
+
+```sql
+> select 'it''s escaped';
++----------------------+
+| Utf8("it's escaped") |
++----------------------+
+| it's escaped         |
++----------------------+
+1 row(s) fetched.
+```
+
+Strings such as `foo\nbar` mean `\` followed by `n` (not newline):
+
+```sql
+> select 'foo\nbar';
++------------------+
+| Utf8("foo\nbar") |
++------------------+
+| foo\nbar         |
++------------------+
+1 row(s) fetched.
+Elapsed 0.005 seconds.
+```
+
+To add escaped characters such as newline or tab, instead of `\n` you use the
+`E` style strings. For example, to add the text with a newline
+
+```text
+foo
+bar
+```
+
+You can use `E'foo\nbar'`
+
+```sql
+> select E'foo\nbar';
++-----------------+
+| Utf8("foo
+bar") |
++-----------------+
+| foo
+bar         |
++-----------------+
 ```

@@ -15,27 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This file contains builders to create SQL ASTs. They are purposefully
-//! not exported as they will eventually be move to the SQLparser package.
-//!
-//!
-//! See <https://github.com/apache/datafusion/issues/8661>
-
 use core::fmt;
+use std::ops::ControlFlow;
 
-use sqlparser::ast;
+use sqlparser::ast::helpers::attached_token::AttachedToken;
+use sqlparser::ast::{self, visit_expressions_mut, OrderByKind, SelectFlavor};
 
 #[derive(Clone)]
-pub(super) struct QueryBuilder {
+pub struct QueryBuilder {
     with: Option<ast::With>,
     body: Option<Box<ast::SetExpr>>,
-    order_by: Vec<ast::OrderByExpr>,
+    order_by_kind: Option<OrderByKind>,
     limit: Option<ast::Expr>,
     limit_by: Vec<ast::Expr>,
     offset: Option<ast::Offset>,
     fetch: Option<ast::Fetch>,
     locks: Vec<ast::LockClause>,
     for_clause: Option<ast::ForClause>,
+    // If true, we need to unparse LogicalPlan::Union as a SQL `UNION` rather than a `UNION ALL`.
+    distinct_union: bool,
 }
 
 #[allow(dead_code)]
@@ -51,8 +49,8 @@ impl QueryBuilder {
     pub fn take_body(&mut self) -> Option<Box<ast::SetExpr>> {
         self.body.take()
     }
-    pub fn order_by(&mut self, value: Vec<ast::OrderByExpr>) -> &mut Self {
-        self.order_by = value;
+    pub fn order_by(&mut self, value: OrderByKind) -> &mut Self {
+        self.order_by_kind = Some(value);
         self
     }
     pub fn limit(&mut self, value: Option<ast::Expr>) -> &mut Self {
@@ -79,15 +77,21 @@ impl QueryBuilder {
         self.for_clause = value;
         self
     }
+    pub fn distinct_union(&mut self) -> &mut Self {
+        self.distinct_union = true;
+        self
+    }
+    pub fn is_distinct_union(&self) -> bool {
+        self.distinct_union
+    }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
-        let order_by = if self.order_by.is_empty() {
-            None
-        } else {
-            Some(ast::OrderBy {
-                exprs: self.order_by.clone(),
+        let order_by = self
+            .order_by_kind
+            .as_ref()
+            .map(|order_by_kind| ast::OrderBy {
+                kind: order_by_kind.clone(),
                 interpolate: None,
-            })
-        };
+            });
 
         Ok(ast::Query {
             with: self.with.clone(),
@@ -110,13 +114,14 @@ impl QueryBuilder {
         Self {
             with: Default::default(),
             body: Default::default(),
-            order_by: Default::default(),
+            order_by_kind: Default::default(),
             limit: Default::default(),
             limit_by: Default::default(),
             offset: Default::default(),
             fetch: Default::default(),
             locks: Default::default(),
             for_clause: Default::default(),
+            distinct_union: false,
         }
     }
 }
@@ -127,7 +132,7 @@ impl Default for QueryBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct SelectBuilder {
+pub struct SelectBuilder {
     distinct: Option<ast::Distinct>,
     top: Option<ast::Top>,
     projection: Vec<ast::SelectItem>,
@@ -143,6 +148,7 @@ pub(super) struct SelectBuilder {
     named_window: Vec<ast::NamedWindowDefinition>,
     qualify: Option<ast::Expr>,
     value_table_mode: Option<ast::ValueTableMode>,
+    flavor: Option<SelectFlavor>,
 }
 
 #[allow(dead_code)]
@@ -158,6 +164,11 @@ impl SelectBuilder {
     pub fn projection(&mut self, value: Vec<ast::SelectItem>) -> &mut Self {
         self.projection = value;
         self
+    }
+    pub fn pop_projections(&mut self) -> Vec<ast::SelectItem> {
+        let ret = self.projection.clone();
+        self.projection.clear();
+        ret
     }
     pub fn already_projected(&self) -> bool {
         !self.projection.is_empty()
@@ -181,6 +192,37 @@ impl SelectBuilder {
         self.lateral_views = value;
         self
     }
+
+    /// Replaces the selection with a new value.
+    ///
+    /// This function is used to replace a specific expression within the selection.
+    /// Unlike the `selection` method which combines existing and new selections with AND,
+    /// this method searches for and replaces occurrences of a specific expression.
+    ///
+    /// This method is primarily used to modify LEFT MARK JOIN expressions.
+    /// When processing a LEFT MARK JOIN, we need to replace the placeholder expression
+    /// with the actual join condition in the selection clause.
+    ///
+    /// # Arguments
+    ///
+    /// * `existing_expr` - The expression to replace
+    /// * `value` - The new expression to set as the selection
+    pub fn replace_mark(
+        &mut self,
+        existing_expr: &ast::Expr,
+        value: &ast::Expr,
+    ) -> &mut Self {
+        if let Some(selection) = &mut self.selection {
+            visit_expressions_mut(selection, |expr| {
+                if expr == existing_expr {
+                    *expr = value.clone();
+                }
+                ControlFlow::<()>::Continue(())
+            });
+        }
+        self
+    }
+
     pub fn selection(&mut self, value: Option<ast::Expr>) -> &mut Self {
         // With filter pushdown optimization, the LogicalPlan can have filters defined as part of `TableScan` and `Filter` nodes.
         // To avoid overwriting one of the filters, we combine the existing filter with the additional filter.
@@ -241,6 +283,7 @@ impl SelectBuilder {
     pub fn build(&self) -> Result<ast::Select, BuilderError> {
         Ok(ast::Select {
             distinct: self.distinct.clone(),
+            top_before_distinct: false,
             top: self.top.clone(),
             projection: self.projection.clone(),
             into: self.into.clone(),
@@ -267,6 +310,11 @@ impl SelectBuilder {
             connect_by: None,
             window_before_qualify: false,
             prewhere: None,
+            select_token: AttachedToken::empty(),
+            flavor: match self.flavor {
+                Some(ref value) => value.clone(),
+                None => return Err(Into::into(UninitializedFieldError::from("flavor"))),
+            },
         })
     }
     fn create_empty() -> Self {
@@ -286,6 +334,7 @@ impl SelectBuilder {
             named_window: Default::default(),
             qualify: Default::default(),
             value_table_mode: Default::default(),
+            flavor: Some(SelectFlavor::Standard),
         }
     }
 }
@@ -296,7 +345,7 @@ impl Default for SelectBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct TableWithJoinsBuilder {
+pub struct TableWithJoinsBuilder {
     relation: Option<RelationBuilder>,
     joins: Vec<ast::Join>,
 }
@@ -343,7 +392,7 @@ impl Default for TableWithJoinsBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct RelationBuilder {
+pub struct RelationBuilder {
     relation: Option<TableFactorBuilder>,
 }
 
@@ -352,6 +401,7 @@ pub(super) struct RelationBuilder {
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
+    Unnest(UnnestRelationBuilder),
     Empty,
 }
 
@@ -368,6 +418,12 @@ impl RelationBuilder {
         self.relation = Some(TableFactorBuilder::Derived(value));
         self
     }
+
+    pub fn unnest(&mut self, value: UnnestRelationBuilder) -> &mut Self {
+        self.relation = Some(TableFactorBuilder::Unnest(value));
+        self
+    }
+
     pub fn empty(&mut self) -> &mut Self {
         self.relation = Some(TableFactorBuilder::Empty);
         self
@@ -381,6 +437,9 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Derived(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
+            Some(TableFactorBuilder::Unnest(ref mut rel_builder)) => {
+                rel_builder.alias = value;
+            }
             Some(TableFactorBuilder::Empty) => (),
             None => (),
         }
@@ -390,6 +449,7 @@ impl RelationBuilder {
         Ok(match self.relation {
             Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
+            Some(TableFactorBuilder::Unnest(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Empty) => None,
             None => return Err(Into::into(UninitializedFieldError::from("relation"))),
         })
@@ -407,13 +467,14 @@ impl Default for RelationBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct TableRelationBuilder {
+pub struct TableRelationBuilder {
     name: Option<ast::ObjectName>,
     alias: Option<ast::TableAlias>,
     args: Option<Vec<ast::FunctionArg>>,
     with_hints: Vec<ast::Expr>,
     version: Option<ast::TableVersion>,
     partitions: Vec<ast::Ident>,
+    index_hints: Vec<ast::TableIndexHints>,
 }
 
 #[allow(dead_code)]
@@ -442,6 +503,10 @@ impl TableRelationBuilder {
         self.partitions = value;
         self
     }
+    pub fn index_hints(&mut self, value: Vec<ast::TableIndexHints>) -> &mut Self {
+        self.index_hints = value;
+        self
+    }
     pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
         Ok(ast::TableFactor::Table {
             name: match self.name {
@@ -457,6 +522,9 @@ impl TableRelationBuilder {
             version: self.version.clone(),
             partitions: self.partitions.clone(),
             with_ordinality: false,
+            json_path: None,
+            sample: None,
+            index_hints: self.index_hints.clone(),
         })
     }
     fn create_empty() -> Self {
@@ -467,6 +535,7 @@ impl TableRelationBuilder {
             with_hints: Default::default(),
             version: Default::default(),
             partitions: Default::default(),
+            index_hints: Default::default(),
         }
     }
 }
@@ -476,7 +545,7 @@ impl Default for TableRelationBuilder {
     }
 }
 #[derive(Clone)]
-pub(super) struct DerivedRelationBuilder {
+pub struct DerivedRelationBuilder {
     lateral: Option<bool>,
     subquery: Option<Box<ast::Query>>,
     alias: Option<ast::TableAlias>,
@@ -525,10 +594,72 @@ impl Default for DerivedRelationBuilder {
     }
 }
 
+#[derive(Clone)]
+pub struct UnnestRelationBuilder {
+    pub alias: Option<ast::TableAlias>,
+    pub array_exprs: Vec<ast::Expr>,
+    with_offset: bool,
+    with_offset_alias: Option<ast::Ident>,
+    with_ordinality: bool,
+}
+
+#[allow(dead_code)]
+impl UnnestRelationBuilder {
+    pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
+        self.alias = value;
+        self
+    }
+    pub fn array_exprs(&mut self, value: Vec<ast::Expr>) -> &mut Self {
+        self.array_exprs = value;
+        self
+    }
+
+    pub fn with_offset(&mut self, value: bool) -> &mut Self {
+        self.with_offset = value;
+        self
+    }
+
+    pub fn with_offset_alias(&mut self, value: Option<ast::Ident>) -> &mut Self {
+        self.with_offset_alias = value;
+        self
+    }
+
+    pub fn with_ordinality(&mut self, value: bool) -> &mut Self {
+        self.with_ordinality = value;
+        self
+    }
+
+    pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
+        Ok(ast::TableFactor::UNNEST {
+            alias: self.alias.clone(),
+            array_exprs: self.array_exprs.clone(),
+            with_offset: self.with_offset,
+            with_offset_alias: self.with_offset_alias.clone(),
+            with_ordinality: self.with_ordinality,
+        })
+    }
+
+    fn create_empty() -> Self {
+        Self {
+            alias: Default::default(),
+            array_exprs: Default::default(),
+            with_offset: Default::default(),
+            with_offset_alias: Default::default(),
+            with_ordinality: Default::default(),
+        }
+    }
+}
+
+impl Default for UnnestRelationBuilder {
+    fn default() -> Self {
+        Self::create_empty()
+    }
+}
+
 /// Runtime error when a `build()` method is called and one or more required fields
 /// do not have a value.
 #[derive(Debug, Clone)]
-pub(super) struct UninitializedFieldError(&'static str);
+pub struct UninitializedFieldError(&'static str);
 
 impl UninitializedFieldError {
     /// Create a new `UninitializedFieldError` for the specified field name.
@@ -574,9 +705,9 @@ impl fmt::Display for BuilderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UninitializedField(ref field) => {
-                write!(f, "`{}` must be initialized", field)
+                write!(f, "`{field}` must be initialized")
             }
-            Self::ValidationError(ref error) => write!(f, "{}", error),
+            Self::ValidationError(ref error) => write!(f, "{error}"),
         }
     }
 }

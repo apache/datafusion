@@ -22,7 +22,6 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 use std::any::Any;
 use std::collections::HashSet;
 use std::mem::{size_of, size_of_val};
-use std::sync::OnceLock;
 
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
@@ -34,17 +33,19 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
+use datafusion_common::{
+    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
-    Signature, Volatility,
+    SetMonotonicity, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::utils::Hashable;
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -79,6 +80,20 @@ macro_rules! downcast_sum {
     };
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the sum of all values in the specified column.",
+    syntax_example = "sum(expression)",
+    sql_example = r#"```sql
+> SELECT sum(column_name) FROM table_name;
++-----------------------+
+| sum(column_name)       |
++-----------------------+
+| 12345                 |
++-----------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
@@ -112,9 +127,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!("SUM expects exactly one argument");
-        }
+        let [args] = take_function_args(self.name(), arg_types)?;
 
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval.
@@ -134,7 +147,7 @@ impl AggregateUDFImpl for Sum {
             }
         }
 
-        Ok(vec![coerced_type(&arg_types[0])?])
+        Ok(vec![coerced_type(args)?])
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -183,7 +196,7 @@ impl AggregateUDFImpl for Sum {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "sum distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.return_type.clone(), true),
+                Field::new_list_field(args.return_type.clone(), true),
                 false,
             )])
         } else {
@@ -239,32 +252,20 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_sum_doc())
+        self.doc()
     }
-}
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_sum_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Returns the sum of all values in the specified column.")
-            .with_syntax_example("sum(expression)")
-            .with_sql_example(
-                r#"```sql
-> SELECT sum(column_name) FROM table_name;
-+-----------------------+
-| sum(column_name)       |
-+-----------------------+
-| 12345                 |
-+-----------------------+
-```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
+    fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {
+        // `SUM` is only monotonically increasing when its input is unsigned.
+        // TODO: Expand these utilizing statistics.
+        match data_type {
+            DataType::UInt8 => SetMonotonicity::Increasing,
+            DataType::UInt16 => SetMonotonicity::Increasing,
+            DataType::UInt32 => SetMonotonicity::Increasing,
+            DataType::UInt64 => SetMonotonicity::Increasing,
+            _ => SetMonotonicity::NotMonotonic,
+        }
+    }
 }
 
 /// This accumulator computes SUM incrementally

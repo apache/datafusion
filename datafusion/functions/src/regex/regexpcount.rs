@@ -15,25 +15,52 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::strings::StringArrayType;
-use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array};
+use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_REGEX;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
     TypeSignature::Uniform, Volatility,
 };
+use datafusion_macros::user_doc;
 use itertools::izip;
 use regex::Regex;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "Regular Expression Functions"),
+    description = "Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.",
+    syntax_example = "regexp_count(str, regexp[, start, flags])",
+    sql_example = r#"```sql
+> select regexp_count('abcAbAbc', 'abc', 2, 'i');
++---------------------------------------------------------------+
+| regexp_count(Utf8("abcAbAbc"),Utf8("abc"),Int64(2),Utf8("i")) |
++---------------------------------------------------------------+
+| 1                                                             |
++---------------------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    standard_argument(name = "regexp", prefix = "Regular"),
+    argument(
+        name = "start",
+        description = "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function."
+    ),
+    argument(
+        name = "flags",
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?"#
+    )
+)]
 #[derive(Debug)]
 pub struct RegexpCountFunc {
     signature: Signature,
@@ -81,7 +108,12 @@ impl ScalarUDFImpl for RegexpCountFunc {
         Ok(Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        let args = &args.args;
+
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -93,7 +125,7 @@ impl ScalarUDFImpl for RegexpCountFunc {
         let inferred_length = len.unwrap_or(1);
         let args = args
             .iter()
-            .map(|arg| arg.clone().into_array(inferred_length))
+            .map(|arg| arg.to_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
         let result = regexp_count_func(&args);
@@ -107,39 +139,8 @@ impl ScalarUDFImpl for RegexpCountFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_regexp_count_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_regexp_count_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_REGEX)
-            .with_description("Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.")
-            .with_syntax_example("regexp_count(str, regexp[, start, flags])")
-            .with_sql_example(r#"```sql
-> select regexp_count('abcAbAbc', 'abc', 2, 'i');
-+---------------------------------------------------------------+
-| regexp_count(Utf8("abcAbAbc"),Utf8("abc"),Int64(2),Utf8("i")) |
-+---------------------------------------------------------------+
-| 1                                                             |
-+---------------------------------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_standard_argument("regexp",Some("Regular"))
-            .with_argument("start", "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.")
-            .with_argument("flags",
-                           r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#)
-            .build()
-            .unwrap()
-    })
 }
 
 pub fn regexp_count_func(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -312,12 +313,12 @@ where
 
             let pattern = compile_regex(regex, flags_scalar)?;
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 values
                     .iter()
                     .map(|value| count_matches(value, &pattern, start_scalar))
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (true, true, false) => {
             let regex = match regex_scalar {
@@ -336,17 +337,17 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 values
                     .iter()
                     .zip(flags_array.iter())
                     .map(|(value, flags)| {
                         let pattern =
                             compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                        count_matches(value, &pattern, start_scalar)
+                        count_matches(value, pattern, start_scalar)
                     })
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (true, false, true) => {
             let regex = match regex_scalar {
@@ -360,13 +361,13 @@ where
 
             let start_array = start_array.unwrap();
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 values
                     .iter()
                     .zip(start_array.iter())
                     .map(|(value, start)| count_matches(value, &pattern, start))
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (true, false, false) => {
             let regex = match regex_scalar {
@@ -385,7 +386,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 izip!(
                     values.iter(),
                     start_array.unwrap().iter(),
@@ -395,10 +396,10 @@ where
                     let pattern =
                         compile_and_cache_regex(regex, flags, &mut regex_cache)?;
 
-                    count_matches(value, &pattern, start)
+                    count_matches(value, pattern, start)
                 })
-                .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (false, true, true) => {
             if values.len() != regex_array.len() {
@@ -409,7 +410,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 values
                     .iter()
                     .zip(regex_array.iter())
@@ -424,10 +425,10 @@ where
                             flags_scalar,
                             &mut regex_cache,
                         )?;
-                        count_matches(value, &pattern, start_scalar)
+                        count_matches(value, pattern, start_scalar)
                     })
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (false, true, false) => {
             if values.len() != regex_array.len() {
@@ -447,7 +448,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 izip!(values.iter(), regex_array.iter(), flags_array.iter())
                     .map(|(value, regex, flags)| {
                         let regex = match regex {
@@ -458,10 +459,10 @@ where
                         let pattern =
                             compile_and_cache_regex(regex, flags, &mut regex_cache)?;
 
-                        count_matches(value, &pattern, start_scalar)
+                        count_matches(value, pattern, start_scalar)
                     })
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (false, false, true) => {
             if values.len() != regex_array.len() {
@@ -481,7 +482,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 izip!(values.iter(), regex_array.iter(), start_array.iter())
                     .map(|(value, regex, start)| {
                         let regex = match regex {
@@ -494,10 +495,10 @@ where
                             flags_scalar,
                             &mut regex_cache,
                         )?;
-                        count_matches(value, &pattern, start)
+                        count_matches(value, pattern, start)
                     })
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (false, false, false) => {
             if values.len() != regex_array.len() {
@@ -526,7 +527,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 izip!(
                     values.iter(),
                     regex_array.iter(),
@@ -541,27 +542,30 @@ where
 
                     let pattern =
                         compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                    count_matches(value, &pattern, start)
+                    count_matches(value, pattern, start)
                 })
-                .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
     }
 }
 
-fn compile_and_cache_regex(
-    regex: &str,
-    flags: Option<&str>,
-    regex_cache: &mut HashMap<String, Regex>,
-) -> Result<Regex, ArrowError> {
-    match regex_cache.entry(regex.to_string()) {
-        Entry::Vacant(entry) => {
+fn compile_and_cache_regex<'strings, 'cache>(
+    regex: &'strings str,
+    flags: Option<&'strings str>,
+    regex_cache: &'cache mut HashMap<(&'strings str, Option<&'strings str>), Regex>,
+) -> Result<&'cache Regex, ArrowError>
+where
+    'strings: 'cache,
+{
+    let result = match regex_cache.entry((regex, flags)) {
+        Entry::Occupied(occupied_entry) => occupied_entry.into_mut(),
+        Entry::Vacant(vacant_entry) => {
             let compiled = compile_regex(regex, flags)?;
-            entry.insert(compiled.clone());
-            Ok(compiled)
+            vacant_entry.insert(compiled)
         }
-        Entry::Occupied(entry) => Ok(entry.get().to_owned()),
-    }
+    };
+    Ok(result)
 }
 
 fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
@@ -573,15 +577,12 @@ fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> 
                     "regexp_count() does not support global flag".to_string(),
                 ));
             }
-            format!("(?{}){}", flags, regex)
+            format!("(?{flags}){regex}")
         }
     };
 
     Regex::new(&pattern).map_err(|_| {
-        ArrowError::ComputeError(format!(
-            "Regular expression did not compile: {}",
-            pattern
-        ))
+        ArrowError::ComputeError(format!("Regular expression did not compile: {pattern}"))
     })
 }
 
@@ -615,6 +616,8 @@ fn count_matches(
 mod tests {
     use super::*;
     use arrow::array::{GenericStringArray, StringViewArray};
+    use arrow::datatypes::Field;
+    use datafusion_expr::ScalarFunctionArgs;
 
     #[test]
     fn test_regexp_count() {
@@ -638,6 +641,29 @@ mod tests {
         test_case_sensitive_regexp_count_array_complex::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_count_array_complex::<GenericStringArray<i64>>();
         test_case_sensitive_regexp_count_array_complex::<StringViewArray>();
+
+        test_case_regexp_count_cache_check::<GenericStringArray<i32>>();
+    }
+
+    fn regexp_count_with_scalar_values(args: &[ScalarValue]) -> Result<ColumnarValue> {
+        let args_values = args
+            .iter()
+            .map(|sv| ColumnarValue::Scalar(sv.clone()))
+            .collect();
+
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, a)| Field::new(format!("arg_{idx}"), a.data_type(), true))
+            .collect::<Vec<Field>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
+        RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+            args: args_values,
+            arg_fields,
+            number_rows: args.len(),
+            return_field: &Field::new("f", Int64, true),
+        })
     }
 
     fn test_case_sensitive_regexp_count_scalar() {
@@ -650,9 +676,7 @@ mod tests {
             let v_sv = ScalarValue::Utf8(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
             let expected = expected.get(pos).cloned();
-
-            let re = RegexpCountFunc::new()
-                .invoke(&[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)]);
+            let re = regexp_count_with_scalar_values(&[v_sv, regex_sv]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -663,9 +687,7 @@ mod tests {
             // largeutf8
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
-
-            let re = RegexpCountFunc::new()
-                .invoke(&[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)]);
+            let re = regexp_count_with_scalar_values(&[v_sv, regex_sv]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -676,9 +698,7 @@ mod tests {
             // utf8view
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
-
-            let re = RegexpCountFunc::new()
-                .invoke(&[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)]);
+            let re = regexp_count_with_scalar_values(&[v_sv, regex_sv]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -700,12 +720,7 @@ mod tests {
             let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
             let start_sv = ScalarValue::Int64(Some(start));
             let expected = expected.get(pos).cloned();
-
-            let re = RegexpCountFunc::new().invoke(&[
-                ColumnarValue::Scalar(v_sv),
-                ColumnarValue::Scalar(regex_sv),
-                ColumnarValue::Scalar(start_sv.clone()),
-            ]);
+            let re = regexp_count_with_scalar_values(&[v_sv, regex_sv, start_sv.clone()]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -716,12 +731,7 @@ mod tests {
             // largeutf8
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
-
-            let re = RegexpCountFunc::new().invoke(&[
-                ColumnarValue::Scalar(v_sv),
-                ColumnarValue::Scalar(regex_sv),
-                ColumnarValue::Scalar(start_sv.clone()),
-            ]);
+            let re = regexp_count_with_scalar_values(&[v_sv, regex_sv, start_sv.clone()]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -732,12 +742,7 @@ mod tests {
             // utf8view
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
-
-            let re = RegexpCountFunc::new().invoke(&[
-                ColumnarValue::Scalar(v_sv),
-                ColumnarValue::Scalar(regex_sv),
-                ColumnarValue::Scalar(start_sv),
-            ]);
+            let re = regexp_count_with_scalar_values(&[v_sv, regex_sv, start_sv.clone()]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -762,11 +767,11 @@ mod tests {
             let flags_sv = ScalarValue::Utf8(Some(flags.to_string()));
             let expected = expected.get(pos).cloned();
 
-            let re = RegexpCountFunc::new().invoke(&[
-                ColumnarValue::Scalar(v_sv),
-                ColumnarValue::Scalar(regex_sv),
-                ColumnarValue::Scalar(start_sv.clone()),
-                ColumnarValue::Scalar(flags_sv.clone()),
+            let re = regexp_count_with_scalar_values(&[
+                v_sv,
+                regex_sv,
+                start_sv.clone(),
+                flags_sv.clone(),
             ]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -780,11 +785,11 @@ mod tests {
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
             let flags_sv = ScalarValue::LargeUtf8(Some(flags.to_string()));
 
-            let re = RegexpCountFunc::new().invoke(&[
-                ColumnarValue::Scalar(v_sv),
-                ColumnarValue::Scalar(regex_sv),
-                ColumnarValue::Scalar(start_sv.clone()),
-                ColumnarValue::Scalar(flags_sv.clone()),
+            let re = regexp_count_with_scalar_values(&[
+                v_sv,
+                regex_sv,
+                start_sv.clone(),
+                flags_sv.clone(),
             ]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -798,11 +803,11 @@ mod tests {
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
             let flags_sv = ScalarValue::Utf8View(Some(flags.to_string()));
 
-            let re = RegexpCountFunc::new().invoke(&[
-                ColumnarValue::Scalar(v_sv),
-                ColumnarValue::Scalar(regex_sv),
-                ColumnarValue::Scalar(start_sv),
-                ColumnarValue::Scalar(flags_sv.clone()),
+            let re = regexp_count_with_scalar_values(&[
+                v_sv,
+                regex_sv,
+                start_sv.clone(),
+                flags_sv.clone(),
             ]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -876,12 +881,11 @@ mod tests {
             let start_sv = ScalarValue::Int64(Some(start));
             let flags_sv = ScalarValue::Utf8(flags.get(pos).map(|f| f.to_string()));
             let expected = expected.get(pos).cloned();
-
-            let re = RegexpCountFunc::new().invoke(&[
-                ColumnarValue::Scalar(v_sv),
-                ColumnarValue::Scalar(regex_sv),
-                ColumnarValue::Scalar(start_sv.clone()),
-                ColumnarValue::Scalar(flags_sv.clone()),
+            let re = regexp_count_with_scalar_values(&[
+                v_sv,
+                regex_sv,
+                start_sv.clone(),
+                flags_sv.clone(),
             ]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -894,12 +898,11 @@ mod tests {
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(regex.get(pos).map(|s| s.to_string()));
             let flags_sv = ScalarValue::LargeUtf8(flags.get(pos).map(|f| f.to_string()));
-
-            let re = RegexpCountFunc::new().invoke(&[
-                ColumnarValue::Scalar(v_sv),
-                ColumnarValue::Scalar(regex_sv),
-                ColumnarValue::Scalar(start_sv.clone()),
-                ColumnarValue::Scalar(flags_sv.clone()),
+            let re = regexp_count_with_scalar_values(&[
+                v_sv,
+                regex_sv,
+                start_sv.clone(),
+                flags_sv.clone(),
             ]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -912,12 +915,11 @@ mod tests {
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(regex.get(pos).map(|s| s.to_string()));
             let flags_sv = ScalarValue::Utf8View(flags.get(pos).map(|f| f.to_string()));
-
-            let re = RegexpCountFunc::new().invoke(&[
-                ColumnarValue::Scalar(v_sv),
-                ColumnarValue::Scalar(regex_sv),
-                ColumnarValue::Scalar(start_sv),
-                ColumnarValue::Scalar(flags_sv.clone()),
+            let re = regexp_count_with_scalar_values(&[
+                v_sv,
+                regex_sv,
+                start_sv.clone(),
+                flags_sv.clone(),
             ]);
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -938,6 +940,27 @@ mod tests {
         let flags = A::from(vec!["", "i", "", "", "i"]);
 
         let expected = Int64Array::from(vec![0, 1, 1, 1, 1]);
+
+        let re = regexp_count_func(&[
+            Arc::new(values),
+            Arc::new(regex),
+            Arc::new(start),
+            Arc::new(flags),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_case_regexp_count_cache_check<A>()
+    where
+        A: From<Vec<&'static str>> + Array + 'static,
+    {
+        let values = A::from(vec!["aaa", "Aaa", "aaa"]);
+        let regex = A::from(vec!["aaa", "aaa", "aaa"]);
+        let start = Int64Array::from(vec![1, 1, 1]);
+        let flags = A::from(vec!["", "i", ""]);
+
+        let expected = Int64Array::from(vec![1, 1, 1]);
 
         let re = regexp_count_func(&[
             Arc::new(values),

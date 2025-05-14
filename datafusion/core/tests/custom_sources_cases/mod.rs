@@ -35,15 +35,16 @@ use datafusion::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use datafusion::scalar::ScalarValue;
+use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::{ExecutionMode, PlanProperties};
+use datafusion_physical_plan::PlanProperties;
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
 use futures::stream::Stream;
 
 mod provider_filter_pushdown;
@@ -91,12 +92,11 @@ impl CustomExecutionPlan {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
         PlanProperties::new(
-            eq_properties,
-            // Output Partitioning
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -138,6 +138,11 @@ impl DisplayAs for CustomExecutionPlan {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
             }
+
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -175,6 +180,13 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
         Ok(Statistics {
             num_rows: Precision::Exact(batch.num_rows()),

@@ -15,19 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::binary::{binary_numeric_coercion, comparison_coercion};
+use super::binary::binary_numeric_coercion;
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, plan_err,
-    utils::{coerced_fixed_size_list_to_list, list_ndims},
-    Result,
+use datafusion_common::types::LogicalType;
+use datafusion_common::utils::{
+    base_type, coerced_fixed_size_list_to_list, ListCoercion,
 };
+use datafusion_common::{
+    exec_err, internal_err, plan_err, types::NativeType, utils::list_ndims, Result,
+};
+use datafusion_expr_common::signature::ArrayFunctionArgument;
+use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
+    type_coercion::binary::comparison_coercion_numeric,
     type_coercion::binary::string_coercion,
 };
 use std::sync::Arc;
@@ -44,17 +49,21 @@ pub fn data_types_with_scalar_udf(
     func: &ScalarUDF,
 ) -> Result<Vec<DataType>> {
     let signature = func.signature();
+    let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() {
-        if signature.type_signature.supports_zero_argument() {
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
+        if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!("'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments", func.name());
         } else {
-            return plan_err!("{} does not support zero arguments.", func.name());
+            return plan_err!("'{}' does not support zero arguments", func.name());
         }
     }
 
     let valid_types =
-        get_valid_types_with_scalar_udf(&signature.type_signature, current_types, func)?;
+        get_valid_types_with_scalar_udf(type_signature, current_types, func)?;
 
     if valid_types
         .iter()
@@ -63,7 +72,7 @@ pub fn data_types_with_scalar_udf(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(valid_types, current_types, &signature.type_signature)
+    try_coerce_types(func.name(), valid_types, current_types, type_signature)
 }
 
 /// Performs type coercion for aggregate function arguments.
@@ -78,20 +87,21 @@ pub fn data_types_with_aggregate_udf(
     func: &AggregateUDF,
 ) -> Result<Vec<DataType>> {
     let signature = func.signature();
+    let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() {
-        if signature.type_signature.supports_zero_argument() {
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
+        if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!("'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments", func.name());
         } else {
-            return plan_err!("{} does not support zero arguments.", func.name());
+            return plan_err!("'{}' does not support zero arguments", func.name());
         }
     }
 
-    let valid_types = get_valid_types_with_aggregate_udf(
-        &signature.type_signature,
-        current_types,
-        func,
-    )?;
+    let valid_types =
+        get_valid_types_with_aggregate_udf(type_signature, current_types, func)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -99,7 +109,7 @@ pub fn data_types_with_aggregate_udf(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(valid_types, current_types, &signature.type_signature)
+    try_coerce_types(func.name(), valid_types, current_types, type_signature)
 }
 
 /// Performs type coercion for window function arguments.
@@ -114,17 +124,21 @@ pub fn data_types_with_window_udf(
     func: &WindowUDF,
 ) -> Result<Vec<DataType>> {
     let signature = func.signature();
+    let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() {
-        if signature.type_signature.supports_zero_argument() {
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
+        if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!("'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments", func.name());
         } else {
-            return plan_err!("{} does not support zero arguments.", func.name());
+            return plan_err!("'{}' does not support zero arguments", func.name());
         }
     }
 
     let valid_types =
-        get_valid_types_with_window_udf(&signature.type_signature, current_types, func)?;
+        get_valid_types_with_window_udf(type_signature, current_types, func)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -132,7 +146,7 @@ pub fn data_types_with_window_udf(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(valid_types, current_types, &signature.type_signature)
+    try_coerce_types(func.name(), valid_types, current_types, type_signature)
 }
 
 /// Performs type coercion for function arguments.
@@ -143,21 +157,31 @@ pub fn data_types_with_window_udf(
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn data_types(
+    function_name: impl AsRef<str>,
     current_types: &[DataType],
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
-    if current_types.is_empty() {
-        if signature.type_signature.supports_zero_argument() {
+    let type_signature = &signature.type_signature;
+
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
+        if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!(
+                "function '{}' has signature {type_signature:?} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
+                function_name.as_ref()
+            );
         } else {
             return plan_err!(
-                "signature {:?} does not support zero arguments.",
-                &signature.type_signature
+                "Function '{}' has signature {type_signature:?} which does not support zero arguments",
+                function_name.as_ref()
             );
         }
     }
 
-    let valid_types = get_valid_types(&signature.type_signature, current_types)?;
+    let valid_types =
+        get_valid_types(function_name.as_ref(), type_signature, current_types)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -165,7 +189,12 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(valid_types, current_types, &signature.type_signature)
+    try_coerce_types(
+        function_name.as_ref(),
+        valid_types,
+        current_types,
+        type_signature,
+    )
 }
 
 fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
@@ -180,10 +209,13 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
+            | TypeSignature::Nullary
+            | TypeSignature::Comparable(_)
     )
 }
 
 fn try_coerce_types(
+    function_name: &str,
     valid_types: Vec<Vec<DataType>>,
     current_types: &[DataType],
     type_signature: &TypeSignature,
@@ -192,13 +224,18 @@ fn try_coerce_types(
 
     // Well-supported signature that returns exact valid types.
     if !valid_types.is_empty() && is_well_supported_signature(type_signature) {
-        // exact valid types
-        assert_eq!(valid_types.len(), 1);
+        // There may be many valid types if valid signature is OneOf
+        // Otherwise, there should be only one valid type
+        if !type_signature.is_one_of() {
+            assert_eq!(valid_types.len(), 1);
+        }
+
         let valid_types = valid_types.swap_remove(0);
         if let Some(t) = maybe_data_types_without_coercion(&valid_types, current_types) {
             return Ok(t);
         }
     } else {
+        // TODO: Deprecate this branch after all signatures are well-supported (aka coercion has happened already)
         // Try and coerce the argument types to match the signature, returning the
         // coerced types from the first matching signature.
         for valid_types in valid_types {
@@ -210,9 +247,7 @@ fn try_coerce_types(
 
     // none possible -> Error
     plan_err!(
-        "Coercion from {:?} to the signature {:?} failed.",
-        current_types,
-        type_signature
+        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {current_types:?} to the signature {type_signature:?} failed"
     )
 }
 
@@ -224,7 +259,11 @@ fn get_valid_types_with_scalar_udf(
     match signature {
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => Ok(vec![coerced_types]),
-            Err(e) => exec_err!("User-defined coercion failed with {:?}", e),
+            Err(e) => exec_err!(
+                "Function '{}' user-defined coercion failed with {:?}",
+                func.name(),
+                e.strip_backtrace()
+            ),
         },
         TypeSignature::OneOf(signatures) => {
             let mut res = vec![];
@@ -243,14 +282,15 @@ fn get_valid_types_with_scalar_udf(
             // Every signature failed, return the joined error
             if res.is_empty() {
                 internal_err!(
-                    "Failed to match any signature, errors: {}",
+                    "Function '{}' failed to match any signature, errors: {}",
+                    func.name(),
                     errors.join(",")
                 )
             } else {
                 Ok(res)
             }
         }
-        _ => get_valid_types(signature, current_types),
+        _ => get_valid_types(func.name(), signature, current_types),
     }
 }
 
@@ -262,7 +302,13 @@ fn get_valid_types_with_aggregate_udf(
     let valid_types = match signature {
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => vec![coerced_types],
-            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+            Err(e) => {
+                return exec_err!(
+                    "Function '{}' user-defined coercion failed with {:?}",
+                    func.name(),
+                    e.strip_backtrace()
+                )
+            }
         },
         TypeSignature::OneOf(signatures) => signatures
             .iter()
@@ -271,7 +317,7 @@ fn get_valid_types_with_aggregate_udf(
             })
             .flatten()
             .collect::<Vec<_>>(),
-        _ => get_valid_types(signature, current_types)?,
+        _ => get_valid_types(func.name(), signature, current_types)?,
     };
 
     Ok(valid_types)
@@ -285,14 +331,20 @@ fn get_valid_types_with_window_udf(
     let valid_types = match signature {
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => vec![coerced_types],
-            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+            Err(e) => {
+                return exec_err!(
+                    "Function '{}' user-defined coercion failed with {:?}",
+                    func.name(),
+                    e.strip_backtrace()
+                )
+            }
         },
         TypeSignature::OneOf(signatures) => signatures
             .iter()
             .filter_map(|t| get_valid_types_with_window_udf(t, current_types, func).ok())
             .flatten()
             .collect::<Vec<_>>(),
-        _ => get_valid_types(signature, current_types)?,
+        _ => get_valid_types(func.name(), signature, current_types)?,
     };
 
     Ok(valid_types)
@@ -300,90 +352,84 @@ fn get_valid_types_with_window_udf(
 
 /// Returns a Vec of all possible valid argument types for the given signature.
 fn get_valid_types(
+    function_name: &str,
     signature: &TypeSignature,
     current_types: &[DataType],
 ) -> Result<Vec<Vec<DataType>>> {
-    fn array_element_and_optional_index(
+    fn array_valid_types(
+        function_name: &str,
         current_types: &[DataType],
+        arguments: &[ArrayFunctionArgument],
+        array_coercion: Option<&ListCoercion>,
     ) -> Result<Vec<Vec<DataType>>> {
-        // make sure there's 2 or 3 arguments
-        if !(current_types.len() == 2 || current_types.len() == 3) {
+        if current_types.len() != arguments.len() {
             return Ok(vec![vec![]]);
         }
 
-        let first_two_types = &current_types[0..2];
-        let mut valid_types = array_append_or_prepend_valid_types(first_two_types, true)?;
-
-        // Early return if there are only 2 arguments
-        if current_types.len() == 2 {
-            return Ok(valid_types);
+        let mut large_list = false;
+        let mut fixed_size = array_coercion != Some(&ListCoercion::FixedSizedListToList);
+        let mut list_sizes = Vec::with_capacity(arguments.len());
+        let mut element_types = Vec::with_capacity(arguments.len());
+        for (argument, current_type) in arguments.iter().zip(current_types.iter()) {
+            match argument {
+                ArrayFunctionArgument::Index | ArrayFunctionArgument::String => (),
+                ArrayFunctionArgument::Element => {
+                    element_types.push(current_type.clone())
+                }
+                ArrayFunctionArgument::Array => match current_type {
+                    DataType::Null => element_types.push(DataType::Null),
+                    DataType::List(field) => {
+                        element_types.push(field.data_type().clone());
+                        fixed_size = false;
+                    }
+                    DataType::LargeList(field) => {
+                        element_types.push(field.data_type().clone());
+                        large_list = true;
+                        fixed_size = false;
+                    }
+                    DataType::FixedSizeList(field, size) => {
+                        element_types.push(field.data_type().clone());
+                        list_sizes.push(*size)
+                    }
+                    arg_type => {
+                        plan_err!("{function_name} does not support type {arg_type}")?
+                    }
+                },
+            }
         }
 
-        let valid_types_with_index = valid_types
-            .iter()
-            .map(|t| {
-                let mut t = t.clone();
-                t.push(DataType::Int64);
-                t
-            })
-            .collect::<Vec<_>>();
-
-        valid_types.extend(valid_types_with_index);
-
-        Ok(valid_types)
-    }
-
-    fn array_append_or_prepend_valid_types(
-        current_types: &[DataType],
-        is_append: bool,
-    ) -> Result<Vec<Vec<DataType>>> {
-        if current_types.len() != 2 {
+        let Some(element_type) = type_union_resolution(&element_types) else {
             return Ok(vec![vec![]]);
-        }
-
-        let (array_type, elem_type) = if is_append {
-            (&current_types[0], &current_types[1])
-        } else {
-            (&current_types[1], &current_types[0])
         };
 
-        // We follow Postgres on `array_append(Null, T)`, which is not valid.
-        if array_type.eq(&DataType::Null) {
-            return Ok(vec![vec![]]);
+        if !fixed_size {
+            list_sizes.clear()
         }
 
-        // We need to find the coerced base type, mainly for cases like:
-        // `array_append(List(null), i64)` -> `List(i64)`
-        let array_base_type = datafusion_common::utils::base_type(array_type);
-        let elem_base_type = datafusion_common::utils::base_type(elem_type);
-        let new_base_type = comparison_coercion(&array_base_type, &elem_base_type);
-
-        let new_base_type = new_base_type.ok_or_else(|| {
-            internal_datafusion_err!(
-                "Coercion from {array_base_type:?} to {elem_base_type:?} not supported."
-            )
-        })?;
-
-        let new_array_type = datafusion_common::utils::coerced_type_with_base_type_only(
-            array_type,
-            &new_base_type,
+        let mut list_sizes = list_sizes.into_iter();
+        let valid_types = arguments.iter().zip(current_types.iter()).map(
+            |(argument_type, current_type)| match argument_type {
+                ArrayFunctionArgument::Index => DataType::Int64,
+                ArrayFunctionArgument::String => DataType::Utf8,
+                ArrayFunctionArgument::Element => element_type.clone(),
+                ArrayFunctionArgument::Array => {
+                    if current_type.is_null() {
+                        DataType::Null
+                    } else if large_list {
+                        DataType::new_large_list(element_type.clone(), true)
+                    } else if let Some(size) = list_sizes.next() {
+                        DataType::new_fixed_size_list(element_type.clone(), size, true)
+                    } else {
+                        DataType::new_list(element_type.clone(), true)
+                    }
+                }
+            },
         );
 
-        match new_array_type {
-            DataType::List(ref field)
-            | DataType::LargeList(ref field)
-            | DataType::FixedSizeList(ref field, _) => {
-                let new_elem_type = field.data_type();
-                if is_append {
-                    Ok(vec![vec![new_array_type.clone(), new_elem_type.clone()]])
-                } else {
-                    Ok(vec![vec![new_elem_type.to_owned(), new_array_type.clone()]])
-                }
-            }
-            _ => Ok(vec![vec![]]),
-        }
+        Ok(vec![valid_types.collect()])
     }
-    fn array(array_type: &DataType) -> Option<DataType> {
+
+    fn recursive_array(array_type: &DataType) -> Option<DataType> {
         match array_type {
             DataType::List(_)
             | DataType::LargeList(_)
@@ -395,48 +441,62 @@ fn get_valid_types(
         }
     }
 
+    fn function_length_check(
+        function_name: &str,
+        length: usize,
+        expected_length: usize,
+    ) -> Result<()> {
+        if length != expected_length {
+            return plan_err!(
+                "Function '{function_name}' expects {expected_length} arguments but received {length}"
+            );
+        }
+        Ok(())
+    }
+
     let valid_types = match signature {
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::String(number) => {
-            if *number < 1 {
-                return plan_err!(
-                    "The signature expected at least one argument but received {}",
-                    current_types.len()
-                );
-            }
-            if *number != current_types.len() {
-                return plan_err!(
-                    "The signature expected {} arguments but received {}",
-                    number,
-                    current_types.len()
-                );
+            function_length_check(function_name, current_types.len(), *number)?;
+
+            let mut new_types = Vec::with_capacity(current_types.len());
+            for data_type in current_types.iter() {
+                let logical_data_type: NativeType = data_type.into();
+                if logical_data_type == NativeType::String {
+                    new_types.push(data_type.to_owned());
+                } else if logical_data_type == NativeType::Null {
+                    // TODO: Switch to Utf8View if all the string functions supports Utf8View
+                    new_types.push(DataType::Utf8);
+                } else {
+                    return plan_err!(
+                        "Function '{function_name}' expects NativeType::String but received {logical_data_type}"
+                    );
+                }
             }
 
-            fn coercion_rule(
+            // Find the common string type for the given types
+            fn find_common_type(
+                function_name: &str,
                 lhs_type: &DataType,
                 rhs_type: &DataType,
             ) -> Result<DataType> {
                 match (lhs_type, rhs_type) {
-                    (DataType::Null, DataType::Null) => Ok(DataType::Utf8),
-                    (DataType::Null, data_type) | (data_type, DataType::Null) => {
-                        coercion_rule(data_type, &DataType::Utf8)
-                    }
                     (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => {
-                        coercion_rule(lhs, rhs)
+                        find_common_type(function_name, lhs, rhs)
                     }
                     (DataType::Dictionary(_, v), other)
-                    | (other, DataType::Dictionary(_, v)) => coercion_rule(v, other),
+                    | (other, DataType::Dictionary(_, v)) => {
+                        find_common_type(function_name, v, other)
+                    }
                     _ => {
                         if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
                             Ok(coerced_type)
                         } else {
                             plan_err!(
-                                "{} and {} are not coercible to a common string type",
-                                lhs_type,
-                                rhs_type
+                                "Function '{function_name}' could not coerce {lhs_type} and {rhs_type} to a common string type"
                             )
                         }
                     }
@@ -444,15 +504,13 @@ fn get_valid_types(
             }
 
             // Length checked above, safe to unwrap
-            let mut coerced_type = current_types.first().unwrap().to_owned();
-            for t in current_types.iter().skip(1) {
-                coerced_type = coercion_rule(&coerced_type, t)?;
+            let mut coerced_type = new_types.first().unwrap().to_owned();
+            for t in new_types.iter().skip(1) {
+                coerced_type = find_common_type(function_name, &coerced_type, t)?;
             }
 
             fn base_type_or_default_type(data_type: &DataType) -> DataType {
-                if data_type.is_null() {
-                    DataType::Utf8
-                } else if let DataType::Dictionary(_, v) = data_type {
+                if let DataType::Dictionary(_, v) = data_type {
                     base_type_or_default_type(v)
                 } else {
                     data_type.to_owned()
@@ -462,98 +520,129 @@ fn get_valid_types(
             vec![vec![base_type_or_default_type(&coerced_type); *number]]
         }
         TypeSignature::Numeric(number) => {
-            if *number < 1 {
-                return plan_err!(
-                    "The signature expected at least one argument but received {}",
-                    current_types.len()
-                );
-            }
-            if *number != current_types.len() {
-                return plan_err!(
-                    "The signature expected {} arguments but received {}",
-                    number,
-                    current_types.len()
-                );
-            }
+            function_length_check(function_name, current_types.len(), *number)?;
 
-            let mut valid_type = current_types.first().unwrap().clone();
+            // Find common numeric type among given types except string
+            let mut valid_type = current_types.first().unwrap().to_owned();
             for t in current_types.iter().skip(1) {
+                let logical_data_type: NativeType = t.into();
+                if logical_data_type == NativeType::Null {
+                    continue;
+                }
+
+                if !logical_data_type.is_numeric() {
+                    return plan_err!(
+                        "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
+                    );
+                }
+
                 if let Some(coerced_type) = binary_numeric_coercion(&valid_type, t) {
                     valid_type = coerced_type;
                 } else {
                     return plan_err!(
-                        "{} and {} are not coercible to a common numeric type",
-                        valid_type,
-                        t
+                        "For function '{function_name}' {valid_type} and {t} are not coercible to a common numeric type"
                     );
                 }
             }
 
-            vec![vec![valid_type; *number]]
-        }
-        TypeSignature::Coercible(target_types) => {
-            if target_types.is_empty() {
+            let logical_data_type: NativeType = valid_type.clone().into();
+            // Fallback to default type if we don't know which type to coerced to
+            // f64 is chosen since most of the math functions utilize Signature::numeric,
+            // and their default type is double precision
+            if logical_data_type == NativeType::Null {
+                valid_type = DataType::Float64;
+            } else if !logical_data_type.is_numeric() {
                 return plan_err!(
-                    "The signature expected at least one argument but received {}",
-                    current_types.len()
-                );
-            }
-            if target_types.len() != current_types.len() {
-                return plan_err!(
-                    "The signature expected {} arguments but received {}",
-                    target_types.len(),
-                    current_types.len()
+                    "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
                 );
             }
 
-            for (data_type, target_type) in current_types.iter().zip(target_types.iter())
-            {
-                if !can_cast_types(data_type, target_type) {
-                    return plan_err!("{data_type} is not coercible to {target_type}");
+            vec![vec![valid_type; *number]]
+        }
+        TypeSignature::Comparable(num) => {
+            function_length_check(function_name, current_types.len(), *num)?;
+            let mut target_type = current_types[0].to_owned();
+            for data_type in current_types.iter().skip(1) {
+                if let Some(dt) = comparison_coercion_numeric(&target_type, data_type) {
+                    target_type = dt;
+                } else {
+                    return plan_err!("For function '{function_name}' {target_type} and {data_type} is not comparable");
+                }
+            }
+            // Convert null to String type.
+            if target_type.is_null() {
+                vec![vec![DataType::Utf8View; *num]]
+            } else {
+                vec![vec![target_type; *num]]
+            }
+        }
+        TypeSignature::Coercible(param_types) => {
+            function_length_check(function_name, current_types.len(), param_types.len())?;
+
+            let mut new_types = Vec::with_capacity(current_types.len());
+            for (current_type, param) in current_types.iter().zip(param_types.iter()) {
+                let current_native_type: NativeType = current_type.into();
+
+                if param.desired_type().matches_native_type(&current_native_type) {
+                    let casted_type = param.desired_type().default_casted_type(
+                        &current_native_type,
+                        current_type,
+                    )?;
+
+                    new_types.push(casted_type);
+                } else if param
+                .allowed_source_types()
+                .iter()
+                .any(|t| t.matches_native_type(&current_native_type)) {
+                    // If the condition is met which means `implicit coercion`` is provided so we can safely unwrap
+                    let default_casted_type = param.default_casted_type().unwrap();
+                    let casted_type = default_casted_type.default_cast_for(current_type)?;
+                    new_types.push(casted_type);
+                } else {
+                    return internal_err!(
+                        "Expect {} but received {}, DataType: {}",
+                        param.desired_type(),
+                        current_native_type,
+                        current_type
+                    );
                 }
             }
 
-            vec![target_types.to_owned()]
+            vec![new_types]
         }
-        TypeSignature::Uniform(number, valid_types) => valid_types
-            .iter()
-            .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
-            .collect(),
+        TypeSignature::Uniform(number, valid_types) => {
+            if *number == 0 {
+                return plan_err!("The function '{function_name}' expected at least one argument");
+            }
+
+            valid_types
+                .iter()
+                .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
+                .collect()
+        }
         TypeSignature::UserDefined => {
             return internal_err!(
-            "User-defined signature should be handled by function-specific coerce_types."
-        )
+                "Function '{function_name}' user-defined signature should be handled by function-specific coerce_types"
+            )
         }
         TypeSignature::VariadicAny => {
+            if current_types.is_empty() {
+                return plan_err!(
+                    "Function '{function_name}' expected at least one argument but received 0"
+                );
+            }
             vec![current_types.to_vec()]
         }
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
-        TypeSignature::ArraySignature(ref function_signature) => match function_signature
-        {
-            ArrayFunctionSignature::ArrayAndElement => {
-                array_append_or_prepend_valid_types(current_types, true)?
+        TypeSignature::ArraySignature(ref function_signature) => match function_signature {
+            ArrayFunctionSignature::Array { arguments, array_coercion, } => {
+                array_valid_types(function_name, current_types, arguments, array_coercion.as_ref())?
             }
-            ArrayFunctionSignature::ElementAndArray => {
-                array_append_or_prepend_valid_types(current_types, false)?
-            }
-            ArrayFunctionSignature::ArrayAndIndex => {
-                if current_types.len() != 2 {
-                    return Ok(vec![vec![]]);
-                }
-                array(&current_types[0]).map_or_else(
-                    || vec![vec![]],
-                    |array_type| vec![vec![array_type, DataType::Int64]],
-                )
-            }
-            ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
-                array_element_and_optional_index(current_types)?
-            }
-            ArrayFunctionSignature::Array => {
+            ArrayFunctionSignature::RecursiveArray => {
                 if current_types.len() != 1 {
                     return Ok(vec![vec![]]);
                 }
-
-                array(&current_types[0])
+                recursive_array(&current_types[0])
                     .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
             }
             ArrayFunctionSignature::MapArray => {
@@ -567,11 +656,25 @@ fn get_valid_types(
                 }
             }
         },
+        TypeSignature::Nullary => {
+            if !current_types.is_empty() {
+                return plan_err!(
+                    "The function '{function_name}' expected zero argument but received {}",
+                    current_types.len()
+                );
+            }
+            vec![vec![]]
+        }
         TypeSignature::Any(number) => {
+            if current_types.is_empty() {
+                return plan_err!(
+                    "The function '{function_name}' expected at least one argument but received 0"
+                );
+            }
+
             if current_types.len() != *number {
                 return plan_err!(
-                    "The function expected {} arguments but received {}",
-                    number,
+                    "The function '{function_name}' expected {number} arguments but received {}",
                     current_types.len()
                 );
             }
@@ -579,7 +682,7 @@ fn get_valid_types(
         }
         TypeSignature::OneOf(types) => types
             .iter()
-            .filter_map(|t| get_valid_types(t, current_types).ok())
+            .filter_map(|t| get_valid_types(function_name, t, current_types).ok())
             .flatten()
             .collect::<Vec<_>>(),
     };
@@ -668,7 +771,7 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
 ///
 /// Expect uni-directional coercion, for example, i32 is coerced to i64, but i64 is not coerced to i32.
 ///
-/// Unlike [comparison_coercion], the coerced type is usually `wider` for lossless conversion.
+/// Unlike [crate::binary::comparison_coercion], the coerced type is usually `wider` for lossless conversion.
 fn coerced_from<'a>(
     type_into: &'a DataType,
     type_from: &'a DataType,
@@ -735,7 +838,7 @@ fn coerced_from<'a>(
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
         (List(_) | LargeList(_), _)
-            if datafusion_common::utils::base_type(type_from).eq(&Null)
+            if base_type(type_from).is_null()
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {
             Some(type_into.clone())
@@ -774,11 +877,11 @@ fn coerced_from<'a>(
 
 #[cfg(test)]
 mod tests {
-
     use crate::Volatility;
 
     use super::*;
     use arrow::datatypes::Field;
+    use datafusion_common::assert_contains;
 
     #[test]
     fn test_string_conversion() {
@@ -844,23 +947,99 @@ mod tests {
     }
 
     #[test]
+    fn test_get_valid_types_numeric() -> Result<()> {
+        let get_valid_types_flatten =
+            |function_name: &str,
+             signature: &TypeSignature,
+             current_types: &[DataType]| {
+                get_valid_types(function_name, signature, current_types)
+                    .unwrap()
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+            };
+
+        // Trivial case.
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(1),
+            &[DataType::Int32],
+        );
+        assert_eq!(got, [DataType::Int32]);
+
+        // Args are coerced into a common numeric type.
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Int32, DataType::Int64],
+        );
+        assert_eq!(got, [DataType::Int64, DataType::Int64]);
+
+        // Args are coerced into a common numeric type, specifically, int would be coerced to float.
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(3),
+            &[DataType::Int32, DataType::Int64, DataType::Float64],
+        );
+        assert_eq!(
+            got,
+            [DataType::Float64, DataType::Float64, DataType::Float64]
+        );
+
+        // Cannot coerce args to a common numeric type.
+        let got = get_valid_types(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Int32, DataType::Utf8],
+        )
+        .unwrap_err();
+        assert_contains!(
+            got.to_string(),
+            "Function 'test' expects NativeType::Numeric but received NativeType::String"
+        );
+
+        // Fallbacks to float64 if the arg is of type null.
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(1),
+            &[DataType::Null],
+        );
+        assert_eq!(got, [DataType::Float64]);
+
+        // Rejects non-numeric arg.
+        let got = get_valid_types(
+            "test",
+            &TypeSignature::Numeric(1),
+            &[DataType::Timestamp(TimeUnit::Second, None)],
+        )
+        .unwrap_err();
+        assert_contains!(
+            got.to_string(),
+            "Function 'test' expects NativeType::Numeric but received NativeType::Timestamp(Second, None)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_get_valid_types_one_of() -> Result<()> {
         let signature =
             TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]);
 
         let invalid_types = get_valid_types(
+            "test",
             &signature,
             &[DataType::Int32, DataType::Int32, DataType::Int32],
         )?;
         assert_eq!(invalid_types.len(), 0);
 
         let args = vec![DataType::Int32, DataType::Int32];
-        let valid_types = get_valid_types(&signature, &args)?;
+        let valid_types = get_valid_types("test", &signature, &args)?;
         assert_eq!(valid_types.len(), 1);
         assert_eq!(valid_types[0], args);
 
         let args = vec![DataType::Int32];
-        let valid_types = get_valid_types(&signature, &args)?;
+        let valid_types = get_valid_types("test", &signature, &args)?;
         assert_eq!(valid_types.len(), 1);
         assert_eq!(valid_types[0], args);
 
@@ -868,8 +1047,32 @@ mod tests {
     }
 
     #[test]
+    fn test_get_valid_types_length_check() -> Result<()> {
+        let signature = TypeSignature::Numeric(1);
+
+        let err = get_valid_types("test", &signature, &[]).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Function 'test' expects 1 arguments but received 0"
+        );
+
+        let err = get_valid_types(
+            "test",
+            &signature,
+            &[DataType::Int32, DataType::Int32, DataType::Int32],
+        )
+        .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Function 'test' expects 1 arguments but received 3"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_fixed_list_wildcard_coerce() -> Result<()> {
-        let inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let inner = Arc::new(Field::new_list_field(DataType::Int32, false));
         let current_types = vec![
             DataType::FixedSizeList(Arc::clone(&inner), 2), // able to coerce for any size
         ];
@@ -882,7 +1085,7 @@ mod tests {
             Volatility::Stable,
         );
 
-        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        let coerced_data_types = data_types("test", &current_types, &signature)?;
         assert_eq!(coerced_data_types, current_types);
 
         // make sure it can't coerce to a different size
@@ -890,7 +1093,7 @@ mod tests {
             vec![DataType::FixedSizeList(Arc::clone(&inner), 3)],
             Volatility::Stable,
         );
-        let coerced_data_types = data_types(&current_types, &signature);
+        let coerced_data_types = data_types("test", &current_types, &signature);
         assert!(coerced_data_types.is_err());
 
         // make sure it works with the same type.
@@ -898,7 +1101,7 @@ mod tests {
             vec![DataType::FixedSizeList(Arc::clone(&inner), 2)],
             Volatility::Stable,
         );
-        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        let coerced_data_types = data_types("test", &current_types, &signature).unwrap();
         assert_eq!(coerced_data_types, current_types);
 
         Ok(())
@@ -907,10 +1110,9 @@ mod tests {
     #[test]
     fn test_nested_wildcard_fixed_size_lists() -> Result<()> {
         let type_into = DataType::FixedSizeList(
-            Arc::new(Field::new(
-                "item",
+            Arc::new(Field::new_list_field(
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Int32, false)),
+                    Arc::new(Field::new_list_field(DataType::Int32, false)),
                     FIXED_SIZE_LIST_WILDCARD,
                 ),
                 false,
@@ -919,10 +1121,9 @@ mod tests {
         );
 
         let type_from = DataType::FixedSizeList(
-            Arc::new(Field::new(
-                "item",
+            Arc::new(Field::new_list_field(
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Int8, false)),
+                    Arc::new(Field::new_list_field(DataType::Int8, false)),
                     4,
                 ),
                 false,
@@ -933,10 +1134,9 @@ mod tests {
         assert_eq!(
             coerced_from(&type_into, &type_from),
             Some(DataType::FixedSizeList(
-                Arc::new(Field::new(
-                    "item",
+                Arc::new(Field::new_list_field(
                     DataType::FixedSizeList(
-                        Arc::new(Field::new("item", DataType::Int32, false)),
+                        Arc::new(Field::new_list_field(DataType::Int32, false)),
                         4,
                     ),
                     false,
@@ -962,5 +1162,156 @@ mod tests {
             coerced_from(&type_into, &type_from),
             Some(type_into.clone())
         );
+    }
+
+    #[test]
+    fn test_get_valid_types_array_and_array() -> Result<()> {
+        let function = "array_and_array";
+        let signature = Signature::arrays(
+            2,
+            Some(ListCoercion::FixedSizedListToList),
+            Volatility::Immutable,
+        );
+
+        let data_types = vec![
+            DataType::new_list(DataType::Int32, true),
+            DataType::new_large_list(DataType::Float64, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Float64, true),
+                DataType::new_large_list(DataType::Float64, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Int64, 3, true),
+            DataType::new_fixed_size_list(DataType::Int32, 5, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Int64, true),
+                DataType::new_list(DataType::Int64, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Null, 3, true),
+            DataType::new_large_list(DataType::Utf8, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Utf8, true),
+                DataType::new_large_list(DataType::Utf8, true),
+            ]]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_valid_types_array_and_element() -> Result<()> {
+        let function = "array_and_element";
+        let signature = Signature::array_and_element(Volatility::Immutable);
+
+        let data_types =
+            vec![DataType::new_list(DataType::Int32, true), DataType::Float64];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Float64, true),
+                DataType::Float64,
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_large_list(DataType::Int32, true),
+            DataType::Null,
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Int32, true),
+                DataType::Int32,
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Null, 3, true),
+            DataType::Utf8,
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Utf8, true),
+                DataType::Utf8,
+            ]]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_valid_types_element_and_array() -> Result<()> {
+        let function = "element_and_array";
+        let signature = Signature::element_and_array(Volatility::Immutable);
+
+        let data_types = vec![
+            DataType::new_large_list(DataType::Null, false),
+            DataType::new_list(DataType::new_list(DataType::Int64, true), true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Int64, true),
+                DataType::new_list(DataType::new_large_list(DataType::Int64, true), true),
+            ]]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_valid_types_fixed_size_arrays() -> Result<()> {
+        let function = "fixed_size_arrays";
+        let signature = Signature::arrays(2, None, Volatility::Immutable);
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Int64, 3, true),
+            DataType::new_fixed_size_list(DataType::Int32, 5, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_fixed_size_list(DataType::Int64, 3, true),
+                DataType::new_fixed_size_list(DataType::Int64, 5, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Int64, 3, true),
+            DataType::new_list(DataType::Int32, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Int64, true),
+                DataType::new_list(DataType::Int64, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Utf8, 3, true),
+            DataType::new_list(DataType::new_list(DataType::Int32, true), true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![]]
+        );
+
+        Ok(())
     }
 }

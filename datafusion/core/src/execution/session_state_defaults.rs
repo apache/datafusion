@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::catalog::{CatalogProvider, TableProviderFactory};
-use crate::catalog_common::listing_schema::ListingSchemaProvider;
-use crate::catalog_common::{MemoryCatalogProvider, MemorySchemaProvider};
 use crate::datasource::file_format::arrow::ArrowFormatFactory;
+#[cfg(feature = "avro")]
 use crate::datasource::file_format::avro::AvroFormatFactory;
 use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::json::JsonFormatFactory;
@@ -29,7 +29,9 @@ use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
 use crate::functions_nested;
-use crate::{functions, functions_aggregate, functions_window};
+use crate::{functions, functions_aggregate, functions_table, functions_window};
+use datafusion_catalog::TableFunction;
+use datafusion_catalog::{MemoryCatalogProvider, MemorySchemaProvider};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -93,6 +95,8 @@ impl SessionStateDefaults {
                 feature = "unicode_expressions"
             ))]
             Arc::new(functions::planner::UserDefinedFunctionPlanner),
+            Arc::new(functions_aggregate::planner::AggregateFunctionPlanner),
+            Arc::new(functions_window::planner::WindowFunctionPlanner),
         ];
 
         expr_planners
@@ -119,6 +123,11 @@ impl SessionStateDefaults {
         functions_window::all_default_window_functions()
     }
 
+    /// returns the list of default [`TableFunction`]s
+    pub fn default_table_functions() -> Vec<Arc<TableFunction>> {
+        functions_table::all_default_table_functions()
+    }
+
     /// returns the list of default [`FileFormatFactory']'s
     pub fn default_file_formats() -> Vec<Arc<dyn FileFormatFactory>> {
         let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![
@@ -127,6 +136,7 @@ impl SessionStateDefaults {
             Arc::new(JsonFormatFactory::new()),
             Arc::new(CsvFormatFactory::new()),
             Arc::new(ArrowFormatFactory::new()),
+            #[cfg(feature = "avro")]
             Arc::new(AvroFormatFactory::new()),
         ];
 
@@ -193,8 +203,13 @@ impl SessionStateDefaults {
             Some(factory) => factory,
             _ => return,
         };
-        let schema =
-            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
+        let schema = ListingSchemaProvider::new(
+            authority,
+            path,
+            Arc::clone(factory),
+            store,
+            format,
+        );
         let _ = default_catalog
             .register_schema("default", Arc::new(schema))
             .expect("Failed to register default schema");

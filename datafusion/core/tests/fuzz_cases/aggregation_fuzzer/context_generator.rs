@@ -22,8 +22,8 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_catalog::TableProvider;
-use datafusion_common::error::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::{error::Result, utils::get_available_parallelism};
 use datafusion_expr::col;
 use rand::{thread_rng, Rng};
 
@@ -43,7 +43,7 @@ use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 ///   - `skip_partial parameters`
 ///   - hint `sorted` or not
 ///   - `spilling` or not (TODO, I think a special `MemoryPool` may be needed
-///      to support this)
+///     to support this)
 ///
 pub struct SessionContextGenerator {
     /// Current testing dataset
@@ -73,7 +73,7 @@ impl SessionContextGenerator {
         ];
 
         let max_batch_size = cmp::max(1, dataset_ref.total_rows_num);
-        let max_target_partitions = num_cpus::get();
+        let max_target_partitions = get_available_parallelism();
 
         Self {
             dataset: dataset_ref,
@@ -253,8 +253,8 @@ impl SkipPartialParams {
 
 #[cfg(test)]
 mod test {
-    use arrow_array::{RecordBatch, StringArray, UInt32Array};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::array::{RecordBatch, StringArray, UInt32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 

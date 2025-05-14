@@ -19,8 +19,9 @@ use std::sync::Arc;
 
 use abi_stable::StableAbi;
 use arrow::{
+    array::{make_array, ArrayRef},
     datatypes::{Schema, SchemaRef},
-    ffi::{FFI_ArrowArray, FFI_ArrowSchema},
+    ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
 };
 use log::error;
 
@@ -35,7 +36,7 @@ impl From<SchemaRef> for WrappedSchema {
         let ffi_schema = match FFI_ArrowSchema::try_from(value.as_ref()) {
             Ok(s) => s,
             Err(e) => {
-                error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {}", e);
+                error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {e}");
                 FFI_ArrowSchema::empty()
             }
         };
@@ -49,7 +50,7 @@ impl From<WrappedSchema> for SchemaRef {
         let schema = match Schema::try_from(&value.0) {
             Ok(s) => s,
             Err(e) => {
-                error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {}", e);
+                error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}");
                 Schema::empty()
             }
         };
@@ -67,4 +68,14 @@ pub struct WrappedArray {
     pub array: FFI_ArrowArray,
 
     pub schema: WrappedSchema,
+}
+
+impl TryFrom<WrappedArray> for ArrayRef {
+    type Error = arrow::error::ArrowError;
+
+    fn try_from(value: WrappedArray) -> Result<Self, Self::Error> {
+        let data = unsafe { from_ffi(value.array, &value.schema.0)? };
+
+        Ok(make_array(data))
+    }
 }

@@ -57,7 +57,7 @@ impl CsvOptionsProto {
                 escape: options.escape.map_or(vec![], |v| vec![v]),
                 double_quote: options.double_quote.map_or(vec![], |v| vec![v as u8]),
                 compression: options.compression as i32,
-                schema_infer_max_rec: options.schema_infer_max_rec as u64,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
                 date_format: options.date_format.clone().unwrap_or_default(),
                 datetime_format: options.datetime_format.clone().unwrap_or_default(),
                 timestamp_format: options.timestamp_format.clone().unwrap_or_default(),
@@ -67,6 +67,7 @@ impl CsvOptionsProto {
                     .unwrap_or_default(),
                 time_format: options.time_format.clone().unwrap_or_default(),
                 null_value: options.null_value.clone().unwrap_or_default(),
+                null_regex: options.null_regex.clone().unwrap_or_default(),
                 comment: options.comment.map_or(vec![], |v| vec![v]),
                 newlines_in_values: options
                     .newlines_in_values
@@ -110,7 +111,7 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 3 => CompressionTypeVariant::ZSTD,
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
-            schema_infer_max_rec: proto.schema_infer_max_rec as usize,
+            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
             date_format: if proto.date_format.is_empty() {
                 None
             } else {
@@ -140,6 +141,11 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 None
             } else {
                 Some(proto.null_value.clone())
+            },
+            null_regex: if proto.null_regex.is_empty() {
+                None
+            } else {
+                Some(proto.null_regex.clone())
             },
             comment: if !proto.comment.is_empty() {
                 Some(proto.comment[0])
@@ -239,7 +245,7 @@ impl JsonOptionsProto {
         if let Some(options) = &factory.options {
             JsonOptionsProto {
                 compression: options.compression as i32,
-                schema_infer_max_rec: options.schema_infer_max_rec as u64,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
             }
         } else {
             JsonOptionsProto::default()
@@ -257,7 +263,7 @@ impl From<&JsonOptionsProto> for JsonOptions {
                 3 => CompressionTypeVariant::ZSTD,
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
-            schema_infer_max_rec: proto.schema_infer_max_rec as usize,
+            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
         }
     }
 }
@@ -356,6 +362,7 @@ impl TableParquetOptionsProto {
         };
 
         let column_specific_options = global_options.column_specific_options;
+        #[allow(deprecated)] // max_statistics_size
         TableParquetOptionsProto {
             global: Some(ParquetOptionsProto {
                 enable_page_index: global_options.global.enable_page_index,
@@ -387,6 +394,9 @@ impl TableParquetOptionsProto {
                 column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
                     parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
                 }),
+                statistics_truncate_length_opt: global_options.global.statistics_truncate_length.map(|length| {
+                    parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length as u64)
+                }),
                 data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
                 encoding_opt: global_options.global.encoding.map(|encoding| {
                     parquet_options::EncodingOpt::Encoding(encoding)
@@ -404,6 +414,10 @@ impl TableParquetOptionsProto {
                 maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream as u64,
                 schema_force_view_types: global_options.global.schema_force_view_types,
                 binary_as_string: global_options.global.binary_as_string,
+                skip_arrow_metadata: global_options.global.skip_arrow_metadata,
+                coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
+                    parquet_options::CoerceInt96Opt::CoerceInt96(compression)
+                }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -448,6 +462,7 @@ impl TableParquetOptionsProto {
 
 impl From<&ParquetOptionsProto> for ParquetOptions {
     fn from(proto: &ParquetOptionsProto) -> Self {
+        #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             enable_page_index: proto.enable_page_index,
             pruning: proto.pruning,
@@ -478,6 +493,9 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             column_index_truncate_length: proto.column_index_truncate_length_opt.as_ref().map(|opt| match opt {
                 parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length) => *length as usize,
             }),
+            statistics_truncate_length: proto.statistics_truncate_length_opt.as_ref().map(|opt| match opt {
+                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length) => *length as usize,
+            }),
             data_page_row_count_limit: proto.data_page_row_count_limit as usize,
             encoding: proto.encoding_opt.as_ref().map(|opt| match opt {
                 parquet_options::EncodingOpt::Encoding(encoding) => encoding.clone(),
@@ -495,12 +513,17 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             maximum_buffered_record_batches_per_stream: proto.maximum_buffered_record_batches_per_stream as usize,
             schema_force_view_types: proto.schema_force_view_types,
             binary_as_string: proto.binary_as_string,
+            skip_arrow_metadata: proto.skip_arrow_metadata,
+            coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
+                parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
+            }),
         }
     }
 }
 
 impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
     fn from(proto: ParquetColumnOptionsProto) -> Self {
+        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
                 |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,

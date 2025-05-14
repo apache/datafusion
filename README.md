@@ -22,7 +22,11 @@
 [![Crates.io][crates-badge]][crates-url]
 [![Apache licensed][license-badge]][license-url]
 [![Build Status][actions-badge]][actions-url]
+![Commit Activity][commit-activity-badge]
+[![Open Issues][open-issues-badge]][open-issues-url]
 [![Discord chat][discord-badge]][discord-url]
+[![Linkedin][linkedin-badge]][linkedin-url]
+![Crates.io MSRV][msrv-badge]
 
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
@@ -30,15 +34,21 @@
 [license-url]: https://github.com/apache/datafusion/blob/main/LICENSE.txt
 [actions-badge]: https://github.com/apache/datafusion/actions/workflows/rust.yml/badge.svg
 [actions-url]: https://github.com/apache/datafusion/actions?query=branch%3Amain
-[discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
+[discord-badge]: https://img.shields.io/badge/Chat-Discord-purple
 [discord-url]: https://discord.com/invite/Qw5gKqHxUM
+[commit-activity-badge]: https://img.shields.io/github/commit-activity/m/apache/datafusion
+[open-issues-badge]: https://img.shields.io/github/issues-raw/apache/datafusion
+[open-issues-url]: https://github.com/apache/datafusion/issues
+[linkedin-badge]: https://img.shields.io/badge/Follow-Linkedin-blue
+[linkedin-url]: https://www.linkedin.com/company/apache-datafusion/
+[msrv-badge]: https://img.shields.io/crates/msrv/datafusion?label=Min%20Rust%20Version
 
 [Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
 [Chat](https://discord.com/channels/885562378132000778/885562378132000781)
 
 <a href="https://datafusion.apache.org/">
-  <img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
+  <img src="https://github.com/apache/datafusion/raw/HEAD/docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
 </a>
 
 DataFusion is an extensible query engine written in [Rust] that
@@ -112,7 +122,8 @@ Default features:
 - `parquet`: support for reading the [Apache Parquet] format
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
-- `unparser` : enables support to reverse LogicalPlans back into SQL
+- `unparser`: enables support to reverse LogicalPlans back into SQL
+- `recursive_protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
 
 Optional features:
 
@@ -124,18 +135,21 @@ Optional features:
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
 
-## Rust Version Compatibility Policy
+## DataFusion API Evolution and Deprecation Guidelines
 
-DataFusion's Minimum Required Stable Rust Version (MSRV) policy is to support stable [4 latest
-Rust versions](https://releases.rs) OR the stable minor Rust version as of 4 months, whichever is lower.
+Public methods in Apache DataFusion evolve over time: while we try to maintain a
+stable API, we also improve the API over time. As a result, we typically
+deprecate methods before removing them, according to the [deprecation guidelines].
 
-For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
+[deprecation guidelines]: https://datafusion.apache.org/library-user-guide/api-health.html
 
-If a hotfix is released for the minimum supported Rust version (MSRV), the MSRV will be the minor version with all hotfixes, even if it surpasses the four-month window.
+## Dependencies and `Cargo.lock`
 
-We enforce this policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
+Following the [guidance] on committing `Cargo.lock` files, this project commits
+its `Cargo.lock` file.
 
-## DataFusion API evolution policy
+CI uses the committed `Cargo.lock` file, and dependencies are updated regularly
+using [Dependabot] PRs.
 
-Public methods in Apache DataFusion are subject to evolve as part of the API lifecycle.
-Deprecated methods will be phased out in accordance with the [policy](https://datafusion.apache.org/library-user-guide/api-health.html), ensuring the API is stable and healthy.
+[guidance]: https://blog.rust-lang.org/2023/08/29/committing-lockfiles.html
+[dependabot]: https://docs.github.com/en/code-security/dependabot/working-with-dependabot

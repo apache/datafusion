@@ -21,18 +21,17 @@
 use std::sync::Arc;
 
 use ahash::RandomState;
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use arrow_buffer::IntervalDayTime;
-use arrow_buffer::IntervalMonthDayNano;
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
     as_binary_view_array, as_boolean_array, as_fixed_size_list_array,
     as_generic_binary_array, as_large_list_array, as_list_array, as_map_array,
-    as_primitive_array, as_string_array, as_string_view_array, as_struct_array,
+    as_string_array, as_string_view_array, as_struct_array,
 };
 use crate::error::Result;
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -63,7 +62,7 @@ pub trait HashValue {
     fn hash_one(&self, state: &RandomState) -> u64;
 }
 
-impl<'a, T: HashValue + ?Sized> HashValue for &'a T {
+impl<T: HashValue + ?Sized> HashValue for &T {
     fn hash_one(&self, state: &RandomState) -> u64 {
         T::hash_one(self, state)
     }
@@ -321,8 +320,7 @@ fn hash_fixed_list_array(
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let values = Arc::clone(array.values());
-    let value_len = array.value_length();
-    let offset_size = value_len as usize / array.len();
+    let value_length = array.value_length() as usize;
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
     create_hashes(&[values], random_state, &mut values_hashes)?;
@@ -330,7 +328,8 @@ fn hash_fixed_list_array(
         for i in 0..array.len() {
             if nulls.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[i * offset_size..(i + 1) * offset_size]
+                for values_hash in
+                    &values_hashes[i * value_length..(i + 1) * value_length]
                 {
                     *hash = combine_hashes(*hash, *values_hash);
                 }
@@ -339,7 +338,7 @@ fn hash_fixed_list_array(
     } else {
         for i in 0..array.len() {
             let hash = &mut hashes_buffer[i];
-            for values_hash in &values_hashes[i * offset_size..(i + 1) * offset_size] {
+            for values_hash in &values_hashes[i * value_length..(i + 1) * value_length] {
                 *hash = combine_hashes(*hash, *values_hash);
             }
         }
@@ -391,14 +390,6 @@ pub fn create_hashes<'a>(
             DataType::FixedSizeBinary(_) => {
                 let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
                 hash_array(array, random_state, hashes_buffer, rehash)
-            }
-            DataType::Decimal128(_, _) => {
-                let array = as_primitive_array::<Decimal128Type>(array)?;
-                hash_array_primitive(array, random_state, hashes_buffer, rehash)
-            }
-            DataType::Decimal256(_, _) => {
-                let array = as_primitive_array::<Decimal256Type>(array)?;
-                hash_array_primitive(array, random_state, hashes_buffer, rehash)
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,
@@ -459,6 +450,16 @@ mod tests {
         let hashes_buff = &mut vec![0; array_ref.len()];
         let hashes = create_hashes(&[array_ref], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn create_hashes_for_empty_fixed_size_lit() -> Result<()> {
+        let empty_array = FixedSizeListBuilder::new(StringBuilder::new(), 1).finish();
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let hashes_buff = &mut vec![0; 0];
+        let hashes = create_hashes(&[Arc::new(empty_array)], &random_state, hashes_buff)?;
+        assert_eq!(hashes, &Vec::<u64>::new());
         Ok(())
     }
 
@@ -698,7 +699,7 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_struct_arrays() {
-        use arrow_buffer::Buffer;
+        use arrow::buffer::Buffer;
 
         let boolarr = Arc::new(BooleanArray::from(vec![
             false, false, true, true, true, true,

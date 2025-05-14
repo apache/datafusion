@@ -16,21 +16,28 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::DataType::{Boolean, Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
+use datafusion_macros::user_doc;
 
 use crate::utils::make_scalar_function;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns true if a given number is +0.0 or -0.0 otherwise returns false.",
+    syntax_example = "iszero(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct IsZeroFunc {
     signature: Signature,
@@ -71,29 +78,13 @@ impl ScalarUDFImpl for IsZeroFunc {
         Ok(Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(iszero, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(iszero, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_iszero_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_iszero_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns true if a given number is +0.0 or -0.0 otherwise returns false.",
-            )
-            .with_syntax_example("iszero(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
-            .unwrap()
-    })
 }
 
 /// Iszero SQL function

@@ -20,27 +20,31 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
+use datafusion_common::{
+    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
+};
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
-use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
+use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
 mod join;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Create a `LogicalPlan` that scans the named relation
     fn create_relation(
         &self,
         relation: TableFactor,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        let relation_span = relation.span();
         let (plan, alias) = match relation {
             TableFactor::Table {
                 name, alias, args, ..
             } => {
                 if let Some(func_args) = args {
-                    let tbl_func_name = name.0.first().unwrap().value.to_string();
+                    let tbl_func_name =
+                        name.0.first().unwrap().as_ident().unwrap().to_string();
                     let args = func_args
                         .args
                         .into_iter()
@@ -80,11 +84,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             self.context_provider.get_table_source(table_ref.clone()),
                         ) {
                             (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                            (_, Ok(provider)) => {
-                                LogicalPlanBuilder::scan(table_ref, provider, None)?
-                                    .build()
+                            (_, Ok(provider)) => LogicalPlanBuilder::scan(
+                                table_ref.clone(),
+                                provider,
+                                None,
+                            )?
+                            .build(),
+                            (None, Err(e)) => {
+                                let e = e.with_diagnostic(Diagnostic::new_error(
+                                    format!("table '{table_ref}' not found"),
+                                    Span::try_from_sqlparser_span(relation_span),
+                                ));
+                                Err(e)
                             }
-                            (None, Err(e)) => Err(e),
                         }?,
                         alias,
                     )
@@ -188,12 +200,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context.set_outer_query_schema(old_query_schema);
         planner_context.set_outer_from_schema(Some(old_from_schema));
 
+        // We can omit the subquery wrapper if there are no columns
+        // referencing the outer scope.
+        if outer_ref_columns.is_empty() {
+            return Ok(plan);
+        }
+
         match plan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 subquery_alias(
                     LogicalPlan::Subquery(Subquery {
                         subquery: input,
                         outer_ref_columns,
+                        spans: Spans::new(),
                     }),
                     alias,
                 )
@@ -201,6 +220,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan => Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(plan),
                 outer_ref_columns,
+                spans: Spans::new(),
             })),
         }
     }

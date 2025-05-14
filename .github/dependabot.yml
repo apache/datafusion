@@ -21,31 +21,32 @@ updates:
     directory: "/"
     schedule:
       interval: daily
-    open-pull-requests-limit: 10
     target-branch: main
     labels: [auto-dependencies]
     ignore:
-      # arrow is bumped manually
+      # major version bumps of arrow* and parquet are handled manually
       - dependency-name: "arrow*"
         update-types: ["version-update:semver-major"]
-  - package-ecosystem: cargo
-    directory: "datafusion-cli/"
-    schedule:
-      interval: daily
-    open-pull-requests-limit: 10
-    target-branch: main
-    labels: [auto-dependencies]
-    ignore:
-      # arrow is bumped manually
-      - dependency-name: "arrow*"
+      - dependency-name: "parquet"
         update-types: ["version-update:semver-major"]
-      # datafusion is bumped manually
-      - dependency-name: "datafusion*"
-        update-types: ["version-update:semver-major"]
+    groups:
+      # minor and patch bumps of arrow* and parquet are grouped
+      arrow-parquet:
+        applies-to: version-updates
+        patterns:
+          - "arrow*"
+          - "parquet"
+        update-types:
+          - "minor"
+          - "patch"
+      proto:
+        applies-to: version-updates
+        patterns:
+          - "prost*"
+          - "pbjson*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
     labels: [auto-dependencies]
-

@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Tests for Docs that runs on PRs
 name: Docs
 
 concurrency:
@@ -33,21 +34,30 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Run doc tests
-  linux-test-doc:
-    name: cargo doctest (amd64)
+  
+  # Test doc build
+  linux-test-doc-build:
+    name: Test doc build
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
+          fetch-depth: 1
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          rust-version: stable
-      - name: Run doctests
-        run: cargo test --doc --features avro,json
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code
+          python-version: "3.12"
+      - name: Install doc dependencies
+        run: |
+          set -x
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install -r docs/requirements.txt
+      - name: Build docs html and check for warnings
+        run: |
+          set -x
+          source venv/bin/activate
+          cd docs
+          ./build.sh # fails on errors
+

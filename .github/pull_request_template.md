@@ -4,7 +4,7 @@
 We generally require a GitHub issue to be filed for all bug fixes and enhancements and this helps us generate change logs for our releases. You can link an issue to this PR using the GitHub syntax. For example `Closes #123` indicates that this PR will close issue #123.
 -->
 
-Closes #.
+- Closes #.
 
 ## Rationale for this change
 

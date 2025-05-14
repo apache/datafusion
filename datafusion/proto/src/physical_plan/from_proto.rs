@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
+use arrow::datatypes::Field;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
@@ -32,13 +33,15 @@ use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
+};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -65,7 +68,7 @@ impl From<&protobuf::PhysicalColumn> for Column {
 /// * `proto` - Input proto with physical sort expression node
 /// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
-///                    when performing type coercion.
+///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_expr(
     proto: &protobuf::PhysicalSortExprNode,
@@ -92,7 +95,7 @@ pub fn parse_physical_sort_expr(
 /// * `proto` - Input proto with vector of physical sort expression node
 /// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
-///                    when performing type coercion.
+///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_exprs(
     proto: &[protobuf::PhysicalSortExprNode],
@@ -116,7 +119,7 @@ pub fn parse_physical_sort_exprs(
 /// * `name` - Name of the window expression.
 /// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
-///                    when performing type coercion.
+///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_window_expr(
     proto: &protobuf::PhysicalWindowExprNode,
@@ -146,19 +149,16 @@ pub fn parse_physical_window_expr(
 
     let fun = if let Some(window_func) = proto.window_function.as_ref() {
         match window_func {
-            protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
-                let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
-                    proto_error(format!(
-                        "Received an unknown window builtin function: {n}"
-                    ))
-                })?;
-
-                WindowFunctionDefinition::BuiltInWindowFunction(f.into())
-            }
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(udaf_name) => {
                 WindowFunctionDefinition::AggregateUDF(match &proto.fun_definition {
                     Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
-                    None => registry.udaf(udaf_name)?
+                    None => registry.udaf(udaf_name).or_else(|_| codec.try_decode_udaf(udaf_name, &[]))?,
+                })
+            }
+            protobuf::physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(udwf_name) => {
+                WindowFunctionDefinition::WindowUDF(match &proto.fun_definition {
+                    Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
+                    None => registry.udwf(udwf_name).or_else(|_| codec.try_decode_udwf(udwf_name, &[]))?
                 })
             }
         }
@@ -204,7 +204,7 @@ where
 /// * `proto` - Input proto with physical expression node
 /// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
-///                    when performing type coercion.
+///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,
@@ -222,6 +222,7 @@ pub fn parse_physical_expr(
             let pcol: Column = c.into();
             Arc::new(pcol)
         }
+        ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(binary_expr) => Arc::new(BinaryExpr::new(
             parse_required_physical_expr(
@@ -354,18 +355,23 @@ pub fn parse_physical_expr(
         ExprType::ScalarUdf(e) => {
             let udf = match &e.fun_definition {
                 Some(buf) => codec.try_decode_udf(&e.name, buf)?,
-                None => registry.udf(e.name.as_str())?,
+                None => registry
+                    .udf(e.name.as_str())
+                    .or_else(|_| codec.try_decode_udf(&e.name, &[]))?,
             };
             let scalar_fun_def = Arc::clone(&udf);
 
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
 
-            Arc::new(ScalarFunctionExpr::new(
-                e.name.as_str(),
-                scalar_fun_def,
-                args,
-                convert_required!(e.return_type)?,
-            ))
+            Arc::new(
+                ScalarFunctionExpr::new(
+                    e.name.as_str(),
+                    scalar_fun_def,
+                    args,
+                    Field::new("f", convert_required!(e.return_type)?, true),
+                )
+                .with_nullable(e.nullable),
+            )
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
             like_expr.negated,
@@ -468,25 +474,29 @@ pub fn parse_protobuf_partitioning(
     }
 }
 
+pub fn parse_protobuf_file_scan_schema(
+    proto: &protobuf::FileScanExecConf,
+) -> Result<Arc<Schema>> {
+    Ok(Arc::new(convert_required!(proto.schema)?))
+}
+
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
     codec: &dyn PhysicalExtensionCodec,
+    file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
-    let schema: Arc<Schema> = Arc::new(convert_required!(proto.schema)?);
+    let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
     let projection = proto
         .projection
         .iter()
         .map(|i| *i as usize)
         .collect::<Vec<_>>();
-    let projection = if projection.is_empty() {
-        None
-    } else {
-        Some(projection)
-    };
+
+    let constraints = convert_required!(proto.constraints)?;
     let statistics = convert_required!(proto.statistics)?;
 
-    let file_groups: Vec<Vec<PartitionedFile>> = proto
+    let file_groups = proto
         .file_groups
         .iter()
         .map(|f| f.try_into())
@@ -527,16 +537,17 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.push(sort_expr);
     }
 
-    Ok(FileScanConfig {
-        object_store_url,
-        file_schema,
-        file_groups,
-        statistics,
-        projection,
-        limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
-        table_partition_cols,
-        output_ordering,
-    })
+    let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
+        .with_file_groups(file_groups)
+        .with_constraints(constraints)
+        .with_statistics(statistics)
+        .with_projection(Some(projection))
+        .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
+        .with_table_partition_cols(table_partition_cols)
+        .with_output_ordering(output_ordering)
+        .with_batch_size(proto.batch_size.map(|s| s as usize))
+        .build();
+    Ok(config)
 }
 
 impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
@@ -547,7 +558,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
             object_meta: ObjectMeta {
                 location: Path::from(val.path.as_str()),
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
-                size: val.size as usize,
+                size: val.size,
                 e_tag: None,
                 version: None,
             },
@@ -557,8 +568,13 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: val.range.as_ref().map(|v| v.try_into()).transpose()?,
-            statistics: val.statistics.as_ref().map(|v| v.try_into()).transpose()?,
+            statistics: val
+                .statistics
+                .as_ref()
+                .map(|v| v.try_into().map(Arc::new))
+                .transpose()?,
             extensions: None,
+            metadata_size_hint: None,
         })
     }
 }
@@ -574,14 +590,16 @@ impl TryFrom<&protobuf::FileRange> for FileRange {
     }
 }
 
-impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
+impl TryFrom<&protobuf::FileGroup> for FileGroup {
     type Error = DataFusionError;
 
     fn try_from(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
-        val.files
+        let files = val
+            .files
             .iter()
             .map(|f| f.try_into())
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(FileGroup::new(files))
     }
 }
 
@@ -623,11 +641,12 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
     type Error = DataFusionError;
 
     fn try_from(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
-        let file_groups = conf
-            .file_groups
-            .iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>>>()?;
+        let file_group = FileGroup::new(
+            conf.file_groups
+                .iter()
+                .map(|f| f.try_into())
+                .collect::<Result<Vec<_>>>()?,
+        );
         let table_paths = conf
             .table_paths
             .iter()
@@ -647,13 +666,15 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             protobuf::InsertOp::Replace => InsertOp::Replace,
         };
         Ok(Self {
+            original_url: String::default(),
             object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
-            file_groups,
+            file_group,
             table_paths,
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
             insert_op,
             keep_partition_by_columns: conf.keep_partition_by_columns,
+            file_extension: conf.file_extension.clone(),
         })
     }
 }

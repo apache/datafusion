@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::{LexOrderingRef, PhysicalExpr};
+use crate::{LexOrdering, PhysicalExpr};
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
@@ -109,7 +109,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
 
     /// Expressions that's from the window function's order by clause, empty if absent
-    fn order_by(&self) -> LexOrderingRef;
+    fn order_by(&self) -> &LexOrdering;
 
     /// Get order by columns, empty if absent
     fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
@@ -344,7 +344,7 @@ pub(crate) fn is_end_bound_safe(
     window_frame_ctx: &WindowFrameContext,
     order_bys: &[ArrayRef],
     most_recent_order_bys: Option<&[ArrayRef]>,
-    sort_exprs: LexOrderingRef,
+    sort_exprs: &LexOrdering,
     idx: usize,
 ) -> Result<bool> {
     if sort_exprs.is_empty() {
@@ -530,28 +530,6 @@ pub enum WindowFn {
     Aggregate(Box<dyn Accumulator>),
 }
 
-/// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
-#[derive(Debug, Copy, Clone)]
-pub enum NthValueKind {
-    First,
-    Last,
-    Nth(i64),
-}
-
-#[derive(Debug, Clone)]
-pub struct NthValueState {
-    // In certain cases, we can finalize the result early. Consider this usage:
-    // ```
-    //  FIRST_VALUE(increasing_col) OVER window AS my_first_value
-    //  WINDOW (ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) AS window
-    // ```
-    // The result will always be the first entry in the table. We can store such
-    // early-finalizing results and then just reuse them as necessary. This opens
-    // opportunities to prune our datasets.
-    pub finalized_result: Option<ScalarValue>,
-    pub kind: NthValueKind,
-}
-
 /// Key for IndexMap for each unique partition
 ///
 /// For instance, if window frame is `OVER(PARTITION BY a,b)`,
@@ -574,8 +552,8 @@ mod tests {
 
     use crate::window::window_expr::is_row_ahead;
 
-    use arrow_array::{ArrayRef, Float64Array};
-    use arrow_schema::SortOptions;
+    use arrow::array::{ArrayRef, Float64Array};
+    use arrow::compute::SortOptions;
     use datafusion_common::Result;
 
     #[test]

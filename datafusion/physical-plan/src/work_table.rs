@@ -20,12 +20,13 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use super::{
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
+use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
-use crate::memory::MemoryStream;
-use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties};
+use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -120,6 +121,16 @@ impl WorkTableExec {
         }
     }
 
+    /// Ref to name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Arc clone of ref to schema
+    pub fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
     pub(super) fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
         Self {
             name: self.name.clone(),
@@ -132,12 +143,11 @@ impl WorkTableExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -151,6 +161,9 @@ impl DisplayAs for WorkTableExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "WorkTableExec: name={}", self.name)
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "name={}", self.name)
             }
         }
     }
@@ -214,12 +227,16 @@ impl ExecutionPlan for WorkTableExec {
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
+
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{ArrayRef, Int32Array};
+    use arrow::array::{ArrayRef, Int32Array};
     use datafusion_execution::memory_pool::{MemoryConsumer, UnboundedMemoryPool};
 
     #[test]

@@ -21,7 +21,9 @@ use crate::expr::Alias;
 use crate::expr_rewriter::normalize_col;
 use crate::{expr::Sort, Cast, Expr, LogicalPlan, TryCast};
 
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
@@ -98,14 +100,21 @@ fn rewrite_in_terms_of_projection(
         // for a column with the same "MIN(C2)", so translate there
         let name = normalized_expr.schema_name().to_string();
 
-        let search_col = Expr::Column(Column {
-            relation: None,
-            name,
-        });
+        let search_col = Expr::Column(Column::new_unqualified(name));
 
         // look for the column named the same as this expr
-        if let Some(found) = proj_exprs.iter().find(|a| expr_match(&search_col, a)) {
-            let found = found.clone();
+        let mut found = None;
+        for proj_expr in &proj_exprs {
+            proj_expr.apply(|e| {
+                if expr_match(&search_col, e) {
+                    found = Some(e.clone());
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+
+        if let Some(found) = found {
             return Ok(Transformed::yes(match normalized_expr {
                 Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
                     expr: Box::new(found),

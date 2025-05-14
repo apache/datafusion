@@ -40,6 +40,13 @@ pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
 /// `RecordBatch` returned by the stream should have the same schema as returned
 /// by [`schema`](`RecordBatchStream::schema`).
 ///
+/// # See Also
+///
+/// * [`RecordBatchStreamAdapter`] to convert an existing [`Stream`]
+///   to [`SendableRecordBatchStream`]
+///
+/// [`RecordBatchStreamAdapter`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/stream/struct.RecordBatchStreamAdapter.html
+///
 /// # Error Handling
 ///
 /// Once a stream returns an error, it should not be polled again (the caller

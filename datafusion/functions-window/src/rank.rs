@@ -22,7 +22,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::iter;
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use crate::define_udwf_and_expr;
 use datafusion_common::arrow::array::ArrayRef;
@@ -74,7 +74,7 @@ impl Rank {
     pub fn new(name: String, rank_type: RankType) -> Self {
         Self {
             name,
-            signature: Signature::any(0, Volatility::Immutable),
+            signature: Signature::nullary(Volatility::Immutable),
             rank_type,
         }
     }
@@ -102,54 +102,40 @@ pub enum RankType {
     Percent,
 }
 
-static RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_RANKING,
+            "Returns the rank of the current row within its partition, allowing \
+            gaps between ranks. This function provides a ranking similar to `row_number`, but \
+            skips ranks for identical values.",
+
+        "rank()")
+        .build()
+});
 
 fn get_rank_doc() -> &'static Documentation {
-    RANK_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Returns the rank of the current row within its partition, allowing \
-                gaps between ranks. This function provides a ranking similar to `row_number`, but \
-                skips ranks for identical values.",
-            )
-            .with_syntax_example("rank()")
-            .build()
-            .unwrap()
-    })
+    &RANK_DOCUMENTATION
 }
 
-static DENSE_RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static DENSE_RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(DOC_SECTION_RANKING, "Returns the rank of the current row without gaps. This function ranks \
+            rows in a dense manner, meaning consecutive ranks are assigned even for identical \
+            values.", "dense_rank()")
+        .build()
+});
 
 fn get_dense_rank_doc() -> &'static Documentation {
-    DENSE_RANK_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Returns the rank of the current row without gaps. This function ranks \
-                rows in a dense manner, meaning consecutive ranks are assigned even for identical \
-                values.",
-            )
-            .with_syntax_example("dense_rank()")
-            .build()
-            .unwrap()
-    })
+    &DENSE_RANK_DOCUMENTATION
 }
 
-static PERCENT_RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static PERCENT_RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(DOC_SECTION_RANKING, "Returns the percentage rank of the current row within its partition. \
+            The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.", "percent_rank()")
+        .build()
+});
 
 fn get_percent_rank_doc() -> &'static Documentation {
-    PERCENT_RANK_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Returns the percentage rank of the current row within its partition. \
-                The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.",
-            )
-            .with_syntax_example("percent_rank()")
-            .build()
-            .unwrap()
-    })
+    &PERCENT_RANK_DOCUMENTATION
 }
 
 impl WindowUDFImpl for Rank {
@@ -275,7 +261,7 @@ impl PartitionEvaluator for RankEvaluator {
                     .iter()
                     .scan(1_u64, |acc, range| {
                         let len = range.end - range.start;
-                        let result = iter::repeat(*acc).take(len);
+                        let result = iter::repeat_n(*acc, len);
                         *acc += len as u64;
                         Some(result)
                     })
@@ -288,7 +274,7 @@ impl PartitionEvaluator for RankEvaluator {
                     .zip(1u64..)
                     .flat_map(|(range, rank)| {
                         let len = range.end - range.start;
-                        iter::repeat(rank).take(len)
+                        iter::repeat_n(rank, len)
                     }),
             )),
 
@@ -301,7 +287,7 @@ impl PartitionEvaluator for RankEvaluator {
                         .scan(0_u64, |acc, range| {
                             let len = range.end - range.start;
                             let value = (*acc as f64) / (denominator - 1.0).max(1.0);
-                            let result = iter::repeat(value).take(len);
+                            let result = iter::repeat_n(value, len);
                             *acc += len as u64;
                             Some(result)
                         })

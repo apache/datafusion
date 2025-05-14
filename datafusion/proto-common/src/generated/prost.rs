@@ -106,9 +106,7 @@ pub struct Field {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
-    #[prost(int64, tag = "6")]
-    pub dict_id: i64,
-    #[prost(bool, tag = "7")]
+    #[prost(bool, tag = "6")]
     pub dict_ordered: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -572,9 +570,9 @@ pub struct CsvOptions {
     /// Compression type
     #[prost(enumeration = "CompressionTypeVariant", tag = "5")]
     pub compression: i32,
-    /// Max records for schema inference
-    #[prost(uint64, tag = "6")]
-    pub schema_infer_max_rec: u64,
+    /// Optional max records for schema inference
+    #[prost(uint64, optional, tag = "6")]
+    pub schema_infer_max_rec: ::core::option::Option<u64>,
     /// Optional date format
     #[prost(string, tag = "7")]
     pub date_format: ::prost::alloc::string::String,
@@ -593,17 +591,20 @@ pub struct CsvOptions {
     /// Optional representation of null value
     #[prost(string, tag = "12")]
     pub null_value: ::prost::alloc::string::String,
+    /// Optional representation of null loading regex
+    #[prost(string, tag = "13")]
+    pub null_regex: ::prost::alloc::string::String,
     /// Optional comment character as a byte
-    #[prost(bytes = "vec", tag = "13")]
+    #[prost(bytes = "vec", tag = "14")]
     pub comment: ::prost::alloc::vec::Vec<u8>,
     /// Indicates if quotes are doubled
-    #[prost(bytes = "vec", tag = "14")]
+    #[prost(bytes = "vec", tag = "15")]
     pub double_quote: ::prost::alloc::vec::Vec<u8>,
     /// Indicates if newlines are supported in values
-    #[prost(bytes = "vec", tag = "15")]
+    #[prost(bytes = "vec", tag = "16")]
     pub newlines_in_values: ::prost::alloc::vec::Vec<u8>,
     /// Optional terminator character as a byte
-    #[prost(bytes = "vec", tag = "16")]
+    #[prost(bytes = "vec", tag = "17")]
     pub terminator: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
@@ -612,9 +613,9 @@ pub struct JsonOptions {
     /// Compression type
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
-    /// Max records for schema inference
-    #[prost(uint64, tag = "2")]
-    pub schema_infer_max_rec: u64,
+    /// Optional max records for schema inference
+    #[prost(uint64, optional, tag = "2")]
+    pub schema_infer_max_rec: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableParquetOptions {
@@ -760,6 +761,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "29")]
     pub binary_as_string: bool,
+    /// default = false
+    #[prost(bool, tag = "30")]
+    pub skip_arrow_metadata: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]
@@ -790,12 +794,18 @@ pub struct ParquetOptions {
     pub column_index_truncate_length_opt: ::core::option::Option<
         parquet_options::ColumnIndexTruncateLengthOpt,
     >,
+    #[prost(oneof = "parquet_options::StatisticsTruncateLengthOpt", tags = "31")]
+    pub statistics_truncate_length_opt: ::core::option::Option<
+        parquet_options::StatisticsTruncateLengthOpt,
+    >,
     #[prost(oneof = "parquet_options::EncodingOpt", tags = "19")]
     pub encoding_opt: ::core::option::Option<parquet_options::EncodingOpt>,
     #[prost(oneof = "parquet_options::BloomFilterFppOpt", tags = "21")]
     pub bloom_filter_fpp_opt: ::core::option::Option<parquet_options::BloomFilterFppOpt>,
     #[prost(oneof = "parquet_options::BloomFilterNdvOpt", tags = "22")]
     pub bloom_filter_ndv_opt: ::core::option::Option<parquet_options::BloomFilterNdvOpt>,
+    #[prost(oneof = "parquet_options::CoerceInt96Opt", tags = "32")]
+    pub coerce_int96_opt: ::core::option::Option<parquet_options::CoerceInt96Opt>,
 }
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
@@ -829,6 +839,11 @@ pub mod parquet_options {
         #[prost(uint64, tag = "17")]
         ColumnIndexTruncateLength(u64),
     }
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
+    pub enum StatisticsTruncateLengthOpt {
+        #[prost(uint64, tag = "31")]
+        StatisticsTruncateLength(u64),
+    }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum EncodingOpt {
         #[prost(string, tag = "19")]
@@ -843,6 +858,11 @@ pub mod parquet_options {
     pub enum BloomFilterNdvOpt {
         #[prost(uint64, tag = "22")]
         BloomFilterNdv(u64),
+    }
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum CoerceInt96Opt {
+        #[prost(string, tag = "32")]
+        CoerceInt96(::prost::alloc::string::String),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -867,6 +887,8 @@ pub struct ColumnStats {
     pub min_value: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "2")]
     pub max_value: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "5")]
+    pub sum_value: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "3")]
     pub null_count: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "4")]

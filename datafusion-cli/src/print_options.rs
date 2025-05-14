@@ -29,6 +29,7 @@ use datafusion::common::DataFusionError;
 use datafusion::error::Result;
 use datafusion::physical_plan::RecordBatchStream;
 
+use datafusion::config::FormatOptions;
 use futures::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -102,14 +103,21 @@ impl PrintOptions {
         schema: SchemaRef,
         batches: &[RecordBatch],
         query_start_time: Instant,
+        row_count: usize,
+        format_options: &FormatOptions,
     ) -> Result<()> {
         let stdout = std::io::stdout();
         let mut writer = stdout.lock();
 
-        self.format
-            .print_batches(&mut writer, schema, batches, self.maxrows, true)?;
+        self.format.print_batches(
+            &mut writer,
+            schema,
+            batches,
+            self.maxrows,
+            true,
+            format_options,
+        )?;
 
-        let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
         let formatted_exec_details = get_execution_details_formatted(
             row_count,
             if self.format == PrintFormat::Table {
@@ -132,6 +140,7 @@ impl PrintOptions {
         &self,
         mut stream: Pin<Box<dyn RecordBatchStream>>,
         query_start_time: Instant,
+        format_options: &FormatOptions,
     ) -> Result<()> {
         if self.format == PrintFormat::Table {
             return Err(DataFusionError::External(
@@ -154,6 +163,7 @@ impl PrintOptions {
                 &[batch],
                 MaxRows::Unlimited,
                 with_header,
+                format_options,
             )?;
             with_header = false;
         }

@@ -24,6 +24,9 @@ AS VALUES
 ;
 
 statement ok
+INSERT INTO map_array_table_1 VALUES (NULL, 2, 1.0, '3');
+
+statement ok
 CREATE TABLE map_array_table_2
 AS VALUES
   (MAP {'1': [1, NULL, 3], '2': [4, NULL, 6], '3': [7, 8, 9]}, 1, 1.0, '1'),
@@ -112,7 +115,7 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: int_field@0 > 0
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
 drop table table_with_map;
@@ -130,17 +133,17 @@ SELECT MAKE_MAP('POST', 41, 'HEAD', 33)['POST'];
 query ?
 SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', null);
 ----
-{POST: 41, HEAD: 33, PATCH: }
+{POST: 41, HEAD: 33, PATCH: NULL}
 
 query ?
 SELECT MAKE_MAP('POST', null, 'HEAD', 33, 'PATCH', null);
 ----
-{POST: , HEAD: 33, PATCH: }
+{POST: NULL, HEAD: 33, PATCH: NULL}
 
 query ?
 SELECT MAKE_MAP(1, null, 2, 33, 3, null);
 ----
-{1: , 2: 33, 3: }
+{1: NULL, 2: 33, 3: NULL}
 
 query ?
 SELECT MAKE_MAP([1,2], ['a', 'b'], [3,4], ['b']);
@@ -175,7 +178,7 @@ SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, 30]);
 query ?
 SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
 ----
-{POST: 41, HEAD: 33, PATCH: }
+{POST: 41, HEAD: 33, PATCH: NULL}
 
 query ?
 SELECT MAP([[1,2], [3,4]], ['a', 'b']);
@@ -185,7 +188,7 @@ SELECT MAP([[1,2], [3,4]], ['a', 'b']);
 query error
 SELECT MAP()
 
-query error DataFusion error: Execution error: map requires an even number of arguments, got 1 instead
+query error DataFusion error: Execution error: map function requires 2 arguments, got 1
 SELECT MAP(['POST', 'HEAD'])
 
 query error DataFusion error: Execution error: Expected list, large_list or fixed_size_list, got Null
@@ -198,7 +201,7 @@ query error DataFusion error: Execution error: map key cannot be null
 SELECT MAP(['POST', 'HEAD', null], [41, 33, 30]);
 
 statement error DataFusion error: Execution error: map key cannot be null
-CREATE TABLE duplicated_keys_table 
+CREATE TABLE duplicated_keys_table
 AS VALUES
   (MAP {1: [1, NULL, 3], NULL: [4, NULL, 6]});
 
@@ -214,7 +217,7 @@ query error DataFusion error: Execution error: map key must be unique, duplicate
 SELECT make_map('POST', 41, 'HEAD', 33, 'POST', 30);
 
 statement error DataFusion error: Execution error: map key must be unique, duplicate key found: 1
-CREATE TABLE duplicated_keys_table 
+CREATE TABLE duplicated_keys_table
 AS VALUES
   (MAP {1: [1, NULL, 3], 1: [4, NULL, 6]});
 
@@ -230,7 +233,7 @@ SELECT map(column5, column6) FROM duplicate_keys_table;
 
 # key is a nested type
 query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[1, 2\]
-SELECT MAP([[1,2], [1,2], []], [41, 33, null]);
+SELECT MAP([[1,2], [1,2], [NULL]], [41, 33, null]);
 
 query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[\{1:1\}\]
 SELECT MAP([Map {1:'1'}, Map {1:'1'}, Map {2:'2'}], [41, 33, null]);
@@ -286,14 +289,14 @@ select Map {column6: column7} from t;
 ----
 {[1, 2]: POST}
 {[3]: PUT}
-{[5]: }
+{[5]: NULL}
 
 query ?
 select Map {column8: column7} from t;
 ----
 {[[1, 2, 3]]: POST}
 {[[4]]: PUT}
-{[[1, 2]]: }
+{[[1, 2]]: NULL}
 
 query error
 select Map {column7: column8} from t;
@@ -315,23 +318,23 @@ SELECT MAKE_MAP('POST', 41, 'HEAD', 33)['POST']  from t;
 query ?
 SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', null) from t;
 ----
-{POST: 41, HEAD: 33, PATCH: }
-{POST: 41, HEAD: 33, PATCH: }
-{POST: 41, HEAD: 33, PATCH: }
+{POST: 41, HEAD: 33, PATCH: NULL}
+{POST: 41, HEAD: 33, PATCH: NULL}
+{POST: 41, HEAD: 33, PATCH: NULL}
 
 query ?
 SELECT MAKE_MAP('POST', null, 'HEAD', 33, 'PATCH', null) from t;
 ----
-{POST: , HEAD: 33, PATCH: }
-{POST: , HEAD: 33, PATCH: }
-{POST: , HEAD: 33, PATCH: }
+{POST: NULL, HEAD: 33, PATCH: NULL}
+{POST: NULL, HEAD: 33, PATCH: NULL}
+{POST: NULL, HEAD: 33, PATCH: NULL}
 
 query ?
 SELECT MAKE_MAP(1, null, 2, 33, 3, null) from t;
 ----
-{1: , 2: 33, 3: }
-{1: , 2: 33, 3: }
-{1: , 2: 33, 3: }
+{1: NULL, 2: 33, 3: NULL}
+{1: NULL, 2: 33, 3: NULL}
+{1: NULL, 2: 33, 3: NULL}
 
 query ?
 SELECT MAKE_MAP([1,2], ['a', 'b'], [3,4], ['b']) from t;
@@ -350,9 +353,9 @@ SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, 30]) from t;
 query ?
 SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]) from t;
 ----
-{POST: 41, HEAD: 33, PATCH: }
-{POST: 41, HEAD: 33, PATCH: }
-{POST: 41, HEAD: 33, PATCH: }
+{POST: 41, HEAD: 33, PATCH: NULL}
+{POST: 41, HEAD: 33, PATCH: NULL}
+{POST: 41, HEAD: 33, PATCH: NULL}
 
 query ?
 SELECT MAP([[1,2], [3,4]], ['a', 'b']) from t;
@@ -423,7 +426,7 @@ SELECT MAP {};
 query ?
 SELECT MAP {'a': 1, 'b': null};
 ----
-{a: 1, b: }
+{a: 1, b: NULL}
 
 # keys contain null
 query error DataFusion error: Execution error: map key cannot be null
@@ -556,21 +559,21 @@ query ????
 select map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a'), map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'b'),
        map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'c'), map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'd');
 ----
-[1] [] [3] []
+[1] [NULL] [3] [NULL]
 
 # key is integer
 query ????
 select map_extract(MAP {1: 1, 2: NULL, 3:3}, 1), map_extract(MAP {1: 1, 2: NULL, 3:3}, 2),
        map_extract(MAP {1: 1, 2: NULL, 3:3}, 3), map_extract(MAP {1: 1, 2: NULL, 3:3}, 4);
 ----
-[1] [] [3] []
+[1] [NULL] [3] [NULL]
 
 # value is list
 query ????
 select map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 1), map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 2),
        map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 3), map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 4);
 ----
-[[1, 2]] [] [[3]] []
+[[1, 2]] [NULL] [[3]] [NULL]
 
 # key in map and query key are different types
 query ?????
@@ -578,36 +581,75 @@ select map_extract(MAP {1: 1, 2: 2, 3:3}, '1'), map_extract(MAP {1: 1, 2: 2, 3:3
        map_extract(MAP {1.0: 1, 2: 2, 3:3}, '1'), map_extract(MAP {'1': 1, '2': 2, '3':3}, 1.0),
        map_extract(MAP {arrow_cast('1', 'Utf8View'): 1, arrow_cast('2', 'Utf8View'): 2, arrow_cast('3', 'Utf8View'):3}, '1');
 ----
-[1] [1] [1] [] [1]
+[1] [1] [1] [NULL] [1]
 
 # map_extract with columns
 query ???
 select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7) from map_array_table_1;
 ----
-[[1, , 3]] [] []
-[] [[4, , 6]] []
-[] [] [[1, , 3]]
+[[1, NULL, 3]] [NULL] [NULL]
+[NULL] [[4, NULL, 6]] [NULL]
+[NULL] [NULL] [[1, NULL, 3]]
+[NULL] [NULL] [NULL]
+
+query ?
+select column1[1] from map_array_table_1;
+----
+[1, NULL, 3]
+NULL
+NULL
+NULL
+
+query ?
+select column1[-1000 + 1001] from map_array_table_1;
+----
+[1, NULL, 3]
+NULL
+NULL
+NULL
+
+# test for negative scenario
+query ?
+SELECT column1[-1] FROM map_array_table_1;
+----
+NULL
+NULL
+NULL
+NULL
+
+query ?
+SELECT column1[1000] FROM map_array_table_1;
+----
+NULL
+NULL
+NULL
+NULL
+
+
+query error DataFusion error: Arrow error: Invalid argument error
+SELECT column1[NULL] FROM map_array_table_1;
 
 query ???
 select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_1;
 ----
-[[1, , 3]] [[1, , 3]] [[1, , 3]]
-[[4, , 6]] [[4, , 6]] [[4, , 6]]
-[] [] []
+[[1, NULL, 3]] [[1, NULL, 3]] [[1, NULL, 3]]
+[[4, NULL, 6]] [[4, NULL, 6]] [[4, NULL, 6]]
+[NULL] [NULL] [NULL]
+[NULL] [NULL] [NULL]
 
 query ???
 select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_2;
 ----
-[[1, , 3]] [] [[1, , 3]]
-[[4, , 6]] [] [[4, , 6]]
-[] [] []
+[[1, NULL, 3]] [NULL] [[1, NULL, 3]]
+[[4, NULL, 6]] [NULL] [[4, NULL, 6]]
+[NULL] [NULL] [NULL]
 
 query ???
 select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7) from map_array_table_2;
 ----
-[[1, , 3]] [] []
-[] [[4, , 6]] []
-[] [] [[1, , 3]]
+[[1, NULL, 3]] [NULL] [NULL]
+[NULL] [[4, NULL, 6]] [NULL]
+[NULL] [NULL] [[1, NULL, 3]]
 
 # Tests for map_keys
 
@@ -658,6 +700,7 @@ SELECT map_keys(column1) from map_array_table_1;
 [1, 2, 3]
 [4, 5, 6]
 [7, 8, 9]
+NULL
 
 
 # Tests for map_values
@@ -706,12 +749,38 @@ SELECT map_values(Map{});
 query ?
 SELECT map_values(column1) from map_array_table_1;
 ----
-[[1, , 3], [4, , 6], [7, 8, 9]]
-[[1, , 3], [4, , 6], [7, 8, 9]]
-[[1, , 3], [9, , 6], [7, 8, 9]]
+[[1, NULL, 3], [4, NULL, 6], [7, 8, 9]]
+[[1, NULL, 3], [4, NULL, 6], [7, 8, 9]]
+[[1, NULL, 3], [9, NULL, 6], [7, 8, 9]]
+NULL
 
 statement ok
 drop table map_array_table_1;
 
 statement ok
 drop table map_array_table_2;
+
+
+statement ok
+create table tt as values(MAP{[1,2,3]:1}, MAP {{'a':1, 'b':2}:2}, MAP{true: 3});
+
+# accessing using an array
+query I
+select column1[make_array(1, 2, 3)] from tt;
+----
+1
+
+# accessing using a struct
+query I
+select column2[{a:1, b: 2}] from tt;
+----
+2
+
+# accessing using Bool
+query I
+select column3[true] from tt;
+----
+3
+
+statement ok
+drop table tt;

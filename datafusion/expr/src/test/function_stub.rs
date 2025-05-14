@@ -25,7 +25,7 @@ use arrow::datatypes::{
     DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, utils::take_function_args, Result};
 
 use crate::type_coercion::aggregates::{avg_return_type, coerce_avg_type, NUMERICS};
 use crate::Volatility::Immutable;
@@ -39,19 +39,14 @@ use crate::{
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
         paste::paste! {
-            /// Singleton instance of [$UDAF], ensures the UDAF is only created once
-            /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
-            #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<crate::AggregateUDF>> =
-                std::sync::OnceLock::new();
-
             #[doc = concat!("AggregateFunction that returns a [AggregateUDF](crate::AggregateUDF) for [`", stringify!($UDAF), "`]")]
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<crate::AggregateUDF> {
-                [< STATIC_ $UDAF >]
-                    .get_or_init(|| {
+                // Singleton instance of [$UDAF], ensures the UDAF is only created once
+                static INSTANCE: std::sync::LazyLock<std::sync::Arc<crate::AggregateUDF>> =
+                    std::sync::LazyLock::new(|| {
                         std::sync::Arc::new(crate::AggregateUDF::from(<$UDAF>::default()))
-                    })
-                    .clone()
+                    });
+                std::sync::Arc::clone(&INSTANCE)
             }
         }
     }
@@ -130,9 +125,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!("SUM expects exactly one argument");
-        }
+        let [array] = take_function_args(self.name(), arg_types)?;
 
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval.
@@ -152,7 +145,7 @@ impl AggregateUDFImpl for Sum {
             }
         }
 
-        Ok(vec![coerced_type(&arg_types[0])?])
+        Ok(vec![coerced_type(array)?])
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -255,6 +248,10 @@ impl AggregateUDFImpl for Count {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int64)
+    }
+
+    fn is_nullable(&self) -> bool {
+        false
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {

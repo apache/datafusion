@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::DFSchema;
 use datafusion_common::{DFSchemaRef, Result, ToDFSchema};

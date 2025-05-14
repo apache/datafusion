@@ -15,241 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for reading line-delimited Avro files
+//! Reexports the [`datafusion_datasource_json::source`] module, containing [Avro] based [`FileSource`].
+//!
+//! [Avro]: https://avro.apache.org/
+//! [`FileSource`]: datafusion_datasource::file::FileSource
 
-use std::any::Any;
-use std::sync::Arc;
-
-use super::FileScanConfig;
-use crate::error::Result;
-use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
-};
-
-use arrow::datatypes::SchemaRef;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-
-/// Execution plan for scanning Avro data source
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct AvroExec {
-    base_config: FileScanConfig,
-    projected_statistics: Statistics,
-    projected_schema: SchemaRef,
-    projected_output_ordering: Vec<LexOrdering>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
-}
-
-impl AvroExec {
-    /// Create a new Avro reader execution plan provided base configurations
-    pub fn new(base_config: FileScanConfig) -> Self {
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
-        let cache = Self::compute_properties(
-            projected_schema.clone(),
-            &projected_output_ordering,
-            &base_config,
-        );
-        Self {
-            base_config,
-            projected_schema,
-            projected_statistics,
-            projected_output_ordering,
-            metrics: ExecutionPlanMetricsSet::new(),
-            cache,
-        }
-    }
-    /// Ref to the base configs
-    pub fn base_config(&self) -> &FileScanConfig {
-        &self.base_config
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        schema: SchemaRef,
-        orderings: &[LexOrdering],
-        file_scan_config: &FileScanConfig,
-    ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
-        let n_partitions = file_scan_config.file_groups.len();
-
-        PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
-            ExecutionMode::Bounded,                          // Execution Mode
-        )
-    }
-}
-
-impl DisplayAs for AvroExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "AvroExec: ")?;
-        self.base_config.fmt_as(t, f)
-    }
-}
-
-impl ExecutionPlan for AvroExec {
-    fn name(&self) -> &'static str {
-        "AvroExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.cache
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        Vec::new()
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    #[cfg(not(feature = "avro"))]
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        Err(crate::error::DataFusionError::NotImplemented(
-            "Cannot execute avro plan without avro feature enabled".to_string(),
-        ))
-    }
-
-    #[cfg(feature = "avro")]
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        use super::file_stream::FileStream;
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.base_config.object_store_url)?;
-
-        let config = Arc::new(private::AvroConfig {
-            schema: Arc::clone(&self.base_config.file_schema),
-            batch_size: context.session_config().batch_size(),
-            projection: self.base_config.projected_file_column_names(),
-            object_store,
-        });
-        let opener = private::AvroOpener { config };
-
-        let stream =
-            FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
-        Ok(Box::pin(stream))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_statistics.clone())
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        self.base_config.limit
-    }
-
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let new_config = self.base_config.clone().with_limit(limit);
-
-        Some(Arc::new(Self {
-            base_config: new_config,
-            projected_statistics: self.projected_statistics.clone(),
-            projected_schema: self.projected_schema.clone(),
-            projected_output_ordering: self.projected_output_ordering.clone(),
-            metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
-        }))
-    }
-}
-
-#[cfg(feature = "avro")]
-mod private {
-    use super::*;
-    use crate::datasource::avro_to_arrow::Reader as AvroReader;
-    use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
-    use crate::datasource::physical_plan::FileMeta;
-
-    use bytes::Buf;
-    use futures::StreamExt;
-    use object_store::{GetResultPayload, ObjectStore};
-
-    pub struct AvroConfig {
-        pub schema: SchemaRef,
-        pub batch_size: usize,
-        pub projection: Option<Vec<String>>,
-        pub object_store: Arc<dyn ObjectStore>,
-    }
-
-    impl AvroConfig {
-        fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
-            AvroReader::try_new(
-                reader,
-                self.schema.clone(),
-                self.batch_size,
-                self.projection.clone(),
-            )
-        }
-    }
-
-    pub struct AvroOpener {
-        pub config: Arc<AvroConfig>,
-    }
-
-    impl FileOpener for AvroOpener {
-        fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
-            let config = self.config.clone();
-            Ok(Box::pin(async move {
-                let r = config.object_store.get(file_meta.location()).await?;
-                match r.payload {
-                    GetResultPayload::File(file, _) => {
-                        let reader = config.open(file)?;
-                        Ok(futures::stream::iter(reader).boxed())
-                    }
-                    GetResultPayload::Stream(_) => {
-                        let bytes = r.bytes().await?;
-                        let reader = config.open(bytes.reader())?;
-                        Ok(futures::stream::iter(reader).boxed())
-                    }
-                }
-            }))
-        }
-    }
-}
+pub use datafusion_datasource_avro::source::*;
 
 #[cfg(test)]
-#[cfg(feature = "avro")]
 mod tests {
-    use super::*;
-    use crate::arrow::datatypes::{DataType, Field, SchemaBuilder};
-    use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
-    use crate::datasource::listing::PartitionedFile;
-    use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::prelude::SessionContext;
-    use crate::scalar::ScalarValue;
-    use crate::test::object_store::local_unpartitioned_file;
 
+    use std::sync::Arc;
+
+    use crate::prelude::SessionContext;
+    use crate::test::object_store::local_unpartitioned_file;
+    use arrow::datatypes::{DataType, Field, SchemaBuilder};
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{test_util, Result, ScalarValue};
+    use datafusion_datasource::file_format::FileFormat;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::PartitionedFile;
+    use datafusion_datasource_avro::source::AvroSource;
+    use datafusion_datasource_avro::AvroFormat;
+    use datafusion_execution::object_store::ObjectStoreUrl;
+    use datafusion_physical_plan::ExecutionPlan;
+
+    use datafusion_datasource::source::DataSourceExec;
     use futures::StreamExt;
+    use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
@@ -280,27 +73,33 @@ mod tests {
         let url = Url::parse("file://").unwrap();
         session_ctx.register_object_store(&url, store.clone());
 
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
-        let avro_exec = AvroExec::new(
-            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
-                .with_file(meta.into())
-                .with_projection(Some(vec![0, 1, 2])),
-        );
+        let source = Arc::new(AvroSource::new());
+        let conf = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            file_schema,
+            source,
+        )
+        .with_file(meta.into())
+        .with_projection(Some(vec![0, 1, 2]))
+        .build();
+
+        let source_exec = DataSourceExec::from_data_source(conf);
         assert_eq!(
-            avro_exec
+            source_exec
                 .properties()
                 .output_partitioning()
                 .partition_count(),
             1
         );
-        let mut results = avro_exec
+        let mut results = source_exec
             .execute(0, state.task_ctx())
             .expect("plan execution failed");
 
@@ -310,22 +109,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+-------------+",
-            "| id | bool_col | tinyint_col |",
-            "+----+----------+-------------+",
-            "| 4  | true     | 0           |",
-            "| 5  | false    | 1           |",
-            "| 6  | true     | 0           |",
-            "| 7  | false    | 1           |",
-            "| 2  | true     | 0           |",
-            "| 3  | false    | 1           |",
-            "| 0  | true     | 0           |",
-            "| 1  | false    | 1           |",
-            "+----+----------+-------------+",
-        ];
-
-        crate::assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+-------------+
+            | id | bool_col | tinyint_col |
+            +----+----------+-------------+
+            | 4  | true     | 0           |
+            | 5  | false    | 1           |
+            | 6  | true     | 0           |
+            | 7  | false    | 1           |
+            | 2  | true     | 0           |
+            | 3  | false    | 1           |
+            | 0  | true     | 0           |
+            | 1  | false    | 1           |
+            +----+----------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -344,13 +141,13 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
 
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let actual_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
             .await?;
 
         let mut builder = SchemaBuilder::from(actual_schema.fields());
@@ -360,20 +157,22 @@ mod tests {
         // Include the missing column in the projection
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
-        let avro_exec = AvroExec::new(
-            FileScanConfig::new(object_store_url, file_schema)
-                .with_file(meta.into())
-                .with_projection(projection),
-        );
+        let source = Arc::new(AvroSource::new());
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+            .with_file(meta.into())
+            .with_projection(projection)
+            .build();
+
+        let source_exec = DataSourceExec::from_data_source(conf);
         assert_eq!(
-            avro_exec
+            source_exec
                 .properties()
                 .output_partitioning()
                 .partition_count(),
             1
         );
 
-        let mut results = avro_exec
+        let mut results = source_exec
             .execute(0, state.task_ctx())
             .expect("plan execution failed");
 
@@ -383,22 +182,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+-------------+-------------+",
-            "| id | bool_col | tinyint_col | missing_col |",
-            "+----+----------+-------------+-------------+",
-            "| 4  | true     | 0           |             |",
-            "| 5  | false    | 1           |             |",
-            "| 6  | true     | 0           |             |",
-            "| 7  | false    | 1           |             |",
-            "| 2  | true     | 0           |             |",
-            "| 3  | false    | 1           |             |",
-            "| 0  | true     | 0           |             |",
-            "| 1  | false    | 1           |             |",
-            "+----+----------+-------------+-------------+",
-        ];
-
-        crate::assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+-------------+-------------+
+            | id | bool_col | tinyint_col | missing_col |
+            +----+----------+-------------+-------------+
+            | 4  | true     | 0           |             |
+            | 5  | false    | 1           |             |
+            | 6  | true     | 0           |             |
+            | 7  | false    | 1           |             |
+            | 2  | true     | 0           |             |
+            | 3  | false    | 1           |             |
+            | 0  | true     | 0           |             |
+            | 1  | false    | 1           |             |
+            +----+----------+-------------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -417,40 +214,39 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
 
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
         partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
         let projection = Some(vec![0, 1, file_schema.fields().len(), 2]);
-        let avro_exec = AvroExec::new(
-            FileScanConfig::new(object_store_url, file_schema)
-                // select specific columns of the files as well as the partitioning
-                // column which is supposed to be the last column in the table schema.
-                .with_projection(projection)
-                .with_file(partitioned_file)
-                .with_table_partition_cols(vec![Field::new(
-                    "date",
-                    DataType::Utf8,
-                    false,
-                )]),
-        );
+        let source = Arc::new(AvroSource::new());
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+            // select specific columns of the files as well as the partitioning
+            // column which is supposed to be the last column in the table schema.
+            .with_projection(projection)
+            .with_file(partitioned_file)
+            .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
+            .build();
+
+        let source_exec = DataSourceExec::from_data_source(conf);
+
         assert_eq!(
-            avro_exec
+            source_exec
                 .properties()
                 .output_partitioning()
                 .partition_count(),
             1
         );
 
-        let mut results = avro_exec
+        let mut results = source_exec
             .execute(0, state.task_ctx())
             .expect("plan execution failed");
 
@@ -460,21 +256,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+------------+-------------+",
-            "| id | bool_col | date       | tinyint_col |",
-            "+----+----------+------------+-------------+",
-            "| 4  | true     | 2021-10-26 | 0           |",
-            "| 5  | false    | 2021-10-26 | 1           |",
-            "| 6  | true     | 2021-10-26 | 0           |",
-            "| 7  | false    | 2021-10-26 | 1           |",
-            "| 2  | true     | 2021-10-26 | 0           |",
-            "| 3  | false    | 2021-10-26 | 1           |",
-            "| 0  | true     | 2021-10-26 | 0           |",
-            "| 1  | false    | 2021-10-26 | 1           |",
-            "+----+----------+------------+-------------+",
-        ];
-        crate::assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+------------+-------------+
+            | id | bool_col | date       | tinyint_col |
+            +----+----------+------------+-------------+
+            | 4  | true     | 2021-10-26 | 0           |
+            | 5  | false    | 2021-10-26 | 1           |
+            | 6  | true     | 2021-10-26 | 0           |
+            | 7  | false    | 2021-10-26 | 1           |
+            | 2  | true     | 2021-10-26 | 0           |
+            | 3  | false    | 2021-10-26 | 1           |
+            | 0  | true     | 2021-10-26 | 0           |
+            | 1  | false    | 2021-10-26 | 1           |
+            +----+----------+------------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());

@@ -16,17 +16,42 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
 use crate::utils::make_scalar_function;
+use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Tests if a string ends with a substring.",
+    syntax_example = "ends_with(str, substr)",
+    sql_example = r#"```sql
+>  select ends_with('datafusion', 'soin');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("soin")) |
++--------------------------------------------+
+| false                                      |
++--------------------------------------------+
+> select ends_with('datafusion', 'sion');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("sion")) |
++--------------------------------------------+
+| true                                       |
++--------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "substr", description = "Substring to test for.")
+)]
 #[derive(Debug)]
 pub struct EndsWithFunc {
     signature: Signature,
@@ -41,7 +66,13 @@ impl Default for EndsWithFunc {
 impl EndsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -63,10 +94,10 @@ impl ScalarUDFImpl for EndsWithFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
-                make_scalar_function(ends_with, vec![])(args)
+                make_scalar_function(ends_with, vec![])(&args.args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function ends_with. Expected Utf8, LargeUtf8 or Utf8View")?
@@ -75,47 +106,35 @@ impl ScalarUDFImpl for EndsWithFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_ends_with_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_ends_with_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Tests if a string ends with a substring.")
-            .with_syntax_example("ends_with(str, substr)")
-            .with_sql_example(
-                r#"```sql
->  select ends_with('datafusion', 'soin');
-+--------------------------------------------+
-| ends_with(Utf8("datafusion"),Utf8("soin")) |
-+--------------------------------------------+
-| false                                      |
-+--------------------------------------------+
-> select ends_with('datafusion', 'sion');
-+--------------------------------------------+
-| ends_with(Utf8("datafusion"),Utf8("sion")) |
-+--------------------------------------------+
-| true                                       |
-+--------------------------------------------+
-```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("substr", "Substring to test for.")
-            .build()
-            .unwrap()
-    })
 }
 
 /// Returns true if string ends with suffix.
 /// ends_with('alphabet', 'abet') = 't'
-pub fn ends_with(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let result = arrow::compute::kernels::comparison::ends_with(&args[0], &args[1])?;
-
-    Ok(Arc::new(result) as ArrayRef)
+fn ends_with(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if let Some(coercion_data_type) =
+        string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
+            binary_to_string_coercion(args[0].data_type(), args[1].data_type())
+        })
+    {
+        let arg0 = if args[0].data_type() == &coercion_data_type {
+            Arc::clone(&args[0])
+        } else {
+            arrow::compute::kernels::cast::cast(&args[0], &coercion_data_type)?
+        };
+        let arg1 = if args[1].data_type() == &coercion_data_type {
+            Arc::clone(&args[1])
+        } else {
+            arrow::compute::kernels::cast::cast(&args[1], &coercion_data_type)?
+        };
+        let result = arrow::compute::kernels::comparison::ends_with(&arg0, &arg1)?;
+        Ok(Arc::new(result) as ArrayRef)
+    } else {
+        internal_err!(
+            "Unsupported data types for ends_with. Expected Utf8, LargeUtf8 or Utf8View"
+        )
+    }
 }
 
 #[cfg(test)]
@@ -134,7 +153,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from("alph")),
             ],
@@ -145,7 +164,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from("bet")),
             ],
@@ -156,7 +175,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("alph")),
             ],
@@ -167,7 +186,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],

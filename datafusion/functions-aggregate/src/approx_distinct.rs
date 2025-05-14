@@ -18,7 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use crate::hyperloglog::HyperLogLog;
-use arrow::array::BinaryArray;
+use arrow::array::{BinaryArray, StringViewArray};
 use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
@@ -31,17 +31,17 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, DataFusionError, Result,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_APPROXIMATE;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::sync::OnceLock;
+
 make_udaf_expr_and_func!(
     ApproxDistinct,
     approx_distinct,
@@ -127,6 +127,27 @@ where
 }
 
 #[derive(Debug)]
+struct StringViewHLLAccumulator<T>
+where
+    T: OffsetSizeTrait,
+{
+    hll: HyperLogLog<String>,
+    phantom_data: PhantomData<T>,
+}
+
+impl<T> StringViewHLLAccumulator<T>
+where
+    T: OffsetSizeTrait,
+{
+    pub fn new() -> Self {
+        Self {
+            hll: HyperLogLog::new(),
+            phantom_data: PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct BinaryHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
@@ -197,6 +218,21 @@ where
     default_accumulator_impl!();
 }
 
+impl<T> Accumulator for StringViewHLLAccumulator<T>
+where
+    T: OffsetSizeTrait,
+{
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array: &StringViewArray = downcast_value!(values[0], StringViewArray);
+        // flatten because we would skip nulls
+        self.hll
+            .extend(array.iter().flatten().map(|s| s.to_string()));
+        Ok(())
+    }
+
+    default_accumulator_impl!();
+}
+
 impl<T> Accumulator for StringHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
@@ -243,6 +279,20 @@ impl Default for ApproxDistinct {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Approximate Functions"),
+    description = "Returns the approximate number of distinct input values calculated using the HyperLogLog algorithm.",
+    syntax_example = "approx_distinct(expression)",
+    sql_example = r#"```sql
+> SELECT approx_distinct(column_name) FROM table_name;
++-----------------------------------+
+| approx_distinct(column_name)      |
++-----------------------------------+
+| 42                                |
++-----------------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 pub struct ApproxDistinct {
     signature: Signature,
 }
@@ -297,6 +347,7 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
             DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
             DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
+            DataType::Utf8View => Box::new(StringViewHLLAccumulator::<i32>::new()),
             DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
             other => {
@@ -309,31 +360,6 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_approx_distinct_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_approx_distinct_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_APPROXIMATE)
-            .with_description(
-                "Returns the approximate number of distinct input values calculated using the HyperLogLog algorithm.",
-            )
-            .with_syntax_example("approx_distinct(expression)")
-            .with_sql_example(r#"```sql
-> SELECT approx_distinct(column_name) FROM table_name;
-+-----------------------------------+
-| approx_distinct(column_name)      |
-+-----------------------------------+
-| 42                                |
-+-----------------------------------+
-```"#, 
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
 }

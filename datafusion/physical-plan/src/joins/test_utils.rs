@@ -23,17 +23,16 @@ use crate::joins::utils::{JoinFilter, JoinOn};
 use crate::joins::{
     HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
-use crate::memory::MemoryExec;
 use crate::repartition::RepartitionExec;
+use crate::test::TestMemoryExec;
 use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
 
-use arrow::util::pretty::pretty_format_batches;
-use arrow_array::{
-    ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
-    TimestampMillisecondArray,
+use arrow::array::{
+    types::IntervalDayTime, ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray,
+    RecordBatch, TimestampMillisecondArray,
 };
-use arrow_buffer::IntervalDayTime;
-use arrow_schema::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema};
+use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
@@ -47,21 +46,23 @@ use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 
 pub fn compare_batches(collected_1: &[RecordBatch], collected_2: &[RecordBatch]) {
+    let left_row_num: usize = collected_1.iter().map(|batch| batch.num_rows()).sum();
+    let right_row_num: usize = collected_2.iter().map(|batch| batch.num_rows()).sum();
+    if left_row_num == 0 && right_row_num == 0 {
+        return;
+    }
     // compare
     let first_formatted = pretty_format_batches(collected_1).unwrap().to_string();
     let second_formatted = pretty_format_batches(collected_2).unwrap().to_string();
 
-    let mut first_formatted_sorted: Vec<&str> = first_formatted.trim().lines().collect();
-    first_formatted_sorted.sort_unstable();
+    let mut first_lines: Vec<&str> = first_formatted.trim().lines().collect();
+    first_lines.sort_unstable();
 
-    let mut second_formatted_sorted: Vec<&str> =
-        second_formatted.trim().lines().collect();
-    second_formatted_sorted.sort_unstable();
+    let mut second_lines: Vec<&str> = second_formatted.trim().lines().collect();
+    second_lines.sort_unstable();
 
-    for (i, (first_line, second_line)) in first_formatted_sorted
-        .iter()
-        .zip(&second_formatted_sorted)
-        .enumerate()
+    for (i, (first_line, second_line)) in
+        first_lines.iter().zip(&second_lines).enumerate()
     {
         assert_eq!((i, first_line), (i, second_line));
     }
@@ -443,8 +444,7 @@ pub fn build_sides_record_batches(
             .collect::<Vec<i32>>(),
     ));
     let ordered_asc_null_first = Arc::new(Int32Array::from_iter({
-        std::iter::repeat(None)
-            .take(index as usize)
+        std::iter::repeat_n(None, index as usize)
             .chain(rest_of.clone().map(Some))
             .collect::<Vec<Option<i32>>>()
     }));
@@ -452,13 +452,12 @@ pub fn build_sides_record_batches(
         rest_of
             .clone()
             .map(Some)
-            .chain(std::iter::repeat(None).take(index as usize))
+            .chain(std::iter::repeat_n(None, index as usize))
             .collect::<Vec<Option<i32>>>()
     }));
 
     let ordered_desc_null_first = Arc::new(Int32Array::from_iter({
-        std::iter::repeat(None)
-            .take(index as usize)
+        std::iter::repeat_n(None, index as usize)
             .chain(rest_of.rev().map(Some))
             .collect::<Vec<Option<i32>>>()
     }));
@@ -528,12 +527,15 @@ pub fn create_memory_table(
     right_sorted: Vec<LexOrdering>,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
     let left_schema = left_partition[0].schema();
-    let left = MemoryExec::try_new(&[left_partition], left_schema, None)?
+    let left = TestMemoryExec::try_new(&[left_partition], left_schema, None)?
         .try_with_sort_information(left_sorted)?;
     let right_schema = right_partition[0].schema();
-    let right = MemoryExec::try_new(&[right_partition], right_schema, None)?
+    let right = TestMemoryExec::try_new(&[right_partition], right_schema, None)?
         .try_with_sort_information(right_sorted)?;
-    Ok((Arc::new(left), Arc::new(right)))
+    Ok((
+        Arc::new(TestMemoryExec::update_cache(Arc::new(left))),
+        Arc::new(TestMemoryExec::update_cache(Arc::new(right))),
+    ))
 }
 
 /// Filter expr for a + b > c + 10 AND a + b < c + 100

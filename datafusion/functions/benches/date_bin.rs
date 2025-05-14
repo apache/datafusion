@@ -19,13 +19,14 @@ extern crate criterion;
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, TimestampSecondArray};
+use arrow::array::{Array, ArrayRef, TimestampSecondArray};
+use arrow::datatypes::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
 use rand::Rng;
 
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_bin;
 
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
@@ -40,15 +41,28 @@ fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("date_bin_1000", |b| {
         let mut rng = rand::thread_rng();
+        let timestamps_array = Arc::new(timestamps(&mut rng)) as ArrayRef;
+        let batch_len = timestamps_array.len();
         let interval = ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1_000_000));
-        let timestamps = ColumnarValue::Array(Arc::new(timestamps(&mut rng)) as ArrayRef);
+        let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_bin();
+        let return_type = udf
+            .return_type(&[interval.data_type(), timestamps.data_type()])
+            .unwrap();
+        let return_field = Field::new("f", return_type, true);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
-                udf.invoke(&[interval.clone(), timestamps.clone()])
-                    .expect("date_bin should work on valid values"),
+                udf.invoke_with_args(ScalarFunctionArgs {
+                    args: vec![interval.clone(), timestamps.clone()],
+                    arg_fields: vec![
+                        &Field::new("a", interval.data_type(), true),
+                        &Field::new("b", timestamps.data_type(), true),
+                    ],
+                    number_rows: batch_len,
+                    return_field: &return_field,
+                })
+                .expect("date_bin should work on valid values"),
             )
         })
     });

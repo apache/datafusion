@@ -17,15 +17,14 @@
 
 use std::cmp::Ordering;
 
-use arrow::buffer::ScalarBuffer;
+use arrow::array::{
+    types::ByteArrayType, Array, ArrowPrimitiveType, GenericByteArray,
+    GenericByteViewArray, OffsetSizeTrait, PrimitiveArray, StringViewArray,
+};
+use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::Rows;
-use arrow_array::types::ByteArrayType;
-use arrow_array::{
-    Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait, PrimitiveArray,
-};
-use arrow_buffer::{Buffer, OffsetBuffer};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 /// A comparable collection of values for use with [`Cursor`]
@@ -156,8 +155,7 @@ pub struct RowValues {
 
     /// Tracks for the memory used by in the `Rows` of this
     /// cursor. Freed on drop
-    #[allow(dead_code)]
-    reservation: MemoryReservation,
+    _reservation: MemoryReservation,
 }
 
 impl RowValues {
@@ -173,7 +171,10 @@ impl RowValues {
             "memory reservation mismatch"
         );
         assert!(rows.num_rows() > 0);
-        Self { rows, reservation }
+        Self {
+            rows,
+            _reservation: reservation,
+        }
     }
 }
 
@@ -280,6 +281,59 @@ impl<T: ByteArrayType> CursorArray for GenericByteArray<T> {
     }
 }
 
+impl CursorArray for StringViewArray {
+    type Values = StringViewArray;
+    fn values(&self) -> Self {
+        self.gc()
+    }
+}
+
+impl CursorValues for StringViewArray {
+    fn len(&self) -> usize {
+        self.views().len()
+    }
+
+    fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // SAFETY: Both l_idx and r_idx are guaranteed to be within bounds,
+        // and any null-checks are handled in the outer layers.
+        // Fast path: Compare the lengths before full byte comparison.
+
+        let l_view = unsafe { l.views().get_unchecked(l_idx) };
+        let l_len = *l_view as u32;
+        let r_view = unsafe { r.views().get_unchecked(r_idx) };
+        let r_len = *r_view as u32;
+        if l_len != r_len {
+            return false;
+        }
+
+        unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx).is_eq() }
+    }
+
+    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
+        // SAFETY: The caller guarantees that idx > 0 and the indices are valid.
+        // Already checked it in is_eq_to_prev_one function
+        // Fast path: Compare the lengths of the current and previous views.
+        let l_view = unsafe { cursor.views().get_unchecked(idx) };
+        let l_len = *l_view as u32;
+        let r_view = unsafe { cursor.views().get_unchecked(idx - 1) };
+        let r_len = *r_view as u32;
+        if l_len != r_len {
+            return false;
+        }
+
+        unsafe {
+            GenericByteViewArray::compare_unchecked(cursor, idx, cursor, idx - 1).is_eq()
+        }
+    }
+
+    fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        // SAFETY: Prior assertions guarantee that l_idx and r_idx are valid indices.
+        // Null-checks are assumed to have been handled in the wrapper (e.g., ArrayValues).
+        // And the bound is checked in is_finished, it is safe to call get_unchecked
+        unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
+    }
+}
+
 /// A collection of sorted, nullable [`CursorValues`]
 ///
 /// Note: comparing cursors with different `SortOptions` will yield an arbitrary ordering
@@ -290,6 +344,10 @@ pub struct ArrayValues<T: CursorValues> {
     // Otherwise, the first null index
     null_threshold: usize,
     options: SortOptions,
+
+    /// Tracks the memory used by the values array,
+    /// freed on drop.
+    _reservation: MemoryReservation,
 }
 
 impl<T: CursorValues> ArrayValues<T> {
@@ -297,7 +355,11 @@ impl<T: CursorValues> ArrayValues<T> {
     /// to `options`.
     ///
     /// Panics if the array is empty
-    pub fn new<A: CursorArray<Values = T>>(options: SortOptions, array: &A) -> Self {
+    pub fn new<A: CursorArray<Values = T>>(
+        options: SortOptions,
+        array: &A,
+        reservation: MemoryReservation,
+    ) -> Self {
         assert!(array.len() > 0, "Empty array passed to FieldCursor");
         let null_threshold = match options.nulls_first {
             true => array.null_count(),
@@ -308,6 +370,7 @@ impl<T: CursorValues> ArrayValues<T> {
             values: array.values(),
             null_threshold,
             options,
+            _reservation: reservation,
         }
     }
 
@@ -359,6 +422,12 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool,
+    };
+
     use super::*;
 
     fn new_primitive(
@@ -371,10 +440,15 @@ mod tests {
             false => values.len() - null_count,
         };
 
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(10000));
+        let consumer = MemoryConsumer::new("test");
+        let reservation = consumer.register(&memory_pool);
+
         let values = ArrayValues {
             values: PrimitiveValues(values),
             null_threshold,
             options,
+            _reservation: reservation,
         };
 
         Cursor::new(values)

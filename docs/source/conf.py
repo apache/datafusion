@@ -34,7 +34,7 @@
 # -- Project information -----------------------------------------------------
 
 project = 'Apache DataFusion'
-copyright = '2019-2024, Apache Software Foundation'
+copyright = '2019-2025, Apache Software Foundation'
 author = 'Apache Software Foundation'
 
 
@@ -106,10 +106,6 @@ html_css_files = [
     "theme_overrides.css"
 ]
 
-html_js_files = [
-    ("https://buttons.github.io/buttons.js", {'async': 'true', 'defer': 'true'}),
-]
-
 html_sidebars = {
     "**": ["docs-sidebar.html"],
 }
@@ -119,3 +115,9 @@ myst_heading_anchors = 3
 
 # enable nice rendering of checkboxes for the task lists
 myst_enable_extensions = ["colon_fence", "deflist", "tasklist"]
+
+# Some code blocks (sql) are not being highlighted correctly, due to the
+# presence of some special characters like: 🚀, å, {,... But this isn’t a major
+# issue for our documentation. So, suppress these warnings to keep our build
+# log cleaner.
+suppress_warnings = ['misc.highlighting_failure']

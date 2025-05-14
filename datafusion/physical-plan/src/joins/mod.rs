@@ -17,9 +17,12 @@
 
 //! DataFusion Join implementations
 
+use arrow::array::BooleanBufferBuilder;
 pub use cross_join::CrossJoinExec;
+use datafusion_physical_expr::PhysicalExprRef;
 pub use hash_join::HashJoinExec;
 pub use nested_loop_join::NestedLoopJoinExec;
+use parking_lot::Mutex;
 // Note: SortMergeJoin is not used in plans yet
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
@@ -31,18 +34,27 @@ mod stream_join_utils;
 mod symmetric_hash_join;
 pub mod utils;
 
+mod join_filter;
+mod join_hash_map;
+
 #[cfg(test)]
 pub mod test_utils;
 
+/// The on clause of the join, as vector of (left, right) columns.
+pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
+/// Reference for JoinOn.
+pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Partitioning mode to use for hash join
+/// Hash join Partitioning mode
 pub enum PartitionMode {
     /// Left/right children are partitioned using the left and right keys
     Partitioned,
     /// Left side will collected into one partition
     CollectLeft,
-    /// When set to Auto, DataFusion optimizer will decide which PartitionMode mode(Partitioned/CollectLeft) is optimal based on statistics.
-    /// It will also consider swapping the left and right inputs for the Join
+    /// DataFusion optimizer decides which PartitionMode
+    /// mode(Partitioned/CollectLeft) is optimal based on statistics. It will
+    /// also consider swapping the left and right inputs for the Join
     Auto,
 }
 
@@ -54,3 +66,6 @@ pub enum StreamJoinPartitionMode {
     /// Both sides will collected into one partition
     SinglePartition,
 }
+
+/// Shared bitmap for visited left-side indices
+type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;

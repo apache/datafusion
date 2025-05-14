@@ -22,7 +22,7 @@ use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::Expr;
 use sqlparser::ast::Expr as SQLExpr;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_substring_to_expr(
         &self,
         expr: Box<SQLExpr>,

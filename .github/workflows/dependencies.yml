@@ -25,9 +25,11 @@ on:
   push:
     paths:
       - "**/Cargo.toml"
+      - "**/Cargo.lock"
   pull_request:
     paths:
       - "**/Cargo.toml"
+      - "**/Cargo.lock"
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
@@ -42,6 +44,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:

@@ -18,22 +18,25 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::array::{BooleanArray, Int32Array};
+use arrow::array::{BooleanArray, Int32Array, Int8Array};
 use arrow::record_batch::RecordBatch;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::common::DFSchema;
+use datafusion::common::stats::Precision;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{ColumnStatistics, DFSchema};
+use datafusion::common::{ScalarValue, ToDFSchema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::first_last::first_value_udaf;
+use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::expr::BinaryExpr;
+use datafusion::logical_expr::interval_arithmetic::Interval;
+use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::logical_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
 use datafusion::prelude::*;
-use datafusion_common::{ScalarValue, ToDFSchema};
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::BinaryExpr;
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///
@@ -51,6 +54,7 @@ use datafusion_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
 /// 4. Simplify expressions: [`simplify_demo`]
 /// 5. Analyze predicates for boundary ranges: [`range_analysis_demo`]
 /// 6. Get the types of the expressions: [`expression_type_demo`]
+/// 7. Apply type coercion to expressions: [`type_coercion_demo`]
 #[tokio::main]
 async fn main() -> Result<()> {
     // The easiest way to do create expressions is to use the
@@ -77,8 +81,17 @@ async fn main() -> Result<()> {
     // See how to analyze ranges in expressions
     range_analysis_demo()?;
 
+    // See how to analyze boundaries in different kinds of expressions.
+    boundary_analysis_and_selectivity_demo()?;
+
+    // See how boundary analysis works for `AND` & `OR` conjunctions.
+    boundary_analysis_in_conjuctions_demo()?;
+
     // See how to determine the data types of expressions
     expression_type_demo()?;
+
+    // See how to type coerce expressions.
+    type_coercion_demo()?;
 
     Ok(())
 }
@@ -134,8 +147,7 @@ fn evaluate_demo() -> Result<()> {
     ])) as _;
     assert!(
         matches!(&result, ColumnarValue::Array(r) if r == &expected_result),
-        "result: {:?}",
-        result
+        "result: {result:?}"
     );
 
     Ok(())
@@ -264,19 +276,186 @@ fn range_analysis_demo() -> Result<()> {
     // In this case, we can see that, as expected, `analyze` has figured out
     // that in this case,  `date` must be in the range `['2020-09-01', '2020-10-01']`
     let expected_range = Interval::try_new(september_1, october_1)?;
-    assert_eq!(analysis_result.boundaries[0].interval, expected_range);
+    assert_eq!(analysis_result.boundaries[0].interval, Some(expected_range));
 
     Ok(())
 }
 
-fn make_field(name: &str, data_type: DataType) -> Field {
-    let nullable = false;
-    Field::new(name, data_type, nullable)
+/// DataFusion's analysis can infer boundary statistics and selectivity in
+/// various situations which can be helpful in building more efficient
+/// query plans.
+fn boundary_analysis_and_selectivity_demo() -> Result<()> {
+    // Consider the example where we want all rows with an `id` greater than
+    // 5000.
+    let id_greater_5000 = col("id").gt_eq(lit(5000i64));
+
+    // As in most examples we must tell DataFusion the type of the column.
+    let schema = Arc::new(Schema::new(vec![make_field("id", DataType::Int64)]));
+
+    // DataFusion is able to do cardinality estimation on various column types
+    // these estimates represented by the `ColumnStatistics` type describe
+    // properties such as the maximum and minimum value, the number of distinct
+    // values and the number of null values.
+    let column_stats = ColumnStatistics {
+        null_count: Precision::Exact(0),
+        max_value: Precision::Exact(ScalarValue::Int64(Some(10000))),
+        min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+        sum_value: Precision::Absent,
+        distinct_count: Precision::Absent,
+    };
+
+    // We can then build our expression boundaries from the column statistics
+    // allowing the analysis to be more precise.
+    let initial_boundaries =
+        vec![ExprBoundaries::try_from_column(&schema, &column_stats, 0)?];
+
+    // With the above we can perform the boundary analysis similar to the previous
+    // example.
+    let df_schema = DFSchema::try_from(schema.clone())?;
+
+    // Analysis case id >= 5000
+    let physical_expr =
+        SessionContext::new().create_physical_expr(id_greater_5000, &df_schema)?;
+    let analysis = analyze(
+        &physical_expr,
+        AnalysisContext::new(initial_boundaries.clone()),
+        df_schema.as_ref(),
+    )?;
+
+    // The analysis will return better bounds thanks to the column statistics.
+    assert_eq!(
+        analysis.boundaries.first().map(|boundary| boundary
+            .interval
+            .clone()
+            .unwrap()
+            .into_bounds()),
+        Some((
+            ScalarValue::Int64(Some(5000)),
+            ScalarValue::Int64(Some(10000))
+        ))
+    );
+
+    // We can also infer selectivity from the column statistics by assuming
+    // that the column is uniformly distributed and using the following
+    // estimation formula:
+    // Assuming the original range is [a, b] and the new range: [a', b']
+    //
+    // (a' - b' + 1) / (a - b)
+    // (10000 - 5000 + 1) / (10000 - 1)
+    assert!(analysis
+        .selectivity
+        .is_some_and(|selectivity| (0.5..=0.6).contains(&selectivity)));
+
+    Ok(())
 }
 
-fn make_ts_field(name: &str) -> Field {
-    let tz = None;
-    make_field(name, DataType::Timestamp(TimeUnit::Nanosecond, tz))
+/// This function shows how to think about and leverage the analysis API
+/// to infer boundaries in `AND` & `OR` conjunctions.
+fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
+    // Let us consider the more common case of AND & OR conjunctions.
+    //
+    // age > 18 AND age <= 25
+    let age_between_18_25 = col("age").gt(lit(18i64)).and(col("age").lt_eq(lit(25)));
+
+    // As always we need to tell DataFusion the type of the column.
+    let schema = Arc::new(Schema::new(vec![make_field("age", DataType::Int64)]));
+
+    // Similarly to the example in `boundary_analysis_and_selectivity_demo` we
+    // can establish column statistics that can be used to describe certain
+    // column properties.
+    let column_stats = ColumnStatistics {
+        null_count: Precision::Exact(0),
+        max_value: Precision::Exact(ScalarValue::Int64(Some(79))),
+        min_value: Precision::Exact(ScalarValue::Int64(Some(14))),
+        sum_value: Precision::Absent,
+        distinct_count: Precision::Absent,
+    };
+
+    let initial_boundaries =
+        vec![ExprBoundaries::try_from_column(&schema, &column_stats, 0)?];
+
+    // Before we run the analysis pass; let us describe what we can infer from
+    // the initial information.
+    //
+    // To recap, the expression is `age > 18 AND age <= 25`.
+    //
+    // The column `age` can take any value in the `Int64` range.
+    //
+    // But using the `min`, `max` statistics we can reduce that initial range
+    // to `[min_value, max_value]` which is [14, 79].
+    //
+    // During analysis, when evaluating, let's say the left-hand side of the `AND`
+    // expression, we know that `age` must be greater than 18. Therefore our range
+    // is now [19, 79].
+    // And by evaluating the right-hand side we can get an upper bound, allowing
+    // us to infer that `age` must be in the range [19, 25] inclusive.
+    let df_schema = DFSchema::try_from(schema.clone())?;
+
+    let physical_expr =
+        SessionContext::new().create_physical_expr(age_between_18_25, &df_schema)?;
+    let analysis = analyze(
+        &physical_expr,
+        // We re-use initial_boundaries elsewhere so we must clone it.
+        AnalysisContext::new(initial_boundaries.clone()),
+        df_schema.as_ref(),
+    )?;
+
+    // We can check that DataFusion's analysis inferred the same bounds.
+    assert_eq!(
+        analysis.boundaries.first().map(|boundary| boundary
+            .interval
+            .clone()
+            .unwrap()
+            .into_bounds()),
+        Some((ScalarValue::Int64(Some(19)), ScalarValue::Int64(Some(25))))
+    );
+
+    // We can also infer the selectivity using the same approach as before.
+    //
+    // Granted a column such as age will more likely follow a Normal distribution
+    // as such our selectivity estimation will not be as good as it can.
+    assert!(analysis
+        .selectivity
+        .is_some_and(|selectivity| (0.1..=0.2).contains(&selectivity)));
+
+    // The above example was a good way to look at how we can derive better
+    // interval and get a lower selectivity during boundary analysis.
+    //
+    // But `AND` conjunctions are easier to reason with because their interval
+    // arithmetic follows naturally from set intersection operations, let us
+    // now look at an example that is a tad more complicated `OR` disjunctions.
+
+    // The expression we will look at is `age > 60 OR age <= 18`.
+    let age_greater_than_60_less_than_18 =
+        col("age").gt(lit(64i64)).or(col("age").lt_eq(lit(18i64)));
+
+    // We can re-use the same schema, initial boundaries and column statistics
+    // described above. So let's think about this for a bit.
+    //
+    // Initial range: [14, 79] as described in our column statistics.
+    //
+    // From the left-hand side and right-hand side of our `OR` disjunctions
+    // we end up with two ranges, instead of just one.
+    //
+    // - age > 60: [61, 79]
+    // - age <= 18: [14, 18]
+    //
+    // Thus the range of possible values the `age` column might take is a
+    // union of both sets [14, 18] U [61, 79].
+    let physical_expr = SessionContext::new()
+        .create_physical_expr(age_greater_than_60_less_than_18, &df_schema)?;
+
+    // However, analysis only supports a single interval, so we don't yet deal
+    // with the multiple possibilities of the `OR` disjunctions.
+    let analysis = analyze(
+        &physical_expr,
+        AnalysisContext::new(initial_boundaries),
+        df_schema.as_ref(),
+    );
+
+    assert!(analysis.is_err());
+
+    Ok(())
 }
 
 /// This function shows how to use `Expr::get_type` to retrieve the DataType
@@ -315,4 +494,114 @@ fn expression_type_demo() -> Result<()> {
     assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
 
     Ok(())
+}
+
+/// This function demonstrates how to apply type coercion to expressions, such as binary expressions.
+///
+/// In most cases, manual type coercion is not required since DataFusion handles it implicitly.
+/// However, certain projects may construct `ExecutionPlan`s directly from DataFusion logical expressions,
+/// bypassing the construction of DataFusion logical plans.
+/// Since constructing `ExecutionPlan`s from logical expressions does not automatically apply type coercion,
+/// you may need to handle type coercion manually in these cases.
+///
+/// The codes in this function shows various ways to perform type coercion on expressions:
+/// 1. Using `SessionContext::create_physical_expr`
+/// 2. Using `ExprSimplifier::coerce`
+/// 3. Using `TreeNodeRewriter::rewrite` based on `TypeCoercionRewriter`
+/// 4. Using `TreeNode::transform`
+///
+/// Note, this list may not be complete and there may be other methods to apply type coercion to expressions.
+fn type_coercion_demo() -> Result<()> {
+    // Creates a record batch for demo.
+    let df_schema = DFSchema::from_unqualified_fields(
+        vec![Field::new("a", DataType::Int8, false)].into(),
+        HashMap::new(),
+    )?;
+    let i8_array = Int8Array::from_iter_values(vec![0, 1, 2]);
+    let batch = RecordBatch::try_new(
+        Arc::new(df_schema.as_arrow().to_owned()),
+        vec![Arc::new(i8_array) as _],
+    )?;
+
+    // Constructs a binary expression for demo.
+    // By default, the literal `1` is translated into the Int32 type and cannot be directly compared with the Int8 type.
+    let expr = col("a").gt(lit(1));
+
+    // Evaluation with an expression that has not been type coerced cannot succeed.
+    let props = ExecutionProps::default();
+    let physical_expr =
+        datafusion::physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
+    let e = physical_expr.evaluate(&batch).unwrap_err();
+    assert!(e
+        .find_root()
+        .to_string()
+        .contains("Invalid comparison operation: Int8 > Int32"));
+
+    // 1. Type coercion with `SessionContext::create_physical_expr` which implicitly applies type coercion before constructing the physical expr.
+    let physical_expr =
+        SessionContext::new().create_physical_expr(expr.clone(), &df_schema)?;
+    assert!(physical_expr.evaluate(&batch).is_ok());
+
+    // 2. Type coercion with `ExprSimplifier::coerce`.
+    let context = SimplifyContext::new(&props).with_schema(Arc::new(df_schema.clone()));
+    let simplifier = ExprSimplifier::new(context);
+    let coerced_expr = simplifier.coerce(expr.clone(), &df_schema)?;
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
+        &coerced_expr,
+        &df_schema,
+        &props,
+    )?;
+    assert!(physical_expr.evaluate(&batch).is_ok());
+
+    // 3. Type coercion with `TypeCoercionRewriter`.
+    let coerced_expr = expr
+        .clone()
+        .rewrite(&mut TypeCoercionRewriter::new(&df_schema))?
+        .data;
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
+        &coerced_expr,
+        &df_schema,
+        &props,
+    )?;
+    assert!(physical_expr.evaluate(&batch).is_ok());
+
+    // 4. Apply explicit type coercion by manually rewriting the expression
+    let coerced_expr = expr
+        .transform(|e| {
+            // Only type coerces binary expressions.
+            let Expr::BinaryExpr(e) = e else {
+                return Ok(Transformed::no(e));
+            };
+            if let Expr::Column(ref col_expr) = *e.left {
+                let field = df_schema.field_with_name(None, col_expr.name())?;
+                let cast_to_type = field.data_type();
+                let coerced_right = e.right.cast_to(cast_to_type, &df_schema)?;
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                    e.left,
+                    e.op,
+                    Box::new(coerced_right),
+                ))))
+            } else {
+                Ok(Transformed::no(Expr::BinaryExpr(e)))
+            }
+        })?
+        .data;
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
+        &coerced_expr,
+        &df_schema,
+        &props,
+    )?;
+    assert!(physical_expr.evaluate(&batch).is_ok());
+
+    Ok(())
+}
+
+fn make_field(name: &str, data_type: DataType) -> Field {
+    let nullable = false;
+    Field::new(name, data_type, nullable)
+}
+
+fn make_ts_field(name: &str) -> Field {
+    let tz = None;
+    make_field(name, DataType::Timestamp(TimeUnit::Nanosecond, tz))
 }

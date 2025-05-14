@@ -17,22 +17,31 @@
 
 //! Math function: `power()`.
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use super::log::LogFunc;
 
 use arrow::array::{ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
-    DataFusionError, Result, ScalarValue,
+    arrow_datafusion_err, exec_datafusion_err, exec_err, internal_datafusion_err,
+    plan_datafusion_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF, TypeSignature,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns a base expression raised to the power of an exponent.",
+    syntax_example = "power(base, exponent)",
+    standard_argument(name = "base", prefix = "Numeric"),
+    standard_argument(name = "exponent", prefix = "Exponent numeric")
+)]
 #[derive(Debug)]
 pub struct PowerFunc {
     signature: Signature,
@@ -84,8 +93,8 @@ impl ScalarUDFImpl for PowerFunc {
         &self.aliases
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(&args.args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
             DataType::Float64 => {
@@ -99,8 +108,8 @@ impl ScalarUDFImpl for PowerFunc {
                 Arc::new(result) as _
             }
             DataType::Int64 => {
-                let bases = downcast_arg!(&args[0], "base", Int64Array);
-                let exponents = downcast_arg!(&args[1], "exponent", Int64Array);
+                let bases = downcast_named_arg!(&args[0], "base", Int64Array);
+                let exponents = downcast_named_arg!(&args[1], "exponent", Int64Array);
                 bases
                     .iter()
                     .zip(exponents.iter())
@@ -166,25 +175,8 @@ impl ScalarUDFImpl for PowerFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_power_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_power_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns a base expression raised to the power of an exponent.",
-            )
-            .with_syntax_example("power(base, exponent)")
-            .with_standard_argument("base", Some("Numeric"))
-            .with_standard_argument("exponent", Some("Exponent numeric"))
-            .build()
-            .unwrap()
-    })
 }
 
 /// Return true if this function call is a call to `Log`
@@ -195,19 +187,32 @@ fn is_log(func: &ScalarUDF) -> bool {
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;
+    use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float64_array, as_int64_array};
 
     use super::*;
 
     #[test]
     fn test_power_f64() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Float64Array::from(vec![2.0, 2.0, 3.0, 5.0]))), // base
-            ColumnarValue::Array(Arc::new(Float64Array::from(vec![3.0, 2.0, 4.0, 4.0]))), // exponent
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("a", DataType::Float64, true),
         ];
-
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    2.0, 2.0, 3.0, 5.0,
+                ]))), // base
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    3.0, 2.0, 4.0, 4.0,
+                ]))), // exponent
+            ],
+            arg_fields: arg_fields.iter().collect(),
+            number_rows: 4,
+            return_field: &Field::new("f", DataType::Float64, true),
+        };
         let result = PowerFunc::new()
-            .invoke(&args)
+            .invoke_with_args(args)
             .expect("failed to initialize function power");
 
         match result {
@@ -228,13 +233,21 @@ mod tests {
 
     #[test]
     fn test_power_i64() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("a", DataType::Int64, true),
         ];
-
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
+            ],
+            arg_fields: arg_fields.iter().collect(),
+            number_rows: 4,
+            return_field: &Field::new("f", DataType::Int64, true),
+        };
         let result = PowerFunc::new()
-            .invoke(&args)
+            .invoke_with_args(args)
             .expect("failed to initialize function power");
 
         match result {

@@ -16,18 +16,37 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
-use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
-use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+use arrow::array::{
+    ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringArrayType,
 };
+use arrow::datatypes::{ArrowNativeType, DataType, Field, Int32Type, Int64Type};
+use datafusion_common::types::logical_string;
+use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
+    Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.",
+    syntax_example = "strpos(str, substr)",
+    alternative_syntax = "position(substr in origstr)",
+    sql_example = r#"```sql
+> select strpos('datafusion', 'fus');
++----------------------------------------+
+| strpos(Utf8("datafusion"),Utf8("fus")) |
++----------------------------------------+
+| 5                                      |
++----------------------------------------+ 
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "substr", description = "Substring expression to search for.")
+)]
 #[derive(Debug)]
 pub struct StrposFunc {
     signature: Signature,
@@ -43,7 +62,13 @@ impl Default for StrposFunc {
 impl StrposFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("instr"), String::from("position")],
         }
     }
@@ -62,12 +87,30 @@ impl ScalarUDFImpl for StrposFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "strpos/instr/position")
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(strpos, vec![])(args)
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<Field> {
+        utf8_to_int_type(args.arg_fields[0].data_type(), "strpos/instr/position").map(
+            |data_type| {
+                Field::new(
+                    self.name(),
+                    data_type,
+                    args.arg_fields.iter().any(|x| x.is_nullable()),
+                )
+            },
+        )
+    }
+
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(strpos, vec![])(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -75,32 +118,8 @@ impl ScalarUDFImpl for StrposFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_strpos_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_strpos_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.")
-            .with_syntax_example("strpos(str, substr)")
-            .with_sql_example(r#"```sql
-> select strpos('datafusion', 'fus');
-+----------------------------------------+
-| strpos(Utf8("datafusion"),Utf8("fus")) |
-+----------------------------------------+
-| 5                                      |
-+----------------------------------------+ 
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("substr", "Substring expression to search for.")
-            .with_alternative_syntax("position(substr in origstr)")
-            .build()
-            .unwrap()
-    })
 }
 
 fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -108,6 +127,11 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
         (DataType::Utf8, DataType::Utf8) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string::<i32>();
+            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+        }
+        (DataType::Utf8, DataType::Utf8View) => {
+            let string_array = args[0].as_string::<i32>();
+            let substring_array = args[1].as_string_view();
             calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
         }
         (DataType::Utf8, DataType::LargeUtf8) => {
@@ -118,6 +142,11 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
         (DataType::LargeUtf8, DataType::Utf8) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string::<i32>();
+            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+        }
+        (DataType::LargeUtf8, DataType::Utf8View) => {
+            let string_array = args[0].as_string::<i64>();
+            let substring_array = args[1].as_string_view();
             calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -170,13 +199,13 @@ where
                 // the sub vector in the main vector. This is faster than string.find() method.
                 if ascii_only {
                     // If the substring is empty, the result is 1.
-                    if substring.as_bytes().is_empty() {
+                    if substring.is_empty() {
                         T::Native::from_usize(1)
                     } else {
                         T::Native::from_usize(
                             string
                                 .as_bytes()
-                                .windows(substring.as_bytes().len())
+                                .windows(substring.len())
                                 .position(|w| w == substring.as_bytes())
                                 .map(|x| x + 1)
                                 .unwrap_or(0),
@@ -205,6 +234,7 @@ mod tests {
     use arrow::array::{Array, Int32Array, Int64Array};
     use arrow::datatypes::DataType::{Int32, Int64};
 
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -215,7 +245,7 @@ mod tests {
         ($lhs:literal, $rhs:literal -> $result:literal; $t1:ident $t2:ident $t3:ident $t4:ident $t5:ident) => {
             test_function!(
                 StrposFunc::new(),
-                &[
+                vec![
                     ColumnarValue::Scalar(ScalarValue::$t1(Some($lhs.to_owned()))),
                     ColumnarValue::Scalar(ScalarValue::$t2(Some($rhs.to_owned()))),
                 ],
@@ -291,5 +321,28 @@ mod tests {
         test_strpos!("", "a" -> 0; Utf8View LargeUtf8 i32 Int32 Int32Array);
         test_strpos!("", "" -> 1; Utf8View LargeUtf8 i32 Int32 Int32Array);
         test_strpos!("ДатаФусион数据融合📊🔥", "📊" -> 15; Utf8View LargeUtf8 i32 Int32 Int32Array);
+    }
+
+    #[test]
+    fn nullable_return_type() {
+        fn get_nullable(string_array_nullable: bool, substring_nullable: bool) -> bool {
+            let strpos = StrposFunc::new();
+            let args = datafusion_expr::ReturnFieldArgs {
+                arg_fields: &[
+                    Field::new("f1", DataType::Utf8, string_array_nullable),
+                    Field::new("f2", DataType::Utf8, substring_nullable),
+                ],
+                scalar_arguments: &[None::<&ScalarValue>, None::<&ScalarValue>],
+            };
+
+            strpos.return_field_from_args(args).unwrap().is_nullable()
+        }
+
+        assert!(!get_nullable(false, false));
+
+        // If any of the arguments is nullable, the result is nullable
+        assert!(get_nullable(true, false));
+        assert!(get_nullable(false, true));
+        assert!(get_nullable(true, true));
     }
 }

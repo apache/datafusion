@@ -15,41 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use arrow::datatypes::{
-    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
-use arrow_array::{ArrayRef, RecordBatch};
-use arrow_schema::{DataType, Field, Schema};
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
+use arrow::array::RecordBatch;
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::sorts::sort::sort_batch;
-use rand::{
-    rngs::{StdRng, ThreadRng},
-    thread_rng, Rng, SeedableRng,
-};
-use test_utils::{
-    array_gen::{PrimitiveArrayGenerator, StringArrayGenerator},
-    stagger_batch,
-};
+use test_utils::stagger_batch;
 
-/// Config for Data sets generator
+use crate::fuzz_cases::record_batch_generator::{ColumnDescr, RecordBatchGenerator};
+
+/// Config for Dataset generator
 ///
 /// # Parameters
 ///   - `columns`, you just need to define `column name`s and `column data type`s
-///     fot the test datasets, and then they will be randomly generated from generator
-///     when you can `generate` function
+///     for the test datasets, and then they will be randomly generated from the generator
+///     when you call `generate` function
 ///         
-///   - `rows_num_range`, the rows num of the datasets will be randomly generated
-///      among this range
+///   - `rows_num_range`, the number of rows in the datasets will be randomly generated
+///     within this range
 ///
-///   - `sort_keys`, if `sort_keys` are defined, when you can `generate`, the generator
-///      will generate one `base dataset` firstly. Then the `base dataset` will be sorted
-///      based on each `sort_key` respectively. And finally `len(sort_keys) + 1` datasets
-///      will be returned
+///   - `sort_keys`, if `sort_keys` are defined, when you call the `generate` function, the generator
+///     will generate one `base dataset` firstly. Then the `base dataset` will be sorted
+///     based on each `sort_key` respectively. And finally `len(sort_keys) + 1` datasets
+///     will be returned
 ///
 #[derive(Debug, Clone)]
 pub struct DatasetGeneratorConfig {
@@ -62,23 +51,25 @@ pub struct DatasetGeneratorConfig {
     /// Additional optional sort keys
     ///
     /// The generated datasets always include a non-sorted copy. For each
-    /// element in `sort_keys_set`, an additional datasets is created that
+    /// element in `sort_keys_set`, an additional dataset is created that
     /// is sorted by these values as well.
     pub sort_keys_set: Vec<Vec<String>>,
 }
 
 impl DatasetGeneratorConfig {
-    /// return a list of all column names
+    /// Return a list of all column names
     pub fn all_columns(&self) -> Vec<&str> {
         self.columns.iter().map(|d| d.name.as_str()).collect()
     }
 
-    /// return a list of column names that are "numeric"
+    /// Return a list of column names that are "numeric"
     pub fn numeric_columns(&self) -> Vec<&str> {
         self.columns
             .iter()
             .filter_map(|d| {
-                if d.column_type.is_numeric() {
+                if d.column_type.is_numeric()
+                    && !matches!(d.column_type, DataType::Float32 | DataType::Float64)
+                {
                     Some(d.name.as_str())
                 } else {
                     None
@@ -90,15 +81,36 @@ impl DatasetGeneratorConfig {
 
 /// Dataset generator
 ///
-/// It will generate one random [`Dataset`]s when `generate` function is called.
+/// It will generate random [`Dataset`]s when the `generate` function is called. For each
+/// sort key in `sort_keys_set`, an additional sorted dataset will be generated, and the
+/// dataset will be chunked into staggered batches.
+///
+/// # Example
+/// For `DatasetGenerator` with `sort_keys_set = [["a"], ["b"]]`, it will generate 2
+/// datasets. The first one will be sorted by column `a` and get randomly chunked
+/// into staggered batches. It might look like the following:
+/// ```text
+/// a b
+/// ----
+/// 1 2 <-- batch 1
+/// 1 1
+///
+/// 2 1 <-- batch 2
+///
+/// 3 3 <-- batch 3
+/// 4 3
+/// 4 1
+/// ```
+///
+/// # Implementation details:
 ///
 /// The generation logic in `generate`:
 ///
 ///   - Randomly generate a base record from `batch_generator` firstly.
 ///     And `columns`, `rows_num_range` in `config`(detail can see `DataSetsGeneratorConfig`),
 ///     will be used in generation.
-///   
-///   - Sort the batch according to `sort_keys` in `config` to generator another
+///
+///   - Sort the batch according to `sort_keys` in `config` to generate another
 ///     `len(sort_keys)` sorted batches.
 ///   
 ///   - Split each batch to multiple batches which each sub-batch in has the randomly `rows num`,
@@ -123,7 +135,7 @@ impl DatasetGenerator {
         }
     }
 
-    pub fn generate(&self) -> Result<Vec<Dataset>> {
+    pub fn generate(&mut self) -> Result<Vec<Dataset>> {
         let mut datasets = Vec::with_capacity(self.sort_keys_set.len() + 1);
 
         // Generate the base batch (unsorted)
@@ -173,295 +185,9 @@ impl Dataset {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ColumnDescr {
-    /// Column name
-    name: String,
-
-    /// Data type of this column
-    column_type: DataType,
-
-    /// The maximum number of distinct values in this column.
-    ///
-    /// See [`ColumnDescr::with_max_num_distinct`] for more information
-    max_num_distinct: Option<usize>,
-}
-
-impl ColumnDescr {
-    #[inline]
-    pub fn new(name: &str, column_type: DataType) -> Self {
-        Self {
-            name: name.to_string(),
-            column_type,
-            max_num_distinct: None,
-        }
-    }
-
-    /// set the maximum number of distinct values in this column
-    ///
-    /// If `None`, the number of distinct values is randomly selected between 1
-    /// and the number of rows.
-    pub fn with_max_num_distinct(mut self, num_distinct: usize) -> Self {
-        self.max_num_distinct = Some(num_distinct);
-        self
-    }
-}
-
-/// Record batch generator
-struct RecordBatchGenerator {
-    min_rows_nun: usize,
-
-    max_rows_num: usize,
-
-    columns: Vec<ColumnDescr>,
-
-    candidate_null_pcts: Vec<f64>,
-}
-
-macro_rules! generate_string_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $OFFSET_TYPE:ty) => {{
-        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
-        let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
-        let max_len = $BATCH_GEN_RNG.gen_range(1..50);
-
-        let mut generator = StringArrayGenerator {
-            max_len,
-            num_strings: $NUM_ROWS,
-            num_distinct_strings: $MAX_NUM_DISTINCT,
-            null_pct,
-            rng: $ARRAY_GEN_RNG,
-        };
-
-        generator.gen_data::<$OFFSET_TYPE>()
-    }};
-}
-
-macro_rules! generate_primitive_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {
-        paste::paste! {{
-            let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
-            let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
-
-            let mut generator = PrimitiveArrayGenerator {
-                num_primitives: $NUM_ROWS,
-                num_distinct_primitives: $MAX_NUM_DISTINCT,
-                null_pct,
-                rng: $ARRAY_GEN_RNG,
-            };
-
-            generator.gen_data::<$ARROW_TYPE>()
-    }}}
-}
-
-impl RecordBatchGenerator {
-    fn new(min_rows_nun: usize, max_rows_num: usize, columns: Vec<ColumnDescr>) -> Self {
-        let candidate_null_pcts = vec![0.0, 0.01, 0.1, 0.5];
-
-        Self {
-            min_rows_nun,
-            max_rows_num,
-            columns,
-            candidate_null_pcts,
-        }
-    }
-
-    fn generate(&self) -> Result<RecordBatch> {
-        let mut rng = thread_rng();
-        let num_rows = rng.gen_range(self.min_rows_nun..=self.max_rows_num);
-        let array_gen_rng = StdRng::from_seed(rng.gen());
-
-        // Build arrays
-        let mut arrays = Vec::with_capacity(self.columns.len());
-        for col in self.columns.iter() {
-            let array = self.generate_array_of_type(
-                col,
-                num_rows,
-                &mut rng,
-                array_gen_rng.clone(),
-            );
-            arrays.push(array);
-        }
-
-        // Build schema
-        let fields = self
-            .columns
-            .iter()
-            .map(|col| Field::new(col.name.clone(), col.column_type.clone(), true))
-            .collect::<Vec<_>>();
-        let schema = Arc::new(Schema::new(fields));
-
-        RecordBatch::try_new(schema, arrays).map_err(|e| arrow_datafusion_err!(e))
-    }
-
-    fn generate_array_of_type(
-        &self,
-        col: &ColumnDescr,
-        num_rows: usize,
-        batch_gen_rng: &mut ThreadRng,
-        array_gen_rng: StdRng,
-    ) -> ArrayRef {
-        let num_distinct = if num_rows > 1 {
-            batch_gen_rng.gen_range(1..num_rows)
-        } else {
-            num_rows
-        };
-        // cap to at most the num_distinct values
-        let max_num_distinct = col
-            .max_num_distinct
-            .map(|max| num_distinct.min(max))
-            .unwrap_or(num_distinct);
-
-        match col.column_type {
-            DataType::Int8 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    Int8Type
-                )
-            }
-            DataType::Int16 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    Int16Type
-                )
-            }
-            DataType::Int32 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    Int32Type
-                )
-            }
-            DataType::Int64 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    Int64Type
-                )
-            }
-            DataType::UInt8 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    UInt8Type
-                )
-            }
-            DataType::UInt16 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    UInt16Type
-                )
-            }
-            DataType::UInt32 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    UInt32Type
-                )
-            }
-            DataType::UInt64 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    UInt64Type
-                )
-            }
-            DataType::Float32 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    Float32Type
-                )
-            }
-            DataType::Float64 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    Float64Type
-                )
-            }
-            DataType::Date32 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    Date32Type
-                )
-            }
-            DataType::Date64 => {
-                generate_primitive_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    Date64Type
-                )
-            }
-            DataType::Utf8 => {
-                generate_string_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    i32
-                )
-            }
-            DataType::LargeUtf8 => {
-                generate_string_array!(
-                    self,
-                    num_rows,
-                    max_num_distinct,
-                    batch_gen_rng,
-                    array_gen_rng,
-                    i64
-                )
-            }
-            _ => {
-                panic!("Unsupported data generator type: {}", col.column_type)
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use arrow_array::UInt32Array;
+    use arrow::array::UInt32Array;
 
     use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 
@@ -471,8 +197,8 @@ mod test {
     fn test_generated_datasets() {
         // The test datasets generation config
         // We expect that after calling `generate`
-        //  - Generate 2 datasets
-        //  - They have 2 column "a" and "b",
+        //  - Generates two datasets
+        //  - They have two columns, "a" and "b",
         //    "a"'s type is `Utf8`, and "b"'s type is `UInt32`
         //  - One of them is unsorted, another is sorted by column "b"
         //  - Their rows num should be same and between [16, 32]
@@ -485,7 +211,7 @@ mod test {
             sort_keys_set: vec![vec!["b".to_string()]],
         };
 
-        let gen = DatasetGenerator::new(config);
+        let mut gen = DatasetGenerator::new(config);
         let datasets = gen.generate().unwrap();
 
         // Should Generate 2 datasets
@@ -507,7 +233,7 @@ mod test {
         let batch = &datasets[1].batches[0];
         check_fields(batch);
 
-        // One batches should be sort by "b"
+        // One of the batches should be sorted by "b"
         let sorted_batches = &datasets[1].batches;
         let b_vals = sorted_batches.iter().flat_map(|batch| {
             let uint_array = batch
@@ -524,10 +250,10 @@ mod test {
             prev_b_val = b_val;
         }
 
-        // Two batches should be same after sorting
+        // Two batches should be the same after sorting
         check_equality_of_batches(&datasets[0].batches, &datasets[1].batches).unwrap();
 
-        // Rows num should between [16, 32]
+        // The number of rows should be between [16, 32]
         let rows_num0 = datasets[0]
             .batches
             .iter()

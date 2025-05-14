@@ -35,6 +35,14 @@ create table test_substr as
 select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
 
 statement ok
+create table test_datetime as
+select
+  arrow_cast(column1, 'Utf8View') as ts,
+  arrow_cast(column2, 'Utf8View') as d,
+  arrow_cast(column3, 'Utf8View') as t
+from test_datetime_base;
+
+statement ok
 drop table test_source
 
 #
@@ -50,6 +58,9 @@ drop table test_basic_operator;
 
 statement ok
 drop table test_substr_base;
+
+statement ok
+drop table test_datetime_base;
 
 
 # --------------------------------------
@@ -92,9 +103,6 @@ select octet_length(column1_utf8view) from test;
 7
 0
 NULL
-
-query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
-select bit_length(column1_utf8view) from test;
 
 query T
 select btrim(column1_large_utf8) from test;
@@ -291,7 +299,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(test.column1_utf8view, test.column2_utf8view) AS c1, starts_with(test.column1_utf8view, CAST(test.column2_utf8 AS Utf8View)) AS c2, starts_with(test.column1_utf8view, CAST(test.column2_large_utf8 AS Utf8View)) AS c3
+01)Projection: starts_with(test.column1_utf8view, test.column2_utf8view) AS c1, starts_with(test.column1_utf8view, test.column2_utf8) AS c2, starts_with(test.column1_utf8view, test.column2_large_utf8) AS c3
 02)--TableScan: test projection=[column2_utf8, column2_large_utf8, column1_utf8view, column2_utf8view]
 
 query BBB
@@ -318,7 +326,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(CAST(test.column1_utf8 AS Utf8View), test.column2_utf8view) AS c1, starts_with(test.column1_utf8, test.column2_utf8) AS c3, starts_with(CAST(test.column1_utf8 AS LargeUtf8), test.column2_large_utf8) AS c4
+01)Projection: starts_with(test.column1_utf8, test.column2_utf8view) AS c1, starts_with(test.column1_utf8, test.column2_utf8) AS c3, starts_with(test.column1_utf8, test.column2_large_utf8) AS c4
 02)--TableScan: test projection=[column1_utf8, column2_utf8, column2_large_utf8, column2_utf8view]
 
 query BBB
@@ -347,9 +355,51 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
+01)Projection: test.column1_utf8view LIKE Utf8View("äöüß%") AS c1, CASE test.column1_utf8view IS NOT NULL WHEN Boolean(true) THEN Boolean(true) END AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
+## Test STARTS_WITH is rewitten to LIKE when the pattern is a constant
+query TT
+EXPLAIN SELECT
+  STARTS_WITH(column1_utf8, 'foo%') as c1,
+  STARTS_WITH(column1_large_utf8, 'foo%') as c2,
+  STARTS_WITH(column1_utf8view, 'foo%') as c3,
+  STARTS_WITH(column1_utf8, 'f_o') as c4,
+  STARTS_WITH(column1_large_utf8, 'f_o') as c5,
+  STARTS_WITH(column1_utf8view, 'f_o') as c6
+FROM test;
+----
+logical_plan
+01)Projection: test.column1_utf8 LIKE Utf8("foo\%%") AS c1, test.column1_large_utf8 LIKE LargeUtf8("foo\%%") AS c2, test.column1_utf8view LIKE Utf8View("foo\%%") AS c3, test.column1_utf8 LIKE Utf8("f_o%") AS c4, test.column1_large_utf8 LIKE LargeUtf8("f_o%") AS c5, test.column1_utf8view LIKE Utf8View("f_o%") AS c6
+02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column1_utf8view]
+
+## Test STARTS_WITH works with column arguments
+query TT
+EXPLAIN SELECT
+  STARTS_WITH(column1_utf8, substr(column1_utf8, 1, 2)) as c1,
+  STARTS_WITH(column1_large_utf8, substr(column1_large_utf8, 1, 2)) as c2,
+  STARTS_WITH(column1_utf8view, substr(column1_utf8view, 1, 2)) as c3
+FROM test;
+----
+logical_plan
+01)Projection: starts_with(test.column1_utf8, substr(test.column1_utf8, Int64(1), Int64(2))) AS c1, starts_with(test.column1_large_utf8, substr(test.column1_large_utf8, Int64(1), Int64(2))) AS c2, starts_with(test.column1_utf8view, substr(test.column1_utf8view, Int64(1), Int64(2))) AS c3
+02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column1_utf8view]
+
+query BBB
+SELECT
+  STARTS_WITH(column1_utf8, substr(column1_utf8, 1, 2)) as c1,
+  STARTS_WITH(column1_large_utf8, substr(column1_large_utf8, 1, 2)) as c2,
+  STARTS_WITH(column1_utf8view, substr(column1_utf8view, 1, 2)) as c3
+FROM test;
+----
+true true true
+true true true
+true true true
+true true true
+NULL NULL NULL
+
+
+# Ensure that INIT cap works with utf8view
 query TT
 EXPLAIN SELECT
   INITCAP(column1_utf8view) as c
@@ -391,12 +441,12 @@ drop table test_lowercase
 ## Ensure no casts for LIKE/ILIKE
 query TT
 EXPLAIN SELECT
-  column1_utf8view like 'foo' as "like",
-  column1_utf8view ilike 'foo' as "ilike"
+  column1_utf8view like '%foo%' as "like",
+  column1_utf8view ilike '%foo%' as "ilike"
 FROM test;
 ----
 logical_plan
-01)Projection: test.column1_utf8view LIKE Utf8View("foo") AS like, test.column1_utf8view ILIKE Utf8View("foo") AS ilike
+01)Projection: test.column1_utf8view LIKE Utf8View("%foo%") AS like, test.column1_utf8view ILIKE Utf8View("%foo%") AS ilike
 02)--TableScan: test projection=[column1_utf8view]
 
 
@@ -480,7 +530,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: btrim(test.column1_utf8view, Utf8View("foo")) AS l
+01)Projection: btrim(test.column1_utf8view, Utf8("foo")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test BTRIM with Utf8View bytes longer than 12
@@ -490,7 +540,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: btrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+01)Projection: btrim(test.column1_utf8view, Utf8("this is longer than 12")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for LTRIM
@@ -511,7 +561,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ltrim(test.column1_utf8view, Utf8View("foo")) AS l
+01)Projection: ltrim(test.column1_utf8view, Utf8("foo")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test LTRIM with Utf8View bytes longer than 12
@@ -521,7 +571,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ltrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+01)Projection: ltrim(test.column1_utf8view, Utf8("this is longer than 12")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 ## ensure no casts for RTRIM
@@ -542,7 +592,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rtrim(test.column1_utf8view, Utf8View("foo")) AS l
+01)Projection: rtrim(test.column1_utf8view, Utf8("foo")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test RTRIM with Utf8View bytes longer than 12
@@ -552,7 +602,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rtrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+01)Projection: rtrim(test.column1_utf8view, Utf8("this is longer than 12")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for CHARACTER_LENGTH
@@ -610,7 +660,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: contains(test.column1_utf8view, Utf8View("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, CAST(test.column2_large_utf8 AS Utf8View)) AS c3, contains(CAST(test.column1_utf8 AS Utf8View), test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(CAST(test.column1_utf8 AS LargeUtf8), test.column2_large_utf8) AS c6, contains(CAST(test.column1_large_utf8 AS Utf8View), test.column1_utf8view) AS c7, contains(test.column1_large_utf8, CAST(test.column2_utf8 AS LargeUtf8)) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
+01)Projection: contains(test.column1_utf8view, Utf8("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, test.column2_large_utf8) AS c3, contains(test.column1_utf8, test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(test.column1_utf8, test.column2_large_utf8) AS c6, contains(test.column1_large_utf8, test.column1_utf8view) AS c7, contains(test.column1_large_utf8, test.column2_utf8) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
 02)--TableScan: test projection=[column1_utf8, column2_utf8, column1_large_utf8, column2_large_utf8, column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for ENDS_WITH
@@ -621,7 +671,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ends_with(test.column1_utf8view, Utf8View("foo")) AS c1, ends_with(test.column2_utf8view, test.column2_utf8view) AS c2
+01)Projection: ends_with(test.column1_utf8view, Utf8("foo")) AS c1, ends_with(test.column2_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LEVENSHTEIN
@@ -632,7 +682,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: levenshtein(test.column1_utf8view, Utf8View("foo")) AS c1, levenshtein(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: levenshtein(test.column1_utf8view, Utf8("foo")) AS c1, levenshtein(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LOWER
@@ -744,7 +794,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: regexp_match(CAST(test.column1_utf8view AS Utf8), Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+01)Projection: regexp_match(test.column1_utf8view, Utf8View("^https?://(?:www\.)?([^/]+)/.*$")) AS k
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REGEXP_REPLACE
@@ -775,7 +825,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: replace(test.column1_utf8view, Utf8View("foo"), Utf8View("bar")) AS c1, replace(test.column1_utf8view, test.column2_utf8view, Utf8View("bar")) AS c2
+01)Projection: replace(test.column1_utf8view, Utf8("foo"), Utf8("bar")) AS c1, replace(test.column1_utf8view, test.column2_utf8view, Utf8("bar")) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for REVERSE
@@ -856,7 +906,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: strpos(test.column1_utf8view, Utf8View("f")) AS c, strpos(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: strpos(test.column1_utf8view, Utf8("f")) AS c, strpos(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SUBSTR
@@ -890,7 +940,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(test.column1_utf8view, Utf8View("foo")) AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: test.column1_utf8view LIKE Utf8View("foo%") AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for TRANSLATE
@@ -933,6 +983,115 @@ logical_plan
 01)Projection: to_timestamp(test.column1_utf8view, Utf8("a,b,c,d")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
+## Ensure no casts for NVL
+query TT
+EXPLAIN SELECT NVL(column1_utf8view, 'a') as c2 FROM test;
+----
+logical_plan
+01)Projection: nvl(test.column1_utf8view, Utf8View("a")) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for nullif
+query TT
+EXPLAIN SELECT
+  nullif(column1_utf8view, 'a') as c
+FROM test;
+----
+logical_plan
+01)Projection: nullif(test.column1_utf8view, Utf8View("a")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for nullif
+query TT
+EXPLAIN SELECT
+  nullif(column1_utf8view, column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: nullif(test.column1_utf8view, test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for md5
+query TT
+EXPLAIN SELECT
+  md5(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: md5(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha224
+query TT
+EXPLAIN SELECT
+  sha224(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha224(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha256
+query TT
+EXPLAIN SELECT
+  sha256(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha256(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha384
+query TT
+EXPLAIN SELECT
+  sha384(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha384(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha512
+query TT
+EXPLAIN SELECT
+  sha512(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha512(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for digest
+query TT
+EXPLAIN SELECT
+  digest(column1_utf8view, 'md5') as c
+FROM test;
+----
+logical_plan
+01)Projection: digest(test.column1_utf8view, Utf8("md5")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no unexpected casts for string_to_array
+query TT
+EXPLAIN SELECT
+  string_to_array(column1_utf8view, ',') AS c
+FROM test;
+----
+logical_plan
+01)Projection: string_to_array(test.column1_utf8view, Utf8(",")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no unexpected casts for array_to_string
+query TT
+EXPLAIN SELECT
+  array_to_string(string_to_array(column1_utf8view, NULL), ',') AS c
+FROM test;
+----
+logical_plan
+01)Projection: array_to_string(string_to_array(test.column1_utf8view, Utf8View(NULL)), Utf8(",")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+
 ## Ensure no casts for binary operators
 # `~` operator (regex match)
 query TT
@@ -941,7 +1100,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) LIKE Utf8("%an%") AS c1
+01)Projection: test.column1_utf8view ~ Utf8View("an") AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 # `~*` operator (regex match case-insensitive)
@@ -951,7 +1110,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) ~* Utf8("^a.{3}e") AS c1
+01)Projection: test.column1_utf8view ~* Utf8View("^a.{3}e") AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 # `!~~` operator (not like match)
@@ -961,7 +1120,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) !~~ Utf8("xia_g%g") AS c1
+01)Projection: test.column1_utf8view !~~ Utf8View("xia_g%g") AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 # `!~~*` operator (not like match case-insensitive)
@@ -971,7 +1130,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) !~~* Utf8("xia_g%g") AS c1
+01)Projection: test.column1_utf8view !~~* Utf8View("xia_g%g") AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 # coercions between stringview and date types

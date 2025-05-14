@@ -31,8 +31,7 @@ SQL Reference
    operators
    aggregate_functions
    window_functions
-   window_functions_new
    scalar_functions
    special_functions
-   sql_status
-   write_options
+   format_options
+   prepared_statements

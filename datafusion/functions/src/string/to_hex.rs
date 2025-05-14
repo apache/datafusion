@@ -16,9 +16,10 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::fmt::Write;
+use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Int32Type, Int64Type,
 };
@@ -27,9 +28,10 @@ use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+
 use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
@@ -39,26 +41,48 @@ where
 {
     let integer_array = as_primitive_array::<T>(&args[0])?;
 
-    let result = integer_array
-        .iter()
-        .map(|integer| {
-            if let Some(value) = integer {
-                if let Some(value_usize) = value.to_usize() {
-                    Ok(Some(format!("{value_usize:x}")))
-                } else if let Some(value_isize) = value.to_isize() {
-                    Ok(Some(format!("{value_isize:x}")))
-                } else {
-                    exec_err!("Unsupported data type {integer:?} for function to_hex")
-                }
+    let mut result = GenericStringBuilder::<i32>::with_capacity(
+        integer_array.len(),
+        // * 8 to convert to bits, / 4 bits per hex char
+        integer_array.len() * (T::Native::get_byte_width() * 8 / 4),
+    );
+
+    for integer in integer_array {
+        if let Some(value) = integer {
+            if let Some(value_usize) = value.to_usize() {
+                write!(result, "{value_usize:x}")?;
+            } else if let Some(value_isize) = value.to_isize() {
+                write!(result, "{value_isize:x}")?;
             } else {
-                Ok(None)
+                return exec_err!(
+                    "Unsupported data type {integer:?} for function to_hex"
+                );
             }
-        })
-        .collect::<Result<GenericStringArray<i32>>>()?;
+            result.append_value("");
+        } else {
+            result.append_null();
+        }
+    }
+
+    let result = result.finish();
 
     Ok(Arc::new(result) as ArrayRef)
 }
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Converts an integer to a hexadecimal string.",
+    syntax_example = "to_hex(int)",
+    sql_example = r#"```sql
+> select to_hex(12345689);
++-------------------------+
+| to_hex(Int64(12345689)) |
++-------------------------+
+| bc6159                  |
++-------------------------+
+```"#,
+    standard_argument(name = "int", prefix = "Integer")
+)]
 #[derive(Debug)]
 pub struct ToHexFunc {
     signature: Signature,
@@ -103,41 +127,21 @@ impl ScalarUDFImpl for ToHexFunc {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        match args[0].data_type() {
-            DataType::Int32 => make_scalar_function(to_hex::<Int32Type>, vec![])(args),
-            DataType::Int64 => make_scalar_function(to_hex::<Int64Type>, vec![])(args),
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
+            DataType::Int32 => {
+                make_scalar_function(to_hex::<Int32Type>, vec![])(&args.args)
+            }
+            DataType::Int64 => {
+                make_scalar_function(to_hex::<Int64Type>, vec![])(&args.args)
+            }
             other => exec_err!("Unsupported data type {other:?} for function to_hex"),
         }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_hex_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_hex_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Converts an integer to a hexadecimal string.")
-            .with_syntax_example("to_hex(int)")
-            .with_sql_example(
-                r#"```sql
-> select to_hex(12345689);
-+-------------------------+
-| to_hex(Int64(12345689)) |
-+-------------------------+
-| bc6159                  |
-+-------------------------+
-```"#,
-            )
-            .with_standard_argument("int", Some("Integer"))
-            .build()
-            .unwrap()
-    })
 }
 
 #[cfg(test)]

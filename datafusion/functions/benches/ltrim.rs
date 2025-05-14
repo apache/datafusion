@@ -18,12 +18,13 @@
 extern crate criterion;
 
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
+use arrow::datatypes::{DataType, Field};
 use criterion::{
     black_box, criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup,
     Criterion, SamplingMode,
 };
 use datafusion_common::ScalarValue;
-use datafusion_expr::{ColumnarValue, ScalarUDF};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fmt, sync::Arc};
@@ -135,14 +136,25 @@ fn run_with_string_type<M: Measurement>(
     string_type: StringArrayType,
 ) {
     let args = create_args(size, characters, trimmed, remaining_len, string_type);
+    let arg_fields_owned = args
+        .iter()
+        .enumerate()
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .collect::<Vec<_>>();
+    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
     group.bench_function(
         format!(
             "{string_type} [size={size}, len_before={len}, len_after={remaining_len}]",
         ),
         |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(ltrim.invoke(&args))
+                let args_cloned = args.clone();
+                black_box(ltrim.invoke_with_args(ScalarFunctionArgs {
+                    args: args_cloned,
+                    arg_fields: arg_fields.clone(),
+                    number_rows: size,
+                    return_field: &Field::new("f", DataType::Utf8, true),
+                }))
             })
         },
     );

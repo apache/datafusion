@@ -37,9 +37,7 @@ use datafusion::execution::context::SessionContext;
 
 use tokio::runtime::Runtime;
 
-fn query(ctx: Arc<Mutex<SessionContext>>, sql: &str) {
-    let rt = Runtime::new().unwrap();
-
+fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     // execute the query
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     rt.block_on(df.collect()).unwrap();
@@ -104,11 +102,14 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let ctx = create_context();
+    let rt = Runtime::new().unwrap();
+
     c.bench_function("sort_and_limit_by_int", |b| {
-        let ctx = create_context();
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT c1, c13, c6, c10 \
                  FROM aggregate_test_100 \
                  ORDER BY c6
@@ -118,10 +119,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("sort_and_limit_by_float", |b| {
-        let ctx = create_context();
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT c1, c13, c12 \
                  FROM aggregate_test_100 \
                  ORDER BY c13
@@ -131,10 +132,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("sort_and_limit_lex_by_int", |b| {
-        let ctx = create_context();
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT c1, c13, c6, c10 \
                  FROM aggregate_test_100 \
                  ORDER BY c6 DESC, c10 DESC
@@ -144,10 +145,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("sort_and_limit_lex_by_string", |b| {
-        let ctx = create_context();
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT c1, c13, c6, c10 \
                  FROM aggregate_test_100 \
                  ORDER BY c1, c13

@@ -18,25 +18,26 @@
 //! [`ScalarUDFImpl`] definitions for array_replace, array_replace_n and array_replace_all functions.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, Capacities, MutableArrayData, OffsetSizeTrait,
+    new_null_array, Array, ArrayRef, AsArray, Capacities, GenericListArray,
+    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
-use arrow_array::GenericListArray;
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
-use arrow_schema::Field;
+use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_common::utils::ListCoercion;
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(ArrayReplace,
@@ -58,16 +59,53 @@ make_udf_expr_and_func!(ArrayReplaceAll,
     array_replace_all_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Replaces the first occurrence of the specified element with another specified element.",
+    syntax_example = "array_replace(array, from, to)",
+    sql_example = r#"```sql
+> select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
++--------------------------------------------------------+
+| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++--------------------------------------------------------+
+| [1, 5, 2, 3, 2, 1, 4]                                  |
++--------------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "from", description = "Initial element."),
+    argument(name = "to", description = "Final element.")
+)]
 #[derive(Debug)]
-pub(super) struct ArrayReplace {
+pub struct ArrayReplace {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayReplace {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayReplace {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(3, Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Element,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_replace")],
         }
     }
@@ -90,8 +128,11 @@ impl ScalarUDFImpl for ArrayReplace {
         Ok(args[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_replace_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_replace_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -99,47 +140,30 @@ impl ScalarUDFImpl for ArrayReplace {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_replace_doc())
+        self.doc()
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_replace_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Replaces the first occurrence of the specified element with another specified element.",
-            )
-            .with_syntax_example("array_replace(array, from, to)")
-            .with_sql_example(
-                r#"```sql
-> select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
-+--------------------------------------------------------+
-| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
-+--------------------------------------------------------+
-| [1, 5, 2, 3, 2, 1, 4]                                  |
-+--------------------------------------------------------+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Replaces the first `max` occurrences of the specified element with another specified element.",
+    syntax_example = "array_replace_n(array, from, to, max)",
+    sql_example = r#"```sql
+> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
++-------------------------------------------------------------------+
+| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
++-------------------------------------------------------------------+
+| [1, 5, 5, 3, 2, 1, 4]                                             |
++-------------------------------------------------------------------+
 ```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "from",
-                "Initial element.",
-            )
-            .with_argument(
-                "to",
-                "Final element.",
-            )
-            .build()
-            .unwrap()
-    })
-}
-
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "from", description = "Initial element."),
+    argument(name = "to", description = "Final element."),
+    argument(name = "max", description = "Number of first occurrences to replace.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayReplaceN {
     signature: Signature,
@@ -149,7 +173,20 @@ pub(super) struct ArrayReplaceN {
 impl ArrayReplaceN {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(4, Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Index,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_replace_n")],
         }
     }
@@ -172,8 +209,11 @@ impl ScalarUDFImpl for ArrayReplaceN {
         Ok(args[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_replace_n_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_replace_n_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -181,49 +221,29 @@ impl ScalarUDFImpl for ArrayReplaceN {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_replace_n_doc())
+        self.doc()
     }
 }
 
-fn get_array_replace_n_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Replaces the first `max` occurrences of the specified element with another specified element.",
-            )
-            .with_syntax_example("array_replace_n(array, from, to, max)")
-            .with_sql_example(
-                r#"```sql
-> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
-+-------------------------------------------------------------------+
-| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
-+-------------------------------------------------------------------+
-| [1, 5, 5, 3, 2, 1, 4]                                             |
-+-------------------------------------------------------------------+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Replaces all occurrences of the specified element with another specified element.",
+    syntax_example = "array_replace_all(array, from, to)",
+    sql_example = r#"```sql
+> select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
++------------------------------------------------------------+
+| array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++------------------------------------------------------------+
+| [1, 5, 5, 3, 5, 1, 4]                                      |
++------------------------------------------------------------+
 ```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "from",
-                "Initial element.",
-            )
-            .with_argument(
-                "to",
-                "Final element.",
-            )
-            .with_argument(
-                "max",
-                "Number of first occurrences to replace.",
-            )
-            .build()
-            .unwrap()
-    })
-}
-
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "from", description = "Initial element."),
+    argument(name = "to", description = "Final element.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayReplaceAll {
     signature: Signature,
@@ -233,7 +253,19 @@ pub(super) struct ArrayReplaceAll {
 impl ArrayReplaceAll {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(3, Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Element,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_replace_all")],
         }
     }
@@ -256,8 +288,11 @@ impl ScalarUDFImpl for ArrayReplaceAll {
         Ok(args[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_replace_all_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_replace_all_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -265,43 +300,8 @@ impl ScalarUDFImpl for ArrayReplaceAll {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_replace_all_doc())
+        self.doc()
     }
-}
-
-fn get_array_replace_all_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Replaces all occurrences of the specified element with another specified element.",
-            )
-            .with_syntax_example("array_replace_all(array, from, to)")
-            .with_sql_example(
-                r#"```sql
-> select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
-+------------------------------------------------------------+
-| array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
-+------------------------------------------------------------+
-| [1, 5, 5, 3, 5, 1, 4]                                      |
-+------------------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "from",
-                "Initial element.",
-            )
-            .with_argument(
-                "to",
-                "Final element.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 /// For each element of `list_array[i]`, replaces up to `arr_n[i]`  occurrences
@@ -341,12 +341,12 @@ fn general_replace<O: OffsetSizeTrait>(
         capacity,
     );
 
-    let mut valid = BooleanBufferBuilder::new(list_array.len());
+    let mut valid = NullBufferBuilder::new(list_array.len());
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
         if list_array.is_null(row_index) {
             offsets.push(offsets[row_index]);
-            valid.append(false);
+            valid.append_null();
             continue;
         }
 
@@ -373,7 +373,7 @@ fn general_replace<O: OffsetSizeTrait>(
                 end.to_usize().unwrap(),
             );
             offsets.push(offsets[row_index] + (end - start));
-            valid.append(true);
+            valid.append_non_null();
             continue;
         }
 
@@ -402,57 +402,53 @@ fn general_replace<O: OffsetSizeTrait>(
         }
 
         offsets.push(offsets[row_index] + (end - start));
-        valid.append(true);
+        valid.append_non_null();
     }
 
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", list_array.value_type(), true)),
+        Arc::new(Field::new_list_field(list_array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
-        Some(NullBuffer::new(valid.finish())),
+        arrow::array::make_array(data),
+        valid.finish(),
     )?))
 }
 
 pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!("array_replace expects three arguments");
-    }
+    let [array, from, to] = take_function_args("array_replace", args)?;
 
     // replace at most one occurrence for each element
-    let arr_n = vec![1; args[0].len()];
-    let array = &args[0];
+    let arr_n = vec![1; array.len()];
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i32>(list_array, from, to, arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i64>(list_array, from, to, arr_n)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => exec_err!("array_replace does not support type '{array_type:?}'."),
     }
 }
 
 pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 4 {
-        return exec_err!("array_replace_n expects four arguments");
-    }
+    let [array, from, to, max] = take_function_args("array_replace_n", args)?;
 
     // replace the specified number of occurrences
-    let arr_n = as_int64_array(&args[3])?.values().to_vec();
-    let array = &args[0];
+    let arr_n = as_int64_array(max)?.values().to_vec();
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i32>(list_array, from, to, arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i64>(list_array, from, to, arr_n)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {
             exec_err!("array_replace_n does not support type '{array_type:?}'.")
         }
@@ -460,22 +456,20 @@ pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 pub(crate) fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!("array_replace_all expects three arguments");
-    }
+    let [array, from, to] = take_function_args("array_replace_all", args)?;
 
     // replace all occurrences (up to "i64::MAX")
-    let arr_n = vec![i64::MAX; args[0].len()];
-    let array = &args[0];
+    let arr_n = vec![i64::MAX; array.len()];
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i32>(list_array, from, to, arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i64>(list_array, from, to, arr_n)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {
             exec_err!("array_replace_all does not support type '{array_type:?}'.")
         }

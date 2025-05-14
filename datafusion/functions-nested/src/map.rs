@@ -16,21 +16,22 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::{HashSet, VecDeque};
-use std::sync::{Arc, OnceLock};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
-use arrow::array::ArrayData;
-use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
-use arrow_buffer::{Buffer, ToByteSlice};
-use arrow_schema::{DataType, Field, SchemaBuilder};
+use arrow::array::{Array, ArrayData, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
+use arrow::buffer::Buffer;
+use arrow::datatypes::{DataType, Field, SchemaBuilder, ToByteSlice};
 
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, utils::take_function_args, HashSet, Result, ScalarValue,
+};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 use crate::make_array::make_array;
 
@@ -56,23 +57,18 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
 }
 
 fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!(
-            "make_map requires exactly 2 arguments, got {} instead",
-            args.len()
-        );
-    }
+    let [keys_arg, values_arg] = take_function_args("make_map", args)?;
 
     let can_evaluate_to_const = can_evaluate_to_const(args);
 
     // check the keys array is unique
-    let keys = get_first_array_ref(&args[0])?;
+    let keys = get_first_array_ref(keys_arg)?;
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
     }
     let key_array = keys.as_ref();
 
-    match &args[0] {
+    match keys_arg {
         ColumnarValue::Array(_) => {
             let row_keys = match key_array.data_type() {
                 DataType::List(_) => list_to_arrays::<i32>(&keys),
@@ -95,8 +91,8 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
 
-    let values = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(keys, values, can_evaluate_to_const, args[0].data_type())
+    let values = get_first_array_ref(values_arg)?;
+    make_map_batch_internal(keys, values, can_evaluate_to_const, keys_arg.data_type())
 }
 
 fn check_unique_keys(array: &dyn Array) -> Result<()> {
@@ -181,6 +177,50 @@ fn make_map_batch_internal(
     })
 }
 
+#[user_doc(
+    doc_section(label = "Map Functions"),
+    description = "Returns an Arrow map with the specified key-value pairs.\n\n\
+    The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.",
+    syntax_example = "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])",
+    sql_example = r#"
+```sql
+-- Using map function
+SELECT MAP('type', 'test');
+----
+{type: test}
+
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: NULL}
+
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
+
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
+
+-- Using make_map function
+SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
+----
+{POST: 41, HEAD: 33}
+
+SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
+----
+{key1: value1, key2: }
+```"#,
+    argument(
+        name = "key",
+        description = "For `map`: Expression to be used for key. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
+                        For `make_map`: The list of keys to be used in the map. Each key must be unique and non-null."
+    ),
+    argument(
+        name = "value",
+        description = "For `map`: Expression to be used for value. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
+                        For `make_map`: The list of values to be mapped to the corresponding keys."
+    )
+)]
 #[derive(Debug)]
 pub struct MapFunc {
     signature: Signature,
@@ -214,21 +254,16 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() % 2 != 0 {
-            return exec_err!(
-                "map requires an even number of arguments, got {} instead",
-                arg_types.len()
-            );
-        }
+        let [keys_arg, values_arg] = take_function_args(self.name(), arg_types)?;
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new(
             "key",
-            get_element_type(&arg_types[0])?.clone(),
+            get_element_type(keys_arg)?.clone(),
             false,
         ));
         builder.push(Field::new(
             "value",
-            get_element_type(&arg_types[1])?.clone(),
+            get_element_type(values_arg)?.clone(),
             true,
         ));
         let fields = builder.finish().fields;
@@ -238,70 +273,16 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_map_batch(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_map_batch(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_map_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_map_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-                Documentation::builder()
-                    .with_doc_section(DOC_SECTION_MAP)
-                    .with_description(
-                        "Returns an Arrow map with the specified key-value pairs.\n\n\
-                        The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null."
-                    )
-                    .with_syntax_example(
-                        "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])"
-                    )
-                    .with_sql_example(
-                        r#"```sql
-        -- Using map function
-        SELECT MAP('type', 'test');
-        ----
-        {type: test}
-        
-        SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
-        ----
-        {POST: 41, HEAD: 33, PATCH: }
-        
-        SELECT MAP([[1,2], [3,4]], ['a', 'b']);
-        ----
-        {[1, 2]: a, [3, 4]: b}
-        
-        SELECT MAP { 'a': 1, 'b': 2 };
-        ----
-        {a: 1, b: 2}
-        
-        -- Using make_map function
-        SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
-        ----
-        {POST: 41, HEAD: 33}
-        
-        SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
-        ----
-        {key1: value1, key2: }
-        ```"#
-                    )
-                    .with_argument(
-                        "key",
-                        "For `map`: Expression to be used for key. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
-                        For `make_map`: The list of keys to be used in the map. Each key must be unique and non-null."
-                    )
-                    .with_argument(
-                        "value",
-                        "For `map`: Expression to be used for value. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
-                        For `make_map`: The list of values to be mapped to the corresponding keys."
-                    )
-                    .build()
-                    .unwrap()
-            })
 }
 
 fn get_element_type(data_type: &DataType) -> Result<&DataType> {
@@ -371,7 +352,6 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 /// | +-------+ |      | +-------+ |
 /// +-----------+      +-----------+
 /// ```text
-
 fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,

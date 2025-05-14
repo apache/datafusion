@@ -17,9 +17,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
-set -ex
+set -e
+
+export CARGO_PROFILE_CI_OPT_LEVEL="s"
+export CARGO_PROFILE_CI_STRIP=true
+
 cd datafusion-examples/examples/
-cargo check --examples
+cargo build --profile ci --examples
 
 files=$(ls .)
 for filename in $files
@@ -27,7 +31,6 @@ do
   example_name=`basename $filename ".rs"`
   # Skip tests that rely on external storage and flight
   if [ ! -d $filename ]; then
-     cargo run --example $example_name
-     cargo clean -p datafusion-examples
+    cargo run --profile ci --example $example_name
   fi
 done

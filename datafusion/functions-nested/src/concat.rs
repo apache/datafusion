@@ -17,24 +17,31 @@
 
 //! [`ScalarUDFImpl`] definitions for `array_append`, `array_prepend` and `array_concat` functions.
 
-use std::sync::{Arc, OnceLock};
-use std::{any::Any, cmp::Ordering};
+use std::any::Any;
+use std::sync::Arc;
 
-use arrow::array::{Capacities, MutableArrayData};
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
-use arrow_schema::{DataType, Field};
+use crate::make_array::make_array_inner;
+use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
+use arrow::array::{
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray,
+    NullBufferBuilder, OffsetSizeTrait,
+};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::{
+    base_type, coerced_type_with_base_type_only, ListCoercion,
+};
 use datafusion_common::Result;
 use datafusion_common::{
-    cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
+    cast::as_generic_list_array,
+    exec_err, plan_err,
+    utils::{list_ndims, take_function_args},
 };
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::binary::type_union_resolution;
 use datafusion_expr::{
-    type_coercion::binary::get_wider_type, ColumnarValue, Documentation, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-
-use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
+use datafusion_macros::user_doc;
 
 make_udf_expr_and_func!(
     ArrayAppend,
@@ -44,6 +51,24 @@ make_udf_expr_and_func!(
     array_append_udf                              // internal function name
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Appends an element to the end of an array.",
+    syntax_example = "array_append(array, element)",
+    sql_example = r#"```sql
+> select array_append([1, 2, 3], 4);
++--------------------------------------+
+| array_append(List([1,2,3]),Int64(4)) |
++--------------------------------------+
+| [1, 2, 3, 4]                         |
++--------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "element", description = "Element to append to the array.")
+)]
 #[derive(Debug)]
 pub struct ArrayAppend {
     signature: Signature,
@@ -83,11 +108,19 @@ impl ScalarUDFImpl for ArrayAppend {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        let [array_type, element_type] = take_function_args(self.name(), arg_types)?;
+        if array_type.is_null() {
+            Ok(DataType::new_list(element_type.clone(), true))
+        } else {
+            Ok(array_type.clone())
+        }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_append_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_append_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -95,41 +128,8 @@ impl ScalarUDFImpl for ArrayAppend {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_append_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_append_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Appends an element to the end of an array.",
-            )
-            .with_syntax_example("array_append(array, element)")
-            .with_sql_example(
-                r#"```sql
-> select array_append([1, 2, 3], 4);
-+--------------------------------------+
-| array_append(List([1,2,3]),Int64(4)) |
-+--------------------------------------+
-| [1, 2, 3, 4]                         |
-+--------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "element",
-                "Element to append to the array.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 make_udf_expr_and_func!(
@@ -140,6 +140,24 @@ make_udf_expr_and_func!(
     array_prepend_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Prepends an element to the beginning of an array.",
+    syntax_example = "array_prepend(element, array)",
+    sql_example = r#"```sql
+> select array_prepend(1, [2, 3, 4]);
++---------------------------------------+
+| array_prepend(Int64(1),List([2,3,4])) |
++---------------------------------------+
+| [1, 2, 3, 4]                          |
++---------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "element", description = "Element to prepend to the array.")
+)]
 #[derive(Debug)]
 pub struct ArrayPrepend {
     signature: Signature,
@@ -179,11 +197,19 @@ impl ScalarUDFImpl for ArrayPrepend {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[1].clone())
+        let [element_type, array_type] = take_function_args(self.name(), arg_types)?;
+        if array_type.is_null() {
+            Ok(DataType::new_list(element_type.clone(), true))
+        } else {
+            Ok(array_type.clone())
+        }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_prepend_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_prepend_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -191,39 +217,8 @@ impl ScalarUDFImpl for ArrayPrepend {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_prepend_doc())
+        self.doc()
     }
-}
-
-fn get_array_prepend_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Prepends an element to the beginning of an array.",
-            )
-            .with_syntax_example("array_prepend(element, array)")
-            .with_sql_example(
-                r#"```sql
-> select array_prepend(1, [2, 3, 4]);
-+---------------------------------------+
-| array_prepend(Int64(1),List([2,3,4])) |
-+---------------------------------------+
-| [1, 2, 3, 4]                          |
-+---------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "element",
-                "Element to prepend to the array.",
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 make_udf_expr_and_func!(
@@ -233,6 +228,27 @@ make_udf_expr_and_func!(
     array_concat_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Concatenates arrays.",
+    syntax_example = "array_concat(array[, ..., array_n])",
+    sql_example = r#"```sql
+> select array_concat([1, 2], [3, 4], [5, 6]);
++---------------------------------------------------+
+| array_concat(List([1,2]),List([3,4]),List([5,6])) |
++---------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                |
++---------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array_n",
+        description = "Subsequent array column or literal array to concatenate."
+    )
+)]
 #[derive(Debug)]
 pub struct ArrayConcat {
     signature: Signature,
@@ -248,7 +264,7 @@ impl Default for ArrayConcat {
 impl ArrayConcat {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![
                 String::from("array_cat"),
                 String::from("list_concat"),
@@ -272,99 +288,92 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let mut expr_type = DataType::Null;
         let mut max_dims = 0;
+        let mut large_list = false;
+        let mut element_types = Vec::with_capacity(arg_types.len());
         for arg_type in arg_types {
             match arg_type {
-                DataType::List(field) => {
-                    if !field.data_type().equals_datatype(&DataType::Null) {
-                        let dims = list_ndims(arg_type);
-                        expr_type = match max_dims.cmp(&dims) {
-                            Ordering::Greater => expr_type,
-                            Ordering::Equal => get_wider_type(&expr_type, arg_type)?,
-                            Ordering::Less => {
-                                max_dims = dims;
-                                arg_type.clone()
-                            }
-                        };
-                    }
-                }
-                _ => {
-                    return plan_err!(
-                        "The array_concat function can only accept list as the args."
-                    )
+                DataType::Null | DataType::List(_) | DataType::FixedSizeList(..) => (),
+                DataType::LargeList(_) => large_list = true,
+                arg_type => {
+                    return plan_err!("{} does not support type {arg_type}", self.name())
                 }
             }
+
+            max_dims = max_dims.max(list_ndims(arg_type));
+            element_types.push(base_type(arg_type))
         }
 
-        Ok(expr_type)
+        if max_dims == 0 {
+            Ok(DataType::Null)
+        } else if let Some(mut return_type) = type_union_resolution(&element_types) {
+            for _ in 1..max_dims {
+                return_type = DataType::new_list(return_type, true)
+            }
+
+            if large_list {
+                Ok(DataType::new_large_list(return_type, true))
+            } else {
+                Ok(DataType::new_list(return_type, true))
+            }
+        } else {
+            plan_err!(
+                "Failed to unify argument types of {}: {arg_types:?}",
+                self.name()
+            )
+        }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_concat_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_concat_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
 
-    fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_concat_doc())
-    }
-}
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let base_type = base_type(&self.return_type(arg_types)?);
+        let coercion = Some(&ListCoercion::FixedSizedListToList);
+        let arg_types = arg_types.iter().map(|arg_type| {
+            coerced_type_with_base_type_only(arg_type, &base_type, coercion)
+        });
 
-fn get_array_concat_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Concatenates arrays.",
-            )
-            .with_syntax_example("array_concat(array[, ..., array_n])")
-            .with_sql_example(
-                r#"```sql
-> select array_concat([1, 2], [3, 4], [5, 6]);
-+---------------------------------------------------+
-| array_concat(List([1,2]),List([3,4]),List([5,6])) |
-+---------------------------------------------------+
-| [1, 2, 3, 4, 5, 6]                                |
-+---------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression to concatenate. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "array_n",
-                "Subsequent array column or literal array to concatenate.",
-            )
-            .build()
-            .unwrap()
-    })
+        Ok(arg_types.collect())
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 /// Array_concat/Array_cat SQL function
 pub(crate) fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.is_empty() {
-        return exec_err!("array_concat expects at least one arguments");
+        return exec_err!("array_concat expects at least one argument");
     }
 
-    let mut new_args = vec![];
+    let mut all_null = true;
+    let mut large_list = false;
     for arg in args {
-        let ndim = list_ndims(arg.data_type());
-        let base_type = datafusion_common::utils::base_type(arg.data_type());
-        if ndim == 0 {
-            return not_impl_err!("Array is not type '{base_type:?}'.");
+        match arg.data_type() {
+            DataType::Null => continue,
+            DataType::LargeList(_) => large_list = true,
+            _ => (),
         }
-        if !base_type.eq(&DataType::Null) {
-            new_args.push(Arc::clone(arg));
-        }
+
+        all_null = false
     }
 
-    match &args[0].data_type() {
-        DataType::LargeList(_) => concat_internal::<i64>(new_args.as_slice()),
-        _ => concat_internal::<i32>(new_args.as_slice()),
+    if all_null {
+        Ok(Arc::new(NullArray::new(args[0].len())))
+    } else if large_list {
+        concat_internal::<i64>(args)
+    } else {
+        concat_internal::<i32>(args)
     }
 }
 
@@ -380,7 +389,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut array_lengths = vec![];
     let mut arrays = vec![];
-    let mut valid = BooleanBufferBuilder::new(row_count);
+    let mut valid = NullBufferBuilder::new(row_count);
     for i in 0..row_count {
         let nulls = list_arrays
             .iter()
@@ -391,7 +400,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         let is_null = nulls.iter().all(|&x| x);
         if is_null {
             array_lengths.push(0);
-            valid.append(false);
+            valid.append_null();
         } else {
             // Get all the arrays on i-th row
             let values = list_arrays
@@ -408,12 +417,11 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let concatenated_array = arrow::compute::concat(elements.as_slice())?;
             array_lengths.push(concatenated_array.len());
             arrays.push(concatenated_array);
-            valid.append(true);
+            valid.append_non_null();
         }
     }
     // Assume all arrays have the same data type
     let data_type = list_arrays[0].value_type();
-    let buffer = valid.finish();
 
     let elements = arrays
         .iter()
@@ -421,38 +429,36 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<Vec<&dyn Array>>();
 
     let list_arr = GenericListArray::<O>::new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(arrow::compute::concat(elements.as_slice())?),
-        Some(NullBuffer::new(buffer)),
+        valid.finish(),
     );
 
     Ok(Arc::new(list_arr))
 }
 
-/// Kernal functions
+// Kernel functions
 
 /// Array_append SQL function
 pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_append expects two arguments");
-    }
-
-    match args[0].data_type() {
+    let [array, values] = take_function_args("array_append", args)?;
+    match array.data_type() {
+        DataType::Null => make_array_inner(&[Arc::clone(values)]),
+        DataType::List(_) => general_append_and_prepend::<i32>(args, true),
         DataType::LargeList(_) => general_append_and_prepend::<i64>(args, true),
-        _ => general_append_and_prepend::<i32>(args, true),
+        arg_type => exec_err!("array_append does not support type {arg_type}"),
     }
 }
 
 /// Array_prepend SQL function
 pub(crate) fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_prepend expects two arguments");
-    }
-
-    match args[1].data_type() {
+    let [values, array] = take_function_args("array_prepend", args)?;
+    match array.data_type() {
+        DataType::Null => make_array_inner(&[Arc::clone(values)]),
+        DataType::List(_) => general_append_and_prepend::<i32>(args, false),
         DataType::LargeList(_) => general_append_and_prepend::<i64>(args, false),
-        _ => general_append_and_prepend::<i32>(args, false),
+        arg_type => exec_err!("array_prepend does not support type {arg_type}"),
     }
 }
 
@@ -476,8 +482,8 @@ where
     };
 
     let res = match list_array.value_type() {
-        DataType::List(_) => concat_internal::<i32>(args)?,
-        DataType::LargeList(_) => concat_internal::<i64>(args)?,
+        DataType::List(_) => concat_internal::<O>(args)?,
+        DataType::LargeList(_) => concat_internal::<O>(args)?,
         data_type => {
             return generic_append_and_prepend::<O>(
                 list_array,
@@ -550,9 +556,9 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         None,
     )?))
 }

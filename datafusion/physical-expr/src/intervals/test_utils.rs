@@ -6,7 +6,7 @@
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+//   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::expressions::{binary, BinaryExpr, Literal};
 use crate::PhysicalExpr;
-use arrow_schema::Schema;
+use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Operator;
 

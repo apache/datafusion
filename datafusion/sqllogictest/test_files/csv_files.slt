@@ -165,7 +165,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
 02)--SortExec: expr=[int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CsvExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], has_header=false
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/csv_files/csv_partitions/2.csv]]}, projection=[int_col, string_col, bigint_col, partition_col], file_type=csv, has_header=false
 
 
 # ensure that correct quote character is used when writing to csv
@@ -350,15 +350,33 @@ col2 TEXT
 LOCATION '../core/tests/data/cr_terminator.csv'
 OPTIONS ('format.terminator' E'\r', 'format.has_header' 'true');
 
-# TODO: It should be passed but got the error: External error: query failed: DataFusion error: Object Store error: Generic LocalFileSystem error: Requested range was invalid
-# See the issue: https://github.com/apache/datafusion/issues/12328
-# query TT
-# select * from stored_table_with_cr_terminator;
-# ----
-# id0 value0
-# id1 value1
-# id2 value2
-# id3 value3
+# Check single-thread reading of CSV with custom line terminator
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 10485760;
+
+query TT
+select * from stored_table_with_cr_terminator;
+----
+id0 value0
+id1 value1
+id2 value2
+id3 value3
+
+# Check repartitioned reading of CSV with custom line terminator
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 1;
+
+query TT
+select * from stored_table_with_cr_terminator order by col1;
+----
+id0 value0
+id1 value1
+id2 value2
+id3 value3
+
+# Reset repartition_file_min_size to default value
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 10485760;
 
 statement ok
 drop table stored_table_with_cr_terminator;

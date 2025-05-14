@@ -27,7 +27,7 @@ use crate::{
 };
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{config::ConfigEntry, Result};
 use object_store::ObjectStore;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,13 +41,32 @@ use url::Url;
 /// Execution runtime environment that manages system resources such
 /// as memory, disk, cache and storage.
 ///
-/// A [`RuntimeEnv`] is created from a [`RuntimeEnvBuilder`] and has the
+/// A [`RuntimeEnv`] can be created using [`RuntimeEnvBuilder`] and has the
 /// following resource management functionality:
 ///
 /// * [`MemoryPool`]: Manage memory
 /// * [`DiskManager`]: Manage temporary files on local disk
 /// * [`CacheManager`]: Manage temporary cache data during the session lifetime
 /// * [`ObjectStoreRegistry`]: Manage mapping URLs to object store instances
+///
+/// # Example: Create default `RuntimeEnv`
+/// ```
+/// # use datafusion_execution::runtime_env::RuntimeEnv;
+/// let runtime_env = RuntimeEnv::default();
+/// ```
+///
+/// # Example: Create a `RuntimeEnv` from [`RuntimeEnvBuilder`] with a new memory pool
+/// ```
+/// # use std::sync::Arc;
+/// # use datafusion_execution::memory_pool::GreedyMemoryPool;
+/// # use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+/// // restrict to using at most 100MB of memory
+/// let pool_size = 100 * 1024 * 1024;
+/// let runtime_env = RuntimeEnvBuilder::new()
+///   .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+///   .build()
+///   .unwrap();
+/// ```
 pub struct RuntimeEnv {
     /// Runtime memory management
     pub memory_pool: Arc<dyn MemoryPool>,
@@ -66,28 +85,16 @@ impl Debug for RuntimeEnv {
 }
 
 impl RuntimeEnv {
-    #[deprecated(note = "please use `try_new` instead")]
+    #[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
+    #[allow(deprecated)]
     pub fn new(config: RuntimeConfig) -> Result<Self> {
         Self::try_new(config)
     }
     /// Create env based on configuration
+    #[deprecated(since = "44.0.0", note = "please use `RuntimeEnvBuilder` instead")]
+    #[allow(deprecated)]
     pub fn try_new(config: RuntimeConfig) -> Result<Self> {
-        let RuntimeConfig {
-            memory_pool,
-            disk_manager,
-            cache_manager,
-            object_store_registry,
-        } = config;
-
-        let memory_pool =
-            memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
-
-        Ok(Self {
-            memory_pool,
-            disk_manager: DiskManager::try_new(disk_manager)?,
-            cache_manager: CacheManager::try_new(&cache_manager)?,
-            object_store_registry,
-        })
+        config.build()
     }
 
     /// Registers a custom `ObjectStore` to be used with a specific url.
@@ -104,26 +111,26 @@ impl RuntimeEnv {
     /// # use std::sync::Arc;
     /// # use url::Url;
     /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::try_new(Default::default()).unwrap();
+    /// # let runtime_env = RuntimeEnv::default();
     /// let url = Url::try_from("file://").unwrap();
     /// let object_store = object_store::local::LocalFileSystem::new();
     /// // register the object store with the runtime environment
     /// runtime_env.register_object_store(&url, Arc::new(object_store));
     /// ```
     ///
-    /// # Example: Register local file system object store
+    /// # Example: Register remote URL object store like [Github](https://github.com)
     ///
-    /// To register reading from urls such as <https://github.com>`
     ///
     /// ```
     /// # use std::sync::Arc;
     /// # use url::Url;
     /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::try_new(Default::default()).unwrap();
+    /// # let runtime_env = RuntimeEnv::default();
     /// # // use local store for example as http feature is not enabled
     /// # let http_store = object_store::local::LocalFileSystem::new();
     /// // create a new object store via object_store::http::HttpBuilder;
     /// let base_url = Url::parse("https://github.com").unwrap();
+    /// // (note this example can't depend on the http feature)
     /// // let http_store = HttpBuilder::new()
     /// //    .with_url(base_url.clone())
     /// //    .build()
@@ -143,9 +150,7 @@ impl RuntimeEnv {
     /// registry. See [`ObjectStoreRegistry::get_store`] for more
     /// details.
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
-        self.object_store_registry
-            .get_store(url.as_ref())
-            .map_err(DataFusionError::from)
+        self.object_store_registry.get_store(url.as_ref())
     }
 }
 
@@ -157,10 +162,13 @@ impl Default for RuntimeEnv {
 
 /// Please see: <https://github.com/apache/datafusion/issues/12156>
 /// This a type alias for backwards compatibility.
+#[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
 pub type RuntimeConfig = RuntimeEnvBuilder;
 
 #[derive(Clone)]
-/// Execution runtime configuration
+/// Execution runtime configuration builder.
+///
+/// See example on [`RuntimeEnv`]
 pub struct RuntimeEnvBuilder {
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
@@ -239,20 +247,77 @@ impl RuntimeEnvBuilder {
 
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
-        let memory_pool = self
-            .memory_pool
-            .unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
+        let Self {
+            disk_manager,
+            memory_pool,
+            cache_manager,
+            object_store_registry,
+        } = self;
+        let memory_pool =
+            memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
 
         Ok(RuntimeEnv {
             memory_pool,
-            disk_manager: DiskManager::try_new(self.disk_manager)?,
-            cache_manager: CacheManager::try_new(&self.cache_manager)?,
-            object_store_registry: self.object_store_registry,
+            disk_manager: DiskManager::try_new(disk_manager)?,
+            cache_manager: CacheManager::try_new(&cache_manager)?,
+            object_store_registry,
         })
     }
 
     /// Convenience method to create a new `Arc<RuntimeEnv>`
     pub fn build_arc(self) -> Result<Arc<RuntimeEnv>> {
         self.build().map(Arc::new)
+    }
+
+    /// Create a new RuntimeEnvBuilder from an existing RuntimeEnv
+    pub fn from_runtime_env(runtime_env: &RuntimeEnv) -> Self {
+        let cache_config = CacheManagerConfig {
+            table_files_statistics_cache: runtime_env
+                .cache_manager
+                .get_file_statistic_cache(),
+            list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
+        };
+
+        Self {
+            disk_manager: DiskManagerConfig::Existing(Arc::clone(
+                &runtime_env.disk_manager,
+            )),
+            memory_pool: Some(Arc::clone(&runtime_env.memory_pool)),
+            cache_manager: cache_config,
+            object_store_registry: Arc::clone(&runtime_env.object_store_registry),
+        }
+    }
+
+    /// Returns a list of all available runtime configurations with their current values and descriptions
+    pub fn entries(&self) -> Vec<ConfigEntry> {
+        // Memory pool configuration
+        vec![ConfigEntry {
+            key: "datafusion.runtime.memory_limit".to_string(),
+            value: None, // Default is system-dependent
+            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+        }]
+    }
+
+    /// Generate documentation that can be included in the user guide
+    pub fn generate_config_markdown() -> String {
+        use std::fmt::Write as _;
+
+        let s = Self::default();
+
+        let mut docs = "| key | default | description |\n".to_string();
+        docs += "|-----|---------|-------------|\n";
+        let mut entries = s.entries();
+        entries.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+
+        for entry in &entries {
+            let _ = writeln!(
+                &mut docs,
+                "| {} | {} | {} |",
+                entry.key,
+                entry.value.as_deref().unwrap_or("NULL"),
+                entry.description
+            );
+        }
+        docs
     }
 }

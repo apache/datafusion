@@ -18,14 +18,27 @@
 //! [`VersionFunc`]: Implementation of the `version` function.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
+use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = "Returns the version of DataFusion.",
+    syntax_example = "version()",
+    sql_example = r#"```sql
+> select version();
++--------------------------------------------+
+| version()                                  |
++--------------------------------------------+
+| Apache DataFusion 42.0.0, aarch64 on macos |
++--------------------------------------------+
+```"#
+)]
 #[derive(Debug)]
 pub struct VersionFunc {
     signature: Signature,
@@ -59,18 +72,12 @@ impl ScalarUDFImpl for VersionFunc {
     }
 
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        if args.is_empty() {
-            Ok(DataType::Utf8)
-        } else {
-            plan_err!("version expects no arguments")
-        }
+        let [] = take_function_args(self.name(), args)?;
+        Ok(DataType::Utf8)
     }
 
-    fn invoke(&self, _: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("version does not take any arguments")
-    }
-
-    fn invoke_no_args(&self, _: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [] = take_function_args(self.name(), args.args)?;
         // TODO it would be great to add rust version and arrow version,
         // but that requires a `build.rs` script and/or adding a version const to arrow-rs
         let version = format!(
@@ -83,42 +90,27 @@ impl ScalarUDFImpl for VersionFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_version_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_version_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_OTHER)
-            .with_description("Returns the version of DataFusion.")
-            .with_syntax_example("version()")
-            .with_sql_example(
-                r#"```sql
-> select version();
-+--------------------------------------------+
-| version()                                  |
-+--------------------------------------------+
-| Apache DataFusion 42.0.0, aarch64 on macos |
-+--------------------------------------------+
-```"#,
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::datatypes::Field;
     use datafusion_expr::ScalarUDF;
 
     #[tokio::test]
     async fn test_version_udf() {
         let version_udf = ScalarUDF::from(VersionFunc::new());
-        let version = version_udf.invoke_batch(&[], 1).unwrap();
+        let version = version_udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![],
+                arg_fields: vec![],
+                number_rows: 0,
+                return_field: &Field::new("f", DataType::Utf8, true),
+            })
+            .unwrap();
 
         if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(version))) = version {
             assert!(version.starts_with("Apache DataFusion"));

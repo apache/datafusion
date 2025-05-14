@@ -16,42 +16,190 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+use crate::datetime::common::*;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-
-use crate::datetime::common::*;
-use datafusion_common::{exec_err, Result, ScalarType};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r#"
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`). Supports strings, integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided. Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
+
+Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`. Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
+"#,
+    syntax_example = "to_timestamp(expression[, ..., format_n])",
+    sql_example = r#"```sql
+> select to_timestamp('2023-01-31T09:26:56.123456789-05:00');
++-----------------------------------------------------------+
+| to_timestamp(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++-----------------------------------------------------------+
+| 2023-01-31T14:26:56.123456789                             |
++-----------------------------------------------------------+
+> select to_timestamp('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++--------------------------------------------------------------------------------------------------------+
+| to_timestamp(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++--------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123456789                                                                          |
++--------------------------------------------------------------------------------------------------------+
+```
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+"#,
+    argument(
+        name = "expression",
+        description = "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "format_n",
+        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
+    )
+)]
 #[derive(Debug)]
 pub struct ToTimestampFunc {
     signature: Signature,
 }
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.",
+    syntax_example = "to_timestamp_seconds(expression[, ..., format_n])",
+    sql_example = r#"```sql
+> select to_timestamp_seconds('2023-01-31T09:26:56.123456789-05:00');
++-------------------------------------------------------------------+
+| to_timestamp_seconds(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++-------------------------------------------------------------------+
+| 2023-01-31T14:26:56                                               |
++-------------------------------------------------------------------+
+> select to_timestamp_seconds('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++----------------------------------------------------------------------------------------------------------------+
+| to_timestamp_seconds(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++----------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00                                                                                            |
++----------------------------------------------------------------------------------------------------------------+
+```
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+"#,
+    argument(
+        name = "expression",
+        description = "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "format_n",
+        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
+    )
+)]
 #[derive(Debug)]
 pub struct ToTimestampSecondsFunc {
     signature: Signature,
 }
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.",
+    syntax_example = "to_timestamp_millis(expression[, ..., format_n])",
+    sql_example = r#"```sql
+> select to_timestamp_millis('2023-01-31T09:26:56.123456789-05:00');
++------------------------------------------------------------------+
+| to_timestamp_millis(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++------------------------------------------------------------------+
+| 2023-01-31T14:26:56.123                                          |
++------------------------------------------------------------------+
+> select to_timestamp_millis('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++---------------------------------------------------------------------------------------------------------------+
+| to_timestamp_millis(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++---------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123                                                                                       |
++---------------------------------------------------------------------------------------------------------------+
+```
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+"#,
+    argument(
+        name = "expression",
+        description = "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "format_n",
+        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
+    )
+)]
 #[derive(Debug)]
 pub struct ToTimestampMillisFunc {
     signature: Signature,
 }
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`) Returns the corresponding timestamp.",
+    syntax_example = "to_timestamp_micros(expression[, ..., format_n])",
+    sql_example = r#"```sql
+> select to_timestamp_micros('2023-01-31T09:26:56.123456789-05:00');
++------------------------------------------------------------------+
+| to_timestamp_micros(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++------------------------------------------------------------------+
+| 2023-01-31T14:26:56.123456                                       |
++------------------------------------------------------------------+
+> select to_timestamp_micros('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++---------------------------------------------------------------------------------------------------------------+
+| to_timestamp_micros(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++---------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123456                                                                                    |
++---------------------------------------------------------------------------------------------------------------+
+```
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+"#,
+    argument(
+        name = "expression",
+        description = "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "format_n",
+        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
+    )
+)]
 #[derive(Debug)]
 pub struct ToTimestampMicrosFunc {
     signature: Signature,
 }
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.",
+    syntax_example = "to_timestamp_nanos(expression[, ..., format_n])",
+    sql_example = r#"```sql
+> select to_timestamp_nanos('2023-01-31T09:26:56.123456789-05:00');
++-----------------------------------------------------------------+
+| to_timestamp_nanos(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
++-----------------------------------------------------------------+
+| 2023-01-31T14:26:56.123456789                                   |
++-----------------------------------------------------------------+
+> select to_timestamp_nanos('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
++--------------------------------------------------------------------------------------------------------------+
+| to_timestamp_nanos(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
++--------------------------------------------------------------------------------------------------------------+
+| 2023-05-17T03:59:00.123456789                                                                                |
++---------------------------------------------------------------------------------------------------------------+
+```
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+"#,
+    argument(
+        name = "expression",
+        description = "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "format_n",
+        description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
+    )
+)]
 #[derive(Debug)]
 pub struct ToTimestampNanosFunc {
     signature: Signature,
@@ -150,7 +298,11 @@ impl ScalarUDFImpl for ToTimestampFunc {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp function requires 1 or more arguments, got {}",
@@ -160,7 +312,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -174,7 +326,31 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
             Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
+                to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp")
+            }
+            Decimal128(_, _) => {
+                match &args[0] {
+                    ColumnarValue::Scalar(ScalarValue::Decimal128(
+                        Some(value),
+                        _,
+                        scale,
+                    )) => {
+                        // Convert decimal to seconds and nanoseconds
+                        let scale_factor = 10_i128.pow(*scale as u32);
+                        let seconds = value / scale_factor;
+                        let fraction = value % scale_factor;
+
+                        let nanos = (fraction * 1_000_000_000) / scale_factor;
+
+                        let timestamp_nanos = seconds * 1_000_000_000 + nanos;
+
+                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                            Some(timestamp_nanos as i64),
+                            None,
+                        )))
+                    }
+                    _ => exec_err!("Invalid decimal value"),
+                }
             }
             other => {
                 exec_err!(
@@ -185,49 +361,8 @@ impl ScalarUDFImpl for ToTimestampFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_timestamp_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_timestamp_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description(r#"
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`). Supports strings, integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided. Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
-
-Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`. Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
-"#)
-            .with_syntax_example("to_timestamp(expression[, ..., format_n])")
-            .with_argument(
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-            )
-            .with_argument(
-                "format_n",
-                "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.",
-            )
-            .with_sql_example(r#"```sql
-> select to_timestamp('2023-01-31T09:26:56.123456789-05:00');
-+-----------------------------------------------------------+
-| to_timestamp(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
-+-----------------------------------------------------------+
-| 2023-01-31T14:26:56.123456789                             |
-+-----------------------------------------------------------+
-> select to_timestamp('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
-+--------------------------------------------------------------------------------------------------------+
-| to_timestamp(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
-+--------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00.123456789                                                                          |
-+--------------------------------------------------------------------------------------------------------+
-```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-"#)
-            .build()
-            .unwrap()
-    })
 }
 
 impl ScalarUDFImpl for ToTimestampSecondsFunc {
@@ -247,7 +382,11 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         Ok(return_type_for(&arg_types[0], Second))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_seconds function requires 1 or more arguments, got {}",
@@ -257,16 +396,16 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
-            Null | Int32 | Int64 | Timestamp(_, None) => {
+            Null | Int32 | Int64 | Timestamp(_, None) | Decimal128(_, _) => {
                 args[0].cast_to(&Timestamp(Second, None), None)
             }
             Timestamp(_, Some(tz)) => args[0].cast_to(&Timestamp(Second, Some(tz)), None),
             Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds")
+                to_timestamp_impl::<TimestampSecondType>(&args, "to_timestamp_seconds")
             }
             other => {
                 exec_err!(
@@ -277,45 +416,8 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_timestamp_seconds_doc())
+        self.doc()
     }
-}
-
-static TO_TIMESTAMP_SECONDS_DOC: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_timestamp_seconds_doc() -> &'static Documentation {
-    TO_TIMESTAMP_SECONDS_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.")
-            .with_syntax_example("to_timestamp_seconds(expression[, ..., format_n])")
-            .with_argument(
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-            )
-            .with_argument(
-                "format_n",
-                "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.",
-            )
-            .with_sql_example(r#"```sql
-> select to_timestamp_seconds('2023-01-31T09:26:56.123456789-05:00');
-+-------------------------------------------------------------------+
-| to_timestamp_seconds(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
-+-------------------------------------------------------------------+
-| 2023-01-31T14:26:56                                               |
-+-------------------------------------------------------------------+
-> select to_timestamp_seconds('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
-+----------------------------------------------------------------------------------------------------------------+
-| to_timestamp_seconds(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
-+----------------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00                                                                                            |
-+----------------------------------------------------------------------------------------------------------------+
-```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-"#)
-            .build()
-            .unwrap()
-    })
 }
 
 impl ScalarUDFImpl for ToTimestampMillisFunc {
@@ -335,7 +437,11 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         Ok(return_type_for(&arg_types[0], Millisecond))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_millis function requires 1 or more arguments, got {}",
@@ -345,7 +451,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -355,9 +461,10 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis")
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMillisecondType>(
+                &args,
+                "to_timestamp_millis",
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp_millis",
@@ -367,45 +474,8 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_timestamp_millis_doc())
+        self.doc()
     }
-}
-
-static TO_TIMESTAMP_MILLIS_DOC: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_timestamp_millis_doc() -> &'static Documentation {
-    TO_TIMESTAMP_MILLIS_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.")
-            .with_syntax_example("to_timestamp_millis(expression[, ..., format_n])")
-            .with_argument(
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-            )
-            .with_argument(
-                "format_n",
-                "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.",
-            )
-            .with_sql_example(r#"```sql
-> select to_timestamp_millis('2023-01-31T09:26:56.123456789-05:00');
-+------------------------------------------------------------------+
-| to_timestamp_millis(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
-+------------------------------------------------------------------+
-| 2023-01-31T14:26:56.123                                          |
-+------------------------------------------------------------------+
-> select to_timestamp_millis('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
-+---------------------------------------------------------------------------------------------------------------+
-| to_timestamp_millis(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
-+---------------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00.123                                                                                       |
-+---------------------------------------------------------------------------------------------------------------+
-```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-"#)
-            .build()
-            .unwrap()
-    })
 }
 
 impl ScalarUDFImpl for ToTimestampMicrosFunc {
@@ -425,7 +495,11 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         Ok(return_type_for(&arg_types[0], Microsecond))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_micros function requires 1 or more arguments, got {}",
@@ -435,7 +509,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -445,9 +519,10 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros")
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMicrosecondType>(
+                &args,
+                "to_timestamp_micros",
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp_micros",
@@ -457,45 +532,8 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_timestamp_micros_doc())
+        self.doc()
     }
-}
-
-static TO_TIMESTAMP_MICROS_DOC: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_timestamp_micros_doc() -> &'static Documentation {
-    TO_TIMESTAMP_MICROS_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`) Returns the corresponding timestamp.")
-            .with_syntax_example("to_timestamp_micros(expression[, ..., format_n])")
-            .with_argument(
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-            )
-            .with_argument(
-                "format_n",
-                "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.",
-            )
-            .with_sql_example(r#"```sql
-> select to_timestamp_micros('2023-01-31T09:26:56.123456789-05:00');
-+------------------------------------------------------------------+
-| to_timestamp_micros(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
-+------------------------------------------------------------------+
-| 2023-01-31T14:26:56.123456                                       |
-+------------------------------------------------------------------+
-> select to_timestamp_micros('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
-+---------------------------------------------------------------------------------------------------------------+
-| to_timestamp_micros(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
-+---------------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00.123456                                                                                    |
-+---------------------------------------------------------------------------------------------------------------+
-```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-"#)
-            .build()
-            .unwrap()
-    })
 }
 
 impl ScalarUDFImpl for ToTimestampNanosFunc {
@@ -515,7 +553,11 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_nanos function requires 1 or more arguments, got {}",
@@ -525,7 +567,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -536,7 +578,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
             Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos")
+                to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp_nanos")
             }
             other => {
                 exec_err!(
@@ -547,45 +589,8 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_timestamp_nanos_doc())
+        self.doc()
     }
-}
-
-static TO_TIMESTAMP_NANOS_DOC: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_timestamp_nanos_doc() -> &'static Documentation {
-    TO_TIMESTAMP_NANOS_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.")
-            .with_syntax_example("to_timestamp_nanos(expression[, ..., format_n])")
-            .with_argument(
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-            )
-            .with_argument(
-                "format_n",
-                "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.",
-            )
-            .with_sql_example(r#"```sql
-> select to_timestamp_nanos('2023-01-31T09:26:56.123456789-05:00');
-+-----------------------------------------------------------------+
-| to_timestamp_nanos(Utf8("2023-01-31T09:26:56.123456789-05:00")) |
-+-----------------------------------------------------------------+
-| 2023-01-31T14:26:56.123456789                                   |
-+-----------------------------------------------------------------+
-> select to_timestamp_nanos('03:59:00.123456789 05-17-2023', '%c', '%+', '%H:%M:%S%.f %m-%d-%Y');
-+--------------------------------------------------------------------------------------------------------------+
-| to_timestamp_nanos(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
-+--------------------------------------------------------------------------------------------------------------+
-| 2023-05-17T03:59:00.123456789                                                                                |
-+---------------------------------------------------------------------------------------------------------------+
-```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-"#)
-            .build()
-            .unwrap()
-    })
 }
 
 /// Returns the return type for the to_timestamp_* function, preserving
@@ -634,9 +639,8 @@ mod tests {
         TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
-    use arrow::datatypes::TimeUnit;
+    use arrow::datatypes::{Field, TimeUnit};
     use chrono::Utc;
-
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
 
@@ -1008,10 +1012,16 @@ mod tests {
         for udf in &udfs {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
+                let arg_field = Field::new("arg", array.data_type().clone(), true);
                 assert!(matches!(rt, Timestamp(_, Some(_))));
-
+                let args = datafusion_expr::ScalarFunctionArgs {
+                    args: vec![array.clone()],
+                    arg_fields: vec![&arg_field],
+                    number_rows: 4,
+                    return_field: &Field::new("f", rt, true),
+                };
                 let res = udf
-                    .invoke(&[array.clone()])
+                    .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
                 let array = match res {
                     ColumnarValue::Array(res) => res,
@@ -1052,9 +1062,15 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 assert!(matches!(rt, Timestamp(_, None)));
-
+                let arg_field = Field::new("arg", array.data_type().clone(), true);
+                let args = datafusion_expr::ScalarFunctionArgs {
+                    args: vec![array.clone()],
+                    arg_fields: vec![&arg_field],
+                    number_rows: 5,
+                    return_field: &Field::new("f", rt, true),
+                };
                 let res = udf
-                    .invoke(&[array.clone()])
+                    .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
                 let array = match res {
                     ColumnarValue::Array(res) => res,

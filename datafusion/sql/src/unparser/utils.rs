@@ -17,6 +17,10 @@
 
 use std::{cmp::Ordering, sync::Arc, vec};
 
+use super::{
+    dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
+    rewrite::TableAliasRewriter, Unparser,
+};
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
@@ -26,9 +30,10 @@ use datafusion_expr::{
     expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
     LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
 };
-use sqlparser::ast;
 
-use super::{dialect::DateFieldExtractStyle, rewrite::TableAliasRewriter, Unparser};
+use indexmap::IndexSet;
+use sqlparser::ast;
+use sqlparser::tokenizer::Span;
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
@@ -84,6 +89,31 @@ pub(crate) fn find_unnest_node_within_select(plan: &LogicalPlan) -> Option<&Unne
     }
 }
 
+/// Recursively searches children of [LogicalPlan] to find Unnest node if exist
+/// until encountering a Relation node with single input
+pub(crate) fn find_unnest_node_until_relation(plan: &LogicalPlan) -> Option<&Unnest> {
+    // Note that none of the nodes that have a corresponding node can have more
+    // than 1 input node. E.g. Projection / Filter always have 1 input node.
+    let input = plan.inputs();
+    let input = if input.len() > 1 {
+        return None;
+    } else {
+        input.first()?
+    };
+
+    if let LogicalPlan::Unnest(unnest) = input {
+        Some(unnest)
+    } else if let LogicalPlan::TableScan(_) = input {
+        None
+    } else if let LogicalPlan::Subquery(_) = input {
+        None
+    } else if let LogicalPlan::SubqueryAlias(_) = input {
+        None
+    } else {
+        find_unnest_node_within_select(input)
+    }
+}
+
 /// Recursively searches children of [LogicalPlan] to find Window nodes if exist
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
 /// If Window node is not found prior to this or at all before reaching the end
@@ -128,7 +158,7 @@ pub(crate) fn find_window_nodes_within_select<'a>(
 
 /// Recursively identify Column expressions and transform them into the appropriate unnest expression
 ///
-/// For example, if expr contains the column expr "unnest_placeholder(make_array(Int64(1),Int64(2),Int64(2),Int64(5),NULL),depth=1)"
+/// For example, if expr contains the column expr "__unnest_placeholder(make_array(Int64(1),Int64(2),Int64(2),Int64(5),NULL),depth=1)"
 /// it will be transformed into an actual unnest expression UNNEST([1, 2, 2, 5, NULL])
 pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr> {
     expr.transform(|sub_expr| {
@@ -307,7 +337,7 @@ pub(crate) fn unproject_sort_expr(
 pub(crate) fn try_transform_to_simple_table_scan_with_filters(
     plan: &LogicalPlan,
 ) -> Result<Option<(LogicalPlan, Vec<Expr>)>> {
-    let mut filters: Vec<Expr> = vec![];
+    let mut filters: IndexSet<Expr> = IndexSet::new();
     let mut plan_stack = vec![plan];
     let mut table_alias = None;
 
@@ -318,7 +348,9 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                 plan_stack.push(alias.input.as_ref());
             }
             LogicalPlan::Filter(filter) => {
-                filters.push(filter.predicate.clone());
+                if !filters.contains(&filter.predicate) {
+                    filters.insert(filter.predicate.clone());
+                }
                 plan_stack.push(filter.input.as_ref());
             }
             LogicalPlan::TableScan(table_scan) => {
@@ -344,12 +376,16 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                     })
                     .collect::<Result<Vec<_>, DataFusionError>>()?;
 
-                filters.extend(table_scan_filters);
+                for table_scan_filter in table_scan_filters {
+                    if !filters.contains(&table_scan_filter) {
+                        filters.insert(table_scan_filter);
+                    }
+                }
 
                 let mut builder = LogicalPlanBuilder::scan(
                     table_scan.table_name.clone(),
                     Arc::clone(&table_scan.source),
-                    None,
+                    table_scan.projection.clone(),
                 )?;
 
                 if let Some(alias) = table_alias.take() {
@@ -357,6 +393,7 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                 }
 
                 let plan = builder.build()?;
+                let filters = filters.into_iter().collect();
 
                 return Ok(Some((plan, filters)));
             }
@@ -411,15 +448,16 @@ pub(crate) fn date_part_to_sql(
                 };
 
                 return Ok(Some(ast::Expr::Function(ast::Function {
-                    name: ast::ObjectName(vec![ast::Ident {
+                    name: ast::ObjectName::from(vec![ast::Ident {
                         value: "strftime".to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: None,
                         args: vec![
                             ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
-                                ast::Expr::Value(ast::Value::SingleQuotedString(
+                                ast::Expr::value(ast::Value::SingleQuotedString(
                                     field.to_string(),
                                 )),
                             )),
@@ -432,6 +470,7 @@ pub(crate) fn date_part_to_sql(
                     over: None,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 })));
             }
         }
@@ -442,6 +481,91 @@ pub(crate) fn date_part_to_sql(
         }
         _ => {}
     };
+
+    Ok(None)
+}
+
+pub(crate) fn character_length_to_sql(
+    unparser: &Unparser,
+    style: CharacterLengthStyle,
+    character_length_args: &[Expr],
+) -> Result<Option<ast::Expr>> {
+    let func_name = match style {
+        CharacterLengthStyle::CharacterLength => "character_length",
+        CharacterLengthStyle::Length => "length",
+    };
+
+    Ok(Some(unparser.scalar_function_to_sql(
+        func_name,
+        character_length_args,
+    )?))
+}
+
+/// SQLite does not support timestamp/date scalars like `to_timestamp`, `from_unixtime`, `date_trunc`, etc.
+/// This remaps `from_unixtime` to `datetime(expr, 'unixepoch')`, expecting the input to be in seconds.
+/// It supports no other arguments, so if any are supplied it will return an error.
+///
+/// # Errors
+///
+/// - If the number of arguments is not 1 - the column or expression to convert.
+/// - If the scalar function cannot be converted to SQL.
+pub(crate) fn sqlite_from_unixtime_to_sql(
+    unparser: &Unparser,
+    from_unixtime_args: &[Expr],
+) -> Result<Option<ast::Expr>> {
+    if from_unixtime_args.len() != 1 {
+        return internal_err!(
+            "from_unixtime for SQLite expects 1 argument, found {}",
+            from_unixtime_args.len()
+        );
+    }
+
+    Ok(Some(unparser.scalar_function_to_sql(
+        "datetime",
+        &[
+            from_unixtime_args[0].clone(),
+            Expr::Literal(ScalarValue::Utf8(Some("unixepoch".to_string()))),
+        ],
+    )?))
+}
+
+/// SQLite does not support timestamp/date scalars like `to_timestamp`, `from_unixtime`, `date_trunc`, etc.
+/// This uses the `strftime` function to format the timestamp as a string depending on the truncation unit.
+///
+/// # Errors
+///
+/// - If the number of arguments is not 2 - truncation unit and the column or expression to convert.
+/// - If the scalar function cannot be converted to SQL.
+pub(crate) fn sqlite_date_trunc_to_sql(
+    unparser: &Unparser,
+    date_trunc_args: &[Expr],
+) -> Result<Option<ast::Expr>> {
+    if date_trunc_args.len() != 2 {
+        return internal_err!(
+            "date_trunc for SQLite expects 2 arguments, found {}",
+            date_trunc_args.len()
+        );
+    }
+
+    if let Expr::Literal(ScalarValue::Utf8(Some(unit))) = &date_trunc_args[0] {
+        let format = match unit.to_lowercase().as_str() {
+            "year" => "%Y",
+            "month" => "%Y-%m",
+            "day" => "%Y-%m-%d",
+            "hour" => "%Y-%m-%d %H",
+            "minute" => "%Y-%m-%d %H:%M",
+            "second" => "%Y-%m-%d %H:%M:%S",
+            _ => return Ok(None),
+        };
+
+        return Ok(Some(unparser.scalar_function_to_sql(
+            "strftime",
+            &[
+                Expr::Literal(ScalarValue::Utf8(Some(format.to_string()))),
+                date_trunc_args[1].clone(),
+            ],
+        )?));
+    }
 
     Ok(None)
 }

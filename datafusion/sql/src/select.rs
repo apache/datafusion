@@ -16,41 +16,47 @@
 // under the License.
 
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
+    CheckColumnsSatisfyExprsPurpose,
 };
 
+use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
-    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning,
 };
+
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
-    WildcardAdditionalOptions, WindowType,
+    visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
+    OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
         &self,
         mut select: Select,
-        order_by: Vec<OrderByExpr>,
+        query_order_by: Option<OrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Check for unsupported syntax first
@@ -79,7 +85,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
-        match_window_definitions(&mut select.projection, &select.named_window)?;
+        self.match_window_definitions(&mut select.projection, &select.named_window)?;
         // Process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
@@ -89,7 +95,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )?;
 
         // Having and group by clause may reference aliases defined in select projection
-        let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
+        let projected_plan = self.project(base_plan.clone(), select_exprs)?;
+        let select_exprs = projected_plan.expressions();
+
+        let order_by =
+            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
 
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
@@ -167,7 +177,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
-                        &[group_by_expr.clone()],
+                        std::slice::from_ref(&group_by_expr),
                     )?;
                     Ok(group_by_expr)
                 })
@@ -368,7 +378,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let agg_expr = agg.aggr_expr.clone();
                 let (new_input, new_group_by_exprs) =
                     self.try_process_group_by_unnest(agg)?;
+                let options = LogicalPlanBuilderOptions::new()
+                    .with_add_implicit_group_by_exprs(true);
                 LogicalPlanBuilder::from(new_input)
+                    .with_options(options)
                     .aggregate(new_group_by_exprs, agg_expr)?
                     .build()
             }
@@ -571,15 +584,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         projection: Vec<SelectItem>,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<Expr>> {
-        projection
-            .into_iter()
-            .map(|expr| self.sql_select_to_rex(expr, plan, empty_from, planner_context))
-            .flat_map(|result| match result {
-                Ok(vec) => vec.into_iter().map(Ok).collect(),
-                Err(err) => vec![Err(err)],
-            })
-            .collect::<Result<Vec<Expr>>>()
+    ) -> Result<Vec<SelectExpr>> {
+        let mut prepared_select_exprs = vec![];
+        let mut error_builder = DataFusionErrorBuilder::new();
+        for expr in projection {
+            match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
+                Ok(expr) => prepared_select_exprs.push(expr),
+                Err(err) => error_builder.add_error(err),
+            }
+        }
+        error_builder.error_or(prepared_select_exprs)
     }
 
     /// Generate a relational expression from a select SQL expression
@@ -589,7 +603,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<Expr>> {
+    ) -> Result<SelectExpr> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
@@ -598,7 +612,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                Ok(vec![col])
+
+                Ok(SelectExpr::Expression(col))
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
@@ -614,7 +629,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Expr::Column(column) if column.name.eq(&name) => col,
                     _ => col.alias(name),
                 };
-                Ok(vec![expr])
+
+                Ok(SelectExpr::Expression(expr))
             }
             SelectItem::Wildcard(options) => {
                 Self::check_wildcard_options(&options)?;
@@ -627,10 +643,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context,
                     options,
                 )?;
-                Ok(vec![wildcard_with_options(planned_options)])
+
+                Ok(SelectExpr::Wildcard(planned_options))
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
+                let object_name = match object_name {
+                    SelectItemQualifiedWildcardKind::ObjectName(object_name) => {
+                        object_name
+                    }
+                    SelectItemQualifiedWildcardKind::Expr(_) => {
+                        return plan_err!(
+                            "Qualified wildcard with expression not supported"
+                        )
+                    }
+                };
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 let planned_options = self.plan_wildcard_options(
                     plan,
@@ -638,10 +665,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context,
                     options,
                 )?;
-                Ok(vec![qualified_wildcard_with_options(
-                    qualifier,
-                    planned_options,
-                )])
+
+                Ok(SelectExpr::QualifiedWildcard(qualifier, planned_options))
             }
         }
     }
@@ -654,12 +679,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             opt_rename,
             opt_replace: _opt_replace,
             opt_ilike: _opt_ilike,
+            wildcard_token: _wildcard_token,
         } = options;
 
         if opt_rename.is_some() {
-            Err(DataFusionError::NotImplemented(
-                "wildcard * with RENAME not supported ".to_string(),
-            ))
+            not_impl_err!("wildcard * with RENAME not supported ")
         } else {
             Ok(())
         }
@@ -687,15 +711,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .items
                 .iter()
                 .map(|item| {
-                    Ok(self.sql_select_to_rex(
+                    self.sql_select_to_rex(
                         SelectItem::UnnamedExpr(item.expr.clone()),
                         plan,
                         empty_from,
                         planner_context,
-                    )?[0]
-                        .clone())
+                    )
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .filter_map(|expr| match expr {
+                    SelectExpr::Expression(expr) => Some(expr),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
             let planned_replace = PlannedReplaceSelectItem {
                 items: replace.items.into_iter().map(|i| *i).collect(),
                 planned_expressions: replace_expr,
@@ -707,8 +737,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Wrap a plan in a projection
-    fn project(&self, input: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
-        self.validate_schema_satisfies_exprs(input.schema(), &expr)?;
+    fn project(&self, input: LogicalPlan, expr: Vec<SelectExpr>) -> Result<LogicalPlan> {
+        // convert to Expr for validate_schema_satisfies_exprs
+        let exprs = expr
+            .iter()
+            .filter_map(|e| match e {
+                SelectExpr::Expression(expr) => Some(expr.to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        self.validate_schema_satisfies_exprs(input.schema(), &exprs)?;
+
         LogicalPlanBuilder::from(input).project(expr)?.build()
     }
 
@@ -720,11 +759,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// # Arguments
     ///
     /// * `input`           - The input plan that will be aggregated. The grouping, aggregate, and
-    ///                       "having" expressions must all be resolvable from this plan.
+    ///   "having" expressions must all be resolvable from this plan.
     /// * `select_exprs`    - The projection expressions from the SELECT clause.
     /// * `having_expr_opt` - Optional HAVING clause.
     /// * `group_by_exprs`  - Grouping expressions from the GROUP BY clause. These can be column
-    ///                       references or more complex expressions.
+    ///   references or more complex expressions.
     /// * `aggr_exprs`      - Aggregate expressions, such as `SUM(a)` or `COUNT(1)`.
     ///
     /// # Return
@@ -733,9 +772,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ///
     /// * `plan`                   - A [LogicalPlan::Aggregate] plan for the newly created aggregate.
     /// * `select_exprs_post_aggr` - The projection expressions rewritten to reference columns from
-    ///                              the aggregate
+    ///   the aggregate
     /// * `having_expr_post_aggr`  - The "having" expression rewritten to reference a column from
-    ///                              the aggregate
+    ///   the aggregate
     fn aggregate(
         &self,
         input: &LogicalPlan,
@@ -745,7 +784,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         aggr_exprs: &[Expr],
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
         // create the aggregate plan
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
         let plan = LogicalPlanBuilder::from(input.clone())
+            .with_options(options)
             .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
         let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {
@@ -804,7 +846,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         check_columns_satisfy_exprs(
             &column_exprs_post_aggr,
             &select_exprs_post_aggr,
-            "Projection references non-aggregate values",
+            CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate,
         )?;
 
         // Rewrite the HAVING expression to use the columns produced by the
@@ -815,8 +857,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
-                &[having_expr_post_aggr.clone()],
-                "HAVING clause references non-aggregate values",
+                std::slice::from_ref(&having_expr_post_aggr),
+                CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate,
             )?;
 
             Some(having_expr_post_aggr)
@@ -825,6 +867,61 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
+    }
+
+    // If the projection is done over a named window, that window
+    // name must be defined. Otherwise, it gives an error.
+    fn match_window_definitions(
+        &self,
+        projection: &mut [SelectItem],
+        named_windows: &[NamedWindowDefinition],
+    ) -> Result<()> {
+        let named_windows: Vec<(&NamedWindowDefinition, String)> = named_windows
+            .iter()
+            .map(|w| (w, self.ident_normalizer.normalize(w.0.clone())))
+            .collect();
+        for proj in projection.iter_mut() {
+            if let SelectItem::ExprWithAlias { expr, alias: _ }
+            | SelectItem::UnnamedExpr(expr) = proj
+            {
+                let mut err = None;
+                visit_expressions_mut(expr, |expr| {
+                    if let SQLExpr::Function(f) = expr {
+                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                            let normalized_ident =
+                                self.ident_normalizer.normalize(ident.clone());
+                            for (
+                                NamedWindowDefinition(_, window_expr),
+                                normalized_window_ident,
+                            ) in named_windows.iter()
+                            {
+                                if normalized_ident.eq(normalized_window_ident) {
+                                    f.over = Some(match window_expr {
+                                        NamedWindowExpr::NamedWindow(ident) => {
+                                            WindowType::NamedWindow(ident.clone())
+                                        }
+                                        NamedWindowExpr::WindowSpec(spec) => {
+                                            WindowType::WindowSpec(spec.clone())
+                                        }
+                                    })
+                                }
+                            }
+                            // All named windows must be defined with a WindowSpec.
+                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                                err =
+                                    Some(plan_err!("The window {ident} is not defined!"));
+                                return ControlFlow::Break(());
+                            }
+                        }
+                    }
+                    ControlFlow::Continue(())
+                });
+                if let Some(err) = err {
+                    return err;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -837,42 +934,6 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
                     "The window {} is defined multiple times!",
                     window_def_i.0
                 );
-            }
-        }
-    }
-    Ok(())
-}
-
-// If the projection is done over a named window, that window
-// name must be defined. Otherwise, it gives an error.
-fn match_window_definitions(
-    projection: &mut [SelectItem],
-    named_windows: &[NamedWindowDefinition],
-) -> Result<()> {
-    for proj in projection.iter_mut() {
-        if let SelectItem::ExprWithAlias {
-            expr: SQLExpr::Function(f),
-            alias: _,
-        }
-        | SelectItem::UnnamedExpr(SQLExpr::Function(f)) = proj
-        {
-            for NamedWindowDefinition(window_ident, window_expr) in named_windows.iter() {
-                if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                    if ident.eq(window_ident) {
-                        f.over = Some(match window_expr {
-                            NamedWindowExpr::NamedWindow(ident) => {
-                                WindowType::NamedWindow(ident.clone())
-                            }
-                            NamedWindowExpr::WindowSpec(spec) => {
-                                WindowType::WindowSpec(spec.clone())
-                            }
-                        })
-                    }
-                }
-            }
-            // All named windows must be defined with a WindowSpec.
-            if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                return plan_err!("The window {ident} is not defined!");
             }
         }
     }

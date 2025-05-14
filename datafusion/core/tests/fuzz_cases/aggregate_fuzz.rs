@@ -17,36 +17,47 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
+use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
+use crate::fuzz_cases::aggregation_fuzzer::{
+    AggregationFuzzerBuilder, DatasetGeneratorConfig,
+};
+
+use arrow::array::{
+    types::Int64Type, Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch,
+    StringArray,
+};
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::DataType;
-use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_array::types::Int64Type;
+use arrow_schema::{Field, Schema, SchemaRef};
 use datafusion::common::Result;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::HashMap;
+use datafusion_common_runtime::JoinSet;
 use datafusion_functions_aggregate::sum::sum_udaf;
-use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::expressions::{col, lit, Column};
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
-use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
-};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use hashbrown::HashMap;
+use datafusion_execution::memory_pool::FairSpillPool;
+use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::MetricValue;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-use tokio::task::JoinSet;
+use rand::{random, thread_rng, Rng, SeedableRng};
+
+use super::record_batch_generator::get_supported_types_columns;
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
@@ -75,6 +86,61 @@ async fn test_min() {
         .with_aggregate_function("min")
         // min works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
+        .set_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_first_val() {
+    let mut data_gen_config: DatasetGeneratorConfig = baseline_config();
+
+    for i in 0..data_gen_config.columns.len() {
+        if data_gen_config.columns[i].get_max_num_distinct().is_none() {
+            data_gen_config.columns[i] = data_gen_config.columns[i]
+                .clone()
+                // Minimize the chance of identical values in the order by columns to make the test more stable
+                .with_max_num_distinct(usize::MAX);
+        }
+    }
+
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("first_value")
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
+        .set_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_last_val() {
+    let mut data_gen_config = baseline_config();
+
+    for i in 0..data_gen_config.columns.len() {
+        if data_gen_config.columns[i].get_max_num_distinct().is_none() {
+            data_gen_config.columns[i] = data_gen_config.columns[i]
+                .clone()
+                // Minimize the chance of identical values in the order by columns to make the test more stable
+                .with_max_num_distinct(usize::MAX);
+        }
+    }
+
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("last_value")
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -94,6 +160,7 @@ async fn test_max() {
         .with_aggregate_function("max")
         // max works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -114,6 +181,7 @@ async fn test_sum() {
         .with_distinct_aggregate_function("sum")
         // sum only works on numeric columns
         .with_aggregate_arguments(data_gen_config.numeric_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -134,6 +202,28 @@ async fn test_count() {
         .with_distinct_aggregate_function("count")
         // count work for all arguments
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
+        .set_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_median() {
+    let data_gen_config = baseline_config();
+
+    // Queries like SELECT median(a), median(distinct) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("median")
+        .with_distinct_aggregate_function("median")
+        // median only works on numeric columns
+        .with_aggregate_arguments(data_gen_config.numeric_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -151,29 +241,8 @@ async fn test_count() {
 /// 1. Floating point numbers
 /// 1. structured types
 fn baseline_config() -> DatasetGeneratorConfig {
-    let columns = vec![
-        ColumnDescr::new("i8", DataType::Int8),
-        ColumnDescr::new("i16", DataType::Int16),
-        ColumnDescr::new("i32", DataType::Int32),
-        ColumnDescr::new("i64", DataType::Int64),
-        ColumnDescr::new("u8", DataType::UInt8),
-        ColumnDescr::new("u16", DataType::UInt16),
-        ColumnDescr::new("u32", DataType::UInt32),
-        ColumnDescr::new("u64", DataType::UInt64),
-        ColumnDescr::new("date32", DataType::Date32),
-        ColumnDescr::new("date64", DataType::Date64),
-        // TODO: date/time columns
-        // todo decimal columns
-        // begin string columns
-        ColumnDescr::new("utf8", DataType::Utf8),
-        ColumnDescr::new("largeutf8", DataType::LargeUtf8),
-        // TODO add support for utf8view in data generator
-        // ColumnDescr::new("utf8view", DataType::Utf8View),
-        // todo binary
-        // low cardinality columns
-        ColumnDescr::new("u8_low", DataType::UInt8).with_max_num_distinct(10),
-        ColumnDescr::new("utf8_low", DataType::Utf8).with_max_num_distinct(10),
-    ];
+    let mut rng = thread_rng();
+    let columns = get_supported_types_columns(rng.gen());
 
     let min_num_rows = 512;
     let max_num_rows = 1024;
@@ -243,12 +312,16 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     }
 
     let concat_input_record = concat_batches(&schema, &input1).unwrap();
-    let usual_source = Arc::new(
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap(),
-    );
 
-    let running_source = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
+    let usual_source = MemorySourceConfig::try_new_exec(
+        &[vec![concat_input_record]],
+        schema.clone(),
+        None,
+    )
+    .unwrap();
+
+    let running_source = DataSourceExec::from_data_source(
+        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
             .try_with_sort_information(vec![sort_keys])
             .unwrap(),
@@ -439,7 +512,9 @@ async fn group_by_string_test(
     let expected = compute_counts(&input, column_name);
 
     let schema = input[0].schema();
-    let session_config = SessionConfig::new().with_batch_size(50);
+    let session_config = SessionConfig::new()
+        .with_batch_size(50)
+        .with_repartition_file_scans(false);
     let ctx = SessionContext::new_with_config(session_config);
 
     let provider = MemTable::try_new(schema.clone(), vec![input]).unwrap();
@@ -556,4 +631,135 @@ fn extract_result_counts(results: Vec<RecordBatch>) -> HashMap<Option<String>, i
         }
     }
     output
+}
+
+fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<AggregateExec>) {
+    if let Some(metrics_set) = single_aggregate.metrics() {
+        let mut spill_count = 0;
+
+        // Inspect metrics for SpillCount
+        for metric in metrics_set.iter() {
+            if let MetricValue::SpillCount(count) = metric.value() {
+                spill_count = count.value();
+                break;
+            }
+        }
+
+        if expect_spill && spill_count == 0 {
+            panic!("Expected spill but SpillCount metric not found or SpillCount was 0.");
+        } else if !expect_spill && spill_count > 0 {
+            panic!("Expected no spill but found SpillCount metric with value greater than 0.");
+        }
+    } else {
+        panic!("No metrics returned from the operator; cannot verify spilling.");
+    }
+}
+
+// Fix for https://github.com/apache/datafusion/issues/15530
+#[tokio::test]
+async fn test_single_mode_aggregate_with_spill() -> Result<()> {
+    let scan_schema = Arc::new(Schema::new(vec![
+        Field::new("col_0", DataType::Int64, true),
+        Field::new("col_1", DataType::Utf8, true),
+        Field::new("col_2", DataType::Utf8, true),
+        Field::new("col_3", DataType::Utf8, true),
+        Field::new("col_4", DataType::Utf8, true),
+        Field::new("col_5", DataType::Int32, true),
+        Field::new("col_6", DataType::Utf8, true),
+        Field::new("col_7", DataType::Utf8, true),
+        Field::new("col_8", DataType::Utf8, true),
+    ]));
+
+    let group_by = PhysicalGroupBy::new_single(vec![
+        (Arc::new(Column::new("col_1", 1)), "col_1".to_string()),
+        (Arc::new(Column::new("col_7", 7)), "col_7".to_string()),
+        (Arc::new(Column::new("col_0", 0)), "col_0".to_string()),
+        (Arc::new(Column::new("col_8", 8)), "col_8".to_string()),
+    ]);
+
+    fn generate_int64_array() -> ArrayRef {
+        Arc::new(Int64Array::from_iter_values(
+            (0..1024).map(|_| random::<i64>()),
+        ))
+    }
+    fn generate_int32_array() -> ArrayRef {
+        Arc::new(Int32Array::from_iter_values(
+            (0..1024).map(|_| random::<i32>()),
+        ))
+    }
+
+    fn generate_string_array() -> ArrayRef {
+        Arc::new(StringArray::from(
+            (0..1024)
+                .map(|_| -> String {
+                    thread_rng()
+                        .sample_iter::<char, _>(rand::distributions::Standard)
+                        .take(5)
+                        .collect()
+                })
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    fn generate_record_batch(schema: &SchemaRef) -> Result<RecordBatch> {
+        RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![
+                generate_int64_array(),
+                generate_string_array(),
+                generate_string_array(),
+                generate_string_array(),
+                generate_string_array(),
+                generate_int32_array(),
+                generate_string_array(),
+                generate_string_array(),
+                generate_string_array(),
+            ],
+        )
+        .map_err(|err| err.into())
+    }
+
+    let aggregate_expressions = vec![Arc::new(
+        AggregateExprBuilder::new(sum_udaf(), vec![lit(1i64)])
+            .schema(Arc::clone(&scan_schema))
+            .alias("SUM(1i64)")
+            .build()?,
+    )];
+
+    let batches = (0..5)
+        .map(|_| generate_record_batch(&scan_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let plan: Arc<dyn ExecutionPlan> =
+        MemorySourceConfig::try_new_exec(&[batches], Arc::clone(&scan_schema), None)
+            .unwrap();
+
+    let single_aggregate = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        group_by,
+        aggregate_expressions.clone(),
+        vec![None; aggregate_expressions.len()],
+        plan,
+        Arc::clone(&scan_schema),
+    )?);
+
+    let memory_pool = Arc::new(FairSpillPool::new(250000));
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(248))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            )),
+    );
+
+    datafusion_physical_plan::common::collect(
+        single_aggregate.execute(0, Arc::clone(&task_ctx))?,
+    )
+    .await?;
+
+    assert_spill_count_metric(true, single_aggregate);
+
+    Ok(())
 }

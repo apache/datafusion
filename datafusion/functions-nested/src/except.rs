@@ -18,19 +18,18 @@
 //! [`ScalarUDFImpl`] definitions for array_except function.
 
 use crate::utils::{check_datatypes, make_scalar_function};
+use arrow::array::{cast::AsArray, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, FieldRef};
 use arrow::row::{RowConverter, SortField};
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::OffsetBuffer;
-use arrow_schema::{DataType, FieldRef};
-use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{internal_err, HashSet, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArrayExcept,
@@ -40,10 +39,43 @@ make_udf_expr_and_func!(
     array_except_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array of the elements that appear in the first array but not in the second.",
+    syntax_example = "array_except(array1, array2)",
+    sql_example = r#"```sql
+> select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2]                                              |
++----------------------------------------------------+
+> select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
++----------------------------------------------------+
+| [1, 2]                                              |
++----------------------------------------------------+
+```"#,
+    argument(
+        name = "array1",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array2",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArrayExcept {
+pub struct ArrayExcept {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayExcept {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayExcept {
@@ -74,8 +106,11 @@ impl ScalarUDFImpl for ArrayExcept {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_except_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_except_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -83,57 +118,13 @@ impl ScalarUDFImpl for ArrayExcept {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_except_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_except_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Returns an array of the elements that appear in the first array but not in the second.",
-            )
-            .with_syntax_example("array_except(array1, array2)")
-            .with_sql_example(
-                r#"```sql
-> select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
-+----------------------------------------------------+
-| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
-+----------------------------------------------------+
-| [1, 2]                                              |
-+----------------------------------------------------+
-> select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
-+----------------------------------------------------+
-| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
-+----------------------------------------------------+
-| [1, 2]                                              |
-+----------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array1",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "array2",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 /// Array_except SQL function
 pub fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_except needs two arguments");
-    }
-
-    let array1 = &args[0];
-    let array2 = &args[1];
+    let [array1, array2] = take_function_args("array_except", args)?;
 
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, _) | (_, DataType::Null) => Ok(array1.to_owned()),

@@ -15,20 +15,36 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveArray,
+    StringArrayType,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the number of characters in a string.",
+    syntax_example = "character_length(str)",
+    sql_example = r#"```sql
+> select character_length('Ångström');
++------------------------------------+
+| character_length(Utf8("Ångström")) |
++------------------------------------+
+| 8                                  |
++------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "bit_length"),
+    related_udf(name = "octet_length")
+)]
 #[derive(Debug)]
 pub struct CharacterLengthFunc {
     signature: Signature,
@@ -72,8 +88,11 @@ impl ScalarUDFImpl for CharacterLengthFunc {
         utf8_to_int_type(&arg_types[0], "character_length")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(character_length, vec![])(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(character_length, vec![])(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -81,34 +100,8 @@ impl ScalarUDFImpl for CharacterLengthFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_character_length_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_character_length_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the number of characters in a string.")
-            .with_syntax_example("character_length(str)")
-            .with_sql_example(
-                r#"```sql
-> select character_length('Ångström');
-+------------------------------------+
-| character_length(Utf8("Ångström")) |
-+------------------------------------+
-| 8                                  |
-+------------------------------------+
-```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("bit_length")
-            .with_related_udf("octet_length")
-            .build()
-            .unwrap()
-    })
 }
 
 /// Returns number of characters in the string.
@@ -128,35 +121,74 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string_view();
             character_length_general::<Int32Type, _>(string_array)
         }
-        _ => unreachable!(),
+        _ => unreachable!("CharacterLengthFunc"),
     }
 }
 
-fn character_length_general<'a, T: ArrowPrimitiveType, V: StringArrayType<'a>>(
-    array: V,
-) -> Result<ArrayRef>
+fn character_length_general<'a, T, V>(array: V) -> Result<ArrayRef>
 where
+    T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
+    V: StringArrayType<'a>,
 {
     // String characters are variable length encoded in UTF-8, counting the
     // number of chars requires expensive decoding, however checking if the
     // string is ASCII only is relatively cheap.
     // If strings are ASCII only, count bytes instead.
     let is_array_ascii_only = array.is_ascii();
-    let iter = array.iter();
-    let result = iter
-        .map(|string| {
-            string.map(|string: &str| {
-                if is_array_ascii_only {
-                    T::Native::usize_as(string.len())
+    let array = if array.null_count() == 0 {
+        if is_array_ascii_only {
+            let values: Vec<_> = (0..array.len())
+                .map(|i| {
+                    let value = array.value(i);
+                    T::Native::usize_as(value.len())
+                })
+                .collect();
+            PrimitiveArray::<T>::new(values.into(), None)
+        } else {
+            let values: Vec<_> = (0..array.len())
+                .map(|i| {
+                    let value = array.value(i);
+                    if value.is_ascii() {
+                        T::Native::usize_as(value.len())
+                    } else {
+                        T::Native::usize_as(value.chars().count())
+                    }
+                })
+                .collect();
+            PrimitiveArray::<T>::new(values.into(), None)
+        }
+    } else if is_array_ascii_only {
+        let values: Vec<_> = (0..array.len())
+            .map(|i| {
+                if array.is_null(i) {
+                    T::default_value()
                 } else {
-                    T::Native::usize_as(string.chars().count())
+                    let value = array.value(i);
+                    T::Native::usize_as(value.len())
                 }
             })
-        })
-        .collect::<PrimitiveArray<T>>();
+            .collect();
+        PrimitiveArray::<T>::new(values.into(), array.nulls().cloned())
+    } else {
+        let values: Vec<_> = (0..array.len())
+            .map(|i| {
+                if array.is_null(i) {
+                    T::default_value()
+                } else {
+                    let value = array.value(i);
+                    if value.is_ascii() {
+                        T::Native::usize_as(value.len())
+                    } else {
+                        T::Native::usize_as(value.chars().count())
+                    }
+                }
+            })
+            .collect();
+        PrimitiveArray::<T>::new(values.into(), array.nulls().cloned())
+    };
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(array))
 }
 
 #[cfg(test)]
@@ -172,7 +204,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,
@@ -181,7 +213,7 @@ mod tests {
 
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
                 $EXPECTED,
                 i64,
                 Int64,
@@ -190,7 +222,7 @@ mod tests {
 
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,

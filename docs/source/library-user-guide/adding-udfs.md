@@ -30,7 +30,8 @@ This page covers how to add UDFs to DataFusion. In particular, it covers how to 
 | Aggregate | A function that takes a group of rows and returns a single value.                                          | [simple_udaf.rs][3] |
 | Table     | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                | [simple_udtf.rs][4] |
 
-First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about the differences between the different types of UDFs.
+First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about the differences between the different
+types of UDFs.
 
 ## Adding a Scalar UDF
 
@@ -40,58 +41,76 @@ an Arrow Array with the same number of rows as output.
 
 To create a Scalar UDF, you
 
-1.  Implement the `ScalarUDFImpl` trait to tell DataFusion about your function such as what types of arguments it takes and how to calculate the results.
-2.  Create a `ScalarUDF` and register it with `SessionContext::register_udf` so it can be invoked by name.
+1. Implement the `ScalarUDFImpl` trait to tell DataFusion about your function such as what types of arguments it takes
+   and how to calculate the results.
+2. Create a `ScalarUDF` and register it with `SessionContext::register_udf` so it can be invoked by name.
 
 In the following example, we will add a function takes a single i64 and returns a single i64 with 1 added to it:
 
-For brevity, we'll skipped some error handling, but e.g. you may want to check that `args.len()` is the expected number of arguments.
+For brevity, we'll skipped some error handling, but e.g. you may want to check that `args.len()` is the expected number
+of arguments.
 
 ### Adding by `impl ScalarUDFImpl`
 
 This a lower level API with more functionality but is more complex, also documented in [`advanced_udf.rs`].
 
 ```rust
+use std::sync::Arc;
 use std::any::Any;
+use std::sync::LazyLock;
 use arrow::datatypes::DataType;
+use datafusion_common::cast::as_int64_array;
 use datafusion_common::{DataFusionError, plan_err, Result};
-use datafusion_expr::{col, ColumnarValue, Signature, Volatility};
+use datafusion_expr::{col, ColumnarValue, ScalarFunctionArgs, Signature, Volatility};
+use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
+use datafusion_macros::user_doc;
+use datafusion_doc::Documentation;
 
+/// This struct for a simple UDF that adds one to an int32
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Add one udf",
+    syntax_example = "add_one(1)"
+)]
 #[derive(Debug)]
 struct AddOne {
-    signature: Signature
-};
+  signature: Signature,
+}
 
 impl AddOne {
-    fn new() -> Self {
-        Self {
-            signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable)
-        }
-    }
+  fn new() -> Self {
+    Self {
+      signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
+     }
+  }
 }
 
 /// Implement the ScalarUDFImpl trait for AddOne
 impl ScalarUDFImpl for AddOne {
-    fn as_any(&self) -> &dyn Any { self }
-    fn name(&self) -> &str { "add_one" }
-    fn signature(&self) -> &Signature { &self.signature }
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-      if !matches!(args.get(0), Some(&DataType::Int32)) {
-        return plan_err!("add_one only accepts Int32 arguments");
-      }
-      Ok(DataType::Int32)
-    }
-    // The actual implementation would add one to the argument
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = columnar_values_to_array(args)?;
+   fn as_any(&self) -> &dyn Any { self }
+   fn name(&self) -> &str { "add_one" }
+   fn signature(&self) -> &Signature { &self.signature }
+   fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+     if !matches!(args.get(0), Some(&DataType::Int32)) {
+       return plan_err!("add_one only accepts Int32 arguments");
+     }
+     Ok(DataType::Int32)
+   }
+   // The actual implementation would add one to the argument
+   fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(&args.args)?;
         let i64s = as_int64_array(&args[0])?;
 
         let new_array = i64s
-        .iter()
-        .map(|array_elem| array_elem.map(|value| value + 1))
-        .collect::<Int64Array>();
-        Ok(Arc::new(new_array))
+            .iter()
+            .map(|array_elem| array_elem.map(|value| value + 1))
+            .collect::<Int64Array>();
+
+        Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+   }
+   fn documentation(&self) -> Option<&Documentation> {
+       self.doc()
     }
 }
 ```
@@ -99,15 +118,75 @@ impl ScalarUDFImpl for AddOne {
 We now need to register the function with DataFusion so that it can be used in the context of a query.
 
 ```rust
+# use std::sync::Arc;
+# use std::any::Any;
+# use std::sync::LazyLock;
+# use arrow::datatypes::DataType;
+# use datafusion_common::cast::as_int64_array;
+# use datafusion_common::{DataFusionError, plan_err, Result};
+# use datafusion_expr::{col, ColumnarValue, ScalarFunctionArgs, Signature, Volatility};
+# use datafusion::arrow::array::{ArrayRef, Int64Array};
+# use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
+# use datafusion_macros::user_doc;
+# use datafusion_doc::Documentation;
+#
+# /// This struct for a simple UDF that adds one to an int32
+# #[user_doc(
+#     doc_section(label = "Math Functions"),
+#     description = "Add one udf",
+#     syntax_example = "add_one(1)"
+# )]
+# #[derive(Debug)]
+# struct AddOne {
+#   signature: Signature,
+# }
+#
+# impl AddOne {
+#   fn new() -> Self {
+#     Self {
+#       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
+#      }
+#   }
+# }
+#
+# /// Implement the ScalarUDFImpl trait for AddOne
+# impl ScalarUDFImpl for AddOne {
+#    fn as_any(&self) -> &dyn Any { self }
+#    fn name(&self) -> &str { "add_one" }
+#    fn signature(&self) -> &Signature { &self.signature }
+#    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+#      if !matches!(args.get(0), Some(&DataType::Int32)) {
+#        return plan_err!("add_one only accepts Int32 arguments");
+#      }
+#      Ok(DataType::Int32)
+#    }
+#    // The actual implementation would add one to the argument
+#    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+#         let args = ColumnarValue::values_to_arrays(&args.args)?;
+#         let i64s = as_int64_array(&args[0])?;
+#
+#         let new_array = i64s
+#             .iter()
+#             .map(|array_elem| array_elem.map(|value| value + 1))
+#             .collect::<Int64Array>();
+#
+#         Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+#    }
+#    fn documentation(&self) -> Option<&Documentation> {
+#        self.doc()
+#     }
+# }
+use datafusion::execution::context::SessionContext;
+
 // Create a new ScalarUDF from the implementation
 let add_one = ScalarUDF::from(AddOne::new());
+
+// Call the function `add_one(col)`
+let expr = add_one.call(vec![col("a")]);
 
 // register the UDF with the context so it can be invoked by name and from SQL
 let mut ctx = SessionContext::new();
 ctx.register_udf(add_one.clone());
-
-// Call the function `add_one(col)`
-let expr = add_one.call(vec![col("a")]);
 ```
 
 ### Adding a Scalar UDF by [`create_udf`]
@@ -118,57 +197,151 @@ There is a an older, more concise, but also more limited API [`create_udf`] avai
 
 ```rust
 use std::sync::Arc;
-
 use datafusion::arrow::array::{ArrayRef, Int64Array};
-use datafusion::common::Result;
 use datafusion::common::cast::as_int64_array;
-use datafusion::physical_plan::functions::columnar_values_to_array;
+use datafusion::common::Result;
+use datafusion::logical_expr::ColumnarValue;
 
-pub fn add_one(args: &[ColumnarValue]) -> Result<ArrayRef> {
+pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // Error handling omitted for brevity
-    let args = columnar_values_to_array(args)?;
+    let args = ColumnarValue::values_to_arrays(args)?;
     let i64s = as_int64_array(&args[0])?;
 
     let new_array = i64s
-      .iter()
-      .map(|array_elem| array_elem.map(|value| value + 1))
-      .collect::<Int64Array>();
+        .iter()
+        .map(|array_elem| array_elem.map(|value| value + 1))
+        .collect::<Int64Array>();
 
-    Ok(Arc::new(new_array))
+    Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
 }
 ```
 
-This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call `add_one` and it will return a new `ArrayRef` with 1 added to each value.
+This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call `add_one` and it will return a new
+`ArrayRef` with 1 added to each value.
 
 ```rust
+# use std::sync::Arc;
+# use datafusion::arrow::array::{ArrayRef, Int64Array};
+# use datafusion::common::cast::as_int64_array;
+# use datafusion::common::Result;
+# use datafusion::logical_expr::ColumnarValue;
+#
+# pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+#     // Error handling omitted for brevity
+#     let args = ColumnarValue::values_to_arrays(args)?;
+#     let i64s = as_int64_array(&args[0])?;
+#
+#     let new_array = i64s
+#         .iter()
+#         .map(|array_elem| array_elem.map(|value| value + 1))
+#         .collect::<Int64Array>();
+#
+#     Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+# }
 let input = vec![Some(1), None, Some(3)];
-let input = Arc::new(Int64Array::from(input)) as ArrayRef;
+let input = ColumnarValue::from(Arc::new(Int64Array::from(input)) as ArrayRef);
 
 let result = add_one(&[input]).unwrap();
-let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+let binding = result.into_array(1).unwrap();
+let result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
 assert_eq!(result, &Int64Array::from(vec![Some(2), None, Some(4)]));
 ```
 
-The challenge however is that DataFusion doesn't know about this function. We need to register it with DataFusion so that it can be used in the context of a query.
+The challenge however is that DataFusion doesn't know about this function. We need to register it with DataFusion so
+that it can be used in the context of a query.
 
 #### Registering a Scalar UDF
 
-To register a Scalar UDF, you need to wrap the function implementation in a [`ScalarUDF`] struct and then register it with the `SessionContext`.
+To register a Scalar UDF, you need to wrap the function implementation in a [`ScalarUDF`] struct and then register it
+with the `SessionContext`.
 DataFusion provides the [`create_udf`] and helper functions to make this easier.
 
 ```rust
+# use std::sync::Arc;
+# use datafusion::arrow::array::{ArrayRef, Int64Array};
+# use datafusion::common::cast::as_int64_array;
+# use datafusion::common::Result;
+# use datafusion::logical_expr::ColumnarValue;
+#
+# pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+#     // Error handling omitted for brevity
+#     let args = ColumnarValue::values_to_arrays(args)?;
+#     let i64s = as_int64_array(&args[0])?;
+#
+#     let new_array = i64s
+#         .iter()
+#         .map(|array_elem| array_elem.map(|value| value + 1))
+#         .collect::<Int64Array>();
+#
+#     Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+# }
 use datafusion::logical_expr::{Volatility, create_udf};
 use datafusion::arrow::datatypes::DataType;
-use std::sync::Arc;
 
 let udf = create_udf(
     "add_one",
     vec![DataType::Int64],
-    Arc::new(DataType::Int64),
+    DataType::Int64,
     Volatility::Immutable,
     Arc::new(add_one),
 );
+```
+
+A few things to note on `create_udf`:
+
+- The first argument is the name of the function. This is the name that will be used in SQL queries.
+- The second argument is a vector of `DataType`s. This is the list of argument types that the function accepts. I.e. in
+  this case, the function accepts a single `Int64` argument.
+- The third argument is the return type of the function. I.e. in this case, the function returns an `Int64`.
+- The fourth argument is the volatility of the function. In short, this is used to determine if the function's
+  performance can be optimized in some situations. In this case, the function is `Immutable` because it always returns
+  the same value for the same input. A random number generator would be `Volatile` because it returns a different value
+  for the same input.
+- The fifth argument is the function implementation. This is the function that we defined above.
+
+That gives us a `ScalarUDF` that we can register with the `SessionContext`:
+
+```rust
+# use std::sync::Arc;
+# use datafusion::arrow::array::{ArrayRef, Int64Array};
+# use datafusion::common::cast::as_int64_array;
+# use datafusion::common::Result;
+# use datafusion::logical_expr::ColumnarValue;
+#
+# pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+#     // Error handling omitted for brevity
+#     let args = ColumnarValue::values_to_arrays(args)?;
+#     let i64s = as_int64_array(&args[0])?;
+#
+#     let new_array = i64s
+#         .iter()
+#         .map(|array_elem| array_elem.map(|value| value + 1))
+#         .collect::<Int64Array>();
+#
+#     Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+# }
+use datafusion::logical_expr::{Volatility, create_udf};
+use datafusion::arrow::datatypes::DataType;
+use datafusion::execution::context::SessionContext;
+
+#[tokio::main]
+async fn main() {
+    let udf = create_udf(
+        "add_one",
+        vec![DataType::Int64],
+        DataType::Int64,
+        Volatility::Immutable,
+        Arc::new(add_one),
+    );
+
+    let mut ctx = SessionContext::new();
+    ctx.register_udf(udf);
+
+    // At this point, you can use the `add_one` function in your query:
+    let query = "SELECT add_one(1)";
+    let df = ctx.sql(&query).await.unwrap();
+}
 ```
 
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
@@ -176,35 +349,10 @@ let udf = create_udf(
 [`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
 [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 
-A few things to note:
-
-- The first argument is the name of the function. This is the name that will be used in SQL queries.
-- The second argument is a vector of `DataType`s. This is the list of argument types that the function accepts. I.e. in this case, the function accepts a single `Int64` argument.
-- The third argument is the return type of the function. I.e. in this case, the function returns an `Int64`.
-- The fourth argument is the volatility of the function. In short, this is used to determine if the function's performance can be optimized in some situations. In this case, the function is `Immutable` because it always returns the same value for the same input. A random number generator would be `Volatile` because it returns a different value for the same input.
-- The fifth argument is the function implementation. This is the function that we defined above.
-
-That gives us a `ScalarUDF` that we can register with the `SessionContext`:
-
-```rust
-use datafusion::execution::context::SessionContext;
-
-let mut ctx = SessionContext::new();
-
-ctx.register_udf(udf);
-```
-
-At this point, you can use the `add_one` function in your query:
-
-```rust
-let sql = "SELECT add_one(1)";
-
-let df = ctx.sql(&sql).await.unwrap();
-```
-
 ## Adding a Window UDF
 
-Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.
+Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have
+access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.
 
 For example, we will declare a user defined window function that computes a moving average.
 
@@ -277,10 +425,55 @@ fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
 
 ### Registering a Window UDF
 
-To register a Window UDF, you need to wrap the function implementation in a [`WindowUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udwf`] helper functions to make this easier.
+To register a Window UDF, you need to wrap the function implementation in a [`WindowUDF`] struct and then register it
+with the `SessionContext`. DataFusion provides the [`create_udwf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udwf.rs`].
 
 ```rust
+# use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
+# use datafusion::logical_expr::{PartitionEvaluator};
+# use datafusion::common::ScalarValue;
+# use datafusion::error::Result;
+#
+# #[derive(Clone, Debug)]
+# struct MyPartitionEvaluator {}
+#
+# impl MyPartitionEvaluator {
+#     fn new() -> Self {
+#         Self {}
+#     }
+# }
+#
+# impl PartitionEvaluator for MyPartitionEvaluator {
+#     fn uses_window_frame(&self) -> bool {
+#         true
+#     }
+#
+#     fn evaluate(
+#         &mut self,
+#         values: &[ArrayRef],
+#         range: &std::ops::Range<usize>,
+#     ) -> Result<ScalarValue> {
+#         // Again, the input argument is an array of floating
+#         // point numbers to calculate a moving average
+#         let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
+#
+#         let range_len = range.end - range.start;
+#
+#         // our smoothing function will average all the values in the
+#         let output = if range_len > 0 {
+#             let sum: f64 = arr.values().iter().skip(range.start).take(range_len).sum();
+#             Some(sum / range_len as f64)
+#         } else {
+#             None
+#         };
+#
+#         Ok(ScalarValue::Float64(output))
+#     }
+# }
+# fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+#     Ok(Box::new(MyPartitionEvaluator::new()))
+# }
 use datafusion::logical_expr::{Volatility, create_udwf};
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
@@ -302,14 +495,74 @@ let smooth_it = create_udwf(
 The `create_udwf` has five arguments to check:
 
 - The first argument is the name of the function. This is the name that will be used in SQL queries.
-- **The second argument** is the `DataType` of input array (attention: this is not a list of arrays). I.e. in this case, the function accepts `Float64` as argument.
+- **The second argument** is the `DataType` of input array (attention: this is not a list of arrays). I.e. in this case,
+  the function accepts `Float64` as argument.
 - The third argument is the return type of the function. I.e. in this case, the function returns an `Float64`.
-- The fourth argument is the volatility of the function. In short, this is used to determine if the function's performance can be optimized in some situations. In this case, the function is `Immutable` because it always returns the same value for the same input. A random number generator would be `Volatile` because it returns a different value for the same input.
+- The fourth argument is the volatility of the function. In short, this is used to determine if the function's
+  performance can be optimized in some situations. In this case, the function is `Immutable` because it always returns
+  the same value for the same input. A random number generator would be `Volatile` because it returns a different value
+  for the same input.
 - **The fifth argument** is the function implementation. This is the function that we defined above.
 
 That gives us a `WindowUDF` that we can register with the `SessionContext`:
 
 ```rust
+# use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
+# use datafusion::logical_expr::{PartitionEvaluator};
+# use datafusion::common::ScalarValue;
+# use datafusion::error::Result;
+#
+# #[derive(Clone, Debug)]
+# struct MyPartitionEvaluator {}
+#
+# impl MyPartitionEvaluator {
+#     fn new() -> Self {
+#         Self {}
+#     }
+# }
+#
+# impl PartitionEvaluator for MyPartitionEvaluator {
+#     fn uses_window_frame(&self) -> bool {
+#         true
+#     }
+#
+#     fn evaluate(
+#         &mut self,
+#         values: &[ArrayRef],
+#         range: &std::ops::Range<usize>,
+#     ) -> Result<ScalarValue> {
+#         // Again, the input argument is an array of floating
+#         // point numbers to calculate a moving average
+#         let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
+#
+#         let range_len = range.end - range.start;
+#
+#         // our smoothing function will average all the values in the
+#         let output = if range_len > 0 {
+#             let sum: f64 = arr.values().iter().skip(range.start).take(range_len).sum();
+#             Some(sum / range_len as f64)
+#         } else {
+#             None
+#         };
+#
+#         Ok(ScalarValue::Float64(output))
+#     }
+# }
+# fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+#     Ok(Box::new(MyPartitionEvaluator::new()))
+# }
+# use datafusion::logical_expr::{Volatility, create_udwf};
+# use datafusion::arrow::datatypes::DataType;
+# use std::sync::Arc;
+#
+# // here is where we define the UDWF. We also declare its signature:
+# let smooth_it = create_udwf(
+#     "smooth_it",
+#     DataType::Float64,
+#     Arc::new(DataType::Float64),
+#     Volatility::Immutable,
+#     Arc::new(make_partition_evaluator),
+# );
 use datafusion::execution::context::SessionContext;
 
 let ctx = SessionContext::new();
@@ -321,7 +574,7 @@ At this point, you can use the `smooth_it` function in your query:
 
 For example, if we have a [`cars.csv`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/cars.csv) whose contents like
 
-```
+```csv
 car,speed,time
 red,20.0,1996-04-12T12:05:03.000000000
 red,20.3,1996-04-12T12:05:04.000000000
@@ -333,30 +586,97 @@ green,10.3,1996-04-12T12:05:04.000000000
 Then, we can query like below:
 
 ```rust
+# use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
+# use datafusion::logical_expr::{PartitionEvaluator};
+# use datafusion::common::ScalarValue;
+# use datafusion::error::Result;
+#
+# #[derive(Clone, Debug)]
+# struct MyPartitionEvaluator {}
+#
+# impl MyPartitionEvaluator {
+#     fn new() -> Self {
+#         Self {}
+#     }
+# }
+#
+# impl PartitionEvaluator for MyPartitionEvaluator {
+#     fn uses_window_frame(&self) -> bool {
+#         true
+#     }
+#
+#     fn evaluate(
+#         &mut self,
+#         values: &[ArrayRef],
+#         range: &std::ops::Range<usize>,
+#     ) -> Result<ScalarValue> {
+#         // Again, the input argument is an array of floating
+#         // point numbers to calculate a moving average
+#         let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
+#
+#         let range_len = range.end - range.start;
+#
+#         // our smoothing function will average all the values in the
+#         let output = if range_len > 0 {
+#             let sum: f64 = arr.values().iter().skip(range.start).take(range_len).sum();
+#             Some(sum / range_len as f64)
+#         } else {
+#             None
+#         };
+#
+#         Ok(ScalarValue::Float64(output))
+#     }
+# }
+# fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+#     Ok(Box::new(MyPartitionEvaluator::new()))
+# }
+# use datafusion::logical_expr::{Volatility, create_udwf};
+# use datafusion::arrow::datatypes::DataType;
+# use std::sync::Arc;
+# use datafusion::execution::context::SessionContext;
+
 use datafusion::datasource::file_format::options::CsvReadOptions;
-// register csv table first
-let csv_path = "cars.csv".to_string();
-ctx.register_csv("cars", &csv_path, CsvReadOptions::default().has_header(true)).await?;
-// do query with smooth_it
-let df = ctx
-    .sql(
-        "SELECT \
-           car, \
-           speed, \
-           smooth_it(speed) OVER (PARTITION BY car ORDER BY time) as smooth_speed,\
-           time \
-           from cars \
-         ORDER BY \
-           car",
-    )
-    .await?;
-// print the results
-df.show().await?;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+
+    let ctx = SessionContext::new();
+
+    let smooth_it = create_udwf(
+        "smooth_it",
+        DataType::Float64,
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(make_partition_evaluator),
+    );
+    ctx.register_udwf(smooth_it);
+
+    // register csv table first
+    let csv_path = "../../datafusion/core/tests/data/cars.csv".to_string();
+    ctx.register_csv("cars", &csv_path, CsvReadOptions::default().has_header(true)).await?;
+
+    // do query with smooth_it
+    let df = ctx
+        .sql(r#"
+            SELECT
+                car,
+                speed,
+                smooth_it(speed) OVER (PARTITION BY car ORDER BY time) as smooth_speed,
+                time
+            FROM cars
+            ORDER BY car
+        "#)
+        .await?;
+
+    // print the results
+    df.show().await?;
+    Ok(())
+}
 ```
 
-the output will be like:
+The output will be like:
 
-```
+```text
 +-------+-------+--------------------+---------------------+
 | car   | speed | smooth_speed       | time                |
 +-------+-------+--------------------+---------------------+
@@ -379,11 +699,13 @@ the output will be like:
 
 ## Adding an Aggregate UDF
 
-Aggregate UDFs are functions that take a group of rows and return a single value. These are akin to SQL's `SUM` or `COUNT` functions.
+Aggregate UDFs are functions that take a group of rows and return a single value. These are akin to SQL's `SUM` or
+`COUNT` functions.
 
 For example, we will declare a single-type, single return type UDAF that computes the geometric mean.
 
 ```rust
+
 use datafusion::arrow::array::ArrayRef;
 use datafusion::scalar::ScalarValue;
 use datafusion::{error::Result, physical_plan::Accumulator};
@@ -408,7 +730,7 @@ impl Accumulator for GeometricMean {
     // This function serializes our state to `ScalarValue`, which DataFusion uses
     // to pass this state between execution stages.
     // Note that this can be arbitrary data.
-    fn state(&self) -> Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.prod),
             ScalarValue::from(self.n),
@@ -417,7 +739,7 @@ impl Accumulator for GeometricMean {
 
     // DataFusion expects this function to return the final value of this aggregator.
     // in this case, this is the formula of the geometric mean
-    fn evaluate(&self) -> Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         let value = self.prod.powf(1.0 / self.n as f64);
         Ok(ScalarValue::from(value))
     }
@@ -472,12 +794,86 @@ impl Accumulator for GeometricMean {
 }
 ```
 
-### registering an Aggregate UDF
+### Registering an Aggregate UDF
 
-To register a Aggregate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
+To register a Aggregate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register
+it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udaf.rs`].
 
 ```rust
+# use datafusion::arrow::array::ArrayRef;
+# use datafusion::scalar::ScalarValue;
+# use datafusion::{error::Result, physical_plan::Accumulator};
+#
+# #[derive(Debug)]
+# struct GeometricMean {
+#     n: u32,
+#     prod: f64,
+# }
+#
+# impl GeometricMean {
+#     pub fn new() -> Self {
+#         GeometricMean { n: 0, prod: 1.0 }
+#     }
+# }
+#
+# impl Accumulator for GeometricMean {
+#     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+#         Ok(vec![
+#             ScalarValue::from(self.prod),
+#             ScalarValue::from(self.n),
+#         ])
+#     }
+#
+#     fn evaluate(&mut self) -> Result<ScalarValue> {
+#         let value = self.prod.powf(1.0 / self.n as f64);
+#         Ok(ScalarValue::from(value))
+#     }
+#
+#     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+#         if values.is_empty() {
+#             return Ok(());
+#         }
+#         let arr = &values[0];
+#         (0..arr.len()).try_for_each(|index| {
+#             let v = ScalarValue::try_from_array(arr, index)?;
+#
+#             if let ScalarValue::Float64(Some(value)) = v {
+#                 self.prod *= value;
+#                 self.n += 1;
+#             } else {
+#                 unreachable!("")
+#             }
+#             Ok(())
+#         })
+#     }
+#
+#     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+#         if states.is_empty() {
+#             return Ok(());
+#         }
+#         let arr = &states[0];
+#         (0..arr.len()).try_for_each(|index| {
+#             let v = states
+#                 .iter()
+#                 .map(|array| ScalarValue::try_from_array(array, index))
+#                 .collect::<Result<Vec<_>>>()?;
+#             if let (ScalarValue::Float64(Some(prod)), ScalarValue::UInt32(Some(n))) = (&v[0], &v[1])
+#             {
+#                 self.prod *= prod;
+#                 self.n += n;
+#             } else {
+#                 unreachable!("")
+#             }
+#             Ok(())
+#         })
+#     }
+#
+#     fn size(&self) -> usize {
+#         std::mem::size_of_val(self)
+#     }
+# }
+
 use datafusion::logical_expr::{Volatility, create_udaf};
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
@@ -492,48 +888,150 @@ let geometric_mean = create_udaf(
     Arc::new(DataType::Float64),
     Volatility::Immutable,
     // This is the accumulator factory; DataFusion uses it to create new accumulators.
-    Arc::new(|_| Ok(Box::new(GeometricMean::new()))),
+    Arc::new( | _ | Ok(Box::new(GeometricMean::new()))),
     // This is the description of the state. `state()` must match the types here.
     Arc::new(vec![DataType::Float64, DataType::UInt32]),
 );
+```
+
+The `create_udaf` has six arguments to check:
+
+- The first argument is the name of the function. This is the name that will be used in SQL queries.
+- The second argument is a vector of `DataType`s. This is the list of argument types that the function accepts. I.e. in
+  this case, the function accepts a single `Float64` argument.
+- The third argument is the return type of the function. I.e. in this case, the function returns an `Int64`.
+- The fourth argument is the volatility of the function. In short, this is used to determine if the function's
+  performance can be optimized in some situations. In this case, the function is `Immutable` because it always returns
+  the same value for the same input. A random number generator would be `Volatile` because it returns a different value
+  for the same input.
+- The fifth argument is the function implementation. This is the function that we defined above.
+- The sixth argument is the description of the state, which will by passed between execution stages.
+
+```rust
+
+# use datafusion::arrow::array::ArrayRef;
+# use datafusion::scalar::ScalarValue;
+# use datafusion::{error::Result, physical_plan::Accumulator};
+#
+# #[derive(Debug)]
+# struct GeometricMean {
+#     n: u32,
+#     prod: f64,
+# }
+#
+# impl GeometricMean {
+#     pub fn new() -> Self {
+#         GeometricMean { n: 0, prod: 1.0 }
+#     }
+# }
+#
+# impl Accumulator for GeometricMean {
+#     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+#         Ok(vec![
+#             ScalarValue::from(self.prod),
+#             ScalarValue::from(self.n),
+#         ])
+#     }
+#
+#     fn evaluate(&mut self) -> Result<ScalarValue> {
+#         let value = self.prod.powf(1.0 / self.n as f64);
+#         Ok(ScalarValue::from(value))
+#     }
+#
+#     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+#         if values.is_empty() {
+#             return Ok(());
+#         }
+#         let arr = &values[0];
+#         (0..arr.len()).try_for_each(|index| {
+#             let v = ScalarValue::try_from_array(arr, index)?;
+#
+#             if let ScalarValue::Float64(Some(value)) = v {
+#                 self.prod *= value;
+#                 self.n += 1;
+#             } else {
+#                 unreachable!("")
+#             }
+#             Ok(())
+#         })
+#     }
+#
+#     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+#         if states.is_empty() {
+#             return Ok(());
+#         }
+#         let arr = &states[0];
+#         (0..arr.len()).try_for_each(|index| {
+#             let v = states
+#                 .iter()
+#                 .map(|array| ScalarValue::try_from_array(array, index))
+#                 .collect::<Result<Vec<_>>>()?;
+#             if let (ScalarValue::Float64(Some(prod)), ScalarValue::UInt32(Some(n))) = (&v[0], &v[1])
+#             {
+#                 self.prod *= prod;
+#                 self.n += n;
+#             } else {
+#                 unreachable!("")
+#             }
+#             Ok(())
+#         })
+#     }
+#
+#     fn size(&self) -> usize {
+#         std::mem::size_of_val(self)
+#     }
+# }
+
+use datafusion::logical_expr::{Volatility, create_udaf};
+use datafusion::arrow::datatypes::DataType;
+use std::sync::Arc;
+use datafusion::execution::context::SessionContext;
+use datafusion::datasource::file_format::options::CsvReadOptions;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let geometric_mean = create_udaf(
+        "geo_mean",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new( | _ | Ok(Box::new(GeometricMean::new()))),
+        Arc::new(vec![DataType::Float64, DataType::UInt32]),
+    );
+
+    // That gives us a `AggregateUDF` that we can register with the `SessionContext`:
+    use datafusion::execution::context::SessionContext;
+
+    let ctx = SessionContext::new();
+    ctx.register_udaf(geometric_mean);
+
+    // register csv table first
+    let csv_path = "../../datafusion/core/tests/data/cars.csv".to_string();
+    ctx.register_csv("cars", &csv_path, CsvReadOptions::default().has_header(true)).await?;
+
+    // Then, we can query like below:
+    let df = ctx.sql("SELECT geo_mean(speed) FROM cars").await?;
+    Ok(())
+}
+
 ```
 
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
-The `create_udaf` has six arguments to check:
-
-- The first argument is the name of the function. This is the name that will be used in SQL queries.
-- The second argument is a vector of `DataType`s. This is the list of argument types that the function accepts. I.e. in this case, the function accepts a single `Float64` argument.
-- The third argument is the return type of the function. I.e. in this case, the function returns an `Int64`.
-- The fourth argument is the volatility of the function. In short, this is used to determine if the function's performance can be optimized in some situations. In this case, the function is `Immutable` because it always returns the same value for the same input. A random number generator would be `Volatile` because it returns a different value for the same input.
-- The fifth argument is the function implementation. This is the function that we defined above.
-- The sixth argument is the description of the state, which will by passed between execution stages.
-
-That gives us a `AggregateUDF` that we can register with the `SessionContext`:
-
-```rust
-use datafusion::execution::context::SessionContext;
-
-let ctx = SessionContext::new();
-
-ctx.register_udaf(geometric_mean);
-```
-
-Then, we can query like below:
-
-```rust
-let df = ctx.sql("SELECT geo_mean(a) FROM t").await?;
-```
-
 ## Adding a User-Defined Table Function
 
 A User-Defined Table Function (UDTF) is a function that takes parameters and returns a `TableProvider`.
 
-Because we're returning a `TableProvider`, in this example we'll use the `MemTable` data source to represent a table. This is a simple struct that holds a set of RecordBatches in memory and treats them as a table. In your case, this would be replaced with your own struct that implements `TableProvider`.
+Because we're returning a `TableProvider`, in this example we'll use the `MemTable` data source to represent a table.
+This is a simple struct that holds a set of RecordBatches in memory and treats them as a table. In your case, this would
+be replaced with your own struct that implements `TableProvider`.
 
-While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be particularly useful for reading data from external sources and interactive analysis. For example, see the [example][4] for a working example that reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata` in the CLI to read the metadata from a Parquet file.
+While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be
+particularly useful for reading data from external sources and interactive analysis. For example, see the [example][4]
+for a working example that reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata`
+in the CLI to read the metadata from a Parquet file.
 
 ```console
 > select filename, row_group_id, row_group_num_rows, row_group_bytes, stats_min, stats_max from parquet_metadata('./benchmarks/data/hits.parquet') where  column_id = 17 limit 10;
@@ -555,17 +1053,25 @@ While this is a simple example for illustrative purposes, UDTFs have a lot of po
 
 ### Writing the UDTF
 
-The simple UDTF used here takes a single `Int64` argument and returns a table with a single column with the value of the argument. To create a function in DataFusion, you need to implement the `TableFunctionImpl` trait. This trait has a single method, `call`, that takes a slice of `Expr`s and returns a `Result<Arc<dyn TableProvider>>`.
+The simple UDTF used here takes a single `Int64` argument and returns a table with a single column with the value of the
+argument. To create a function in DataFusion, you need to implement the `TableFunctionImpl` trait. This trait has a
+single method, `call`, that takes a slice of `Expr`s and returns a `Result<Arc<dyn TableProvider>>`.
 
-In the `call` method, you parse the input `Expr`s and return a `TableProvider`. You might also want to do some validation of the input `Expr`s, e.g. checking that the number of arguments is correct.
+In the `call` method, you parse the input `Expr`s and return a `TableProvider`. You might also want to do some
+validation of the input `Expr`s, e.g. checking that the number of arguments is correct.
 
 ```rust
-use datafusion::common::plan_err;
-use datafusion::datasource::function::TableFunctionImpl;
-// Other imports here
+use std::sync::Arc;
+use datafusion::common::{plan_err, ScalarValue, Result};
+use datafusion::catalog::{TableFunctionImpl, TableProvider};
+use datafusion::arrow::array::{ArrayRef, Int64Array};
+use datafusion::datasource::memory::MemTable;
+use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_expr::Expr;
 
 /// A table function that returns a table provider with the value as a single column
-#[derive(Default)]
+#[derive(Debug)]
 pub struct EchoFunction {}
 
 impl TableFunctionImpl for EchoFunction {
@@ -596,27 +1102,147 @@ impl TableFunctionImpl for EchoFunction {
 With the UDTF implemented, you can register it with the `SessionContext`:
 
 ```rust
+# use std::sync::Arc;
+# use datafusion::common::{plan_err, ScalarValue, Result};
+# use datafusion::catalog::{TableFunctionImpl, TableProvider};
+# use datafusion::arrow::array::{ArrayRef, Int64Array};
+# use datafusion::datasource::memory::MemTable;
+# use arrow::record_batch::RecordBatch;
+# use arrow::datatypes::{DataType, Field, Schema};
+# use datafusion_expr::Expr;
+#
+# /// A table function that returns a table provider with the value as a single column
+# #[derive(Debug, Default)]
+# pub struct EchoFunction {}
+#
+# impl TableFunctionImpl for EchoFunction {
+#     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+#         let Some(Expr::Literal(ScalarValue::Int64(Some(value)))) = exprs.get(0) else {
+#             return plan_err!("First argument must be an integer");
+#         };
+#
+#         // Create the schema for the table
+#         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+#
+#         // Create a single RecordBatch with the value as a single column
+#         let batch = RecordBatch::try_new(
+#             schema.clone(),
+#             vec![Arc::new(Int64Array::from(vec![*value]))],
+#         )?;
+#
+#         // Create a MemTable plan that returns the RecordBatch
+#         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+#
+#         Ok(Arc::new(provider))
+#     }
+# }
+
 use datafusion::execution::context::SessionContext;
-
-let ctx = SessionContext::new();
-
-ctx.register_udtf("echo", Arc::new(EchoFunction::default()));
-```
-
-And if all goes well, you can use it in your query:
-
-```rust
 use datafusion::arrow::util::pretty;
 
-let df = ctx.sql("SELECT * FROM echo(1)").await?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
 
-let results = df.collect().await?;
-pretty::print_batches(&results)?;
+    ctx.register_udtf("echo", Arc::new(EchoFunction::default()));
+
+    // And if all goes well, you can use it in your query:
+
+    let results = ctx.sql("SELECT * FROM echo(1)").await?.collect().await?;
+    pretty::print_batches(&results)?;
+    Ok(())
+}
+
 // +---+
 // | a |
 // +---+
 // | 1 |
 // +---+
+```
+
+## Custom Expression Planning
+
+DataFusion provides native support for common SQL operators by default such as `+`, `-`, `||`. However it does not provide support for other operators such as `@>`. To override DataFusion's default handling or support unsupported operators, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion
+
+### Implementing Custom Expression Planning
+
+To extend DataFusion with support for custom operators not natively available, you need to:
+
+1. Implement the `ExprPlanner` trait: This allows you to define custom logic for planning expressions that DataFusion doesn't natively recognize. The trait provides the necessary interface to translate SQL AST nodes into logical `Expr`.
+
+   For detailed documentation please see: [Trait ExprPlanner](https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.ExprPlanner.html)
+
+2. Register your custom planner: Integrate your implementation with DataFusion's `SessionContext` to ensure your custom planning logic is invoked during the query optimization and execution planning phase.
+
+   For a detailed documentation see: [fn register_expr_planner](https://docs.rs/datafusion/latest/datafusion/execution/trait.FunctionRegistry.html#method.register_expr_planner)
+
+See example below:
+
+```rust
+# use arrow::array::RecordBatch;
+# use std::sync::Arc;
+
+# use datafusion::common::{assert_batches_eq, DFSchema};
+# use datafusion::error::Result;
+# use datafusion::execution::FunctionRegistry;
+# use datafusion::logical_expr::Operator;
+# use datafusion::prelude::*;
+# use datafusion::sql::sqlparser::ast::BinaryOperator;
+# use datafusion_common::ScalarValue;
+# use datafusion_expr::expr::Alias;
+# use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
+# use datafusion_expr::BinaryExpr;
+
+# #[derive(Debug)]
+# // Define the custom planner
+# struct MyCustomPlanner;
+
+// Implement ExprPlanner to add support for the `->` custom operator
+impl ExprPlanner for MyCustomPlanner {
+    fn plan_binary_op(
+        &self,
+        expr: RawBinaryExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
+        match &expr.op {
+            // Map `->` to string concatenation
+            BinaryOperator::Arrow => {
+                // Rewrite `->` as a string concatenation operation
+                // - `left` and `right` are the operands (e.g., 'hello' and 'world')
+                // - `Operator::StringConcat` tells DataFusion to concatenate them
+                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(expr.left.clone()),
+                    right: Box::new(expr.right.clone()),
+                    op: Operator::StringConcat,
+                })))
+            }
+            _ => Ok(PlannerResult::Original(expr)),
+        }
+    }
+}
+
+use datafusion::execution::context::SessionContext;
+use datafusion::arrow::util::pretty;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let config = SessionConfig::new().set_str("datafusion.sql_parser.dialect", "postgres");
+    let mut ctx = SessionContext::new_with_config(config);
+    ctx.register_expr_planner(Arc::new(MyCustomPlanner))?;
+    let results = ctx.sql("select 'foo'->'bar';").await?.collect().await?;
+
+    let expected = [
+         "+----------------------------+",
+         "| Utf8(\"foo\") || Utf8(\"bar\") |",
+         "+----------------------------+",
+         "| foobar                     |",
+         "+----------------------------+",
+     ];
+    assert_batches_eq!(&expected, &results);
+
+    pretty::print_batches(&results)?;
+    Ok(())
+}
 ```
 
 [1]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs

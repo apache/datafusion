@@ -19,6 +19,7 @@ use arrow::compute::CastOptions;
 use arrow::util::display::{DurationFormat, FormatOptions};
 
 /// The default [`FormatOptions`] to use within DataFusion
+/// Also see [`crate::config::FormatOptions`]
 pub const DEFAULT_FORMAT_OPTIONS: FormatOptions<'static> =
     FormatOptions::new().with_duration_format(DurationFormat::Pretty);
 

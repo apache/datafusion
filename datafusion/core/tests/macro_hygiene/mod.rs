@@ -14,9 +14,11 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-//! Verifies [Macro Hygene]
+
+//! Verifies [Macro Hygiene]
 //!
-//! [Macro Hygene]: https://en.wikipedia.org/wiki/Hygienic_macro
+//! [Macro Hygiene]: https://en.wikipedia.org/wiki/Hygienic_macro
+
 mod plan_err {
     // NO other imports!
     use datafusion_common::plan_err;
@@ -45,5 +47,21 @@ mod record_batch {
     #[test]
     fn test_macro() {
         record_batch!(("column_name", Int32, vec![1, 2, 3])).unwrap();
+    }
+}
+
+mod config_namespace {
+    // NO other imports!
+    use datafusion_common::config_namespace;
+
+    #[test]
+    fn test_macro() {
+        config_namespace! {
+            /// A config section
+            pub struct Foo {
+                /// Some doc comments
+                pub bar: bool, default = true
+            }
+        }
     }
 }

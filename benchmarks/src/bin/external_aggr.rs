@@ -17,10 +17,12 @@
 
 //! external_aggr binary entrypoint
 
+use datafusion::execution::memory_pool::GreedyMemoryPool;
+use datafusion::execution::memory_pool::MemoryPool;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use structopt::StructOpt;
 
 use arrow::record_batch::RecordBatch;
@@ -33,13 +35,15 @@ use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::Result;
 use datafusion::execution::memory_pool::FairSpillPool;
 use datafusion::execution::memory_pool::{human_readable_size, units};
-use datafusion::execution::runtime_env::RuntimeConfig;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt};
 use datafusion_common::instant::Instant;
-use datafusion_common::{exec_datafusion_err, exec_err, DEFAULT_PARQUET_EXTENSION};
+use datafusion_common::utils::get_available_parallelism;
+use datafusion_common::{exec_err, DEFAULT_PARQUET_EXTENSION};
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -55,10 +59,6 @@ struct ExternalAggrConfig {
     /// Query number. If not specified, runs all queries
     #[structopt(short, long)]
     query: Option<usize>,
-
-    /// Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query.
-    #[structopt(long)]
-    memory_limit: Option<String>,
 
     /// Common options
     #[structopt(flatten)]
@@ -89,7 +89,13 @@ struct QueryResult {
 /// Memory limits to run: 64MiB, 32MiB, 16MiB
 /// Q2 requires 250MiB for aggregation
 /// Memory limits to run: 512MiB, 256MiB, 128MiB, 64MiB, 32MiB
-static QUERY_MEMORY_LIMITS: OnceLock<HashMap<usize, Vec<u64>>> = OnceLock::new();
+static QUERY_MEMORY_LIMITS: LazyLock<HashMap<usize, Vec<u64>>> = LazyLock::new(|| {
+    use units::*;
+    let mut map = HashMap::new();
+    map.insert(1, vec![64 * MB, 32 * MB, 16 * MB]);
+    map.insert(2, vec![512 * MB, 256 * MB, 128 * MB, 64 * MB, 32 * MB]);
+    map
+});
 
 impl ExternalAggrConfig {
     const AGGR_TABLES: [&'static str; 1] = ["lineitem"];
@@ -112,16 +118,6 @@ impl ExternalAggrConfig {
         "#,
     ];
 
-    fn init_query_memory_limits() -> &'static HashMap<usize, Vec<u64>> {
-        use units::*;
-        QUERY_MEMORY_LIMITS.get_or_init(|| {
-            let mut map = HashMap::new();
-            map.insert(1, vec![64 * MB, 32 * MB, 16 * MB]);
-            map.insert(2, vec![512 * MB, 256 * MB, 128 * MB, 64 * MB, 32 * MB]);
-            map
-        })
-    }
-
     /// If `--query` and `--memory-limit` is not speicified, run all queries
     /// with pre-configured memory limits
     /// If only `--query` is specified, run the query with all memory limits
@@ -131,10 +127,8 @@ impl ExternalAggrConfig {
     pub async fn run(&self) -> Result<()> {
         let mut benchmark_run = BenchmarkRun::new();
 
-        let memory_limit = match &self.memory_limit {
-            Some(limit) => Some(Self::parse_memory_limit(limit)?),
-            None => None,
-        };
+        let memory_limit = self.common.memory_limit.map(|limit| limit as u64);
+        let mem_pool_type = self.common.mem_pool_type.as_str();
 
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
@@ -159,8 +153,7 @@ impl ExternalAggrConfig {
                     query_executions.push((query_id, limit));
                 }
                 None => {
-                    let memory_limits_table = Self::init_query_memory_limits();
-                    let memory_limits = memory_limits_table.get(&query_id).unwrap();
+                    let memory_limits = QUERY_MEMORY_LIMITS.get(&query_id).unwrap();
                     for limit in memory_limits {
                         query_executions.push((query_id, *limit));
                     }
@@ -174,7 +167,9 @@ impl ExternalAggrConfig {
                 human_readable_size(mem_limit as usize)
             ));
 
-            let query_results = self.benchmark_query(query_id, mem_limit).await?;
+            let query_results = self
+                .benchmark_query(query_id, mem_limit, mem_pool_type)
+                .await?;
             for iter in query_results {
                 benchmark_run.write_iter(iter.elapsed, iter.row_count);
             }
@@ -190,14 +185,27 @@ impl ExternalAggrConfig {
         &self,
         query_id: usize,
         mem_limit: u64,
+        mem_pool_type: &str,
     ) -> Result<Vec<QueryResult>> {
         let query_name =
             format!("Q{query_id}({})", human_readable_size(mem_limit as usize));
-        let config = self.common.config();
-        let runtime_config = RuntimeConfig::new()
-            .with_memory_pool(Arc::new(FairSpillPool::new(mem_limit as usize)))
+        let config = self.common.config()?;
+        let memory_pool: Arc<dyn MemoryPool> = match mem_pool_type {
+            "fair" => Arc::new(FairSpillPool::new(mem_limit as usize)),
+            "greedy" => Arc::new(GreedyMemoryPool::new(mem_limit as usize)),
+            _ => {
+                return exec_err!("Invalid memory pool type: {}", mem_pool_type);
+            }
+        };
+        let runtime_env = RuntimeEnvBuilder::new()
+            .with_memory_pool(memory_pool)
             .build_arc()?;
-        let ctx = SessionContext::new_with_config_rt(config, runtime_config);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .with_default_features()
+            .build();
+        let ctx = SessionContext::from(state);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -325,23 +333,9 @@ impl ExternalAggrConfig {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions.unwrap_or(num_cpus::get())
-    }
-
-    /// Parse memory limit from string to number of bytes
-    /// e.g. '1.5G', '100M' -> 1572864
-    fn parse_memory_limit(limit: &str) -> Result<u64> {
-        let (number, unit) = limit.split_at(limit.len() - 1);
-        let number: f64 = number.parse().map_err(|_| {
-            exec_datafusion_err!("Failed to parse number from memory limit '{}'", limit)
-        })?;
-
-        match unit {
-            "K" => Ok((number * 1024.0) as u64),
-            "M" => Ok((number * 1024.0 * 1024.0) as u64),
-            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as u64),
-            _ => exec_err!("Unsupported unit '{}' in memory limit '{}'", unit, limit),
-        }
+        self.common
+            .partitions
+            .unwrap_or_else(get_available_parallelism)
     }
 }
 
@@ -354,32 +348,4 @@ pub async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_memory_limit_all() {
-        // Test valid inputs
-        assert_eq!(
-            ExternalAggrConfig::parse_memory_limit("100K").unwrap(),
-            102400
-        );
-        assert_eq!(
-            ExternalAggrConfig::parse_memory_limit("1.5M").unwrap(),
-            1572864
-        );
-        assert_eq!(
-            ExternalAggrConfig::parse_memory_limit("2G").unwrap(),
-            2147483648
-        );
-
-        // Test invalid unit
-        assert!(ExternalAggrConfig::parse_memory_limit("500X").is_err());
-
-        // Test invalid number
-        assert!(ExternalAggrConfig::parse_memory_limit("abcM").is_err());
-    }
 }

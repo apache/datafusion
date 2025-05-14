@@ -19,15 +19,19 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
+use std::collections::HashMap;
+
 use datafusion_common::{TableReference, UnnestOptions};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
-    self, Alias, Between, BinaryExpr, Cast, GroupingSet, InList, Like, Placeholder,
-    ScalarFunction, Unnest,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
+    Like, Placeholder, ScalarFunction, Unnest,
 };
+use datafusion_expr::WriteOp;
 use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, BuiltInWindowFunction, Expr,
-    JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition,
+    logical_plan::PlanType, logical_plan::StringifiedPlan, Expr, JoinConstraint,
+    JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 
 use crate::protobuf::RecursionUnnestOption;
@@ -38,6 +42,7 @@ use crate::protobuf::{
         FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
         InitialLogicalPlan, InitialPhysicalPlan, InitialPhysicalPlanWithSchema,
         InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        PhysicalPlanError,
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
@@ -115,18 +120,11 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 PlanType::FinalPhysicalPlanWithSchema => Some(protobuf::PlanType {
                     plan_type_enum: Some(FinalPhysicalPlanWithSchema(EmptyMessage {})),
                 }),
+                PlanType::PhysicalPlanError => Some(protobuf::PlanType {
+                    plan_type_enum: Some(PhysicalPlanError(EmptyMessage {})),
+                }),
             },
             plan: stringified_plan.plan.to_string(),
-        }
-    }
-}
-
-impl From<&BuiltInWindowFunction> for protobuf::BuiltInWindowFunction {
-    fn from(value: &BuiltInWindowFunction) -> Self {
-        match value {
-            BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            BuiltInWindowFunction::LastValue => Self::LastValue,
-            BuiltInWindowFunction::NthValue => Self::NthValue,
         }
     }
 }
@@ -204,6 +202,7 @@ pub fn serialize_expr(
             expr,
             relation,
             name,
+            metadata,
         }) => {
             let alias = Box::new(protobuf::AliasNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
@@ -212,6 +211,7 @@ pub fn serialize_expr(
                     .map(|r| vec![r.into()])
                     .unwrap_or(vec![]),
                 alias: name.to_owned(),
+                metadata: metadata.to_owned().unwrap_or(HashMap::new()),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Alias(alias)),
@@ -304,20 +304,17 @@ pub fn serialize_expr(
         }
         Expr::WindowFunction(expr::WindowFunction {
             ref fun,
-            ref args,
-            ref partition_by,
-            ref order_by,
-            ref window_frame,
-            // TODO: support null treatment in proto
-            null_treatment: _,
+            params:
+                expr::WindowFunctionParams {
+                    ref args,
+                    ref partition_by,
+                    ref order_by,
+                    ref window_frame,
+                    // TODO: support null treatment in proto
+                    null_treatment: _,
+                },
         }) => {
             let (window_function, fun_definition) = match fun {
-                WindowFunctionDefinition::BuiltInWindowFunction(fun) => (
-                    protobuf::window_expr_node::WindowFunction::BuiltInFunction(
-                        protobuf::BuiltInWindowFunction::from(fun).into(),
-                    ),
-                    None,
-                ),
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
                     let mut buf = Vec::new();
                     let _ = codec.try_encode_udaf(aggr_udf, &mut buf);
@@ -358,11 +355,14 @@ pub fn serialize_expr(
         }
         Expr::AggregateFunction(expr::AggregateFunction {
             ref func,
-            ref args,
-            ref distinct,
-            ref filter,
-            ref order_by,
-            null_treatment: _,
+            params:
+                AggregateFunctionParams {
+                    ref args,
+                    ref distinct,
+                    ref filter,
+                    ref order_by,
+                    null_treatment: _,
+                },
         }) => {
             let mut buf = Vec::new();
             let _ = codec.try_encode_udaf(func, &mut buf);
@@ -564,6 +564,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::InList(expr)),
             }
         }
+        #[expect(deprecated)]
         Expr::Wildcard { qualifier, .. } => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
                 qualifier: qualifier.to_owned().map(|x| x.into()),
@@ -696,6 +697,21 @@ impl From<JoinConstraint> for protobuf::JoinConstraint {
         match t {
             JoinConstraint::On => protobuf::JoinConstraint::On,
             JoinConstraint::Using => protobuf::JoinConstraint::Using,
+        }
+    }
+}
+
+impl From<&WriteOp> for protobuf::dml_node::Type {
+    fn from(t: &WriteOp) -> Self {
+        match t {
+            WriteOp::Insert(InsertOp::Append) => protobuf::dml_node::Type::InsertAppend,
+            WriteOp::Insert(InsertOp::Overwrite) => {
+                protobuf::dml_node::Type::InsertOverwrite
+            }
+            WriteOp::Insert(InsertOp::Replace) => protobuf::dml_node::Type::InsertReplace,
+            WriteOp::Delete => protobuf::dml_node::Type::Delete,
+            WriteOp::Update => protobuf::dml_node::Type::Update,
+            WriteOp::Ctas => protobuf::dml_node::Type::Ctas,
         }
     }
 }

@@ -23,9 +23,9 @@ use crate::aggregates::{
     PhysicalGroupBy,
 };
 use crate::{RecordBatchStream, SendableRecordBatchStream};
+use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
-use arrow_array::{Array, ArrayRef, RecordBatch};
-use arrow_schema::SchemaRef;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
@@ -123,7 +123,7 @@ impl Stream for GroupedTopKAggregateStream {
                         batch.num_rows()
                     );
                     if log::log_enabled!(Level::Trace) && batch.num_rows() < 20 {
-                        print_batches(&[batch.clone()])?;
+                        print_batches(std::slice::from_ref(&batch))?;
                     }
                     self.row_count += batch.num_rows();
                     let batches = &[batch];
@@ -165,7 +165,7 @@ impl Stream for GroupedTopKAggregateStream {
                         batch.num_rows()
                     );
                     if log::log_enabled!(Level::Trace) {
-                        print_batches(&[batch.clone()])?;
+                        print_batches(std::slice::from_ref(&batch))?;
                     }
                     return Poll::Ready(Some(Ok(batch)));
                 }

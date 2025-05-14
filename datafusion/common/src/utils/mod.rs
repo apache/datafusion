@@ -22,25 +22,25 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_internal_datafusion_err, _internal_err};
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
 use crate::{DataFusionError, Result, ScalarValue};
-use arrow::array::ArrayRef;
+use arrow::array::{
+    cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
+    OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{partition, SortColumn, SortOptions};
-use arrow::datatypes::{Field, SchemaRef};
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-};
-use arrow_schema::DataType;
+use arrow::datatypes::{DataType, Field, SchemaRef};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::{min, Ordering};
 use std::collections::HashSet;
+use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -82,6 +82,23 @@ pub fn project_schema(
     Ok(schema)
 }
 
+/// Extracts a row at the specified index from a set of columns and stores it in the provided buffer.
+pub fn extract_row_at_idx_to_buf(
+    columns: &[ArrayRef],
+    idx: usize,
+    buf: &mut Vec<ScalarValue>,
+) -> Result<()> {
+    buf.clear();
+
+    let iter = columns
+        .iter()
+        .map(|arr| ScalarValue::try_from_array(arr, idx));
+    for v in iter.into_iter() {
+        buf.push(v?);
+    }
+
+    Ok(())
+}
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
     columns
@@ -319,52 +336,201 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
-/// Array Utils
+/// Creates single element [`ListArray`], [`LargeListArray`] and
+/// [`FixedSizeListArray`] from other arrays
+///
+/// For example this builder can convert `[1, 2, 3]` into `[[1, 2, 3]]`
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::array::{Array, ListArray};
+/// # use arrow::array::types::Int64Type;
+/// # use datafusion_common::utils::SingleRowListArrayBuilder;
+/// // Array is [1, 2, 3]
+/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+///       Some(vec![Some(1), Some(2), Some(3)]),
+/// ]);
+/// // Wrap as a list array: [[1, 2, 3]]
+/// let list_arr = SingleRowListArrayBuilder::new(Arc::new(arr)).build_list_array();
+/// assert_eq!(list_arr.len(), 1);
+/// ```
+#[derive(Debug, Clone)]
+pub struct SingleRowListArrayBuilder {
+    /// array to be wrapped
+    arr: ArrayRef,
+    /// Should the resulting array be nullable? Defaults to `true`.
+    nullable: bool,
+    /// Specify the field name for the resulting array. Defaults to value used in
+    /// [`Field::new_list_field`]
+    field_name: Option<String>,
+}
+
+impl SingleRowListArrayBuilder {
+    /// Create a new instance of [`SingleRowListArrayBuilder`]
+    pub fn new(arr: ArrayRef) -> Self {
+        Self {
+            arr,
+            nullable: true,
+            field_name: None,
+        }
+    }
+
+    /// Set the nullable flag
+    pub fn with_nullable(mut self, nullable: bool) -> Self {
+        self.nullable = nullable;
+        self
+    }
+
+    /// sets the field name for the resulting array
+    pub fn with_field_name(mut self, field_name: Option<String>) -> Self {
+        self.field_name = field_name;
+        self
+    }
+
+    /// Copies field name and nullable from the specified field
+    pub fn with_field(self, field: &Field) -> Self {
+        self.with_field_name(Some(field.name().to_owned()))
+            .with_nullable(field.is_nullable())
+    }
+
+    /// Build a single element [`ListArray`]
+    pub fn build_list_array(self) -> ListArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = OffsetBuffer::from_lengths([arr.len()]);
+        ListArray::new(field, offsets, arr, None)
+    }
+
+    /// Build a single element [`ListArray`] and wrap as [`ScalarValue::List`]
+    pub fn build_list_scalar(self) -> ScalarValue {
+        ScalarValue::List(Arc::new(self.build_list_array()))
+    }
+
+    /// Build a single element [`LargeListArray`]
+    pub fn build_large_list_array(self) -> LargeListArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = OffsetBuffer::from_lengths([arr.len()]);
+        LargeListArray::new(field, offsets, arr, None)
+    }
+
+    /// Build a single element [`LargeListArray`] and wrap as [`ScalarValue::LargeList`]
+    pub fn build_large_list_scalar(self) -> ScalarValue {
+        ScalarValue::LargeList(Arc::new(self.build_large_list_array()))
+    }
+
+    /// Build a single element [`FixedSizeListArray`]
+    pub fn build_fixed_size_list_array(self, list_size: usize) -> FixedSizeListArray {
+        let (field, arr) = self.into_field_and_arr();
+        FixedSizeListArray::new(field, list_size as i32, arr, None)
+    }
+
+    /// Build a single element [`FixedSizeListArray`] and wrap as [`ScalarValue::FixedSizeList`]
+    pub fn build_fixed_size_list_scalar(self, list_size: usize) -> ScalarValue {
+        ScalarValue::FixedSizeList(Arc::new(self.build_fixed_size_list_array(list_size)))
+    }
+
+    /// Helper function: convert this builder into a tuple of field and array
+    fn into_field_and_arr(self) -> (Arc<Field>, ArrayRef) {
+        let Self {
+            arr,
+            nullable,
+            field_name,
+        } = self;
+        let data_type = arr.data_type().to_owned();
+        let field = match field_name {
+            Some(name) => Field::new(name, data_type, nullable),
+            None => Field::new_list_field(data_type, nullable),
+        };
+        (Arc::new(field), arr)
+    }
+}
 
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 /// The field in the list array is nullable.
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array_nullable(arr: ArrayRef) -> ListArray {
-    array_into_list_array(arr, true)
+    SingleRowListArrayBuilder::new(arr)
+        .with_nullable(true)
+        .build_list_array()
 }
-
-/// Array Utils
 
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
-    let offsets = OffsetBuffer::from_lengths([arr.len()]);
-    ListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), nullable)),
-        offsets,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr)
+        .with_nullable(nullable)
+        .build_list_array()
+}
+
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
+pub fn array_into_list_array_with_field_name(
+    arr: ArrayRef,
+    nullable: bool,
+    field_name: &str,
+) -> ListArray {
+    SingleRowListArrayBuilder::new(arr)
+        .with_nullable(nullable)
+        .with_field_name(Some(field_name.to_string()))
+        .build_list_array()
 }
 
 /// Wrap an array into a single element `LargeListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
-    let offsets = OffsetBuffer::from_lengths([arr.len()]);
-    LargeListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
-        offsets,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr).build_large_list_array()
 }
 
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
+pub fn array_into_large_list_array_with_field_name(
+    arr: ArrayRef,
+    field_name: &str,
+) -> LargeListArray {
+    SingleRowListArrayBuilder::new(arr)
+        .with_field_name(Some(field_name.to_string()))
+        .build_large_list_array()
+}
+
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_fixed_size_list_array(
     arr: ArrayRef,
     list_size: usize,
 ) -> FixedSizeListArray {
-    let list_size = list_size as i32;
-    FixedSizeListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
-        list_size,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr).build_fixed_size_list_array(list_size)
+}
+
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
+pub fn array_into_fixed_size_list_array_with_field_name(
+    arr: ArrayRef,
+    list_size: usize,
+    field_name: &str,
+) -> FixedSizeListArray {
+    SingleRowListArrayBuilder::new(arr)
+        .with_field_name(Some(field_name.to_string()))
+        .build_fixed_size_list_array(list_size)
 }
 
 /// Wrap arrays into a single element `ListArray`.
@@ -441,6 +607,13 @@ pub fn base_type(data_type: &DataType) -> DataType {
     }
 }
 
+/// Information about how to coerce lists.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum ListCoercion {
+    /// [`DataType::FixedSizeList`] should be coerced to [`DataType::List`].
+    FixedSizedListToList,
+}
+
 /// A helper function to coerce base type in List.
 ///
 /// Example
@@ -451,16 +624,22 @@ pub fn base_type(data_type: &DataType) -> DataType {
 ///
 /// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// let base_type = DataType::Float64;
-/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type);
+/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type, None);
 /// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))));
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
     base_type: &DataType,
+    array_coercion: Option<&ListCoercion>,
 ) -> DataType {
-    match data_type {
-        DataType::List(field) | DataType::FixedSizeList(field, _) => {
-            let field_type =
-                coerced_type_with_base_type_only(field.data_type(), base_type);
+    match (data_type, array_coercion) {
+        (DataType::List(field), _)
+        | (DataType::FixedSizeList(field, _), Some(ListCoercion::FixedSizedListToList)) =>
+        {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
 
             DataType::List(Arc::new(Field::new(
                 field.name(),
@@ -468,9 +647,24 @@ pub fn coerced_type_with_base_type_only(
                 field.is_nullable(),
             )))
         }
-        DataType::LargeList(field) => {
-            let field_type =
-                coerced_type_with_base_type_only(field.data_type(), base_type);
+        (DataType::FixedSizeList(field, len), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
+
+            DataType::FixedSizeList(
+                Arc::new(Field::new(field.name(), field_type, field.is_nullable())),
+                *len,
+            )
+        }
+        (DataType::LargeList(field), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
 
             DataType::LargeList(Arc::new(Field::new(
                 field.name(),
@@ -528,7 +722,7 @@ pub mod datafusion_strsim {
 
     struct StringWrapper<'a>(&'a str);
 
-    impl<'a, 'b> IntoIterator for &'a StringWrapper<'b> {
+    impl<'b> IntoIterator for &StringWrapper<'b> {
         type Item = char;
         type IntoIter = Chars<'b>;
 
@@ -585,6 +779,27 @@ pub mod datafusion_strsim {
     pub fn levenshtein(a: &str, b: &str) -> usize {
         generic_levenshtein(&StringWrapper(a), &StringWrapper(b))
     }
+
+    /// Calculates the normalized Levenshtein distance between two strings.
+    /// The normalized distance is a value between 0.0 and 1.0, where 1.0 indicates
+    /// that the strings are identical and 0.0 indicates no similarity.
+    ///
+    /// ```
+    /// use datafusion_common::utils::datafusion_strsim::normalized_levenshtein;
+    ///
+    /// assert!((normalized_levenshtein("kitten", "sitting") - 0.57142).abs() < 0.00001);
+    ///
+    /// assert!(normalized_levenshtein("", "second").abs() < 0.00001);
+    ///
+    /// assert!((normalized_levenshtein("kitten", "sitten") - 0.833).abs() < 0.001);
+    /// ```
+    pub fn normalized_levenshtein(a: &str, b: &str) -> f64 {
+        if a.is_empty() && b.is_empty() {
+            return 1.0;
+        }
+        1.0 - (levenshtein(a, b) as f64)
+            / (a.chars().count().max(b.chars().count()) as f64)
+    }
 }
 
 /// Merges collections `first` and `second`, removes duplicates and sorts the
@@ -619,6 +834,7 @@ pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
 }
 
 /// Checks whether the given index sequence is monotonically non-decreasing.
+#[deprecated(since = "45.0.0", note = "Use std::Iterator::is_sorted instead")]
 pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
     // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
     let mut previous = 0;
@@ -724,12 +940,61 @@ pub fn combine_limit(
     (combined_skip, combined_fetch)
 }
 
+/// Returns the estimated number of threads available for parallel execution.
+///
+/// This is a wrapper around `std::thread::available_parallelism`, providing a default value
+/// of `1` if the system's parallelism cannot be determined.
+pub fn get_available_parallelism() -> usize {
+    available_parallelism()
+        .unwrap_or(NonZero::new(1).expect("literal value `1` shouldn't be zero"))
+        .get()
+}
+
+/// Converts a collection of function arguments into an fixed-size array of length N
+/// producing a reasonable error message in case of unexpected number of arguments.
+///
+/// # Example
+/// ```
+/// # use datafusion_common::Result;
+/// # use datafusion_common::utils::take_function_args;
+/// # use datafusion_common::ScalarValue;
+/// fn my_function(args: &[ScalarValue]) -> Result<()> {
+///   // function expects 2 args, so create a 2-element array
+///   let [arg1, arg2] = take_function_args("my_function", args)?;
+///   // ... do stuff..
+///   Ok(())
+/// }
+///
+/// // Calling the function with 1 argument produces an error:
+/// let args = vec![ScalarValue::Int32(Some(10))];
+/// let err = my_function(&args).unwrap_err();
+/// assert_eq!(err.to_string(), "Execution error: my_function function requires 2 arguments, got 1");
+/// // Calling the function with 2 arguments works great
+/// let args = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))];
+/// my_function(&args).unwrap();
+/// ```
+pub fn take_function_args<const N: usize, T>(
+    function_name: &str,
+    args: impl IntoIterator<Item = T>,
+) -> Result<[T; N]> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    args.try_into().map_err(|v: Vec<T>| {
+        _exec_datafusion_err!(
+            "{} function requires {} {}, got {}",
+            function_name,
+            N,
+            if N == 1 { "argument" } else { "arguments" },
+            v.len()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
-
-    use super::*;
+    use sqlparser::tokenizer::Span;
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -957,6 +1222,7 @@ mod tests {
             let expected_parsed = vec![Ident {
                 value: identifier.to_string(),
                 quote_style,
+                span: Span::empty(),
             }];
 
             assert_eq!(
@@ -1010,6 +1276,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_is_sorted() {
         assert!(is_sorted::<usize>([]));
         assert!(is_sorted([0]));

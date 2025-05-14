@@ -17,20 +17,21 @@
 
 //! [`StringAgg`] accumulator for the `string_agg` function
 
+use crate::array_agg::ArrayAgg;
 use arrow::array::ArrayRef;
-use arrow_schema::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::Result;
-use datafusion_common::{not_impl_err, ScalarValue};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
+use datafusion_common::{internal_err, not_impl_err, ScalarValue};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
 };
+use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
+use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::Literal;
 use std::any::Any;
 use std::mem::size_of_val;
-use std::sync::OnceLock;
 
 make_udaf_expr_and_func!(
     StringAgg,
@@ -40,10 +41,49 @@ make_udaf_expr_and_func!(
     string_agg_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Concatenates the values of string expressions and places separator values between them. \
+If ordering is required, strings are concatenated in the specified order. \
+This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression.",
+    syntax_example = "string_agg([DISTINCT] expression, delimiter [ORDER BY expression])",
+    sql_example = r#"```sql
+> SELECT string_agg(name, ', ') AS names_list
+  FROM employee;
++--------------------------+
+| names_list               |
++--------------------------+
+| Alice, Bob, Bob, Charlie |
++--------------------------+
+> SELECT string_agg(name, ', ' ORDER BY name DESC) AS names_list
+  FROM employee;
++--------------------------+
+| names_list               |
++--------------------------+
+| Charlie, Bob, Bob, Alice |
++--------------------------+
+> SELECT string_agg(DISTINCT name, ', ' ORDER BY name DESC) AS names_list
+  FROM employee;
++--------------------------+
+| names_list               |
++--------------------------+
+| Charlie, Bob, Alice |
++--------------------------+
+```"#,
+    argument(
+        name = "expression",
+        description = "The string expression to concatenate. Can be a column or any valid string expression."
+    ),
+    argument(
+        name = "delimiter",
+        description = "A literal string used as a separator between the concatenated values."
+    )
+)]
 /// STRING_AGG aggregate expression
 #[derive(Debug)]
 pub struct StringAgg {
     signature: Signature,
+    array_agg: ArrayAgg,
 }
 
 impl StringAgg {
@@ -55,9 +95,13 @@ impl StringAgg {
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Null]),
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::LargeUtf8]),
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Null]),
                 ],
                 Volatility::Immutable,
             ),
+            array_agg: Default::default(),
         }
     }
 }
@@ -85,65 +129,57 @@ impl AggregateUDFImpl for StringAgg {
         Ok(DataType::LargeUtf8)
     }
 
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if let Some(lit) = acc_args.exprs[1].as_any().downcast_ref::<Literal>() {
-            return match lit.value() {
-                ScalarValue::Utf8(Some(delimiter))
-                | ScalarValue::LargeUtf8(Some(delimiter)) => {
-                    Ok(Box::new(StringAggAccumulator::new(delimiter.as_str())))
-                }
-                ScalarValue::Utf8(None)
-                | ScalarValue::LargeUtf8(None)
-                | ScalarValue::Null => Ok(Box::new(StringAggAccumulator::new(""))),
-                e => not_impl_err!("StringAgg not supported for delimiter {}", e),
-            };
-        }
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        self.array_agg.state_fields(args)
+    }
 
-        not_impl_err!("expect literal")
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let Some(lit) = acc_args.exprs[1].as_any().downcast_ref::<Literal>() else {
+            return not_impl_err!(
+                "The second argument of the string_agg function must be a string literal"
+            );
+        };
+
+        let delimiter = if lit.value().is_null() {
+            // If the second argument (the delimiter that joins strings) is NULL, join
+            // on an empty string. (e.g. [a, b, c] => "abc").
+            ""
+        } else if let Some(lit_string) = lit.value().try_as_str() {
+            lit_string.unwrap_or("")
+        } else {
+            return not_impl_err!(
+                "StringAgg not supported for delimiter \"{}\"",
+                lit.value()
+            );
+        };
+
+        let array_agg_acc = self.array_agg.accumulator(AccumulatorArgs {
+            return_type: &DataType::new_list(acc_args.return_type.clone(), true),
+            exprs: &filter_index(acc_args.exprs, 1),
+            ..acc_args
+        })?;
+
+        Ok(Box::new(StringAggAccumulator::new(
+            array_agg_acc,
+            delimiter,
+        )))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_string_agg_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_string_agg_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Concatenates the values of string expressions and places separator values between them."
-            )
-            .with_syntax_example("string_agg(expression, delimiter)")
-            .with_sql_example(r#"```sql
-> SELECT string_agg(name, ', ') AS names_list
-  FROM employee;
-+--------------------------+
-| names_list               |
-+--------------------------+
-| Alice, Bob, Charlie      |
-+--------------------------+
-```"#, 
-            )
-            .with_argument("expression", "The string expression to concatenate. Can be a column or any valid string expression.")
-            .with_argument("delimiter", "A literal string used as a separator between the concatenated values.")
-            .build()
-            .unwrap()
-    })
 }
 
 #[derive(Debug)]
 pub(crate) struct StringAggAccumulator {
-    values: Option<String>,
+    array_agg_acc: Box<dyn Accumulator>,
     delimiter: String,
 }
 
 impl StringAggAccumulator {
-    pub fn new(delimiter: &str) -> Self {
+    pub fn new(array_agg_acc: Box<dyn Accumulator>, delimiter: &str) -> Self {
         Self {
-            values: None,
+            array_agg_acc,
             delimiter: delimiter.to_string(),
         }
     }
@@ -151,37 +187,311 @@ impl StringAggAccumulator {
 
 impl Accumulator for StringAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let string_array: Vec<_> = as_generic_string_array::<i64>(&values[0])?
-            .iter()
-            .filter_map(|v| v.as_ref().map(ToString::to_string))
-            .collect();
-        if !string_array.is_empty() {
-            let s = string_array.join(self.delimiter.as_str());
-            let v = self.values.get_or_insert("".to_string());
-            if !v.is_empty() {
-                v.push_str(self.delimiter.as_str());
-            }
-            v.push_str(s.as_str());
-        }
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.update_batch(values)?;
-        Ok(())
-    }
-
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
+        self.array_agg_acc.update_batch(&filter_index(values, 1))
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::LargeUtf8(self.values.clone()))
+        let scalar = self.array_agg_acc.evaluate()?;
+
+        let ScalarValue::List(list) = scalar else {
+            return internal_err!("Expected a DataType::List while evaluating underlying ArrayAggAccumulator, but got {}", scalar.data_type());
+        };
+
+        let string_arr: Vec<_> = match list.value_type() {
+            DataType::LargeUtf8 => as_generic_string_array::<i64>(list.values())?
+                .iter()
+                .flatten()
+                .collect(),
+            DataType::Utf8 => as_generic_string_array::<i32>(list.values())?
+                .iter()
+                .flatten()
+                .collect(),
+            _ => {
+                return internal_err!(
+                    "Expected elements to of type Utf8 or LargeUtf8, but got {}",
+                    list.value_type()
+                )
+            }
+        };
+
+        if string_arr.is_empty() {
+            return Ok(ScalarValue::LargeUtf8(None));
+        }
+
+        Ok(ScalarValue::LargeUtf8(Some(
+            string_arr.join(&self.delimiter),
+        )))
     }
 
     fn size(&self) -> usize {
-        size_of_val(self)
-            + self.values.as_ref().map(|v| v.capacity()).unwrap_or(0)
+        size_of_val(self) - size_of_val(&self.array_agg_acc)
+            + self.array_agg_acc.size()
             + self.delimiter.capacity()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.array_agg_acc.state()
+    }
+
+    fn merge_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.array_agg_acc.merge_batch(values)
+    }
+}
+
+fn filter_index<T: Clone>(values: &[T], index: usize) -> Vec<T> {
+    values
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != index)
+        .map(|(_, v)| v)
+        .cloned()
+        .collect::<Vec<_>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::LargeStringArray;
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{Fields, Schema};
+    use datafusion_common::internal_err;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use std::sync::Arc;
+
+    #[test]
+    fn no_duplicates_no_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = StringAggAccumulatorBuilder::new(",").build_two()?;
+
+        acc1.update_batch(&[data(["a", "b", "c"]), data([","])])?;
+        acc2.update_batch(&[data(["d", "e", "f"]), data([","])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = some_str(acc1.evaluate()?);
+
+        assert_eq!(result, "a,b,c,d,e,f");
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_duplicates_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = StringAggAccumulatorBuilder::new(",")
+            .distinct()
+            .build_two()?;
+
+        acc1.update_batch(&[data(["a", "b", "c"]), data([","])])?;
+        acc2.update_batch(&[data(["d", "e", "f"]), data([","])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = some_str_sorted(acc1.evaluate()?, ",");
+
+        assert_eq!(result, "a,b,c,d,e,f");
+
+        Ok(())
+    }
+
+    #[test]
+    fn duplicates_no_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = StringAggAccumulatorBuilder::new(",").build_two()?;
+
+        acc1.update_batch(&[data(["a", "b", "c"]), data([","])])?;
+        acc2.update_batch(&[data(["a", "b", "c"]), data([","])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = some_str(acc1.evaluate()?);
+
+        assert_eq!(result, "a,b,c,a,b,c");
+
+        Ok(())
+    }
+
+    #[test]
+    fn duplicates_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = StringAggAccumulatorBuilder::new(",")
+            .distinct()
+            .build_two()?;
+
+        acc1.update_batch(&[data(["a", "b", "c"]), data([","])])?;
+        acc2.update_batch(&[data(["a", "b", "c"]), data([","])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = some_str_sorted(acc1.evaluate()?, ",");
+
+        assert_eq!(result, "a,b,c");
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_duplicates_distinct_sort_asc() -> Result<()> {
+        let (mut acc1, mut acc2) = StringAggAccumulatorBuilder::new(",")
+            .distinct()
+            .order_by_col("col", SortOptions::new(false, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data(["e", "b", "d"]), data([","])])?;
+        acc2.update_batch(&[data(["f", "a", "c"]), data([","])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = some_str(acc1.evaluate()?);
+
+        assert_eq!(result, "a,b,c,d,e,f");
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_duplicates_distinct_sort_desc() -> Result<()> {
+        let (mut acc1, mut acc2) = StringAggAccumulatorBuilder::new(",")
+            .distinct()
+            .order_by_col("col", SortOptions::new(true, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data(["e", "b", "d"]), data([","])])?;
+        acc2.update_batch(&[data(["f", "a", "c"]), data([","])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = some_str(acc1.evaluate()?);
+
+        assert_eq!(result, "f,e,d,c,b,a");
+
+        Ok(())
+    }
+
+    #[test]
+    fn duplicates_distinct_sort_asc() -> Result<()> {
+        let (mut acc1, mut acc2) = StringAggAccumulatorBuilder::new(",")
+            .distinct()
+            .order_by_col("col", SortOptions::new(false, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data(["a", "c", "b"]), data([","])])?;
+        acc2.update_batch(&[data(["b", "c", "a"]), data([","])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = some_str(acc1.evaluate()?);
+
+        assert_eq!(result, "a,b,c");
+
+        Ok(())
+    }
+
+    #[test]
+    fn duplicates_distinct_sort_desc() -> Result<()> {
+        let (mut acc1, mut acc2) = StringAggAccumulatorBuilder::new(",")
+            .distinct()
+            .order_by_col("col", SortOptions::new(true, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data(["a", "c", "b"]), data([","])])?;
+        acc2.update_batch(&[data(["b", "c", "a"]), data([","])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = some_str(acc1.evaluate()?);
+
+        assert_eq!(result, "c,b,a");
+
+        Ok(())
+    }
+
+    struct StringAggAccumulatorBuilder {
+        sep: String,
+        distinct: bool,
+        ordering: LexOrdering,
+        schema: Schema,
+    }
+
+    impl StringAggAccumulatorBuilder {
+        fn new(sep: &str) -> Self {
+            Self {
+                sep: sep.to_string(),
+                distinct: Default::default(),
+                ordering: Default::default(),
+                schema: Schema {
+                    fields: Fields::from(vec![Field::new(
+                        "col",
+                        DataType::LargeUtf8,
+                        true,
+                    )]),
+                    metadata: Default::default(),
+                },
+            }
+        }
+        fn distinct(mut self) -> Self {
+            self.distinct = true;
+            self
+        }
+
+        fn order_by_col(mut self, col: &str, sort_options: SortOptions) -> Self {
+            self.ordering.extend([PhysicalSortExpr::new(
+                Arc::new(
+                    Column::new_with_schema(col, &self.schema)
+                        .expect("column not available in schema"),
+                ),
+                sort_options,
+            )]);
+            self
+        }
+
+        fn build(&self) -> Result<Box<dyn Accumulator>> {
+            StringAgg::new().accumulator(AccumulatorArgs {
+                return_type: &DataType::LargeUtf8,
+                schema: &self.schema,
+                ignore_nulls: false,
+                ordering_req: &self.ordering,
+                is_reversed: false,
+                name: "",
+                is_distinct: self.distinct,
+                exprs: &[
+                    Arc::new(Column::new("col", 0)),
+                    Arc::new(Literal::new(ScalarValue::Utf8(Some(self.sep.to_string())))),
+                ],
+            })
+        }
+
+        fn build_two(&self) -> Result<(Box<dyn Accumulator>, Box<dyn Accumulator>)> {
+            Ok((self.build()?, self.build()?))
+        }
+    }
+
+    fn some_str(value: ScalarValue) -> String {
+        str(value)
+            .expect("ScalarValue was not a String")
+            .expect("ScalarValue was None")
+    }
+
+    fn some_str_sorted(value: ScalarValue, sep: &str) -> String {
+        let value = some_str(value);
+        let mut parts: Vec<&str> = value.split(sep).collect();
+        parts.sort();
+        parts.join(sep)
+    }
+
+    fn str(value: ScalarValue) -> Result<Option<String>> {
+        match value {
+            ScalarValue::LargeUtf8(v) => Ok(v),
+            _ => internal_err!(
+                "Expected ScalarValue::LargeUtf8, got {}",
+                value.data_type()
+            ),
+        }
+    }
+
+    fn data<const N: usize>(list: [&str; N]) -> ArrayRef {
+        Arc::new(LargeStringArray::from(list.to_vec()))
+    }
+
+    fn merge(
+        mut acc1: Box<dyn Accumulator>,
+        mut acc2: Box<dyn Accumulator>,
+    ) -> Result<Box<dyn Accumulator>> {
+        let intermediate_state = acc2.state().and_then(|e| {
+            e.iter()
+                .map(|v| v.to_array())
+                .collect::<Result<Vec<ArrayRef>>>()
+        })?;
+        acc1.merge_batch(&intermediate_state)?;
+        Ok(acc1)
     }
 }

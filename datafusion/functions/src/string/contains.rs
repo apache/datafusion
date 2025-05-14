@@ -20,16 +20,32 @@ use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::contains as arrow_contains;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
-use datafusion_common::exec_err;
-use datafusion_common::DataFusionError;
-use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_common::types::logical_string;
+use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Return true if search_str is found within string (case-sensitive).",
+    syntax_example = "contains(str, search_str)",
+    sql_example = r#"```sql
+> select contains('the quick brown fox', 'row');
++---------------------------------------------------+
+| contains(Utf8("the quick brown fox"),Utf8("row")) |
++---------------------------------------------------+
+| true                                              |
++---------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "search_str", description = "The string to search for in str.")
+)]
 #[derive(Debug)]
 pub struct ContainsFunc {
     signature: Signature,
@@ -44,7 +60,13 @@ impl Default for ContainsFunc {
 impl ContainsFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -66,66 +88,62 @@ impl ScalarUDFImpl for ContainsFunc {
         Ok(Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(contains, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(contains, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_contains_doc())
+        self.doc()
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_contains_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Return true if search_str is found within string (case-sensitive).",
-            )
-            .with_syntax_example("contains(str, search_str)")
-            .with_sql_example(
-                r#"```sql
-> select contains('the quick brown fox', 'row');
-+---------------------------------------------------+
-| contains(Utf8("the quick brown fox"),Utf8("row")) |
-+---------------------------------------------------+
-| true                                              |
-+---------------------------------------------------+
-```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("search_str", "The string to search for in str.")
-            .build()
-            .unwrap()
-    })
-}
-
 /// use `arrow::compute::contains` to do the calculation for contains
-pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
-    match (args[0].data_type(), args[1].data_type()) {
-        (Utf8View, Utf8View) => {
-            let mod_str = args[0].as_string_view();
-            let match_str = args[1].as_string_view();
-            let res = arrow_contains(mod_str, match_str)?;
-            Ok(Arc::new(res) as ArrayRef)
+fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
+    if let Some(coercion_data_type) =
+        string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
+            binary_to_string_coercion(args[0].data_type(), args[1].data_type())
+        })
+    {
+        let arg0 = if args[0].data_type() == &coercion_data_type {
+            Arc::clone(&args[0])
+        } else {
+            arrow::compute::kernels::cast::cast(&args[0], &coercion_data_type)?
+        };
+        let arg1 = if args[1].data_type() == &coercion_data_type {
+            Arc::clone(&args[1])
+        } else {
+            arrow::compute::kernels::cast::cast(&args[1], &coercion_data_type)?
+        };
+
+        match coercion_data_type {
+            Utf8View => {
+                let mod_str = arg0.as_string_view();
+                let match_str = arg1.as_string_view();
+                let res = arrow_contains(mod_str, match_str)?;
+                Ok(Arc::new(res) as ArrayRef)
+            }
+            Utf8 => {
+                let mod_str = arg0.as_string::<i32>();
+                let match_str = arg1.as_string::<i32>();
+                let res = arrow_contains(mod_str, match_str)?;
+                Ok(Arc::new(res) as ArrayRef)
+            }
+            LargeUtf8 => {
+                let mod_str = arg0.as_string::<i64>();
+                let match_str = arg1.as_string::<i64>();
+                let res = arrow_contains(mod_str, match_str)?;
+                Ok(Arc::new(res) as ArrayRef)
+            }
+            other => {
+                exec_err!("Unsupported data type {other:?} for function `contains`.")
+            }
         }
-        (Utf8, Utf8) => {
-            let mod_str = args[0].as_string::<i32>();
-            let match_str = args[1].as_string::<i32>();
-            let res = arrow_contains(mod_str, match_str)?;
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (LargeUtf8, LargeUtf8) => {
-            let mod_str = args[0].as_string::<i64>();
-            let match_str = args[1].as_string::<i64>();
-            let res = arrow_contains(mod_str, match_str)?;
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        other => {
-            exec_err!("Unsupported data type {other:?} for function `contains`.")
-        }
+    } else {
+        exec_err!(
+            "Unsupported data type {:?}, {:?} for function `contains`.",
+            args[0].data_type(),
+            args[1].data_type()
+        )
     }
 }
 
@@ -133,8 +151,9 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 mod test {
     use super::ContainsFunc;
     use arrow::array::{BooleanArray, StringArray};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
@@ -145,7 +164,19 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
-        let actual = udf.invoke(&[array, scalar]).unwrap();
+        let arg_fields = vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("a", DataType::Utf8, true),
+        ];
+
+        let args = ScalarFunctionArgs {
+            args: vec![array, scalar],
+            arg_fields: arg_fields.iter().collect(),
+            number_rows: 2,
+            return_field: &Field::new("f", DataType::Boolean, true),
+        };
+
+        let actual = udf.invoke_with_args(args).unwrap();
         let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
             Some(true),
             Some(false),

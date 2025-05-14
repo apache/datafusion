@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::{Field, Fields, UnionFields};
+use arrow::datatypes::{Field, Fields, UnionFields};
 use std::hash::{Hash, Hasher};
 use std::{ops::Deref, sync::Arc};
 

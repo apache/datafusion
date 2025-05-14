@@ -72,7 +72,6 @@ use datafusion_common::Result;
 use datafusion_execution::{RecordBatchStream, TaskContext};
 use datafusion_physical_expr::LexOrdering;
 
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 use futures::{ready, Stream, StreamExt};
 use log::trace;
 
@@ -159,13 +158,18 @@ impl PartialSortExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> LexOrderingRef {
+    pub fn expr(&self) -> &LexOrdering {
         self.expr.as_ref()
     }
 
     /// If `Some(fetch)`, limits output to only the first "fetch" items
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    /// Common prefix length
+    pub fn common_prefix_length(&self) -> usize {
+        self.common_prefix_length
     }
 
     fn output_partitioning_helper(
@@ -197,10 +201,12 @@ impl PartialSortExec {
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        // Determine execution mode:
-        let mode = input.execution_mode();
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            input.pipeline_behavior(),
+            input.boundedness(),
+        )
     }
 }
 
@@ -220,6 +226,15 @@ impl DisplayAs for PartialSortExec {
                     None => write!(f, "PartialSortExec: expr=[{}], common_prefix_length=[{common_prefix_length}]", self.expr),
                 }
             }
+            DisplayFormatType::TreeRender => match self.fetch {
+                Some(fetch) => {
+                    writeln!(f, "{}", self.expr)?;
+                    writeln!(f, "limit={fetch}")
+                }
+                None => {
+                    writeln!(f, "{}", self.expr)
+                }
+            },
         }
     }
 }
@@ -281,10 +296,7 @@ impl ExecutionPlan for PartialSortExec {
 
         let input = self.input.execute(partition, Arc::clone(&context))?;
 
-        trace!(
-            "End PartialSortExec's input.execute for partition: {}",
-            partition
-        );
+        trace!("End PartialSortExec's input.execute for partition: {partition}");
 
         // Make sure common prefix length is larger than 0
         // Otherwise, we should use SortExec.
@@ -306,7 +318,11 @@ impl ExecutionPlan for PartialSortExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)
     }
 }
 
@@ -359,31 +375,43 @@ impl PartialSortStream {
         if self.is_closed {
             return Poll::Ready(None);
         }
-        let result = match ready!(self.input.poll_next_unpin(cx)) {
-            Some(Ok(batch)) => {
-                if let Some(slice_point) =
-                    self.get_slice_point(self.common_prefix_length, &batch)?
-                {
-                    self.in_mem_batches.push(batch.slice(0, slice_point));
-                    let remaining_batch =
-                        batch.slice(slice_point, batch.num_rows() - slice_point);
-                    let sorted_batch = self.sort_in_mem_batches();
-                    self.in_mem_batches.push(remaining_batch);
-                    sorted_batch
-                } else {
-                    self.in_mem_batches.push(batch);
-                    Ok(RecordBatch::new_empty(self.schema()))
-                }
-            }
-            Some(Err(e)) => Err(e),
-            None => {
-                self.is_closed = true;
-                // once input is consumed, sort the rest of the inserted batches
-                self.sort_in_mem_batches()
-            }
-        };
+        loop {
+            return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
+                    if let Some(slice_point) =
+                        self.get_slice_point(self.common_prefix_length, &batch)?
+                    {
+                        self.in_mem_batches.push(batch.slice(0, slice_point));
+                        let remaining_batch =
+                            batch.slice(slice_point, batch.num_rows() - slice_point);
+                        // Extract the sorted batch
+                        let sorted_batch = self.sort_in_mem_batches();
+                        // Refill with the remaining batch
+                        self.in_mem_batches.push(remaining_batch);
 
-        Poll::Ready(Some(result))
+                        debug_assert!(sorted_batch
+                            .as_ref()
+                            .map(|batch| batch.num_rows() > 0)
+                            .unwrap_or(true));
+                        Some(sorted_batch)
+                    } else {
+                        self.in_mem_batches.push(batch);
+                        continue;
+                    }
+                }
+                Some(Err(e)) => Some(Err(e)),
+                None => {
+                    self.is_closed = true;
+                    // once input is consumed, sort the rest of the inserted batches
+                    let remaining_batch = self.sort_in_mem_batches()?;
+                    if remaining_batch.num_rows() > 0 {
+                        Some(Ok(remaining_batch))
+                    } else {
+                        None
+                    }
+                }
+            });
+        }
     }
 
     /// Returns a sorted RecordBatch from in_mem_batches and clears in_mem_batches
@@ -440,19 +468,20 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use datafusion_common::test_util::batches_to_string;
     use futures::FutureExt;
+    use insta::allow_duplicates;
+    use insta::assert_snapshot;
     use itertools::Itertools;
-
-    use datafusion_common::assert_batches_eq;
 
     use crate::collect;
     use crate::expressions::col;
     use crate::expressions::PhysicalSortExpr;
-    use crate::memory::MemoryExec;
     use crate::sorts::sort::SortExec;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::TestMemoryExec;
 
     use super::*;
 
@@ -495,20 +524,21 @@ mod tests {
 
         let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
 
-        let expected_after_sort = [
-            "+---+---+---+",
-            "| a | b | c |",
-            "+---+---+---+",
-            "| 0 | 1 | 0 |",
-            "| 0 | 1 | 1 |",
-            "| 0 | 2 | 5 |",
-            "| 1 | 2 | 4 |",
-            "| 1 | 3 | 2 |",
-            "| 1 | 3 | 3 |",
-            "+---+---+---+",
-        ];
         assert_eq!(2, result.len());
-        assert_batches_eq!(expected_after_sort, &result);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&result), @r#"
+                +---+---+---+
+                | a | b | c |
+                +---+---+---+
+                | 0 | 1 | 0 |
+                | 0 | 1 | 1 |
+                | 0 | 2 | 5 |
+                | 1 | 2 | 4 |
+                | 1 | 3 | 2 |
+                | 1 | 3 | 3 |
+                +---+---+---+
+                "#);
+        }
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
@@ -561,18 +591,19 @@ mod tests {
 
             let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
 
-            let expected_after_sort = [
-                "+---+---+---+",
-                "| a | b | c |",
-                "+---+---+---+",
-                "| 0 | 1 | 4 |",
-                "| 0 | 2 | 3 |",
-                "| 1 | 2 | 2 |",
-                "| 1 | 3 | 0 |",
-                "+---+---+---+",
-            ];
             assert_eq!(2, result.len());
-            assert_batches_eq!(expected_after_sort, &result);
+            allow_duplicates! {
+                assert_snapshot!(batches_to_string(&result), @r#"
+                    +---+---+---+
+                    | a | b | c |
+                    +---+---+---+
+                    | 0 | 1 | 4 |
+                    | 0 | 2 | 3 |
+                    | 1 | 2 | 2 |
+                    | 1 | 3 | 0 |
+                    +---+---+---+
+                    "#);
+            }
             assert_eq!(
                 task_ctx.runtime_env().memory_pool.reserved(),
                 0,
@@ -636,21 +667,22 @@ mod tests {
                 0,
                 "The sort should have returned all memory used back to the memory manager"
             );
-            let expected = [
-                "+---+---+---+",
-                "| a | b | c |",
-                "+---+---+---+",
-                "| 0 | 1 | 6 |",
-                "| 0 | 1 | 7 |",
-                "| 0 | 3 | 4 |",
-                "| 0 | 3 | 5 |",
-                "| 1 | 2 | 0 |",
-                "| 1 | 2 | 1 |",
-                "| 1 | 4 | 2 |",
-                "| 1 | 4 | 3 |",
-                "+---+---+---+",
-            ];
-            assert_batches_eq!(expected, &result);
+            allow_duplicates! {
+                assert_snapshot!(batches_to_string(&result), @r#"
+                    +---+---+---+
+                    | a | b | c |
+                    +---+---+---+
+                    | 0 | 1 | 6 |
+                    | 0 | 1 | 7 |
+                    | 0 | 3 | 4 |
+                    | 0 | 3 | 5 |
+                    | 1 | 2 | 0 |
+                    | 1 | 2 | 1 |
+                    | 1 | 4 | 2 |
+                    | 1 | 4 | 3 |
+                    +---+---+---+
+                    "#);
+            }
         }
         Ok(())
     }
@@ -677,14 +709,13 @@ mod tests {
             ("c", &(0..100).rev().collect()),
         );
         let schema = batch1.schema();
-        Arc::new(
-            MemoryExec::try_new(
-                &[vec![batch1, batch2, batch3, batch4]],
-                Arc::clone(&schema),
-                None,
-            )
-            .unwrap(),
-        ) as Arc<dyn ExecutionPlan>
+
+        TestMemoryExec::try_new_exec(
+            &[vec![batch1, batch2, batch3, batch4]],
+            Arc::clone(&schema),
+            None,
+        )
+        .unwrap() as Arc<dyn ExecutionPlan>
     }
 
     #[tokio::test]
@@ -727,7 +758,7 @@ mod tests {
         let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
         assert_eq!(
             result.iter().map(|r| r.num_rows()).collect_vec(),
-            [0, 125, 125, 0, 150]
+            [125, 125, 150]
         );
 
         assert_eq!(
@@ -756,10 +787,10 @@ mod tests {
             nulls_first: false,
         };
         for (fetch_size, expected_batch_num_rows) in [
-            (Some(50), vec![0, 50]),
-            (Some(120), vec![0, 120]),
-            (Some(150), vec![0, 125, 25]),
-            (Some(250), vec![0, 125, 125]),
+            (Some(50), vec![50]),
+            (Some(120), vec![120]),
+            (Some(150), vec![125, 25]),
+            (Some(250), vec![125, 125]),
         ] {
             let partial_sort_executor = PartialSortExec::new(
                 LexOrdering::new(vec![
@@ -807,6 +838,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_partial_sort_no_empty_batches() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let mem_exec = prepare_partitioned_input();
+        let schema = mem_exec.schema();
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let fetch_size = Some(250);
+        let partial_sort_executor = PartialSortExec::new(
+            LexOrdering::new(vec![
+                PhysicalSortExpr {
+                    expr: col("a", &schema)?,
+                    options: option_asc,
+                },
+                PhysicalSortExpr {
+                    expr: col("c", &schema)?,
+                    options: option_asc,
+                },
+            ]),
+            Arc::clone(&mem_exec),
+            1,
+        )
+        .with_fetch(fetch_size);
+
+        let partial_sort_exec =
+            Arc::new(partial_sort_executor.clone()) as Arc<dyn ExecutionPlan>;
+        let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
+        for rb in result {
+            assert!(rb.num_rows() > 0);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_sort_metadata() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let field_metadata: HashMap<String, String> =
@@ -827,11 +894,8 @@ mod tests {
             Arc::new(vec![1, 1, 2].into_iter().map(Some).collect::<UInt64Array>());
 
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data])?;
-        let input = Arc::new(MemoryExec::try_new(
-            &[vec![batch]],
-            Arc::clone(&schema),
-            None,
-        )?);
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
@@ -937,24 +1001,9 @@ mod tests {
                     options: option_desc,
                 },
             ]),
-            Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
             2,
         ));
-
-        let expected = [
-            "+-----+------+-------+",
-            "| a   | b    | c     |",
-            "+-----+------+-------+",
-            "| 1.0 | 20.0 | 20.0  |",
-            "| 1.0 | 20.0 | 10.0  |",
-            "| 1.0 | 40.0 | 10.0  |",
-            "| 2.0 | 40.0 | 100.0 |",
-            "| 2.0 | NaN  | NaN   |",
-            "| 3.0 |      |       |",
-            "| 3.0 |      | 100.0 |",
-            "| 3.0 | NaN  | NaN   |",
-            "+-----+------+-------+",
-        ];
 
         assert_eq!(
             DataType::Float32,
@@ -974,7 +1023,20 @@ mod tests {
             task_ctx,
         )
         .await?;
-        assert_batches_eq!(expected, &result);
+        assert_snapshot!(batches_to_string(&result), @r#"
+            +-----+------+-------+
+            | a   | b    | c     |
+            +-----+------+-------+
+            | 1.0 | 20.0 | 20.0  |
+            | 1.0 | 20.0 | 10.0  |
+            | 1.0 | 40.0 | 10.0  |
+            | 2.0 | 40.0 | 100.0 |
+            | 2.0 | NaN  | NaN   |
+            | 3.0 |      |       |
+            | 3.0 |      | 100.0 |
+            | 3.0 | NaN  | NaN   |
+            +-----+------+-------+
+            "#);
         assert_eq!(result.len(), 2);
         let metrics = partial_sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);

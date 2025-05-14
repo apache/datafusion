@@ -28,7 +28,7 @@ use datafusion_common::{
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
 use sqlparser::ast::{Query, SetExpr, SetOperator, With};
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn plan_with_clause(
         &self,
         with: With,

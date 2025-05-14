@@ -94,7 +94,7 @@ impl OptimizerRule for EliminateGroupByConstant {
 /// Checks if expression is constant, and can be eliminated from group by.
 ///
 /// Intended to be used only within this rule, helper function, which heavily
-/// reiles on `SimplifyExpressions` result.
+/// relies on `SimplifyExpressions` result.
 fn is_constant_expression(expr: &Expr) -> bool {
     match expr {
         Expr::Alias(e) => is_constant_expression(&e.expr),
@@ -115,19 +115,37 @@ fn is_constant_expression(expr: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
+    use crate::OptimizerContext;
 
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature,
-        TypeSignature,
+        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, TypeSignature,
     };
 
     use datafusion_functions_aggregate::expr_fn::count;
 
     use std::sync::Arc;
+
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateGroupByConstant::new())];
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
+    }
 
     #[derive(Debug)]
     struct ScalarUDFMock {
@@ -155,7 +173,7 @@ mod tests {
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
         }
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             unimplemented!()
         }
     }
@@ -167,17 +185,11 @@ mod tests {
             .aggregate(vec![col("a"), lit(1u32)], vec![count(col("c"))])?
             .build()?;
 
-        let expected = "\
-            Projection: test.a, UInt32(1), count(test.c)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]\
-            \n    TableScan: test\
-        ";
-
-        assert_optimized_plan_eq(
-            Arc::new(EliminateGroupByConstant::new()),
-            plan,
-            expected,
-        )
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test.a, UInt32(1), count(test.c)
+          Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
+            TableScan: test
+        ")
     }
 
     #[test]
@@ -187,17 +199,11 @@ mod tests {
             .aggregate(vec![lit("test"), lit(123u32)], vec![count(col("c"))])?
             .build()?;
 
-        let expected = "\
-            Projection: Utf8(\"test\"), UInt32(123), count(test.c)\
-            \n  Aggregate: groupBy=[[]], aggr=[[count(test.c)]]\
-            \n    TableScan: test\
-        ";
-
-        assert_optimized_plan_eq(
-            Arc::new(EliminateGroupByConstant::new()),
-            plan,
-            expected,
-        )
+        assert_optimized_plan_equal!(plan, @r#"
+        Projection: Utf8("test"), UInt32(123), count(test.c)
+          Aggregate: groupBy=[[]], aggr=[[count(test.c)]]
+            TableScan: test
+        "#)
     }
 
     #[test]
@@ -207,16 +213,10 @@ mod tests {
             .aggregate(vec![col("a"), col("b")], vec![count(col("c"))])?
             .build()?;
 
-        let expected = "\
-            Aggregate: groupBy=[[test.a, test.b]], aggr=[[count(test.c)]]\
-            \n  TableScan: test\
-        ";
-
-        assert_optimized_plan_eq(
-            Arc::new(EliminateGroupByConstant::new()),
-            plan,
-            expected,
-        )
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a, test.b]], aggr=[[count(test.c)]]
+          TableScan: test
+        ")
     }
 
     #[test]
@@ -226,16 +226,10 @@ mod tests {
             .aggregate(vec![lit(123u32)], Vec::<Expr>::new())?
             .build()?;
 
-        let expected = "\
-            Aggregate: groupBy=[[UInt32(123)]], aggr=[[]]\
-            \n  TableScan: test\
-        ";
-
-        assert_optimized_plan_eq(
-            Arc::new(EliminateGroupByConstant::new()),
-            plan,
-            expected,
-        )
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[UInt32(123)]], aggr=[[]]
+          TableScan: test
+        ")
     }
 
     #[test]
@@ -248,17 +242,11 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "\
-            Projection: UInt32(123) AS const, test.a, count(test.c)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]\
-            \n    TableScan: test\
-        ";
-
-        assert_optimized_plan_eq(
-            Arc::new(EliminateGroupByConstant::new()),
-            plan,
-            expected,
-        )
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: UInt32(123) AS const, test.a, count(test.c)
+          Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
+            TableScan: test
+        ")
     }
 
     #[test]
@@ -273,17 +261,11 @@ mod tests {
             .aggregate(vec![udf_expr, col("a")], vec![count(col("c"))])?
             .build()?;
 
-        let expected = "\
-            Projection: scalar_fn_mock(UInt32(123)), test.a, count(test.c)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]\
-            \n    TableScan: test\
-        ";
-
-        assert_optimized_plan_eq(
-            Arc::new(EliminateGroupByConstant::new()),
-            plan,
-            expected,
-        )
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: scalar_fn_mock(UInt32(123)), test.a, count(test.c)
+          Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
+            TableScan: test
+        ")
     }
 
     #[test]
@@ -298,15 +280,9 @@ mod tests {
             .aggregate(vec![udf_expr, col("a")], vec![count(col("c"))])?
             .build()?;
 
-        let expected = "\
-            Aggregate: groupBy=[[scalar_fn_mock(UInt32(123)), test.a]], aggr=[[count(test.c)]]\
-            \n  TableScan: test\
-        ";
-
-        assert_optimized_plan_eq(
-            Arc::new(EliminateGroupByConstant::new()),
-            plan,
-            expected,
-        )
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[scalar_fn_mock(UInt32(123)), test.a]], aggr=[[count(test.c)]]
+          TableScan: test
+        ")
     }
 }

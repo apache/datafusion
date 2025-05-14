@@ -18,27 +18,27 @@
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::vec;
 
-use arrow::array::{ArrayData, Capacities, MutableArrayData};
-use arrow_array::{
-    new_null_array, Array, ArrayRef, GenericListArray, NullArray, OffsetSizeTrait,
+use crate::utils::make_scalar_function;
+use arrow::array::{
+    new_null_array, Array, ArrayData, ArrayRef, Capacities, GenericListArray,
+    MutableArrayData, NullArray, OffsetSizeTrait,
 };
-use arrow_buffer::OffsetBuffer;
-use arrow_schema::DataType::{LargeList, List, Null};
-use arrow_schema::{DataType, Field};
-use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType::Null, Field};
+use datafusion_common::utils::SingleRowListArrayBuilder;
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-
-use crate::utils::make_scalar_function;
+use datafusion_macros::user_doc;
 
 make_udf_expr_and_func!(
     MakeArray,
@@ -47,6 +47,23 @@ make_udf_expr_and_func!(
     make_array_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array using the specified input expressions.",
+    syntax_example = "make_array(expression1[, ..., expression_n])",
+    sql_example = r#"```sql
+> select make_array(1, 2, 3, 4, 5);
++----------------------------------------------------------+
+| make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
++----------------------------------------------------------+
+| [1, 2, 3, 4, 5]                                          |
++----------------------------------------------------------+
+```"#,
+    argument(
+        name = "expression_n",
+        description = "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators."
+    )
+)]
 #[derive(Debug)]
 pub struct MakeArray {
     signature: Signature,
@@ -63,7 +80,7 @@ impl MakeArray {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::UserDefined, TypeSignature::Any(0)],
+                vec![TypeSignature::Nullary, TypeSignature::UserDefined],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("make_list")],
@@ -85,25 +102,21 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.len() {
-            0 => Ok(empty_array_type()),
-            _ => {
-                // At this point, all the type in array should be coerced to the same one
-                Ok(List(Arc::new(Field::new(
-                    "item",
-                    arg_types[0].to_owned(),
-                    true,
-                ))))
-            }
-        }
+        let element_type = if arg_types.is_empty() {
+            Null
+        } else {
+            // At this point, all the type in array should be coerced to the same one.
+            arg_types[0].to_owned()
+        };
+
+        Ok(DataType::new_list(element_type, true))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(args)
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(&[])
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(make_array_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -111,95 +124,44 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let mut errors = vec![];
-        match try_type_union_resolution_with_struct(arg_types) {
-            Ok(r) => return Ok(r),
-            Err(e) => {
-                errors.push(e);
-            }
+        if let Ok(unified) = try_type_union_resolution_with_struct(arg_types) {
+            return Ok(unified);
         }
 
-        if let Some(new_type) = type_union_resolution(arg_types) {
-            // TODO: Move FixedSizeList to List in type_union_resolution
-            if let DataType::FixedSizeList(field, _) = new_type {
-                Ok(vec![List(field); arg_types.len()])
-            } else if new_type.is_null() {
-                Ok(vec![DataType::Int64; arg_types.len()])
-            } else {
-                Ok(vec![new_type; arg_types.len()])
-            }
+        if let Some(unified) = type_union_resolution(arg_types) {
+            Ok(vec![unified; arg_types.len()])
         } else {
             plan_err!(
-                "Fail to find the valid type between {:?} for {}, errors are {:?}",
-                arg_types,
-                self.name(),
-                errors
+                "Failed to unify argument types of {}: {arg_types:?}",
+                self.name()
             )
         }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_make_array_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_make_array_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Returns an array using the specified input expressions.",
-            )
-            .with_syntax_example("make_array(expression1[, ..., expression_n])")
-            .with_sql_example(
-                r#"```sql
-> select make_array(1, 2, 3, 4, 5);
-+----------------------------------------------------------+
-| make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
-+----------------------------------------------------------+
-| [1, 2, 3, 4, 5]                                          |
-+----------------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "expression_n",
-                "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators.",
-            )
-            .build()
-            .unwrap()
-    })
-}
-
-// Empty array is a special case that is useful for many other array functions
-pub(super) fn empty_array_type() -> DataType {
-    List(Arc::new(Field::new("item", DataType::Int64, true)))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let mut data_type = Null;
-    for arg in arrays {
-        let arg_data_type = arg.data_type();
-        if !arg_data_type.equals_datatype(&Null) {
-            data_type = arg_data_type.clone();
-            break;
-        }
-    }
+    let data_type = arrays.iter().find_map(|arg| {
+        let arg_type = arg.data_type();
+        (!arg_type.is_null()).then_some(arg_type)
+    });
 
-    match data_type {
+    let data_type = data_type.unwrap_or(&Null);
+    if data_type.is_null() {
         // Either an empty array or all nulls:
-        Null => {
-            let length = arrays.iter().map(|a| a.len()).sum();
-            // By default Int64
-            let array = new_null_array(&DataType::Int64, length);
-            Ok(Arc::new(array_into_list_array_nullable(array)))
-        }
-        LargeList(..) => array_array::<i64>(arrays, data_type),
-        _ => array_array::<i32>(arrays, data_type),
+        let length = arrays.iter().map(|a| a.len()).sum();
+        let array = new_null_array(&Null, length);
+        Ok(Arc::new(
+            SingleRowListArrayBuilder::new(array).build_list_array(),
+        ))
+    } else {
+        array_array::<i32>(arrays, data_type.clone())
     }
 }
 
@@ -288,9 +250,9 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         None,
     )?))
 }

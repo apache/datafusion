@@ -20,6 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Date32Array, StringArray};
+use arrow::datatypes::{DataType, Field};
 use chrono::prelude::*;
 use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -29,7 +30,7 @@ use rand::Rng;
 
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_char;
 
 fn random_date_in_range(
@@ -82,14 +83,23 @@ fn patterns(rng: &mut ThreadRng) -> StringArray {
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("to_char_array_array_1000", |b| {
         let mut rng = rand::thread_rng();
-        let data = ColumnarValue::Array(Arc::new(data(&mut rng)) as ArrayRef);
+        let data_arr = data(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns = ColumnarValue::Array(Arc::new(patterns(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_char()
-                    .invoke(&[data.clone(), patterns.clone()])
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", data.data_type(), true),
+                            &Field::new("b", patterns.data_type(), true),
+                        ],
+                        number_rows: batch_len,
+                        return_field: &Field::new("f", DataType::Utf8, true),
+                    })
                     .expect("to_char should work on valid values"),
             )
         })
@@ -97,15 +107,24 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_char_array_scalar_1000", |b| {
         let mut rng = rand::thread_rng();
-        let data = ColumnarValue::Array(Arc::new(data(&mut rng)) as ArrayRef);
+        let data_arr = data(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns =
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_char()
-                    .invoke(&[data.clone(), patterns.clone()])
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", data.data_type(), true),
+                            &Field::new("b", patterns.data_type(), true),
+                        ],
+                        number_rows: batch_len,
+                        return_field: &Field::new("f", DataType::Utf8, true),
+                    })
                     .expect("to_char should work on valid values"),
             )
         })
@@ -126,10 +145,17 @@ fn criterion_benchmark(c: &mut Criterion) {
         )));
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_char()
-                    .invoke(&[data.clone(), pattern.clone()])
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), pattern.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", data.data_type(), true),
+                            &Field::new("b", pattern.data_type(), true),
+                        ],
+                        number_rows: 1,
+                        return_field: &Field::new("f", DataType::Utf8, true),
+                    })
                     .expect("to_char should work on valid values"),
             )
         })

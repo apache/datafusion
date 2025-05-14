@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
 
@@ -22,7 +24,8 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -32,11 +35,12 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
+async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec {
     let object_store_url = ObjectStoreUrl::local_filesystem();
     let store = state.runtime_env().object_store(&object_store_url).unwrap();
 
@@ -48,13 +52,13 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let meta = ObjectMeta {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-        size: metadata.len() as usize,
+        size: metadata.len(),
         e_tag: None,
         version: None,
     };
 
     let schema = ParquetFormat::default()
-        .infer_schema(state, &store, &[meta.clone()])
+        .infer_schema(state, &store, std::slice::from_ref(&meta))
         .await
         .unwrap();
 
@@ -64,18 +68,23 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         range: None,
         statistics: None,
         extensions: None,
+        metadata_size_hint: None,
     };
 
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
-    ParquetExec::builder(
-        FileScanConfig::new(object_store_url, schema).with_file(partitioned_file),
-    )
-    .with_predicate(predicate)
-    .build()
-    .with_enable_page_index(true)
+    let source = Arc::new(
+        ParquetSource::default()
+            .with_predicate(predicate)
+            .with_enable_page_index(true),
+    );
+    let base_config = FileScanConfigBuilder::new(object_store_url, schema, source)
+        .with_file(partitioned_file)
+        .build();
+
+    DataSourceExec::new(Arc::new(base_config))
 }
 
 #[tokio::test]

@@ -16,17 +16,17 @@
 // under the License.
 
 use crate::types::{LogicalTypeRef, NativeType};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 macro_rules! singleton {
     ($name:ident, $getter:ident, $ty:ident) => {
-        // TODO: Use LazyLock instead of getter function when MSRV gets bumped
-        static $name: OnceLock<LogicalTypeRef> = OnceLock::new();
+        static $name: LazyLock<LogicalTypeRef> =
+            LazyLock::new(|| Arc::new(NativeType::$ty));
 
         #[doc = "Getter for singleton instance of a logical type representing"]
         #[doc = concat!("[`NativeType::", stringify!($ty), "`].")]
         pub fn $getter() -> LogicalTypeRef {
-            Arc::clone($name.get_or_init(|| Arc::new(NativeType::$ty)))
+            Arc::clone(&$name)
         }
     };
 }

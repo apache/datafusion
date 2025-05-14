@@ -25,14 +25,10 @@ pub mod regexpmatch;
 pub mod regexpreplace;
 
 // create UDFs
-make_udf_function!(regexpcount::RegexpCountFunc, REGEXP_COUNT, regexp_count);
-make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
-make_udf_function!(regexplike::RegexpLikeFunc, REGEXP_LIKE, regexp_like);
-make_udf_function!(
-    regexpreplace::RegexpReplaceFunc,
-    REGEXP_REPLACE,
-    regexp_replace
-);
+make_udf_function!(regexpcount::RegexpCountFunc, regexp_count);
+make_udf_function!(regexpmatch::RegexpMatchFunc, regexp_match);
+make_udf_function!(regexplike::RegexpLikeFunc, regexp_like);
+make_udf_function!(regexpreplace::RegexpReplaceFunc, regexp_replace);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;

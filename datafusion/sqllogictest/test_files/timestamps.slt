@@ -416,6 +416,33 @@ SELECT to_timestamp(123456789.123456789) as c1, cast(123456789.123456789 as time
 ----
 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784
 
+# to_timestamp Decimal128 inputs
+
+query PPP
+SELECT to_timestamp(arrow_cast(1.1, 'Decimal128(2,1)')) as c1, cast(arrow_cast(1.1, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(1.1, 'Decimal128(2,1)')::timestamp as c3;
+----
+1970-01-01T00:00:01.100 1970-01-01T00:00:01.100 1970-01-01T00:00:01.100
+
+query PPP
+SELECT to_timestamp(arrow_cast(-1.1, 'Decimal128(2,1)')) as c1, cast(arrow_cast(-1.1, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(-1.1, 'Decimal128(2,1)')::timestamp as c3;
+----
+1969-12-31T23:59:58.900 1969-12-31T23:59:58.900 1969-12-31T23:59:58.900
+
+query PPP
+SELECT to_timestamp(arrow_cast(0.0, 'Decimal128(2,1)')) as c1, cast(arrow_cast(0.0, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(0.0, 'Decimal128(2,1)')::timestamp as c3;
+----
+1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00
+
+query PPP
+SELECT to_timestamp(arrow_cast(1.23456789, 'Decimal128(9,8)')) as c1, cast(arrow_cast(1.23456789, 'Decimal128(9,8)') as timestamp) as c2, arrow_cast(1.23456789, 'Decimal128(9,8)')::timestamp as c3;
+----
+1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890
+
+query PPP
+SELECT to_timestamp(arrow_cast(123456789.123456789, 'Decimal128(18,9)')) as c1, cast(arrow_cast(123456789.123456789, 'Decimal128(18,9)') as timestamp) as c2, arrow_cast(123456789.123456789, 'Decimal128(18,9)')::timestamp as c3;
+----
+1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784
+
 
 # from_unixtime
 
@@ -424,6 +451,41 @@ query I
 SELECT COUNT(*) FROM ts_data_secs where ts > from_unixtime(1599566400)
 ----
 2
+
+query P rowsort
+SELECT ts FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855123
+2020-09-08T12:42:29.190855123
+2020-09-08T13:42:29.190855123
+
+query P rowsort
+SELECT CAST(ts AS timestamp(0)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29
+2020-09-08T12:42:29
+2020-09-08T13:42:29
+
+query P rowsort
+SELECT CAST(ts AS timestamp(3)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190
+2020-09-08T12:42:29.190
+2020-09-08T13:42:29.190
+
+query P rowsort
+SELECT CAST(ts AS timestamp(6)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855
+2020-09-08T12:42:29.190855
+2020-09-08T13:42:29.190855
+
+query P rowsort
+SELECT CAST(ts AS timestamp(9)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855123
+2020-09-08T12:42:29.190855123
+2020-09-08T13:42:29.190855123
 
 
 # count_distinct_timestamps
@@ -1721,13 +1783,13 @@ SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMP '2020-01-
 2022-01-01T07:00:00+07:00
 
 # postgresql: 1
-query R
+query I
 SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
 ----
 1
 
 # postgresql: 8
-query R
+query I
 SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as part
 ----
 8
@@ -1804,13 +1866,13 @@ SELECT date_bin('2 hour', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01T00:0
 2021-12-31T18:00:00Z
 
 # postgresql: 1
-query R
+query I
 SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
 ----
 1
 
 # postgresql: 18
-query R
+query I
 SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as part
 ----
 18
@@ -2206,23 +2268,23 @@ query error input contains invalid characters
 SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%c', '%+')
 
 # to_timestamp with broken formatting
-query error bad or unsupported format string
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
 SELECT to_timestamp('2020-09-08 12/00/00+00:00', '%q')
 
 # to_timestamp_nanos with broken formatting
-query error bad or unsupported format string
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
 SELECT to_timestamp_nanos('2020-09-08 12/00/00+00:00', '%q')
 
 # to_timestamp_millis with broken formatting
-query error bad or unsupported format string
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
 SELECT to_timestamp_millis('2020-09-08 12/00/00+00:00', '%q')
 
 # to_timestamp_micros with broken formatting
-query error bad or unsupported format string
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
 SELECT to_timestamp_micros('2020-09-08 12/00/00+00:00', '%q')
 
 # to_timestamp_seconds with broken formatting
-query error bad or unsupported format string
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
 SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%q')
 
 # Create string timestamp table with different formats
@@ -2781,6 +2843,11 @@ select to_char(arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, N
 03-08-2023 14-38-50
 
 query T
+select to_char(arrow_cast('2023-09-04'::date, 'Timestamp(Second, Some("UTC"))'), '%Y-%m-%dT%H:%M:%S%.3f');
+----
+2023-09-04T00:00:00.000
+
+query T
 select to_char(arrow_cast(123456, 'Duration(Second)'), 'pretty');
 ----
 1 days 10 hours 17 mins 36 secs
@@ -2810,7 +2877,27 @@ NULL
 query T
 SELECT to_char(null, '%d-%m-%Y');
 ----
-(empty)
+NULL
+
+query T
+SELECT to_char(date_column, '%Y-%m-%d')
+FROM (VALUES 
+    (DATE '2020-09-01'),
+    (NULL)
+) AS t(date_column);
+----
+2020-09-01
+NULL
+
+query T
+SELECT to_char(date_column, '%Y-%m-%d')
+FROM (VALUES 
+    (NULL),
+    (DATE '2020-09-01')
+) AS t(date_column);
+----
+NULL
+2020-09-01
 
 query T
 SELECT to_char(column1, column2)
@@ -2836,6 +2923,16 @@ query I
 select to_unixtime('2020-09-08T12:00:00+00:00');
 ----
 1599566400
+
+query I
+select to_unixtime(arrow_cast(to_timestamp('2023-01-14T01:01:30'), 'Timestamp(Second, Some("+05:30"))'));
+----
+1673638290
+
+query I
+select to_unixtime(arrow_cast(to_timestamp('2023-01-14T01:01:30'), 'Timestamp(Millisecond, None)'));
+----
+1673658090
 
 query I
 select to_unixtime('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z');
@@ -3316,3 +3413,10 @@ drop view t_utc;
 
 statement ok
 drop view t_europe;
+
+# TODO: In Postgres, '-1' is unknown type and interpreted to float8 so they don't fail on this query
+query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from '\-1': timestamp must contain at least 10 characters
+select to_timestamp('-1');
+
+query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from '\-1': timestamp must contain at least 10 characters
+select to_timestamp(arrow_cast('-1', 'Utf8'));

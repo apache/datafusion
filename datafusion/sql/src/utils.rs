@@ -17,25 +17,27 @@
 
 //! SQL Utility Functions
 
-use std::collections::HashMap;
 use std::vec;
 
-use arrow_schema::{
+use arrow::datatypes::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Result,
-    ScalarValue,
+    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Diagnostic,
+    HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
-use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
+use datafusion_expr::expr::{
+    Alias, GroupingSet, Unnest, WindowFunction, WindowFunctionParams,
+};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
 };
+
 use indexmap::IndexMap;
 use sqlparser::ast::{Ident, Value};
 
@@ -90,12 +92,35 @@ pub(crate) fn rebase_expr(
         .data()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckColumnsSatisfyExprsPurpose {
+    ProjectionMustReferenceAggregate,
+    HavingMustReferenceAggregate,
+}
+
+impl CheckColumnsSatisfyExprsPurpose {
+    fn message_prefix(&self) -> &'static str {
+        match self {
+            CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate => {
+                "Column in SELECT must be in GROUP BY or an aggregate function"
+            }
+            CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate => {
+                "Column in HAVING must be in GROUP BY or an aggregate function"
+            }
+        }
+    }
+
+    fn diagnostic_message(&self, expr: &Expr) -> String {
+        format!("'{expr}' must appear in GROUP BY clause because it's not an aggregate expression")
+    }
+}
+
 /// Determines if the set of `Expr`'s are a valid projection on the input
 /// `Expr::Column`'s.
 pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
-    message_prefix: &str,
+    purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
@@ -106,22 +131,22 @@ pub(crate) fn check_columns_satisfy_exprs(
         match e {
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                 for e in exprs {
-                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                    check_column_satisfies_expr(columns, e, purpose)?;
                 }
             }
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
                 for e in exprs {
-                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                    check_column_satisfies_expr(columns, e, purpose)?;
                 }
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 for exprs in lists_of_exprs {
                     for e in exprs {
-                        check_column_satisfies_expr(columns, e, message_prefix)?;
+                        check_column_satisfies_expr(columns, e, purpose)?;
                     }
                 }
             }
-            _ => check_column_satisfies_expr(columns, e, message_prefix)?,
+            _ => check_column_satisfies_expr(columns, e, purpose)?,
         }
     }
     Ok(())
@@ -130,14 +155,21 @@ pub(crate) fn check_columns_satisfy_exprs(
 fn check_column_satisfies_expr(
     columns: &[Expr],
     expr: &Expr,
-    message_prefix: &str,
+    purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
     if !columns.contains(expr) {
+        let diagnostic = Diagnostic::new_error(
+            purpose.diagnostic_message(expr),
+            expr.spans().and_then(|spans| spans.first()),
+        )
+        .with_help(format!("Either add '{expr}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({expr})"), None);
+
         return plan_err!(
-            "{}: Expression {} could not be resolved from available columns: {}",
-            message_prefix,
+            "{}: While expanding wildcard, column \"{}\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"{}\" appears in the SELECT clause satisfies this requirement",
+            purpose.message_prefix(),
             expr,
-            expr_vec_fmt!(columns)
+            expr_vec_fmt!(columns);
+            diagnostic=diagnostic
         );
     }
     Ok(())
@@ -209,11 +241,15 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {
-            Expr::WindowFunction(WindowFunction { partition_by, .. }) => Ok(partition_by),
+            Expr::WindowFunction(WindowFunction {
+                params: WindowFunctionParams { partition_by, .. },
+                ..
+            }) => Ok(partition_by),
             Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
-                Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
-                    Ok(partition_by)
-                }
+                Expr::WindowFunction(WindowFunction {
+                    params: WindowFunctionParams { partition_by, .. },
+                    ..
+                }) => Ok(partition_by),
                 expr => exec_err!("Impossibly got non-window expr {expr:?}"),
             },
             expr => exec_err!("Impossibly got non-window expr {expr:?}"),
@@ -260,7 +296,7 @@ pub(crate) fn make_decimal_type(
     }
 }
 
-// Normalize an owned identifier to a lowercase string unless the identifier is quoted.
+/// Normalize an owned identifier to a lowercase string, unless the identifier is quoted.
 pub(crate) fn normalize_ident(id: Ident) -> String {
     match id.quote_style {
         Some(_) => id.value,
@@ -315,6 +351,8 @@ pub(crate) fn rewrite_recursive_unnests_bottom_up(
         .collect::<Vec<_>>())
 }
 
+pub const UNNEST_PLACEHOLDER: &str = "__unnest_placeholder";
+
 /*
 This is only usedful when used with transform down up
 A full example of how the transformation works:
@@ -329,7 +367,7 @@ struct RecursiveUnnestRewriter<'a> {
     columns_unnestings: &'a mut IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
     transformed_root_exprs: Option<Vec<Expr>>,
 }
-impl<'a> RecursiveUnnestRewriter<'a> {
+impl RecursiveUnnestRewriter<'_> {
     /// This struct stores the history of expr
     /// during its tree-traversal with a notation of
     /// \[None,**Unnest(exprA)**,**Unnest(exprB)**,None,None\]
@@ -360,9 +398,9 @@ impl<'a> RecursiveUnnestRewriter<'a> {
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
         // inside unnest execution, each column inside the inner projection
         // will be transformed into new columns. Thus we need to keep track of these placeholding column names
-        let placeholder_name = format!("unnest_placeholder({})", inner_expr_name);
+        let placeholder_name = format!("{UNNEST_PLACEHOLDER}({inner_expr_name})");
         let post_unnest_name =
-            format!("unnest_placeholder({},depth={})", inner_expr_name, level);
+            format!("{UNNEST_PLACEHOLDER}({inner_expr_name},depth={level})");
         // This is due to the fact that unnest transformation should keep the original
         // column name as is, to comply with group by and order by
         let placeholder_column = Column::from_name(placeholder_name.clone());
@@ -417,7 +455,7 @@ impl<'a> RecursiveUnnestRewriter<'a> {
     }
 }
 
-impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
+impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     type Node = Expr;
 
     /// This downward traversal needs to keep track of:
@@ -432,7 +470,7 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
             // if expr inside unnest is a struct, do not consider
             // the next unnest as consecutive unnest (if any)
             // meaning unnest(unnest(struct_arr_col)) can't
-            // be interpreted as unest(struct_arr_col, depth:=2)
+            // be interpreted as unnest(struct_arr_col, depth:=2)
             // but has to be split into multiple unnest logical plan instead
             // a.k.a:
             // - unnest(struct_col)
@@ -457,36 +495,36 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
     ///
     /// For example an expr of **unnest(unnest(column1)) + unnest(unnest(unnest(column2)))**
     /// ```text
-    ///                         ┌──────────────────┐           
-    ///                         │    binaryexpr    │           
-    ///                         │                  │           
-    ///                         └──────────────────┘           
-    ///                f_down  / /            │ │              
-    ///                       / / f_up        │ │              
-    ///                      / /        f_down│ │f_up          
-    ///                  unnest               │ │              
-    ///                                       │ │              
-    ///       f_down  / / f_up(rewriting)     │ │              
-    ///              / /                                       
-    ///             / /                      unnest            
-    ///         unnest                                         
-    ///                           f_down  / / f_up(rewriting)  
-    /// f_down / /f_up                   / /                   
-    ///       / /                       / /                    
-    ///      / /                    unnest                     
-    ///   column1                                              
-    ///                     f_down / /f_up                     
-    ///                           / /                          
-    ///                          / /                           
-    ///                       column2                          
+    ///                         ┌──────────────────┐
+    ///                         │    binaryexpr    │
+    ///                         │                  │
+    ///                         └──────────────────┘
+    ///                f_down  / /            │ │
+    ///                       / / f_up        │ │
+    ///                      / /        f_down│ │f_up
+    ///                  unnest               │ │
+    ///                                       │ │
+    ///       f_down  / / f_up(rewriting)     │ │
+    ///              / /
+    ///             / /                      unnest
+    ///         unnest
+    ///                           f_down  / / f_up(rewriting)
+    /// f_down / /f_up                   / /
+    ///       / /                       / /
+    ///      / /                    unnest
+    ///   column1
+    ///                     f_down / /f_up
+    ///                           / /
+    ///                          / /
+    ///                       column2
     /// ```
-    ///         
+    ///
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref traversing_unnest) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
                 self.top_most_unnest = None;
             }
-            // Find inside consecutive_unnest, the sequence of continous unnest exprs
+            // Find inside consecutive_unnest, the sequence of continuous unnest exprs
 
             // Get the latest consecutive unnest exprs
             // and check if current upward traversal is the returning to the root expr
@@ -593,6 +631,8 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         if matches!(&transformed_expr, Expr::Column(_))
             || matches!(&transformed_expr, Expr::Wildcard { .. })
         {
@@ -617,17 +657,16 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
 mod tests {
     use std::{ops::Add, sync::Arc};
 
-    use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-    use arrow_schema::Fields;
+    use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema};
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
         col, lit, unnest, ColumnUnnestList, EmptyRelation, LogicalPlan,
     };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
-    use indexmap::IndexMap;
 
     use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
+    use indexmap::IndexMap;
 
     fn column_unnests_eq(
         l: Vec<&str>,
@@ -641,7 +680,7 @@ mod tests {
                     "{}=>[{}]",
                     i.0,
                     vec.iter()
-                        .map(|i| format!("{}", i))
+                        .map(|i| format!("{i}"))
                         .collect::<Vec<String>>()
                         .join(", ")
                 ),
@@ -693,17 +732,17 @@ mod tests {
         // Only the bottom most unnest exprs are transformed
         assert_eq!(
             transformed_exprs,
-            vec![col("unnest_placeholder(3d_col,depth=2)")
+            vec![col("__unnest_placeholder(3d_col,depth=2)")
                 .alias("UNNEST(UNNEST(3d_col))")
                 .add(
-                    col("unnest_placeholder(3d_col,depth=2)")
+                    col("__unnest_placeholder(3d_col,depth=2)")
                         .alias("UNNEST(UNNEST(3d_col))")
                 )
                 .add(col("i64_col"))]
         );
         column_unnests_eq(
             vec![
-                "unnest_placeholder(3d_col)=>[unnest_placeholder(3d_col,depth=2)|depth=2]",
+                "__unnest_placeholder(3d_col)=>[__unnest_placeholder(3d_col,depth=2)|depth=2]",
             ],
             &unnest_placeholder_columns,
         );
@@ -713,7 +752,7 @@ mod tests {
         assert_eq!(
             inner_projection_exprs,
             vec![
-                col("3d_col").alias("unnest_placeholder(3d_col)"),
+                col("3d_col").alias("__unnest_placeholder(3d_col)"),
                 col("i64_col")
             ]
         );
@@ -730,12 +769,12 @@ mod tests {
         assert_eq!(
             transformed_exprs,
             vec![
-                (col("unnest_placeholder(3d_col,depth=1)").alias("UNNEST(3d_col)"))
+                (col("__unnest_placeholder(3d_col,depth=1)").alias("UNNEST(3d_col)"))
                     .alias("2d_col")
             ]
         );
         column_unnests_eq(
-            vec!["unnest_placeholder(3d_col)=>[unnest_placeholder(3d_col,depth=2)|depth=2, unnest_placeholder(3d_col,depth=1)|depth=1]"],
+            vec!["__unnest_placeholder(3d_col)=>[__unnest_placeholder(3d_col,depth=2)|depth=2, __unnest_placeholder(3d_col,depth=1)|depth=1]"],
             &unnest_placeholder_columns,
         );
         // Still reference struct_col in original schema but with alias,
@@ -743,7 +782,7 @@ mod tests {
         assert_eq!(
             inner_projection_exprs,
             vec![
-                col("3d_col").alias("unnest_placeholder(3d_col)"),
+                col("3d_col").alias("__unnest_placeholder(3d_col)"),
                 col("i64_col")
             ]
         );
@@ -764,8 +803,7 @@ mod tests {
             ),
             Field::new(
                 "array_col",
-                ArrowDataType::List(Arc::new(Field::new(
-                    "item",
+                ArrowDataType::List(Arc::new(Field::new_list_field(
                     ArrowDataType::Int64,
                     true,
                 ))),
@@ -795,19 +833,19 @@ mod tests {
         assert_eq!(
             transformed_exprs,
             vec![
-                col("unnest_placeholder(struct_col).field1"),
-                col("unnest_placeholder(struct_col).field2"),
+                col("__unnest_placeholder(struct_col).field1"),
+                col("__unnest_placeholder(struct_col).field2"),
             ]
         );
         column_unnests_eq(
-            vec!["unnest_placeholder(struct_col)"],
+            vec!["__unnest_placeholder(struct_col)"],
             &unnest_placeholder_columns,
         );
         // Still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_col").alias("unnest_placeholder(struct_col)"),]
+            vec![col("struct_col").alias("__unnest_placeholder(struct_col)"),]
         );
 
         // unnest(array_col) + 1
@@ -820,15 +858,15 @@ mod tests {
         )?;
         column_unnests_eq(
             vec![
-                "unnest_placeholder(struct_col)",
-                "unnest_placeholder(array_col)=>[unnest_placeholder(array_col,depth=1)|depth=1]",
+                "__unnest_placeholder(struct_col)",
+                "__unnest_placeholder(array_col)=>[__unnest_placeholder(array_col,depth=1)|depth=1]",
             ],
             &unnest_placeholder_columns,
         );
         // Only transform the unnest children
         assert_eq!(
             transformed_exprs,
-            vec![col("unnest_placeholder(array_col,depth=1)")
+            vec![col("__unnest_placeholder(array_col,depth=1)")
                 .alias("UNNEST(array_col)")
                 .add(lit(1i64))]
         );
@@ -839,8 +877,8 @@ mod tests {
         assert_eq!(
             inner_projection_exprs,
             vec![
-                col("struct_col").alias("unnest_placeholder(struct_col)"),
-                col("array_col").alias("unnest_placeholder(array_col)")
+                col("struct_col").alias("__unnest_placeholder(struct_col)"),
+                col("array_col").alias("__unnest_placeholder(array_col)")
             ]
         );
 
@@ -908,7 +946,7 @@ mod tests {
         assert_eq!(
             transformed_exprs,
             vec![unnest(
-                col("unnest_placeholder(struct_list,depth=1)")
+                col("__unnest_placeholder(struct_list,depth=1)")
                     .alias("UNNEST(struct_list)")
                     .field("subfield1")
             )]
@@ -916,14 +954,14 @@ mod tests {
 
         column_unnests_eq(
             vec![
-                "unnest_placeholder(struct_list)=>[unnest_placeholder(struct_list,depth=1)|depth=1]",
+                "__unnest_placeholder(struct_list)=>[__unnest_placeholder(struct_list,depth=1)|depth=1]",
             ],
             &unnest_placeholder_columns,
         );
 
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_list").alias("unnest_placeholder(struct_list)")]
+            vec![col("struct_list").alias("__unnest_placeholder(struct_list)")]
         );
 
         // continue rewrite another expr in select
@@ -938,7 +976,7 @@ mod tests {
         assert_eq!(
             transformed_exprs,
             vec![unnest(
-                col("unnest_placeholder(struct_list,depth=1)")
+                col("__unnest_placeholder(struct_list,depth=1)")
                     .alias("UNNEST(struct_list)")
                     .field("subfield2")
             )]
@@ -948,14 +986,14 @@ mod tests {
         // because expr1 and expr2 derive from the same unnest result
         column_unnests_eq(
             vec![
-                "unnest_placeholder(struct_list)=>[unnest_placeholder(struct_list,depth=1)|depth=1]",
+                "__unnest_placeholder(struct_list)=>[__unnest_placeholder(struct_list,depth=1)|depth=1]",
             ],
             &unnest_placeholder_columns,
         );
 
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_list").alias("unnest_placeholder(struct_list)")]
+            vec![col("struct_list").alias("__unnest_placeholder(struct_list)")]
         );
 
         Ok(())

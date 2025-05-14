@@ -14,6 +14,26 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
+//
+// Eliminate unnecessary function calls(some may be not cheap) due to `xxx_or`
+// for performance. Also avoid abusing `xxx_or_else` for readability:
+// https://github.com/apache/datafusion/issues/15802
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::clone_on_ref_ptr,
+        clippy::or_fun_call,
+        clippy::unnecessary_lazy_evaluations
+    )
+)]
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
@@ -57,7 +77,7 @@
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
 //! # use datafusion::functions_aggregate::expr_fn::min;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::array::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -98,7 +118,7 @@
 //! ```
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::array::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -179,7 +199,7 @@
 //!
 //! DataFusion is designed to be highly extensible, so you can
 //! start with a working, full featured engine, and then
-//! specialize any behavior for your usecase. For example,
+//! specialize any behavior for your use case. For example,
 //! some projects may add custom [`ExecutionPlan`] operators, or create their own
 //! query language that directly creates [`LogicalPlan`] rather than using the
 //! built in SQL planner, [`SqlToRel`].
@@ -204,7 +224,7 @@
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
 //! [`AnalyzerRule`]:  datafusion_optimizer::analyzer::AnalyzerRule
-//! [`PhysicalOptimizerRule`]: crate::physical_optimizer::PhysicalOptimizerRule
+//! [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
 //!
 //! ## Query Planning and Execution Overview
 //!
@@ -226,9 +246,9 @@
 //! 1. The query string is parsed to an Abstract Syntax Tree (AST)
 //!    [`Statement`] using [sqlparser].
 //!
-//! 2. The AST is converted to a [`LogicalPlan`] and logical
-//!    expressions [`Expr`]s to compute the desired result by the
-//!    [`SqlToRel`] planner.
+//! 2. The AST is converted to a [`LogicalPlan`] and logical expressions
+//!    [`Expr`]s to compute the desired result by [`SqlToRel`]. This phase
+//!    also includes name and type resolution ("binding").
 //!
 //! [`Statement`]: https://docs.rs/sqlparser/latest/sqlparser/ast/enum.Statement.html
 //!
@@ -246,11 +266,11 @@
 //!             AnalyzerRules and      PhysicalPlanner          PhysicalOptimizerRules
 //!             OptimizerRules         creates ExecutionPlan    improve performance
 //!             rewrite plan
-//! ┌─────────────┐        ┌─────────────┐      ┌───────────────┐        ┌───────────────┐
-//! │Project      │        │Project(x, y)│      │ProjectExec    │        │ProjectExec    │
-//! │  TableScan  │──...──▶│  TableScan  │─────▶│  ...          │──...──▶│  ...          │
-//! │    ...      │        │    ...      │      │    ParquetExec│        │    ParquetExec│
-//! └─────────────┘        └─────────────┘      └───────────────┘        └───────────────┘
+//! ┌─────────────┐        ┌─────────────┐      ┌─────────────────┐        ┌─────────────────┐
+//! │Project      │        │Project(x, y)│      │ProjectExec      │        │ProjectExec      │
+//! │  TableScan  │──...──▶│  TableScan  │─────▶│  ...            │──...──▶│  ...            │
+//! │    ...      │        │    ...      │      │   DataSourceExec│        │   DataSourceExec│
+//! └─────────────┘        └─────────────┘      └─────────────────┘        └─────────────────┘
 //!
 //!  LogicalPlan            LogicalPlan         ExecutionPlan             ExecutionPlan
 //! ```
@@ -281,24 +301,27 @@
 //! such as schema │            ExecutionPlan
 //!                │
 //!                ▼
-//!   ┌─────────────────────────┐         ┌──────────────┐
-//!   │                         │         │              │
-//!   │impl TableProvider       │────────▶│ParquetExec   │
-//!   │                         │         │              │
-//!   └─────────────────────────┘         └──────────────┘
+//!   ┌─────────────────────────┐         ┌───────────────┐
+//!   │                         │         │               │
+//!   │impl TableProvider       │────────▶│DataSourceExec │
+//!   │                         │         │               │
+//!   └─────────────────────────┘         └───────────────┘
 //!         TableProvider
 //!         (built in or user provided)    ExecutionPlan
 //! ```
 //!
-//! DataFusion includes several built in data sources for common use
-//! cases, and can be extended by implementing the [`TableProvider`]
-//! trait. A [`TableProvider`] provides information for planning and
-//! an [`ExecutionPlan`]s for execution.
+//! A [`TableProvider`] provides information for planning and
+//! an [`ExecutionPlan`]s for execution. DataFusion includes [`ListingTable`],
+//! a [`TableProvider`] which reads individual files or directories of files
+//! ("partitioned datasets") of several common file formats. Uses can add
+//! support for new file formats by implementing the [`TableProvider`]
+//! trait.
 //!
-//! 1. [`ListingTable`]: Reads data from Parquet, JSON, CSV, or AVRO
-//!    files.  Supports single files or multiple files with HIVE style
-//!    partitioning, optional compression, directly reading from remote
-//!    object store and more.
+//! See also:
+//!
+//! 1. [`ListingTable`]: Reads data from one or more Parquet, JSON, CSV, or AVRO
+//!    files supporting HIVE style partitioning, optional compression, directly
+//!    reading from remote object store and more.
 //!
 //! 2. [`MemTable`]: Reads data from in memory [`RecordBatch`]es.
 //!
@@ -306,7 +329,7 @@
 //!
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 //! [`MemTable`]: crate::datasource::memory::MemTable
-//! [`StreamingTable`]: crate::datasource::streaming::StreamingTable
+//! [`StreamingTable`]: crate::catalog::streaming::StreamingTable
 //!
 //! ## Plan Representations
 //!
@@ -346,7 +369,7 @@
 //! filtering can never be `true` using additional statistical information.
 //!
 //! [cp_solver]: crate::physical_expr::intervals::cp_solver
-//! [`PruningPredicate`]: crate::physical_optimizer::pruning::PruningPredicate
+//! [`PruningPredicate`]: datafusion_physical_optimizer::pruning::PruningPredicate
 //! [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
 //!
 //! ## Execution
@@ -355,20 +378,20 @@
 //!            ExecutionPlan::execute             Calling next() on the
 //!            produces a stream                  stream produces the data
 //!
-//! ┌───────────────┐      ┌─────────────────────────┐         ┌────────────┐
-//! │ProjectExec    │      │impl                     │    ┌───▶│RecordBatch │
-//! │  ...          │─────▶│SendableRecordBatchStream│────┤    └────────────┘
-//! │    ParquetExec│      │                         │    │    ┌────────────┐
-//! └───────────────┘      └─────────────────────────┘    ├───▶│RecordBatch │
-//!               ▲                                       │    └────────────┘
-//! ExecutionPlan │                                       │         ...
-//!               │                                       │
-//!               │                                       │    ┌────────────┐
-//!             PhysicalOptimizerRules                    ├───▶│RecordBatch │
-//!             request information                       │    └────────────┘
-//!             such as partitioning                      │    ┌ ─ ─ ─ ─ ─ ─
-//!                                                       └───▶ None        │
-//!                                                            └ ─ ─ ─ ─ ─ ─
+//! ┌────────────────┐      ┌─────────────────────────┐         ┌────────────┐
+//! │ProjectExec     │      │impl                     │    ┌───▶│RecordBatch │
+//! │  ...           │─────▶│SendableRecordBatchStream│────┤    └────────────┘
+//! │  DataSourceExec│      │                         │    │    ┌────────────┐
+//! └────────────────┘      └─────────────────────────┘    ├───▶│RecordBatch │
+//!               ▲                                        │    └────────────┘
+//! ExecutionPlan │                                        │         ...
+//!               │                                        │
+//!               │                                        │    ┌────────────┐
+//!             PhysicalOptimizerRules                     ├───▶│RecordBatch │
+//!             request information                        │    └────────────┘
+//!             such as partitioning                       │    ┌ ─ ─ ─ ─ ─ ─
+//!                                                        └───▶ None        │
+//!                                                             └ ─ ─ ─ ─ ─ ─
 //! ```
 //!
 //! [`ExecutionPlan`]s process data using the [Apache Arrow] memory
@@ -379,14 +402,14 @@
 //!
 //! Calling [`execute`] produces 1 or more partitions of data,
 //! as a [`SendableRecordBatchStream`], which implements a pull based execution
-//! API. Calling `.next().await` will incrementally compute and return the next
+//! API. Calling [`next()`]`.await` will incrementally compute and return the next
 //! [`RecordBatch`]. Balanced parallelism is achieved using [Volcano style]
 //! "Exchange" operations implemented by [`RepartitionExec`].
 //!
 //! While some recent research such as [Morsel-Driven Parallelism] describes challenges
 //! with the pull style Volcano execution model on NUMA architectures, in practice DataFusion achieves
-//! similar scalability as systems that use morsel driven approach such as DuckDB.
-//! See the [DataFusion paper submitted to SIGMOD] for more details.
+//! similar scalability as systems that use push driven schedulers [such as DuckDB].
+//! See the [DataFusion paper in SIGMOD 2024] for more details.
 //!
 //! [`execute`]: physical_plan::ExecutionPlan::execute
 //! [`SendableRecordBatchStream`]: crate::physical_plan::SendableRecordBatchStream
@@ -398,26 +421,191 @@
 //! See the [implementors of `ExecutionPlan`] for a list of physical operators available.
 //!
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
-//! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
+//! [Volcano style]: https://doi.org/10.1145/93605.98720
 //! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
-//! [DataFusion paper submitted SIGMOD]: https://github.com/apache/datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
+//! [DataFusion paper in SIGMOD 2024]: https://github.com/apache/datafusion/files/15149988/DataFusion_Query_Engine___SIGMOD_2024-FINAL-mk4.pdf
+//! [such as DuckDB]: https://github.com/duckdb/duckdb/issues/1583
 //! [implementors of `ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#implementors
 //!
-//! ## Thread Scheduling
+//! ## Streaming Execution
 //!
-//! DataFusion incrementally computes output from a [`SendableRecordBatchStream`]
-//! with `target_partitions` threads. Parallelism is implementing using multiple
-//! [Tokio] [`task`]s, which are executed by threads managed by a tokio Runtime.
-//! While tokio is most commonly used
-//! for asynchronous network I/O, its combination of an efficient, work-stealing
-//! scheduler, first class compiler support for automatic continuation generation,
-//! and exceptional performance makes it a compelling choice for CPU intensive
-//! applications as well. This is explained in more detail in [Using Rustlang’s Async Tokio
-//! Runtime for CPU-Bound Tasks].
+//! DataFusion is a "streaming" query engine which means `ExecutionPlan`s incrementally
+//! read from their input(s) and compute output one [`RecordBatch`] at a time
+//! by continually polling [`SendableRecordBatchStream`]s. Output and
+//! intermediate `RecordBatch`s each have approximately `batch_size` rows,
+//! which amortizes per-batch overhead of execution.
+//!
+//! Note that certain operations, sometimes called "pipeline breakers",
+//! (for example full sorts or hash aggregations) are fundamentally non streaming and
+//! must read their input fully before producing **any** output. As much as possible,
+//! other operators read a single [`RecordBatch`] from their input to produce a
+//! single `RecordBatch` as output.
+//!
+//! For example, given this SQL query:
+//!
+//! ```sql
+//! SELECT date_trunc('month', time) FROM data WHERE id IN (10,20,30);
+//! ```
+//!
+//! The diagram below shows the call sequence when a consumer calls [`next()`] to
+//! get the next `RecordBatch` of output. While it is possible that some
+//! steps run on different threads, typically tokio will use the same thread
+//! that called `next()` to read from the input, apply the filter, and
+//! return the results without interleaving any other operations. This results
+//! in excellent cache locality as the same CPU core that produces the data often
+//! consumes it immediately as well.
+//!
+//! ```text
+//!
+//! Step 3: FilterExec calls next()       Step 2: ProjectionExec calls
+//!         on input Stream                  next() on input Stream
+//!         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─      ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+//!                            │                                               Step 1: Consumer
+//!         ▼                        ▼                           │               calls next()
+//! ┏━━━━━━━━━━━━━━━━┓     ┏━━━━━┻━━━━━━━━━━━━━┓      ┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+//! ┃                ┃     ┃                   ┃      ┃                        ◀ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+//! ┃  DataSource    ┃     ┃                   ┃      ┃                        ┃
+//! ┃    (e.g.       ┃     ┃    FilterExec     ┃      ┃     ProjectionExec     ┃
+//! ┃ ParquetSource) ┃     ┃id IN (10, 20, 30) ┃      ┃date_bin('month', time) ┃
+//! ┃                ┃     ┃                   ┃      ┃                        ┣ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶
+//! ┃                ┃     ┃                   ┃      ┃                        ┃
+//! ┗━━━━━━━━━━━━━━━━┛     ┗━━━━━━━━━━━┳━━━━━━━┛      ┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+//!         │                  ▲                                 ▲          Step 6: ProjectionExec
+//!                            │     │                           │        computes date_trunc into a
+//!         └ ─ ─ ─ ─ ─ ─ ─ ─ ─       ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─          new RecordBatch returned
+//!              ┌─────────────────────┐                ┌─────────────┐          from client
+//!              │     RecordBatch     │                │ RecordBatch │
+//!              └─────────────────────┘                └─────────────┘
+//!
+//!           Step 4: DataSource returns a        Step 5: FilterExec returns a new
+//!                single RecordBatch            RecordBatch with only matching rows
+//! ```
+//!
+//! [`next()`]: futures::StreamExt::next
+//!
+//! ## Thread Scheduling, CPU / IO Thread Pools, and [Tokio] [`Runtime`]s
+//!
+//! DataFusion automatically runs each plan with multiple CPU cores using
+//! a [Tokio] [`Runtime`] as a thread pool. While tokio is most commonly used
+//! for asynchronous network I/O, the combination of an efficient, work-stealing
+//! scheduler and first class compiler support for automatic continuation
+//! generation (`async`), also makes it a compelling choice for CPU intensive
+//! applications as explained in the [Using Rustlang’s Async Tokio
+//! Runtime for CPU-Bound Tasks] blog.
+//!
+//! The number of cores used is determined by the `target_partitions`
+//! configuration setting, which defaults to the number of CPU cores.
+//! While preparing for execution, DataFusion tries to create this many distinct
+//! `async` [`Stream`]s for each `ExecutionPlan`.
+//! The `Stream`s for certain `ExecutionPlans`, such as as [`RepartitionExec`]
+//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that are run by
+//! threads managed by the `Runtime`.
+//! Many DataFusion `Stream`s perform CPU intensive processing.
+//!
+//! Using `async` for CPU intensive tasks makes it easy for [`TableProvider`]s
+//! to perform network I/O using standard Rust `async` during execution.
+//! However, this design also makes it very easy to mix CPU intensive and latency
+//! sensitive I/O work on the same thread pool ([`Runtime`]).
+//! Using the same (default) `Runtime` is convenient, and often works well for
+//! initial development and processing local files, but it can lead to problems
+//! under load and/or when reading from network sources such as AWS S3.
+//!
+//! If your system does not fully utilize either the CPU or network bandwidth
+//! during execution, or you see significantly higher tail (e.g. p99) latencies
+//! responding to network requests, **it is likely you need to use a different
+//! `Runtime` for CPU intensive DataFusion plans**. This effect can be especially
+//! pronounced when running several queries concurrently.
+//!
+//! As shown in the following figure, using the same `Runtime` for both CPU
+//! intensive processing and network requests can introduce significant
+//! delays in responding to those network requests. Delays in processing network
+//! requests can and does lead network flow control to throttle the available
+//! bandwidth in response.
+//!
+//! ```text
+//!                                                                          Legend
+//!
+//!                                                                          ┏━━━━━━┓
+//!                            Processing network request                    ┃      ┃  CPU bound work
+//!                            is delayed due to processing                  ┗━━━━━━┛
+//!                            CPU bound work                                ┌─┐
+//!                                                                          │ │       Network request
+//!                                         ││                               └─┘       processing
+//!
+//!                                         ││
+//!                                ─ ─ ─ ─ ─  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+//!                               │                                            │
+//!
+//!                               ▼                                            ▼
+//! ┌─────────────┐           ┌─┐┌─┐┏━━━━━━━━━━━━━━━━━━━┓┏━━━━━━━━━━━━━━━━━━━┓┌─┐
+//! │             │thread 1   │ ││ │┃     Decoding      ┃┃     Filtering     ┃│ │
+//! │             │           └─┘└─┘┗━━━━━━━━━━━━━━━━━━━┛┗━━━━━━━━━━━━━━━━━━━┛└─┘
+//! │             │           ┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+//! │Tokio Runtime│thread 2   ┃   Decoding   ┃     Filtering     ┃   Decoding   ┃       ...
+//! │(thread pool)│           ┗━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┛
+//! │             │     ...                               ...
+//! │             │           ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓┌─┐ ┏━━━━━━━━━━━━━━┓
+//! │             │thread N   ┃     Decoding      ┃     Filtering     ┃│ │ ┃   Decoding   ┃
+//! └─────────────┘           ┗━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━┛└─┘ ┗━━━━━━━━━━━━━━┛
+//!                           ─────────────────────────────────────────────────────────────▶
+//!                                                                                           time
+//! ```
+//!
+//! The bottleneck resulting from network throttling can be avoided
+//! by using separate [`Runtime`]s for the different types of work, as shown
+//! in the diagram below.
+//!
+//! ```text
+//!                    A separate thread pool processes network       Legend
+//!                    requests, reducing the latency for
+//!                    processing each request                        ┏━━━━━━┓
+//!                                                                   ┃      ┃  CPU bound work
+//!                                         │                         ┗━━━━━━┛
+//!                                          │                        ┌─┐
+//!                               ┌ ─ ─ ─ ─ ┘                         │ │       Network request
+//!                                  ┌ ─ ─ ─ ┘                        └─┘       processing
+//!                               │
+//!                               ▼  ▼
+//! ┌─────────────┐           ┌─┐┌─┐┌─┐
+//! │             │thread 1   │ ││ ││ │
+//! │             │           └─┘└─┘└─┘
+//! │Tokio Runtime│                                          ...
+//! │(thread pool)│thread 2
+//! │             │
+//! │"IO Runtime" │     ...
+//! │             │                                                   ┌─┐
+//! │             │thread N                                           │ │
+//! └─────────────┘                                                   └─┘
+//!                           ─────────────────────────────────────────────────────────────▶
+//!                                                                                           time
+//!
+//! ┌─────────────┐           ┏━━━━━━━━━━━━━━━━━━━┓┏━━━━━━━━━━━━━━━━━━━┓
+//! │             │thread 1   ┃     Decoding      ┃┃     Filtering     ┃
+//! │             │           ┗━━━━━━━━━━━━━━━━━━━┛┗━━━━━━━━━━━━━━━━━━━┛
+//! │Tokio Runtime│           ┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+//! │(thread pool)│thread 2   ┃   Decoding   ┃     Filtering     ┃   Decoding   ┃       ...
+//! │             │           ┗━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┛
+//! │ CPU Runtime │     ...                               ...
+//! │             │           ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+//! │             │thread N   ┃     Decoding      ┃     Filtering     ┃   Decoding   ┃
+//! └─────────────┘           ┗━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┛
+//!                          ─────────────────────────────────────────────────────────────▶
+//!                                                                                           time
+//!```
+//!
+//! Note that DataFusion does not use [`tokio::task::spawn_blocking`] for
+//! CPU-bounded work, because `spawn_blocking` is designed for blocking **IO**,
+//! not designed CPU bound tasks. Among other challenges, spawned blocking
+//! tasks can't yield waiting for input (can't call `await`) so they
+//! can't be used to limit the number of concurrent CPU bound tasks or
+//! keep the processing pipeline to the same core.
 //!
 //! [Tokio]:  https://tokio.rs
+//! [`Runtime`]: tokio::runtime::Runtime
 //! [`task`]: tokio::task
 //! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
+//! [`RepartitionExec`]: physical_plan::repartition::RepartitionExec
+//! [`CoalescePartitionsExec`]: physical_plan::coalesce_partitions::CoalescePartitionsExec
 //!
 //! ## State Management and Configuration
 //!
@@ -456,18 +644,45 @@
 //!
 //! ## Crate Organization
 //!
-//! DataFusion is organized into multiple crates to enforce modularity
-//! and improve compilation times. The crates are:
+//! Most users interact with DataFusion via this crate (`datafusion`), which re-exports
+//! all functionality needed to build and execute queries.
+//!
+//! There are three other crates that provide additional functionality that
+//! must be used directly:
+//! * [`datafusion_proto`]: Plan serialization and deserialization
+//! * [`datafusion_substrait`]: Support for the substrait plan serialization format
+//! * [`datafusion_sqllogictest`] : The DataFusion SQL logic test runner
+//!
+//! [`datafusion_proto`]: https://crates.io/crates/datafusion-proto
+//! [`datafusion_substrait`]: https://crates.io/crates/datafusion-substrait
+//! [`datafusion_sqllogictest`]: https://crates.io/crates/datafusion-sqllogictest
+//!
+//! DataFusion is internally split into multiple sub crates to
+//! enforce modularity and improve compilation times. See the
+//! [list of modules](#modules) for all available sub-crates. Major ones are
 //!
 //! * [datafusion_common]: Common traits and types
+//! * [datafusion_catalog]: Catalog APIs such as [`SchemaProvider`] and [`CatalogProvider`]
+//! * [datafusion_datasource]: File and Data IO such as [`FileSource`] and [`DataSink`]
+//! * [datafusion_session]: [`Session`] and related structures
 //! * [datafusion_execution]: State and structures needed for execution
-//! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
+//! * [datafusion_expr]: [`LogicalPlan`], [`Expr`] and related logical planning structure
 //! * [datafusion_functions]: Scalar function packages
+//! * [datafusion_functions_aggregate]: Aggregate functions such as `MIN`, `MAX`, `SUM`, etc
 //! * [datafusion_functions_nested]: Scalar function packages for `ARRAY`s, `MAP`s and `STRUCT`s
+//! * [datafusion_functions_table]: Table Functions such as `GENERATE_SERIES`
+//! * [datafusion_functions_window]: Window functions such as `ROW_NUMBER`, `RANK`, etc
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
 //! * [datafusion_physical_plan]: [`ExecutionPlan`] and related expressions
+//! * [datafusion_physical_optimizer]: [`ExecutionPlan`] and related expressions
 //! * [datafusion_sql]: SQL planner ([`SqlToRel`])
+//!
+//! [`SchemaProvider`]: datafusion_catalog::SchemaProvider
+//! [`CatalogProvider`]: datafusion_catalog::CatalogProvider
+//! [`Session`]: datafusion_session::Session
+//! [`FileSource`]: datafusion_datasource::file::FileSource
+//! [`DataSink`]: datafusion_datasource::sink::DataSink
 //!
 //! ## Citing DataFusion in Academic Papers
 //!
@@ -491,10 +706,10 @@
 //! [`OptimizerRule`]: optimizer::optimizer::OptimizerRule
 //! [`ExecutionPlan`]: physical_plan::ExecutionPlan
 //! [`PhysicalPlanner`]: physical_planner::PhysicalPlanner
-//! [`PhysicalOptimizerRule`]: datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule
+//! [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
-//! [`RecordBatch`]: arrow::record_batch::RecordBatch
+//! [`RecordBatch`]: arrow::array::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
 
@@ -504,12 +719,10 @@ pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 extern crate core;
 extern crate sqlparser;
 
-pub mod catalog_common;
 pub mod dataframe;
 pub mod datasource;
 pub mod error;
 pub mod execution;
-pub mod physical_optimizer;
 pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
@@ -548,9 +761,19 @@ pub mod logical_expr {
     pub use datafusion_expr::*;
 }
 
+/// re-export of [`datafusion_expr_common`] crate
+pub mod logical_expr_common {
+    pub use datafusion_expr_common::*;
+}
+
 /// re-export of [`datafusion_optimizer`] crate
 pub mod optimizer {
     pub use datafusion_optimizer::*;
+}
+
+/// re-export of [`datafusion_physical_optimizer`] crate
+pub mod physical_optimizer {
+    pub use datafusion_physical_optimizer::*;
 }
 
 /// re-export of [`datafusion_physical_expr`] crate
@@ -605,13 +828,20 @@ pub mod functions_window {
     pub use datafusion_functions_window::*;
 }
 
+/// re-export of [`datafusion_functions_table`] crate
+pub mod functions_table {
+    pub use datafusion_functions_table::*;
+}
+
 /// re-export of variable provider for `@name` and `@@name` style runtime values.
 pub mod variable {
     pub use datafusion_expr::var_provider::{VarProvider, VarType};
 }
 
-#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod test;
+
+mod schema_equivalence;
 pub mod test_util;
 
 #[cfg(doctest)]
@@ -643,17 +873,11 @@ doc_comment::doctest!("../../../README.md", readme_example_test);
 //
 // For example, if `user_guide_expressions(line 123)` fails,
 // go to `docs/source/user-guide/expressions.md` to find the relevant problem.
-
+//
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/user-guide/example-usage.md",
-    user_guide_example_usage
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/user-guide/crate-configuration.md",
-    user_guide_crate_configuration
+    "../../../docs/source/user-guide/concepts-readings-events.md",
+    user_guide_concepts_readings_events
 );
 
 #[cfg(doctest)]
@@ -664,14 +888,221 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/runtime_configs.md",
+    user_guide_runtime_configs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/crate-configuration.md",
+    user_guide_crate_configuration
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/dataframe.md",
     user_guide_dataframe
 );
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/example-usage.md",
+    user_guide_example_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/explain-usage.md",
+    user_guide_explain_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/expressions.md",
     user_guide_expressions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!("../../../docs/source/user-guide/faq.md", user_guide_faq);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/introduction.md",
+    user_guide_introduction
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/datasources.md",
+    user_guide_cli_datasource
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/installation.md",
+    user_guide_cli_installation
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/overview.md",
+    user_guide_cli_overview
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/usage.md",
+    user_guide_cli_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/features.md",
+    user_guide_features
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/aggregate_functions.md",
+    user_guide_sql_aggregate_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/data_types.md",
+    user_guide_sql_data_types
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/ddl.md",
+    user_guide_sql_ddl
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/dml.md",
+    user_guide_sql_dml
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/explain.md",
+    user_guide_sql_exmplain
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/information_schema.md",
+    user_guide_sql_information_schema
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/operators.md",
+    user_guide_sql_operators
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/prepared_statements.md",
+    user_guide_prepared_statements
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/scalar_functions.md",
+    user_guide_sql_scalar_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/select.md",
+    user_guide_sql_select
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/special_functions.md",
+    user_guide_sql_special_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/subqueries.md",
+    user_guide_sql_subqueries
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/window_functions.md",
+    user_guide_sql_window_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/format_options.md",
+    user_guide_sql_format_options
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/adding-udfs.md",
+    library_user_guide_adding_udfs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/building-logical-plans.md",
+    library_user_guide_building_logical_plans
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/catalogs.md",
+    library_user_guide_catalogs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/custom-table-providers.md",
+    library_user_guide_custom_table_providers
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/extending-operators.md",
+    library_user_guide_extending_operators
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/extensions.md",
+    library_user_guide_extensions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/index.md",
+    library_user_guide_index
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/profiling.md",
+    library_user_guide_profiling
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/query-optimizer.md",
+    library_user_guide_query_optimizer
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
+    library_user_guide_dataframe_api
 );
 
 #[cfg(doctest)]
@@ -682,12 +1113,18 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/building-logical-plans.md",
-    library_user_guide_logical_plans
+    "../../../docs/source/library-user-guide/working-with-exprs.md",
+    library_user_guide_working_with_exprs
 );
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
-    library_user_guide_dataframe_api
+    "../../../docs/source/library-user-guide/upgrading.md",
+    library_user_guide_upgrading
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/contributor-guide/api-health.md",
+    contributor_guide_api_health
 );

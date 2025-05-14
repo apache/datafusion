@@ -17,7 +17,7 @@
 
 use super::NativeType;
 use crate::error::Result;
-use arrow_schema::DataType;
+use arrow::datatypes::DataType;
 use core::fmt;
 use std::{cmp::Ordering, hash::Hash, sync::Arc};
 
@@ -95,6 +95,12 @@ impl fmt::Debug for dyn LogicalType {
             .field(&self.signature())
             .field(&self.native())
             .finish()
+    }
+}
+
+impl std::fmt::Display for dyn LogicalType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
     }
 }
 

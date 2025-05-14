@@ -1,0 +1,16 @@
+{
+    "build": {
+        "dockerfile": "./Dockerfile",
+        "context": "."
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer"
+            ]
+        }
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/rust:1": "latest"
+    }
+}

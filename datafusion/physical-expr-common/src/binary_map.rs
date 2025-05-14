@@ -19,16 +19,16 @@
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 
 use ahash::RandomState;
-use arrow::array::cast::AsArray;
-use arrow::array::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use arrow::array::{
-    Array, ArrayRef, BooleanBufferBuilder, BufferBuilder, GenericBinaryArray,
-    GenericStringArray, OffsetSizeTrait,
+    cast::AsArray,
+    types::{ByteArrayType, GenericBinaryType, GenericStringType},
+    Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
+    NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::any::type_name;
 use std::fmt::Debug;
 use std::mem::{size_of, swap};
@@ -215,7 +215,7 @@ where
     /// Should the output be String or Binary?
     output_type: OutputType,
     /// Underlying hash set for each distinct value
-    map: hashbrown::raw::RawTable<Entry<O, V>>,
+    map: hashbrown::hash_table::HashTable<Entry<O, V>>,
     /// Total size of the map in bytes
     map_size: usize,
     /// In progress arrow `Buffer` containing all values
@@ -246,7 +246,7 @@ where
     pub fn new(output_type: OutputType) -> Self {
         Self {
             output_type,
-            map: hashbrown::raw::RawTable::with_capacity(INITIAL_MAP_CAPACITY),
+            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()], // first offset is always 0
@@ -349,7 +349,7 @@ where
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(values.len(), 0);
-        create_hashes(&[values.clone()], &self.random_state, batch_hashes)
+        create_hashes(&[Arc::clone(values)], &self.random_state, batch_hashes)
             // hash is supported for all types and create_hashes only
             // returns errors for unsupported types
             .unwrap();
@@ -384,10 +384,10 @@ where
 
             // value is "small"
             let payload = if value.len() <= SHORT_VALUE_LEN {
-                let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+                let inline = value.iter().fold(0usize, |acc, &x| (acc << 8) | x as usize);
 
                 // is value is already present in the set?
-                let entry = self.map.get_mut(hash, |header| {
+                let entry = self.map.find_mut(hash, |header| {
                     // compare value if hashes match
                     if header.len != value_len {
                         return false;
@@ -425,7 +425,7 @@ where
             // value is not "small"
             else {
                 // Check if the value is already present in the set
-                let entry = self.map.get_mut(hash, |header| {
+                let entry = self.map.find_mut(hash, |header| {
                     // compare value if hashes match
                     if header.len != value_len {
                         return false;
@@ -553,10 +553,12 @@ where
 
 /// Returns a `NullBuffer` with a single null value at the given index
 fn single_null_buffer(num_values: usize, null_index: usize) -> NullBuffer {
-    let mut bool_builder = BooleanBufferBuilder::new(num_values);
-    bool_builder.append_n(num_values, true);
-    bool_builder.set_bit(null_index, false);
-    NullBuffer::from(bool_builder.finish())
+    let mut null_builder = NullBufferBuilder::new(num_values);
+    null_builder.append_n_non_nulls(null_index);
+    null_builder.append_null();
+    null_builder.append_n_non_nulls(num_values - null_index - 1);
+    // SAFETY: inner builder must be constructed
+    null_builder.finish().unwrap()
 }
 
 impl<O: OffsetSizeTrait, V> Debug for ArrowBytesMap<O, V>

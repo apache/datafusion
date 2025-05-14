@@ -33,15 +33,16 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
-    memory::MemoryExec,
 };
 use datafusion::prelude::SessionContext;
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-// Initialise the operator using the provided record batches and the sort key
+// Initialize the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.
 fn sort_preserving_merge_operator(
     session_ctx: Arc<SessionContext>,
+    rt: &Runtime,
     batches: Vec<RecordBatch>,
     sort: &[&str],
 ) {
@@ -55,15 +56,14 @@ fn sort_preserving_merge_operator(
         })
         .collect::<LexOrdering>();
 
-    let exec = MemoryExec::try_new(
+    let exec = MemorySourceConfig::try_new_exec(
         &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),
         schema,
         None,
     )
     .unwrap();
-    let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+    let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
     let task_ctx = session_ctx.task_ctx();
-    let rt = Runtime::new().unwrap();
     rt.block_on(collect(merge, task_ctx)).unwrap();
 }
 
@@ -166,14 +166,16 @@ fn criterion_benchmark(c: &mut Criterion) {
     ];
 
     let ctx = Arc::new(SessionContext::new());
+    let rt = Runtime::new().unwrap();
+
     for (name, input) in benches {
-        let ctx_clone = ctx.clone();
-        c.bench_function(name, move |b| {
+        c.bench_function(name, |b| {
             b.iter_batched(
                 || input.clone(),
                 |input| {
                     sort_preserving_merge_operator(
-                        ctx_clone.clone(),
+                        ctx.clone(),
+                        &rt,
                         input,
                         &["a", "b", "c", "d"],
                     );

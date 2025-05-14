@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the nested loop join plan, it supports all [`JoinType`].
-//! The nested loop join can execute in parallel by partitions and it is
-//! determined by the [`JoinType`].
+//! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
 use std::any::Any;
 use std::fmt::Formatter;
@@ -26,41 +24,46 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{
-    asymmetric_join_output_partitioning, need_produce_result_in_final, BatchSplitter,
-    BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
+    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
+    need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
+    BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
 };
-use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::common::can_project;
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
-    get_final_indices_from_bit_map, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-    OnceAsync, OnceFut,
+    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
+use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::projection::{
+    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
+    ProjectionExec,
+};
 use crate::{
-    execution_mode_from_children, handle_state, DisplayAs, DisplayFormatType,
-    Distribution, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream,
+    handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 
 use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_util;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, JoinSide, Result, Statistics,
+    exec_datafusion_err, internal_err, project_schema, JoinSide, Result, Statistics,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
-use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::equivalence::{
+    join_equivalence_properties, ProjectionMapping,
+};
 
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
-/// Shared bitmap for visited left-side indices
-type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
 /// Left (build-side) data
 struct JoinLeftData {
     /// Build-side data collected to single batch
@@ -71,7 +74,8 @@ struct JoinLeftData {
     probe_threads_counter: AtomicUsize,
     /// Memory reservation for tracking batch and bitmap
     /// Cleared on `JoinLeftData` drop
-    #[allow(dead_code)]
+    /// reservation is cleared on Drop
+    #[expect(dead_code)]
     reservation: MemoryReservation,
 }
 
@@ -141,9 +145,11 @@ impl JoinLeftData {
 /// "reports" about probe phase completion (which means that "visited" bitmap won't be
 /// updated anymore), and only the last thread, reporting about completion, will return output.
 ///
-/// Note that the `Clone` trait is not implemented for this struct due to the
-/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
-/// left side with the processing in each output stream.
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side
@@ -155,11 +161,19 @@ pub struct NestedLoopJoinExec {
     /// How the join is performed
     pub(crate) join_type: JoinType,
     /// The schema once the join is applied
-    schema: SchemaRef,
-    /// Build-side data
+    join_schema: SchemaRef,
+    /// Future that consumes left input and buffers it in memory
+    ///
+    /// This structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the hash table creation.
     inner_table: OnceAsync<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
+    /// Projection to apply to the output of the join
+    projection: Option<Vec<usize>>,
+
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
@@ -173,24 +187,31 @@ impl NestedLoopJoinExec {
         right: Arc<dyn ExecutionPlan>,
         filter: Option<JoinFilter>,
         join_type: &JoinType,
+        projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
         check_join_is_valid(&left_schema, &right_schema, &[])?;
-        let (schema, column_indices) =
+        let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
-        let schema = Arc::new(schema);
-        let cache =
-            Self::compute_properties(&left, &right, Arc::clone(&schema), *join_type);
+        let join_schema = Arc::new(join_schema);
+        let cache = Self::compute_properties(
+            &left,
+            &right,
+            Arc::clone(&join_schema),
+            *join_type,
+            projection.as_ref(),
+        )?;
 
         Ok(NestedLoopJoinExec {
             left,
             right,
             filter,
             join_type: *join_type,
-            schema,
+            join_schema,
             inner_table: Default::default(),
             column_indices,
+            projection,
             metrics: Default::default(),
             cache,
         })
@@ -216,36 +237,71 @@ impl NestedLoopJoinExec {
         &self.join_type
     }
 
+    pub fn projection(&self) -> Option<&Vec<usize>> {
+        self.projection.as_ref()
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
-    ) -> PlanProperties {
+        projection: Option<&Vec<usize>>,
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = join_equivalence_properties(
+        let mut eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            schema,
+            Arc::clone(&schema),
             &Self::maintains_input_order(join_type),
             None,
             // No on columns in nested loop join
             &[],
         );
 
-        let output_partitioning =
+        let mut output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let mode = if left.execution_mode().is_unbounded() {
-            ExecutionMode::PipelineBreaking
+        let emission_type = if left.boundedness().is_unbounded() {
+            EmissionType::Final
+        } else if right.pipeline_behavior() == EmissionType::Incremental {
+            match join_type {
+                // If we only need to generate matched rows from the probe side,
+                // we can emit rows incrementally.
+                JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::Right
+                | JoinType::RightAnti => EmissionType::Incremental,
+                // If we need to generate unmatched rows from the *build side*,
+                // we need to emit them at the end.
+                JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::Full => EmissionType::Both,
+            }
         } else {
-            execution_mode_from_children([left, right])
+            right.pipeline_behavior()
         };
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        if let Some(projection) = projection {
+            // construct a map from the input expressions to the output expression of the Projection
+            let projection_mapping =
+                ProjectionMapping::from_indices(projection, &schema)?;
+            let out_schema = project_schema(&schema, Some(projection))?;
+            output_partitioning =
+                output_partitioning.project(&projection_mapping, &eq_properties);
+            eq_properties = eq_properties.project(&projection_mapping, out_schema);
+        }
+
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            boundedness_from_children([left, right]),
+        ))
     }
 
     /// Returns a vector indicating whether the left and right inputs maintain their order.
@@ -272,6 +328,69 @@ impl NestedLoopJoinExec {
             ),
         ]
     }
+
+    pub fn contains_projection(&self) -> bool {
+        self.projection.is_some()
+    }
+
+    pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        // check if the projection is valid
+        can_project(&self.schema(), projection.as_ref())?;
+        let projection = match projection {
+            Some(projection) => match &self.projection {
+                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
+                None => Some(projection),
+            },
+            None => None,
+        };
+        Self::try_new(
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
+            self.filter.clone(),
+            &self.join_type,
+            projection,
+        )
+    }
+
+    /// Returns a new `ExecutionPlan` that runs NestedLoopsJoins with the left
+    /// and right inputs swapped.
+    pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = self.left();
+        let right = self.right();
+        let new_join = NestedLoopJoinExec::try_new(
+            Arc::clone(right),
+            Arc::clone(left),
+            self.filter().map(JoinFilter::swap),
+            &self.join_type().swap(),
+            swap_join_projection(
+                left.schema().fields().len(),
+                right.schema().fields().len(),
+                self.projection.as_ref(),
+                self.join_type(),
+            ),
+        )?;
+
+        // For Semi/Anti joins, swap result will produce same output schema,
+        // no need to wrap them into additional projection
+        let plan: Arc<dyn ExecutionPlan> = if matches!(
+            self.join_type(),
+            JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+        ) || self.projection.is_some()
+        {
+            Arc::new(new_join)
+        } else {
+            reorder_output_after_swap(
+                Arc::new(new_join),
+                &self.left().schema(),
+                &self.right().schema(),
+            )?
+        };
+
+        Ok(plan)
+    }
 }
 
 impl DisplayAs for NestedLoopJoinExec {
@@ -282,11 +401,36 @@ impl DisplayAs for NestedLoopJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
+                let display_projections = if self.contains_projection() {
+                    format!(
+                        ", projection=[{}]",
+                        self.projection
+                            .as_ref()
+                            .unwrap()
+                            .iter()
+                            .map(|index| format!(
+                                "{}@{}",
+                                self.join_schema.fields().get(*index).unwrap().name(),
+                                index
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    "".to_string()
+                };
                 write!(
                     f,
-                    "NestedLoopJoinExec: join_type={:?}{}",
-                    self.join_type, display_filter
+                    "NestedLoopJoinExec: join_type={:?}{}{}",
+                    self.join_type, display_filter, display_projections
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                if *self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)
+                } else {
+                    Ok(())
+                }
             }
         }
     }
@@ -329,6 +473,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             Arc::clone(&children[1]),
             self.filter.clone(),
             &self.join_type,
+            self.projection.clone(),
         )?))
     }
 
@@ -337,6 +482,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if self.left.output_partitioning().partition_count() != 1 {
+            return internal_err!(
+                "Invalid NestedLoopJoinExec, the output partition count of the left child must be 1,\
+                 consider using CoalescePartitionsExec or the EnforceDistribution rule"
+            );
+        }
+
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         // Initialization reservation for load of inner table
@@ -344,16 +496,17 @@ impl ExecutionPlan for NestedLoopJoinExec {
             MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
                 .register(context.memory_pool());
 
-        let inner_table = self.inner_table.once(|| {
-            collect_left_input(
-                Arc::clone(&self.left),
-                Arc::clone(&context),
+        let inner_table = self.inner_table.try_once(|| {
+            let stream = self.left.execute(0, Arc::clone(&context))?;
+
+            Ok(collect_left_input(
+                stream,
                 join_metrics.clone(),
                 load_reservation,
                 need_produce_result_in_final(self.join_type),
                 self.right().output_partitioning().partition_count(),
-            )
-        });
+            ))
+        })?;
 
         let batch_size = context.session_config().batch_size();
         let enforce_batch_size_in_joins =
@@ -367,14 +520,23 @@ impl ExecutionPlan for NestedLoopJoinExec {
         let right_side_ordered =
             self.maintains_input_order()[1] && self.right.output_ordering().is_some();
 
+        // update column indices to reflect the projection
+        let column_indices_after_projection = match &self.projection {
+            Some(projection) => projection
+                .iter()
+                .map(|i| self.column_indices[*i].clone())
+                .collect(),
+            None => self.column_indices.clone(),
+        };
+
         if enforce_batch_size_in_joins {
             Ok(Box::pin(NestedLoopJoinStream {
-                schema: Arc::clone(&self.schema),
+                schema: self.schema(),
                 filter: self.filter.clone(),
                 join_type: self.join_type,
                 outer_table,
                 inner_table,
-                column_indices: self.column_indices.clone(),
+                column_indices: column_indices_after_projection,
                 join_metrics,
                 indices_cache,
                 right_side_ordered,
@@ -384,12 +546,12 @@ impl ExecutionPlan for NestedLoopJoinExec {
             }))
         } else {
             Ok(Box::pin(NestedLoopJoinStream {
-                schema: Arc::clone(&self.schema),
+                schema: self.schema(),
                 filter: self.filter.clone(),
                 join_type: self.join_type,
                 outer_table,
                 inner_table,
-                column_indices: self.column_indices.clone(),
+                column_indices: column_indices_after_projection,
                 join_metrics,
                 indices_cache,
                 right_side_ordered,
@@ -405,48 +567,86 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
+            self.left.partition_statistics(None)?,
+            self.right.partition_statistics(None)?,
             vec![],
             &self.join_type,
-            &self.schema,
+            &self.join_schema,
         )
+    }
+
+    /// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
+    /// pushdown and returns a new [`NestedLoopJoinExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // TODO: currently if there is projection in NestedLoopJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+        if self.contains_projection() {
+            return Ok(None);
+        }
+
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            ..
+        }) = try_pushdown_through_join(
+            projection,
+            self.left(),
+            self.right(),
+            &[],
+            self.schema(),
+            self.filter(),
+        )? {
+            Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_filter,
+                self.join_type(),
+                // Returned early if projection is not None
+                None,
+            )?)))
+        } else {
+            try_embed_projection(projection, self)
+        }
     }
 }
 
 /// Asynchronously collect input into a single batch, and creates `JoinLeftData` from it
 async fn collect_left_input(
-    input: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    stream: SendableRecordBatchStream,
     join_metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_left_side: bool,
     probe_threads_count: usize,
 ) -> Result<JoinLeftData> {
-    let schema = input.schema();
-    let merge = if input.output_partitioning().partition_count() != 1 {
-        Arc::new(CoalescePartitionsExec::new(input))
-    } else {
-        input
-    };
-    let stream = merge.execute(0, context)?;
+    let schema = stream.schema();
 
     // Load all batches and count the rows
     let (batches, metrics, mut reservation) = stream
         .try_fold(
             (Vec::new(), join_metrics, reservation),
-            |mut acc, batch| async {
+            |(mut batches, metrics, mut reservation), batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
-                acc.2.try_grow(batch_size)?;
+                reservation.try_grow(batch_size)?;
                 // Update metrics
-                acc.1.build_mem_used.add(batch_size);
-                acc.1.build_input_batches.add(1);
-                acc.1.build_input_rows.add(batch.num_rows());
+                metrics.build_mem_used.add(batch_size);
+                metrics.build_input_batches.add(1);
+                metrics.build_input_rows.add(batch.num_rows());
                 // Push batch to output
-                acc.0.push(batch);
-                Ok(acc)
+                batches.push(batch);
+                Ok((batches, metrics, reservation))
             },
         )
         .await?;
@@ -455,14 +655,13 @@ async fn collect_left_input(
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {
-        // TODO: Replace `ceil` wrapper with stable `div_cell` after
-        // https://github.com/rust-lang/rust/issues/88581
-        let buffer_size = bit_util::ceil(merged_batch.num_rows(), 8);
+        let n_rows = merged_batch.num_rows();
+        let buffer_size = n_rows.div_ceil(8);
         reservation.try_grow(buffer_size)?;
         metrics.build_mem_used.add(buffer_size);
 
-        let mut buffer = BooleanBufferBuilder::new(merged_batch.num_rows());
-        buffer.append_n(merged_batch.num_rows(), false);
+        let mut buffer = BooleanBufferBuilder::new(n_rows);
+        buffer.append_n(n_rows, false);
         buffer
     } else {
         BooleanBufferBuilder::new(0)
@@ -821,14 +1020,6 @@ fn join_left_and_right_batch(
     )
 }
 
-fn get_final_indices_from_shared_bitmap(
-    shared_bitmap: &SharedBitmapBuilder,
-    join_type: JoinType,
-) -> (UInt64Array, UInt32Array) {
-    let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type)
-}
-
 impl<T: BatchTransformer + Unpin + Send> Stream for NestedLoopJoinStream<T> {
     type Item = Result<RecordBatch>;
 
@@ -846,24 +1037,32 @@ impl<T: BatchTransformer + Unpin + Send> RecordBatchStream for NestedLoopJoinStr
     }
 }
 
+impl EmbeddedProjection for NestedLoopJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::test::TestMemoryExec;
     use crate::{
-        common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
-        test::build_table_i32,
+        common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
 
+    use arrow::array::Int32Array;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
-    use arrow_array::Int32Array;
-    use arrow_schema::SortOptions;
-    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
+    use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
+    use insta::assert_snapshot;
     use rstest::rstest;
 
     fn build_table(
@@ -889,8 +1088,8 @@ pub(crate) mod tests {
             vec![batch]
         };
 
-        let mut exec =
-            MemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
+        let mut source =
+            TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
         if !sorted_column_names.is_empty() {
             let mut sort_info = LexOrdering::default();
             for name in sorted_column_names {
@@ -904,10 +1103,10 @@ pub(crate) mod tests {
                 };
                 sort_info.push(sort_expr);
             }
-            exec = exec.try_with_sort_information(vec![sort_info]).unwrap();
+            source = source.try_with_sort_information(vec![sort_info]).unwrap();
         }
 
-        Arc::new(exec)
+        Arc::new(TestMemoryExec::update_cache(Arc::new(source)))
     }
 
     fn build_left_table() -> Arc<dyn ExecutionPlan> {
@@ -971,7 +1170,11 @@ pub(crate) mod tests {
             Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter))
                 as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     pub(crate) async fn multi_partitioned_join_collect(
@@ -991,7 +1194,7 @@ pub(crate) mod tests {
 
         // Use the required distribution for nested loop join to test partition data
         let nested_loop_join =
-            NestedLoopJoinExec::try_new(left, right, join_filter, join_type)?;
+            NestedLoopJoinExec::try_new(left, right, join_filter, join_type, None)?;
         let columns = columns(&nested_loop_join.schema());
         let mut batches = vec![];
         for i in 0..partition_count {
@@ -1022,15 +1225,13 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 5  | 5  | 50 | 2  | 2  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 5  | 5  | 50 | 2  | 2  | 80 |
+            +----+----+----+----+----+----+
+            "#);
 
         Ok(())
     }
@@ -1051,17 +1252,15 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+-----+----+----+----+",
-            "| a1 | b1 | c1  | a2 | b2 | c2 |",
-            "+----+----+-----+----+----+----+",
-            "| 11 | 8  | 110 |    |    |    |",
-            "| 5  | 5  | 50  | 2  | 2  | 80 |",
-            "| 9  | 8  | 90  |    |    |    |",
-            "+----+----+-----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+----+----+----+
+            | a1 | b1 | c1  | a2 | b2 | c2 |
+            +----+----+-----+----+----+----+
+            | 11 | 8  | 110 |    |    |    |
+            | 5  | 5  | 50  | 2  | 2  | 80 |
+            | 9  | 8  | 90  |    |    |    |
+            +----+----+-----+----+----+----+
+            "#);
 
         Ok(())
     }
@@ -1082,17 +1281,15 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+----+----+----+-----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2  |",
-            "+----+----+----+----+----+-----+",
-            "|    |    |    | 10 | 10 | 100 |",
-            "|    |    |    | 12 | 10 | 40  |",
-            "| 5  | 5  | 50 | 2  | 2  | 80  |",
-            "+----+----+----+----+----+-----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+-----+
+            | a1 | b1 | c1 | a2 | b2 | c2  |
+            +----+----+----+----+----+-----+
+            |    |    |    | 10 | 10 | 100 |
+            |    |    |    | 12 | 10 | 40  |
+            | 5  | 5  | 50 | 2  | 2  | 80  |
+            +----+----+----+----+----+-----+
+            "#);
 
         Ok(())
     }
@@ -1113,19 +1310,17 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+-----+----+----+-----+",
-            "| a1 | b1 | c1  | a2 | b2 | c2  |",
-            "+----+----+-----+----+----+-----+",
-            "|    |    |     | 10 | 10 | 100 |",
-            "|    |    |     | 12 | 10 | 40  |",
-            "| 11 | 8  | 110 |    |    |     |",
-            "| 5  | 5  | 50  | 2  | 2  | 80  |",
-            "| 9  | 8  | 90  |    |    |     |",
-            "+----+----+-----+----+----+-----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+----+----+-----+
+            | a1 | b1 | c1  | a2 | b2 | c2  |
+            +----+----+-----+----+----+-----+
+            |    |    |     | 10 | 10 | 100 |
+            |    |    |     | 12 | 10 | 40  |
+            | 11 | 8  | 110 |    |    |     |
+            | 5  | 5  | 50  | 2  | 2  | 80  |
+            | 9  | 8  | 90  |    |    |     |
+            +----+----+-----+----+----+-----+
+            "#);
 
         Ok(())
     }
@@ -1146,15 +1341,13 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        let expected = [
-            "+----+----+----+",
-            "| a1 | b1 | c1 |",
-            "+----+----+----+",
-            "| 5  | 5  | 50 |",
-            "+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+
+            | a1 | b1 | c1 |
+            +----+----+----+
+            | 5  | 5  | 50 |
+            +----+----+----+
+            "#);
 
         Ok(())
     }
@@ -1175,16 +1368,14 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        let expected = [
-            "+----+----+-----+",
-            "| a1 | b1 | c1  |",
-            "+----+----+-----+",
-            "| 11 | 8  | 110 |",
-            "| 9  | 8  | 90  |",
-            "+----+----+-----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+
+            | a1 | b1 | c1  |
+            +----+----+-----+
+            | 11 | 8  | 110 |
+            | 9  | 8  | 90  |
+            +----+----+-----+
+            "#);
 
         Ok(())
     }
@@ -1205,15 +1396,13 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+----+",
-            "| a2 | b2 | c2 |",
-            "+----+----+----+",
-            "| 2  | 2  | 80 |",
-            "+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+
+            | a2 | b2 | c2 |
+            +----+----+----+
+            | 2  | 2  | 80 |
+            +----+----+----+
+            "#);
 
         Ok(())
     }
@@ -1234,16 +1423,14 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+-----+",
-            "| a2 | b2 | c2  |",
-            "+----+----+-----+",
-            "| 10 | 10 | 100 |",
-            "| 12 | 10 | 40  |",
-            "+----+----+-----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 10 | 10 | 100 |
+            | 12 | 10 | 40  |
+            +----+----+-----+
+            "#);
 
         Ok(())
     }
@@ -1264,17 +1451,15 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
-        let expected = [
-            "+----+----+-----+-------+",
-            "| a1 | b1 | c1  | mark  |",
-            "+----+----+-----+-------+",
-            "| 11 | 8  | 110 | false |",
-            "| 5  | 5  | 50  | true  |",
-            "| 9  | 8  | 90  | false |",
-            "+----+----+-----+-------+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+-------+
+            | a1 | b1 | c1  | mark  |
+            +----+----+-----+-------+
+            | 11 | 8  | 110 | false |
+            | 5  | 5  | 50  | true  |
+            | 9  | 8  | 90  | false |
+            +----+----+-----+-------+
+            "#);
 
         Ok(())
     }
@@ -1359,7 +1544,7 @@ pub(crate) mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]"
             );
         }
 
@@ -1412,7 +1597,11 @@ pub(crate) mod tests {
             Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter))
                 as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     fn generate_columns(num_columns: usize, num_rows: usize) -> Vec<Vec<i32>> {
@@ -1458,6 +1647,7 @@ pub(crate) mod tests {
             Arc::clone(&right),
             Some(filter),
             &join_type,
+            None,
         )?) as Arc<dyn ExecutionPlan>;
         assert_eq!(nested_loop_join.maintains_input_order(), vec![false, true]);
 
@@ -1511,11 +1701,7 @@ pub(crate) mod tests {
                         .into_iter()
                         .zip(prev_values)
                         .all(|(current, prev)| current >= prev),
-                    "batch_index: {} row: {} current: {:?}, prev: {:?}",
-                    batch_index,
-                    row,
-                    current_values,
-                    prev_values
+                    "batch_index: {batch_index} row: {row} current: {current_values:?}, prev: {prev_values:?}"
                 );
                 prev_values = current_values;
             }

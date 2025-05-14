@@ -17,9 +17,9 @@
 
 extern crate criterion;
 
-use arrow_array::{Int32Array, ListArray, StringArray};
-use arrow_buffer::{OffsetBuffer, ScalarBuffer};
-use arrow_schema::{DataType, Field};
+use arrow::array::{Int32Array, ListArray, StringArray};
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::prelude::ThreadRng;
 use rand::Rng;
@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{ColumnarValue, Expr};
+use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs};
 use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_nested::planner::NestedFunctionPlanner;
 
@@ -75,7 +75,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("map_1000", |b| {
         let mut rng = rand::thread_rng();
-        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
         let key_list = ListArray::new(
             field,
@@ -83,7 +83,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Arc::new(StringArray::from(keys(&mut rng))),
             None,
         );
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
         let value_list = ListArray::new(
             field,
@@ -94,11 +94,23 @@ fn criterion_benchmark(c: &mut Criterion) {
         let keys = ColumnarValue::Scalar(ScalarValue::List(Arc::new(key_list)));
         let values = ColumnarValue::Scalar(ScalarValue::List(Arc::new(value_list)));
 
+        let return_type = map_udf()
+            .return_type(&[DataType::Utf8, DataType::Int32])
+            .expect("should get return type");
+        let return_field = &Field::new("f", return_type, true);
+
         b.iter(|| {
             black_box(
-                #[allow(deprecated)] // TODO use invoke_batch
                 map_udf()
-                    .invoke(&[keys.clone(), values.clone()])
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![keys.clone(), values.clone()],
+                        arg_fields: vec![
+                            &Field::new("a", keys.data_type(), true),
+                            &Field::new("a", values.data_type(), true),
+                        ],
+                        number_rows: 1,
+                        return_field,
+                    })
                     .expect("map should work on valid values"),
             );
         });

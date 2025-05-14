@@ -18,19 +18,20 @@
 //! [`ScalarUDFImpl`] definitions for array_reverse function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Capacities, MutableArrayData};
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::OffsetBuffer;
-use arrow_schema::DataType::{LargeList, List, Null};
-use arrow_schema::{DataType, FieldRef};
+use arrow::array::{
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
+};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::DataType::{LargeList, List, Null};
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArrayReverse,
@@ -40,10 +41,33 @@ make_udf_expr_and_func!(
     array_reverse_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the array with the order of the elements reversed.",
+    syntax_example = "array_reverse(array)",
+    sql_example = r#"```sql
+> select array_reverse([1, 2, 3, 4]);
++------------------------------------------------------------+
+| array_reverse(List([1, 2, 3, 4]))                          |
++------------------------------------------------------------+
+| [4, 3, 2, 1]                                               |
++------------------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArrayReverse {
+pub struct ArrayReverse {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayReverse {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayReverse {
@@ -72,8 +96,11 @@ impl ScalarUDFImpl for ArrayReverse {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_reverse_inner)(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(array_reverse_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -81,55 +108,24 @@ impl ScalarUDFImpl for ArrayReverse {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_reverse_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_reverse_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Returns the array with the order of the elements reversed.",
-            )
-            .with_syntax_example("array_reverse(array)")
-            .with_sql_example(
-                r#"```sql
-> select array_reverse([1, 2, 3, 4]);
-+------------------------------------------------------------+
-| array_reverse(List([1, 2, 3, 4]))                          |
-+------------------------------------------------------------+
-| [4, 3, 2, 1]                                               |
-+------------------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 /// array_reverse SQL function
 pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
-    if arg.len() != 1 {
-        return exec_err!("array_reverse needs one argument");
-    }
+    let [input_array] = take_function_args("array_reverse", arg)?;
 
-    match &arg[0].data_type() {
+    match &input_array.data_type() {
         List(field) => {
-            let array = as_list_array(&arg[0])?;
+            let array = as_list_array(input_array)?;
             general_array_reverse::<i32>(array, field)
         }
         LargeList(field) => {
-            let array = as_large_list_array(&arg[0])?;
+            let array = as_large_list_array(input_array)?;
             general_array_reverse::<i64>(array, field)
         }
-        Null => Ok(Arc::clone(&arg[0])),
+        Null => Ok(Arc::clone(input_array)),
         array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
     }
 }
@@ -175,7 +171,7 @@ fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         Some(nulls.into()),
     )?))
 }

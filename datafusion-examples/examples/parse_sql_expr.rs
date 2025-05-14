@@ -16,14 +16,14 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::DFSchema;
+use datafusion::logical_expr::{col, lit};
+use datafusion::sql::unparser::Unparser;
 use datafusion::{
     assert_batches_eq,
     error::Result,
     prelude::{ParquetReadOptions, SessionContext},
 };
-use datafusion_common::DFSchema;
-use datafusion_expr::{col, lit};
-use datafusion_sql::unparser::Unparser;
 
 /// This example demonstrates the programmatic parsing of SQL expressions using
 /// the DataFusion [`SessionContext::parse_sql_expr`] API or the [`DataFrame::parse_sql_expr`] API.
@@ -121,11 +121,11 @@ async fn query_parquet_demo() -> Result<()> {
 
     assert_batches_eq!(
         &[
-            "+------------+----------------------+",
-            "| double_col | sum(?table?.int_col) |",
-            "+------------+----------------------+",
-            "| 10.1       | 4                    |",
-            "+------------+----------------------+",
+            "+------------+-------------+",
+            "| double_col | sum_int_col |",
+            "+------------+-------------+",
+            "| 10.1       | 4           |",
+            "+------------+-------------+",
         ],
         &result
     );

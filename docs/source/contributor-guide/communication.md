@@ -39,7 +39,7 @@ decisions are made fully in the open, on GitHub.
 
 Most of us use the [ASF Slack
 workspace](https://s.apache.org/slack-invite) and the [Arrow Rust Discord
-server](https://discord.gg/Qw5gKqHxUM) for discussions.
+server][discord-link] for discussions.
 
 There are specific channels for Arrow, DataFusion, and the DataFusion subprojects (Ballista, Comet, Python, etc).
 
@@ -68,6 +68,12 @@ Unfortunately, due to spammers, the ASF Slack workspace requires an invitation
 to join. We are happy to invite you -- please ask for an invitation in the
 Discord server.
 
+### Job Board
+
+There are plenty of opportunities to work with DataFusion advertised on the
+#hiring channel on the [Arrow Rust Discord Server][discord-link].
+Please feel free to post links to DataFusion related jobs there.
+
 ## Mailing Lists
 
 Like other Apache projects, we use [mailing lists] for certain purposes, most
@@ -88,3 +94,4 @@ the actual discussion occurs. The project mailing lists are:
   [archives](https://lists.apache.org/list.html?private@datafusion.apache.org)
 
 [mailing lists]: https://www.apache.org/foundation/mailinglists
+[discord-link]: https://discord.gg/Qw5gKqHxUM

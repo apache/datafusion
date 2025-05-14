@@ -19,7 +19,7 @@ use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use std::sync::Arc;
 
 /// A fully resolved path to a table of the form "catalog.schema.table"
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ResolvedTableReference {
     /// The catalog (aka database) containing the table
     pub catalog: Arc<str>,
@@ -193,8 +193,7 @@ impl TableReference {
         match self {
             TableReference::Bare { table } => **table == *other.table(),
             TableReference::Partial { schema, table } => {
-                **table == *other.table()
-                    && other.schema().map_or(true, |s| *s == **schema)
+                **table == *other.table() && other.schema().is_none_or(|s| *s == **schema)
             }
             TableReference::Full {
                 catalog,
@@ -202,8 +201,8 @@ impl TableReference {
                 table,
             } => {
                 **table == *other.table()
-                    && other.schema().map_or(true, |s| *s == **schema)
-                    && other.catalog().map_or(true, |c| *c == **catalog)
+                    && other.schema().is_none_or(|s| *s == **schema)
+                    && other.catalog().is_none_or(|c| *c == **catalog)
             }
         }
     }

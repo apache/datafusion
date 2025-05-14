@@ -22,17 +22,18 @@ use datafusion_common::{
     exec_datafusion_err, internal_err, plan_datafusion_err, RecursionUnnestOption,
     Result, ScalarValue, TableReference, UnnestOptions,
 };
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{Alias, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
-use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::{
     expr::{self, InList, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
-    Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr, GroupingSet,
+    Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
 };
+use datafusion_expr::{ExprFunctionExt, WriteOp};
 use datafusion_proto_common::{from_proto::FromOptionalField, FromProtoError as Error};
 
 use crate::protobuf::plan_type::PlanTypeEnum::{
@@ -44,7 +45,7 @@ use crate::protobuf::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
         FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
         InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
-        OptimizedPhysicalPlan,
+        OptimizedPhysicalPlan, PhysicalPlanError,
     },
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
@@ -141,19 +142,9 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
                 FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
                 FinalPhysicalPlanWithSchema(_) => PlanType::FinalPhysicalPlanWithSchema,
+                PhysicalPlanError(_) => PlanType::PhysicalPlanError,
             },
             plan: Arc::new(stringified_plan.plan.clone()),
-        }
-    }
-}
-
-impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
-    fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
-        match built_in_function {
-            protobuf::BuiltInWindowFunction::Unspecified => todo!(),
-            protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            protobuf::BuiltInWindowFunction::NthValue => Self::NthValue,
-            protobuf::BuiltInWindowFunction::LastValue => Self::LastValue,
         }
     }
 }
@@ -228,6 +219,21 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
     }
 }
 
+impl From<protobuf::dml_node::Type> for WriteOp {
+    fn from(t: protobuf::dml_node::Type) -> Self {
+        match t {
+            protobuf::dml_node::Type::Update => WriteOp::Update,
+            protobuf::dml_node::Type::Delete => WriteOp::Delete,
+            protobuf::dml_node::Type::InsertAppend => WriteOp::Insert(InsertOp::Append),
+            protobuf::dml_node::Type::InsertOverwrite => {
+                WriteOp::Insert(InsertOp::Overwrite)
+            }
+            protobuf::dml_node::Type::InsertReplace => WriteOp::Insert(InsertOp::Replace),
+            protobuf::dml_node::Type::Ctas => WriteOp::Ctas,
+        }
+    }
+}
+
 pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
     registry: &dyn FunctionRegistry,
@@ -288,29 +294,12 @@ pub fn parse_expr(
 
             // TODO: support proto for null treatment
             match window_function {
-                window_expr_node::WindowFunction::BuiltInFunction(i) => {
-                    let built_in_function = protobuf::BuiltInWindowFunction::try_from(*i)
-                        .map_err(|_| Error::unknown("BuiltInWindowFunction", *i))?
-                        .into();
-
-                    let args = parse_exprs(&expr.exprs, registry, codec)?;
-
-                    Expr::WindowFunction(WindowFunction::new(
-                        expr::WindowFunctionDefinition::BuiltInWindowFunction(
-                            built_in_function,
-                        ),
-                        args,
-                    ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .build()
-                    .map_err(Error::DataFusionError)
-                }
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
-                        None => registry.udaf(udaf_name)?,
+                        None => registry
+                            .udaf(udaf_name)
+                            .or_else(|_| codec.try_decode_udaf(udaf_name, &[]))?,
                     };
 
                     let args = parse_exprs(&expr.exprs, registry, codec)?;
@@ -327,7 +316,9 @@ pub fn parse_expr(
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
                     let udwf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
-                        None => registry.udwf(udwf_name)?,
+                        None => registry
+                            .udwf(udwf_name)
+                            .or_else(|_| codec.try_decode_udwf(udwf_name, &[]))?,
                     };
 
                     let args = parse_exprs(&expr.exprs, registry, codec)?;
@@ -541,9 +532,10 @@ pub fn parse_expr(
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
             let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
+            #[expect(deprecated)]
             Ok(Expr::Wildcard {
                 qualifier,
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             })
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
@@ -553,7 +545,9 @@ pub fn parse_expr(
         }) => {
             let scalar_fn = match fun_definition {
                 Some(buf) => codec.try_decode_udf(fun_name, buf)?,
-                None => registry.udf(fun_name.as_str())?,
+                None => registry
+                    .udf(fun_name.as_str())
+                    .or_else(|_| codec.try_decode_udf(fun_name, &[]))?,
             };
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
@@ -563,7 +557,9 @@ pub fn parse_expr(
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = match &pb.fun_definition {
                 Some(buf) => codec.try_decode_udaf(&pb.fun_name, buf)?,
-                None => registry.udaf(&pb.fun_name)?,
+                None => registry
+                    .udaf(&pb.fun_name)
+                    .or_else(|_| codec.try_decode_udaf(&pb.fun_name, &[]))?,
             };
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(

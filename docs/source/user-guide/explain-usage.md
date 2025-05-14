@@ -49,28 +49,28 @@ LIMIT 5;
 
 The output will look like
 
-```
-+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| plan_type     | plan                                                                                                                                                                                |
-+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| logical_plan  | Sort: wid ASC NULLS LAST, ip DESC NULLS FIRST, fetch=5                                                                                                                              |
-|               |   Projection: hits.parquet.WatchID AS wid, hits.parquet.ClientIP AS ip                                                                                                              |
-|               |     Filter: starts_with(hits.parquet.URL, Utf8("http://domcheloveplanet.ru/"))                                                                                                      |
-|               |       TableScan: hits.parquet projection=[WatchID, ClientIP, URL], partial_filters=[starts_with(hits.parquet.URL, Utf8("http://domcheloveplanet.ru/"))]                             |
-| physical_plan | SortPreservingMergeExec: [wid@0 ASC NULLS LAST,ip@1 DESC], fetch=5                                                                                                                  |
-|               |   SortExec: TopK(fetch=5), expr=[wid@0 ASC NULLS LAST,ip@1 DESC], preserve_partitioning=[true]                                                                                      |
-|               |     ProjectionExec: expr=[WatchID@0 as wid, ClientIP@1 as ip]                                                                                                                       |
-|               |       CoalesceBatchesExec: target_batch_size=8192                                                                                                                                   |
-|               |         FilterExec: starts_with(URL@2, http://domcheloveplanet.ru/)                                                                                                                 |
-|               |           ParquetExec: file_groups={16 groups: [[hits.parquet:0..923748528], ...]}, projection=[WatchID, ClientIP, URL], predicate=starts_with(URL@13, http://domcheloveplanet.ru/) |
-+---------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+```text
++---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| plan_type     | plan                                                                                                                                                                                                      |
++---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| logical_plan  | Sort: wid ASC NULLS LAST, ip DESC NULLS FIRST, fetch=5                                                                                                                                                    |
+|               |   Projection: hits.parquet.WatchID AS wid, hits.parquet.ClientIP AS ip                                                                                                                                    |
+|               |     Filter: starts_with(hits.parquet.URL, Utf8("http://domcheloveplanet.ru/"))                                                                                                                            |
+|               |       TableScan: hits.parquet projection=[WatchID, ClientIP, URL], partial_filters=[starts_with(hits.parquet.URL, Utf8("http://domcheloveplanet.ru/"))]                                                   |
+| physical_plan | SortPreservingMergeExec: [wid@0 ASC NULLS LAST,ip@1 DESC], fetch=5                                                                                                                                        |
+|               |   SortExec: TopK(fetch=5), expr=[wid@0 ASC NULLS LAST,ip@1 DESC], preserve_partitioning=[true]                                                                                                            |
+|               |     ProjectionExec: expr=[WatchID@0 as wid, ClientIP@1 as ip]                                                                                                                                             |
+|               |       CoalesceBatchesExec: target_batch_size=8192                                                                                                                                                         |
+|               |         FilterExec: starts_with(URL@2, http://domcheloveplanet.ru/)                                                                                                                                       |
+|               |           DataSourceExec: file_groups={16 groups: [[hits.parquet:0..923748528], ...]}, projection=[WatchID, ClientIP, URL], predicate=starts_with(URL@13, http://domcheloveplanet.ru/), file_type=parquet |
++---------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 2 row(s) fetched.
 Elapsed 0.060 seconds.
 ```
 
 There are two sections: logical plan and physical plan
 
-- **Logical Plan:** is a plan generated for a specific SQL query, DataFrame, or other language without the  
+- **Logical Plan:** is a plan generated for a specific SQL query, DataFrame, or other language without the
   knowledge of the underlying data organization.
 - **Physical Plan:** is a plan generated from a logical plan along with consideration of the hardware
   configuration (e.g number of CPUs) and the underlying data organization (e.g number of files).
@@ -87,7 +87,7 @@ query run faster depends on the reason it is slow and beyond the scope of this d
 A query plan is an upside down tree, and we always read from bottom up. The
 physical plan in Figure 1 in tree format will look like
 
-```
+```text
                          ▲
                          │
                          │
@@ -123,7 +123,7 @@ physical plan in Figure 1 in tree format will look like
                          ▲
                          │
 ┌────────────────────────────────────────────────┐
-│                  ParquetExec                   │
+│                  DataSourceExec                │
 │          hits.parquet (filter = ...)           │
 └────────────────────────────────────────────────┘
 ```
@@ -131,7 +131,7 @@ physical plan in Figure 1 in tree format will look like
 Each node in the tree/plan ends with `Exec` and is sometimes also called an `operator` or `ExecutionPlan` where data is
 processed, transformed and sent up.
 
-1. First, data in parquet the `hits.parquet` file us read in parallel using 16 cores in 16 "partitions" (more on this later) from `ParquetExec`, which applies a first pass at filtering during the scan.
+1. First, data in parquet the `hits.parquet` file us read in parallel using 16 cores in 16 "partitions" (more on this later) from `DataSourceExec`, which applies a first pass at filtering during the scan.
 2. Next, the output is filtered using `FilterExec` to ensure only rows where `starts_with(URL, 'http://domcheloveplanet.ru/')` evaluates to true are passed on
 3. The `CoalesceBatchesExec` then ensures that the data is grouped into larger batches for processing
 4. The `ProjectionExec` then projects the data to rename the `WatchID` and `ClientIP` columns to `wid` and `ip` respectively.
@@ -174,7 +174,7 @@ above but with `EXPLAIN ANALYZE` (note the output is edited for clarity)
 
 [`executionplan::metrics`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics
 
-```
+```sql
 > EXPLAIN ANALYZE SELECT "WatchID" AS wid, "hits.parquet"."ClientIP" AS ip
 FROM 'hits.parquet'
 WHERE starts_with("URL", 'http://domcheloveplanet.ru/')
@@ -187,7 +187,7 @@ LIMIT 5;
 |                   |   SortExec: TopK(fetch=5), expr=[wid@0 ASC NULLS LAST,ip@1 DESC], preserve_partitioning=[true], metrics=[output_rows=75, elapsed_compute=7.243038ms, row_replacements=482]                                                                                                                                                                                     |
 |                   |     ProjectionExec: expr=[WatchID@0 as wid, ClientIP@1 as ip], metrics=[output_rows=811821, elapsed_compute=66.25µs]                                                                                                                                                                                                                                           |
 |                   |         FilterExec: starts_with(URL@2, http://domcheloveplanet.ru/), metrics=[output_rows=811821, elapsed_compute=1.36923816s]                                                                                                                                                                                                                                 |
-|                   |           ParquetExec: file_groups={16 groups: [[hits.parquet:0..923748528], ...]}, projection=[WatchID, ClientIP, URL], predicate=starts_with(URL@13, http://domcheloveplanet.ru/), metrics=[output_rows=99997497, elapsed_compute=16ns, ... bytes_scanned=3703192723, ...  time_elapsed_opening=308.203002ms, time_elapsed_scanning_total=8.350342183s, ...] |
+|                   |           DataSourceExec: file_groups={16 groups: [[hits.parquet:0..923748528], ...]}, projection=[WatchID, ClientIP, URL], predicate=starts_with(URL@13, http://domcheloveplanet.ru/), metrics=[output_rows=99997497, elapsed_compute=16ns, ... bytes_scanned=3703192723, ...  time_elapsed_opening=308.203002ms, time_elapsed_scanning_total=8.350342183s, ...] |
 +-------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row(s) fetched.
 Elapsed 0.720 seconds.
@@ -197,14 +197,14 @@ In this case, DataFusion actually ran the query, but discarded any results, and
 instead returned an annotated plan with a new field, `metrics=[...]`
 
 Most operators have the common metrics `output_rows` and `elapsed_compute` and
-some have operator specific metrics such as `ParquetExec` which has
+some have operator specific metrics such as `DataSourceExec` with `ParquetSource` which has
 `bytes_scanned=3703192723`. Note that times and counters are reported across all
 cores, so if you have 16 cores, the time reported is the sum of the time taken
 by all 16 cores.
 
 Again, reading from bottom up:
 
-- `ParquetExec`
+- `DataSourceExec`
   - `output_rows=99997497`: A total 99.9M rows were produced
   - `bytes_scanned=3703192723`: Of the 14GB file, 3.7GB were actually read (due to projection pushdown)
   - `time_elapsed_opening=308.203002ms`: It took 300ms to open the file and prepare to read it
@@ -223,7 +223,7 @@ Again, reading from bottom up:
 - `SortPreservingMergeExec`
   - `output_rows=5`, `elapsed_compute=2.375µs`: Produced the final 5 rows in 2.375µs (microseconds)
 
-When predicate pushdown is enabled, `ParquetExec` gains the following metrics:
+When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains the following metrics:
 
 - `page_index_rows_matched`: number of rows in pages that were tested by a page index filter, and passed
 - `page_index_rows_pruned`: number of rows in pages that were tested by a page index filter, and did not pass
@@ -247,7 +247,7 @@ planning. Roughly speaking, each "partition" in the plan is run independently us
 a separate core. Data crosses between cores only within certain operators such as
 `RepartitionExec`, `CoalescePartitions` and `SortPreservingMergeExec`
 
-You can read more about this in the [Partitoning Docs].
+You can read more about this in the [Partitioning Docs].
 
 [partitoning docs]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html
 
@@ -267,7 +267,7 @@ LIMIT 10;
 
 We can again see the query plan by using `EXPLAIN`:
 
-```
+```sql
 > EXPLAIN SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
 +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -283,7 +283,7 @@ We can again see the query plan by using `EXPLAIN`:
 |               |         CoalesceBatchesExec: target_batch_size=8192                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 |               |           RepartitionExec: partitioning=Hash([UserID@0], 10), input_partitions=10                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 |               |             AggregateExec: mode=Partial, gby=[UserID@0 as UserID], aggr=[count(*)]                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-|               |               ParquetExec: file_groups={10 groups: [[hits.parquet:0..1477997645], [hits.parquet:1477997645..2955995290], [hits.parquet:2955995290..4433992935], [hits.parquet:4433992935..5911990580], [hits.parquet:5911990580..7389988225], ...]}, projection=[UserID] |
+|               |               DataSourceExec: file_groups={10 groups: [[hits.parquet:0..1477997645], [hits.parquet:1477997645..2955995290], [hits.parquet:2955995290..4433992935], [hits.parquet:4433992935..5911990580], [hits.parquet:5911990580..7389988225], ...]}, projection=[UserID], file_type=parquet                                                                                                                                                                                                                                                    |
 |               |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 ```
@@ -307,11 +307,11 @@ For this query, let's again read the plan from the bottom to the top:
 
 **Physical plan operators**
 
-- `ParquetExec`
+- `DataSourceExec`
   - `file_groups={10 groups: [...]}`: Reads 10 groups in parallel from `hits.parquet`file. (The example above was run on a machine with 10 cores.)
   - `projection=[UserID]`: Pushes down projection of the `UserID` column. The parquet format is columnar and the DataFusion reader only decodes the columns required.
 - `AggregateExec`
-  - `mode=Partial` Runs a [partial aggregation] in parallel across each of the 10 partitions from the `ParquetExec` immediately after reading.
+  - `mode=Partial` Runs a [partial aggregation] in parallel across each of the 10 partitions from the `DataSourceExec` immediately after reading.
   - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together the same values of `UserID`.
   - `aggr=[count(*)]`: Applies the `COUNT` aggregate on all rows for each group.
 - `RepartitionExec`

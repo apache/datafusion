@@ -20,34 +20,37 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::as_string_array;
-use arrow::compute::kernels::numeric::add;
-use arrow_array::builder::BooleanBuilder;
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+use arrow::array::{as_string_array, record_batch, Int8Array, UInt64Array};
+use arrow::array::{
+    builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
+    Int32Array, RecordBatch, StringArray,
 };
-use arrow_schema::{DataType, Field, Schema};
-use parking_lot::Mutex;
-use regex::Regex;
-use sqlparser::ast::Ident;
-
+use arrow::compute::kernels::numeric::add;
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
+use arrow_schema::ArrowError;
+use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
-    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, Result, ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
+    plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, ExprSchemable,
-    LogicalPlanBuilder, OperateFunctionArg, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
+    OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
+use parking_lot::Mutex;
+use regex::Regex;
+use sqlparser::ast::Ident;
+use sqlparser::tokenizer::Span;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -57,15 +60,16 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
     let ctx = create_udf_context();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
-    let actual = plan_and_collect(&ctx, sql).await.unwrap();
-    let expected = [
-        "+------------------------------------------+",
-        "| avg(custom_sqrt(aggregate_test_100.c11)) |",
-        "+------------------------------------------+",
-        "| 0.6584408483418835                       |",
-        "+------------------------------------------+",
-    ];
-    assert_batches_eq!(&expected, &actual);
+    let actual = plan_and_collect(&ctx, sql).await?;
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    +------------------------------------------+
+    | avg(custom_sqrt(aggregate_test_100.c11)) |
+    +------------------------------------------+
+    | 0.6584408483418835                       |
+    +------------------------------------------+
+    "###);
+
     Ok(())
 }
 
@@ -75,15 +79,16 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     // Note it is a different column (c12) than above (c11)
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
-    let actual = plan_and_collect(&ctx, sql).await.unwrap();
-    let expected = [
-        "+------------------------------------------+",
-        "| avg(custom_sqrt(aggregate_test_100.c12)) |",
-        "+------------------------------------------+",
-        "| 0.6706002946036459                       |",
-        "+------------------------------------------+",
-    ];
-    assert_batches_eq!(&expected, &actual);
+    let actual = plan_and_collect(&ctx, sql).await?;
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    +------------------------------------------+
+    | avg(custom_sqrt(aggregate_test_100.c12)) |
+    +------------------------------------------+
+    | 0.6706002946036459                       |
+    +------------------------------------------+
+    "###);
+
     Ok(())
 }
 
@@ -147,17 +152,16 @@ async fn scalar_udf() -> Result<()> {
 
     let result = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    let expected = [
-        "+-----+-----+-----------------+",
-        "| a   | b   | my_add(t.a,t.b) |",
-        "+-----+-----+-----------------+",
-        "| 1   | 2   | 3               |",
-        "| 10  | 12  | 22              |",
-        "| 10  | 12  | 22              |",
-        "| 100 | 120 | 220             |",
-        "+-----+-----+-----------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +-----+-----+-----------------+
+    | a   | b   | my_add(t.a,t.b) |
+    +-----+-----+-----------------+
+    | 1   | 2   | 3               |
+    | 10  | 12  | 22              |
+    | 10  | 12  | 22              |
+    | 100 | 120 | 220             |
+    +-----+-----+-----------------+
+    "###);
 
     let batch = &result[0];
     let a = as_int32_array(batch.column(0))?;
@@ -209,11 +213,7 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("{} function does not accept arguments", self.name())
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
     }
 }
@@ -251,7 +251,7 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
             .err()
             .unwrap()
             .to_string(),
-        "UDF returned a different number of rows than expected"
+        "Internal error: UDF buggy_func returned a different number of rows than expected. Expected: 2, Got: 1"
     );
     Ok(())
 }
@@ -277,34 +277,32 @@ async fn scalar_udf_zero_params() -> Result<()> {
     ctx.register_udf(ScalarUDF::from(get_100_udf));
 
     let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
-    let expected = [
-        "+-----+", //
-        "| a   |", //
-        "+-----+", //
-        "| 100 |", //
-        "| 100 |", //
-        "| 100 |", //
-        "| 100 |", //
-        "+-----+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +-----+
+    | a   |
+    +-----+
+    | 100 |
+    | 100 |
+    | 100 |
+    | 100 |
+    +-----+
+    "###);
 
     let result = plan_and_collect(&ctx, "select get_100() a").await?;
-    let expected = [
-        "+-----+", //
-        "| a   |", //
-        "+-----+", //
-        "| 100 |", //
-        "+-----+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +-----+
+    | a   |
+    +-----+
+    | 100 |
+    +-----+
+    "###);
 
     let result = plan_and_collect(&ctx, "select get_100() from t where a=999").await?;
-    let expected = [
-        "++", //
-        "++",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    ++
+    ++
+    "###);
+
     Ok(())
 }
 
@@ -330,14 +328,14 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
 
     // Make sure that the UDF is used instead of the built-in function
     let result = plan_and_collect(&ctx, "select abs(a) a from t").await?;
-    let expected = [
-        "+---+", //
-        "| a |", //
-        "+---+", //
-        "| 1 |", //
-        "+---+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +---+
+    | a |
+    +---+
+    | 1 |
+    +---+
+    "###);
+
     Ok(())
 }
 
@@ -394,7 +392,7 @@ async fn udaf_as_window_func() -> Result<()> {
   WindowAggr: windowExpr=[[my_acc(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
     TableScan: my_table"#;
 
-    let dataframe = context.sql(sql).await.unwrap();
+    let dataframe = context.sql(sql).await?;
     assert_eq!(format!("{}", dataframe.logical_plan()), expected);
     Ok(())
 }
@@ -404,7 +402,7 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
@@ -432,14 +430,13 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     // Can call it if you put quotes
     let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
-    let expected = [
-        "+--------------+",
-        "| MY_FUNC(t.i) |",
-        "+--------------+",
-        "| 1            |",
-        "+--------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +--------------+
+    | MY_FUNC(t.i) |
+    +--------------+
+    | 1            |
+    +--------------+
+    "###);
 
     Ok(())
 }
@@ -449,7 +446,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
@@ -469,18 +466,23 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     ctx.register_udf(udf);
 
-    let expected = [
-        "+------------+",
-        "| dummy(t.i) |",
-        "+------------+",
-        "| 1          |",
-        "+------------+",
-    ];
     let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +------------+
+    | dummy(t.i) |
+    +------------+
+    | 1          |
+    +------------+
+    "###);
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
-    assert_batches_eq!(expected, &alias_result);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
+    +------------+
+    | dummy(t.i) |
+    +------------+
+    | 1          |
+    +------------+
+    "###);
 
     Ok(())
 }
@@ -520,20 +522,13 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("index_with_offset function does not accept arguments")
-    }
-
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let answer = match &args[0] {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [arg] = take_function_args(self.name(), &args.args)?;
+        let answer = match arg {
             // When called with static arguments, the result is returned as an array.
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(value))) => {
                 let mut answer = vec![];
-                for index in 1..=number_rows {
+                for index in 1..=args.number_rows {
                     // When calling a function with immutable arguments, the result is returned with ")".
                     // Example: SELECT add_index_to_string('const_value') FROM table;
                     answer.push(index.to_string() + ") " + value);
@@ -691,6 +686,10 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(DataType::Int64)
     }
 
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
+    }
+
     // Demonstrate simplifying a UDF
     fn simplify(
         &self,
@@ -718,10 +717,6 @@ impl ScalarUDFImpl for CastToI64UDF {
         };
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))
-    }
-
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        unimplemented!("Function should have been simplified prior to evaluation")
     }
 }
 
@@ -811,7 +806,7 @@ impl ScalarUDFImpl for TakeUDF {
         &self.signature
     }
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        not_impl_err!("Not called because the return_type_from_exprs is implemented")
+        not_impl_err!("Not called because the return_field_from_args is implemented")
     }
 
     /// This function returns the type of the first or second argument based on
@@ -819,41 +814,49 @@ impl ScalarUDFImpl for TakeUDF {
     ///
     /// 1. If the third argument is '0', return the type of the first argument
     /// 2. If the third argument is '1', return the type of the second argument
-    fn return_type_from_exprs(
-        &self,
-        arg_exprs: &[Expr],
-        schema: &dyn ExprSchema,
-        _arg_data_types: &[DataType],
-    ) -> Result<DataType> {
-        if arg_exprs.len() != 3 {
-            return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+        if args.arg_fields.len() != 3 {
+            return plan_err!("Expected 3 arguments, got {}.", args.arg_fields.len());
         }
 
-        let take_idx = if let Some(Expr::Literal(ScalarValue::Int64(Some(idx)))) =
-            arg_exprs.get(2)
-        {
-            if *idx == 0 || *idx == 1 {
-                *idx as usize
+        let take_idx = if let Some(take_idx) = args.scalar_arguments.get(2) {
+            // This is for test only, safe to unwrap
+            let take_idx = take_idx
+                .unwrap()
+                .try_as_str()
+                .unwrap()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap();
+
+            if take_idx == 0 || take_idx == 1 {
+                take_idx
             } else {
-                return plan_err!("The third argument must be 0 or 1, got: {idx}");
+                return plan_err!("The third argument must be 0 or 1, got: {take_idx}");
             }
         } else {
             return plan_err!(
                 "The third argument must be a literal of type int64, but got {:?}",
-                arg_exprs.get(2)
+                args.scalar_arguments.get(2)
             );
         };
 
-        arg_exprs.get(take_idx).unwrap().get_type(schema)
+        Ok(Field::new(
+            self.name(),
+            args.arg_fields[take_idx].data_type().to_owned(),
+            true,
+        ))
     }
 
     // The actual implementation
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let take_idx = match &args[2] {
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) if v < &2 => *v as usize,
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [_arg0, _arg1, arg2] = take_function_args(self.name(), &args.args)?;
+        let take_idx = match arg2 {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "0" => 0,
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "1" => 1,
             _ => unreachable!(),
         };
-        match &args[take_idx] {
+        match &args.args[take_idx] {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(array.clone())),
             ColumnarValue::Scalar(_) => unimplemented!(),
         }
@@ -870,9 +873,9 @@ async fn verify_udf_return_type() -> Result<()> {
     //   take(smallint_col, double_col, 1) as take1
     // FROM alltypes_plain;
     let exprs = vec![
-        take.call(vec![col("smallint_col"), col("double_col"), lit(0_i64)])
+        take.call(vec![col("smallint_col"), col("double_col"), lit("0")])
             .alias("take0"),
-        take.call(vec![col("smallint_col"), col("double_col"), lit(1_i64)])
+        take.call(vec![col("smallint_col"), col("double_col"), lit("1")])
             .alias("take1"),
     ];
 
@@ -956,8 +959,8 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        internal_err!("This function should not get invoked!")
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
     }
 
     fn simplify(
@@ -1006,8 +1009,7 @@ impl ScalarFunctionWrapper {
         if let Some(value) = placeholder.strip_prefix('$') {
             Ok(value.parse().map(|v: usize| v - 1).map_err(|e| {
                 DataFusionError::Execution(format!(
-                    "Placeholder `{}` parsing error: {}!",
-                    placeholder, e
+                    "Placeholder `{placeholder}` parsing error: {e}!"
                 ))
             })?)
         } else {
@@ -1162,7 +1164,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
     match ctx.sql(sql).await {
         Ok(_) => {}
         Err(e) => {
-            panic!("Error creating function: {}", e);
+            panic!("Error creating function: {e}");
         }
     }
 
@@ -1179,6 +1181,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
             name: Some(Ident {
                 value: "name".into(),
                 quote_style: None,
+                span: Span::empty(),
             }),
             data_type: DataType::Utf8,
             default_expr: None,
@@ -1188,6 +1191,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
             language: Some(Ident {
                 value: "plrust".into(),
                 quote_style: None,
+                span: Span::empty(),
             }),
             behavior: None,
             function_body: Some(lit(body)),
@@ -1240,8 +1244,8 @@ impl ScalarUDFImpl for MyRegexUdf {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        match args {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args.as_slice() {
             [ColumnarValue::Scalar(ScalarValue::Utf8(value))] => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
                     self.matches(value.as_deref()),
@@ -1366,4 +1370,343 @@ async fn register_alltypes_parquet(ctx: &SessionContext) -> Result<()> {
 /// Execute SQL and return results as a RecordBatch
 async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
+}
+
+#[derive(Debug)]
+struct MetadataBasedUdf {
+    name: String,
+    signature: Signature,
+    metadata: HashMap<String, String>,
+}
+
+impl MetadataBasedUdf {
+    fn new(metadata: HashMap<String, String>) -> Self {
+        // The name we return must be unique. Otherwise we will not call distinct
+        // instances of this UDF. This is a small hack for the unit tests to get unique
+        // names, but you could do something more elegant with the metadata.
+        let name = format!("metadata_based_udf_{}", metadata.len());
+        Self {
+            name,
+            signature: Signature::exact(vec![DataType::UInt64], Volatility::Immutable),
+            metadata,
+        }
+    }
+}
+
+impl ScalarUDFImpl for MetadataBasedUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        unimplemented!(
+            "this should never be called since return_field_from_args is implemented"
+        );
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::UInt64, true)
+            .with_metadata(self.metadata.clone()))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        assert_eq!(args.arg_fields.len(), 1);
+        let should_double = args.arg_fields[0]
+            .metadata()
+            .get("modify_values")
+            .map(|v| v == "double_output")
+            .unwrap_or(false);
+        let mulitplier = if should_double { 2 } else { 1 };
+
+        match &args.args[0] {
+            ColumnarValue::Array(array) => {
+                let array_values: Vec<_> = array
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.map(|x| x * mulitplier))
+                    .collect();
+                let array_ref = Arc::new(UInt64Array::from(array_values)) as ArrayRef;
+                Ok(ColumnarValue::Array(array_ref))
+            }
+            ColumnarValue::Scalar(value) => {
+                let ScalarValue::UInt64(value) = value else {
+                    return exec_err!("incorrect data type");
+                };
+
+                Ok(ColumnarValue::Scalar(ScalarValue::UInt64(
+                    value.map(|v| v * mulitplier),
+                )))
+            }
+        }
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        self.name == other.name()
+    }
+}
+
+#[tokio::test]
+async fn test_metadata_based_udf() -> Result<()> {
+    let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("no_metadata", DataType::UInt64, true),
+        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
+            [("modify_values".to_string(), "double_output".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::clone(&data_array), Arc::clone(&data_array)],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let t = ctx.table("t").await?;
+    let no_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(HashMap::new()));
+    let with_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(
+        [("output_metatype".to_string(), "custom_value".to_string())]
+            .into_iter()
+            .collect(),
+    ));
+
+    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
+        .project(vec![
+            no_output_meta_udf
+                .call(vec![col("no_metadata")])
+                .alias("meta_no_in_no_out"),
+            no_output_meta_udf
+                .call(vec![col("with_metadata")])
+                .alias("meta_with_in_no_out"),
+            with_output_meta_udf
+                .call(vec![col("no_metadata")])
+                .alias("meta_no_in_with_out"),
+            with_output_meta_udf
+                .call(vec![col("with_metadata")])
+                .alias("meta_with_in_with_out"),
+        ])?
+        .build()?;
+
+    let actual = DataFrame::new(ctx.state(), plan).collect().await?;
+
+    // To test for output metadata handling, we set the expected values on the result
+    // To test for input metadata handling, we check the numbers returned
+    let mut output_meta = HashMap::new();
+    let _ = output_meta.insert("output_metatype".to_string(), "custom_value".to_string());
+    let expected_schema = Schema::new(vec![
+        Field::new("meta_no_in_no_out", DataType::UInt64, true),
+        Field::new("meta_with_in_no_out", DataType::UInt64, true),
+        Field::new("meta_no_in_with_out", DataType::UInt64, true)
+            .with_metadata(output_meta.clone()),
+        Field::new("meta_with_in_with_out", DataType::UInt64, true)
+            .with_metadata(output_meta.clone()),
+    ]);
+
+    let expected = record_batch!(
+        ("meta_no_in_no_out", UInt64, [0, 5, 10, 15, 20]),
+        ("meta_with_in_no_out", UInt64, [0, 10, 20, 30, 40]),
+        ("meta_no_in_with_out", UInt64, [0, 5, 10, 15, 20]),
+        ("meta_with_in_with_out", UInt64, [0, 10, 20, 30, 40])
+    )?
+    .with_schema(Arc::new(expected_schema))?;
+
+    assert_eq!(expected, actual[0]);
+
+    ctx.deregister_table("t")?;
+    Ok(())
+}
+
+/// This UDF is to test extension handling, both on the input and output
+/// sides. For the input, we will handle the data differently if there is
+/// the canonical extension type Bool8. For the output we will add a
+/// user defined extension type.
+#[derive(Debug)]
+struct ExtensionBasedUdf {
+    name: String,
+    signature: Signature,
+}
+
+impl Default for ExtensionBasedUdf {
+    fn default() -> Self {
+        Self {
+            name: "canonical_extension_udf".to_string(),
+            signature: Signature::exact(vec![DataType::Int8], Volatility::Immutable),
+        }
+    }
+}
+impl ScalarUDFImpl for ExtensionBasedUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new("canonical_extension_udf", DataType::Utf8, true)
+            .with_extension_type(MyUserExtentionType {}))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        assert_eq!(args.arg_fields.len(), 1);
+        let input_field = args.arg_fields[0];
+
+        let output_as_bool = matches!(
+            CanonicalExtensionType::try_from(input_field),
+            Ok(CanonicalExtensionType::Bool8(_))
+        );
+
+        // If we have the extension type set, we are outputting a boolean value.
+        // Otherwise we output a string representation of the numeric value.
+        fn print_value(v: Option<i8>, as_bool: bool) -> Option<String> {
+            v.map(|x| match as_bool {
+                true => format!("{}", x != 0),
+                false => format!("{x}"),
+            })
+        }
+
+        match &args.args[0] {
+            ColumnarValue::Array(array) => {
+                let array_values: Vec<_> = array
+                    .as_any()
+                    .downcast_ref::<Int8Array>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| print_value(v, output_as_bool))
+                    .collect();
+                let array_ref = Arc::new(StringArray::from(array_values)) as ArrayRef;
+                Ok(ColumnarValue::Array(array_ref))
+            }
+            ColumnarValue::Scalar(value) => {
+                let ScalarValue::Int8(value) = value else {
+                    return exec_err!("incorrect data type");
+                };
+
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(print_value(
+                    *value,
+                    output_as_bool,
+                ))))
+            }
+        }
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        self.name == other.name()
+    }
+}
+
+struct MyUserExtentionType {}
+
+impl ExtensionType for MyUserExtentionType {
+    const NAME: &'static str = "my_user_extention_type";
+    type Metadata = ();
+
+    fn metadata(&self) -> &Self::Metadata {
+        &()
+    }
+
+    fn serialize_metadata(&self) -> Option<String> {
+        None
+    }
+
+    fn deserialize_metadata(
+        _metadata: Option<&str>,
+    ) -> std::result::Result<Self::Metadata, ArrowError> {
+        Ok(())
+    }
+
+    fn supports_data_type(
+        &self,
+        data_type: &DataType,
+    ) -> std::result::Result<(), ArrowError> {
+        if let DataType::Utf8 = data_type {
+            Ok(())
+        } else {
+            Err(ArrowError::InvalidArgumentError(
+                "only utf8 supported".to_string(),
+            ))
+        }
+    }
+
+    fn try_new(
+        _data_type: &DataType,
+        _metadata: Self::Metadata,
+    ) -> std::result::Result<Self, ArrowError> {
+        Ok(Self {})
+    }
+}
+
+#[tokio::test]
+async fn test_extension_based_udf() -> Result<()> {
+    let data_array = Arc::new(Int8Array::from(vec![0, 0, 10, 20])) as ArrayRef;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("no_extension", DataType::Int8, true),
+        Field::new("with_extension", DataType::Int8, true).with_extension_type(Bool8),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::clone(&data_array), Arc::clone(&data_array)],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let t = ctx.table("t").await?;
+    let extension_based_udf = ScalarUDF::from(ExtensionBasedUdf::default());
+
+    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
+        .project(vec![
+            extension_based_udf
+                .call(vec![col("no_extension")])
+                .alias("without_bool8_extension"),
+            extension_based_udf
+                .call(vec![col("with_extension")])
+                .alias("with_bool8_extension"),
+        ])?
+        .build()?;
+
+    let actual = DataFrame::new(ctx.state(), plan).collect().await?;
+
+    // To test for output extension handling, we set the expected values on the result
+    // To test for input extensions handling, we check the strings returned
+    let expected_schema = Schema::new(vec![
+        Field::new("without_bool8_extension", DataType::Utf8, true)
+            .with_extension_type(MyUserExtentionType {}),
+        Field::new("with_bool8_extension", DataType::Utf8, true)
+            .with_extension_type(MyUserExtentionType {}),
+    ]);
+
+    let expected = record_batch!(
+        ("without_bool8_extension", Utf8, ["0", "0", "10", "20"]),
+        (
+            "with_bool8_extension",
+            Utf8,
+            ["false", "false", "true", "true"]
+        )
+    )?
+    .with_schema(Arc::new(expected_schema))?;
+
+    assert_eq!(expected, actual[0]);
+
+    ctx.deregister_table("t")?;
+    Ok(())
 }

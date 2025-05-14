@@ -18,14 +18,32 @@
 //! "crypto" DataFusion functions
 use super::basic::{sha256, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_HASHING;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+use datafusion_common::{
+    types::{logical_binary, logical_string, NativeType},
+    Result,
 };
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
+};
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Computes the SHA-256 hash of a binary string.",
+    syntax_example = "sha256(expression)",
+    sql_example = r#"```sql
+> select sha256('foo');
++--------------------------------------+
+| sha256(Utf8("foo"))                  |
++--------------------------------------+
+| <sha256_hash_result>                 |
++--------------------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "String")
+)]
 #[derive(Debug)]
 pub struct SHA256Func {
     signature: Signature,
@@ -38,11 +56,20 @@ impl Default for SHA256Func {
 
 impl SHA256Func {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_binary()),
+                        vec![TypeSignatureClass::Native(logical_string())],
+                        NativeType::String,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_binary()),
+                        vec![TypeSignatureClass::Native(logical_binary())],
+                        NativeType::Binary,
+                    )]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -65,35 +92,11 @@ impl ScalarUDFImpl for SHA256Func {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        sha256(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        sha256(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_sha256_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_sha256_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_HASHING)
-            .with_description("Computes the SHA-256 hash of a binary string.")
-            .with_syntax_example("sha256(expression)")
-            .with_sql_example(
-                r#"```sql
-> select sha256('foo');
-+--------------------------------------+
-| sha256(Utf8("foo"))                  |
-+--------------------------------------+
-| <sha256_hash_result>                 |
-+--------------------------------------+
-```"#,
-            )
-            .with_standard_argument("expression", Some("String"))
-            .build()
-            .unwrap()
-    })
 }

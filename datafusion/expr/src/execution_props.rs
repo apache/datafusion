@@ -18,7 +18,7 @@
 use crate::var_provider::{VarProvider, VarType};
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion_common::alias::AliasGenerator;
-use std::collections::HashMap;
+use datafusion_common::HashMap;
 use std::sync::Arc;
 
 /// Holds per-query execution properties and data (such as statement

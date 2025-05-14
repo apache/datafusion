@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
-    StringViewArray,
+    StringArrayType, StringViewArray,
 };
 use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::datatypes::DataType;
@@ -27,7 +27,6 @@ use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
 use chrono::{DateTime, TimeZone, Utc};
 
-use crate::strings::StringArrayType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     exec_err, unwrap_or_internal_err, DataFusionError, Result, ScalarType, ScalarValue,
@@ -212,14 +211,12 @@ where
             ))),
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8View(a)
-            | ScalarValue::LargeUtf8(a)
-            | ScalarValue::Utf8(a) => {
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+            Some(a) => {
                 let result = a.as_ref().map(|x| op(x)).transpose()?;
                 Ok(ColumnarValue::Scalar(S::scalar(result)))
             }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
+            _ => exec_err!("Unsupported data type {scalar:?} for function {name}"),
         },
     }
 }
@@ -271,10 +268,8 @@ where
             }
         },
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8View(a)
-            | ScalarValue::LargeUtf8(a)
-            | ScalarValue::Utf8(a) => {
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+            Some(a) => {
                 let a = a.as_ref();
                 // ASK: Why do we trust `a` to be non-null at this point?
                 let a = unwrap_or_internal_err!(a);
@@ -292,7 +287,7 @@ where
                     };
 
                     if let Some(s) = x {
-                        match op(a.as_str(), s.as_str()) {
+                        match op(a, s.as_str()) {
                             Ok(r) => {
                                 ret = Some(Ok(ColumnarValue::Scalar(S::scalar(Some(
                                     op2(r),
@@ -409,19 +404,10 @@ where
                             DataType::Utf8 => Ok(a.as_string::<i32>().value(pos)),
                             other => exec_err!("Unexpected type encountered '{other}'"),
                         },
-                        ColumnarValue::Scalar(s) => match s {
-                            ScalarValue::Utf8View(a)
-                            | ScalarValue::LargeUtf8(a)
-                            | ScalarValue::Utf8(a) => {
-                                if let Some(v) = a {
-                                    Ok(v.as_str())
-                                } else {
-                                    continue;
-                                }
-                            }
-                            other => {
-                                exec_err!("Unexpected scalar type encountered '{other}'")
-                            }
+                        ColumnarValue::Scalar(s) => match s.try_as_str() {
+                            Some(Some(v)) => Ok(v),
+                            Some(None) => continue, // null string
+                            None => exec_err!("Unexpected scalar type encountered '{s}'"),
                         },
                     }?;
 

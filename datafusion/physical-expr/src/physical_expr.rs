@@ -17,13 +17,12 @@
 
 use std::sync::Arc;
 
+use crate::create_physical_expr;
+use datafusion_common::{DFSchema, HashMap};
+use datafusion_expr::execution_props::ExecutionProps;
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+pub use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use itertools::izip;
-
-pub use datafusion_physical_expr_common::physical_expr::down_cast_any_ref;
-
-/// Shared [`PhysicalExpr`].
-pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 
 /// This function is similar to the `contains` method of `Vec`. It finds
 /// whether `expr` is among `physical_exprs`.
@@ -50,51 +49,144 @@ pub fn physical_exprs_bag_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
     rhs: &[Arc<dyn PhysicalExpr>],
 ) -> bool {
-    // TODO: Once we can use `HashMap`s with `Arc<dyn PhysicalExpr>`, this
-    //       function should use a `HashMap` to reduce computational complexity.
-    if lhs.len() == rhs.len() {
-        let mut rhs_vec = rhs.to_vec();
-        for expr in lhs {
-            if let Some(idx) = rhs_vec.iter().position(|e| expr.eq(e)) {
-                rhs_vec.swap_remove(idx);
-            } else {
-                return false;
-            }
-        }
-        true
-    } else {
-        false
+    let mut multi_set_lhs: HashMap<_, usize> = HashMap::new();
+    let mut multi_set_rhs: HashMap<_, usize> = HashMap::new();
+    for expr in lhs {
+        *multi_set_lhs.entry(expr).or_insert(0) += 1;
     }
+    for expr in rhs {
+        *multi_set_rhs.entry(expr).or_insert(0) += 1;
+    }
+    multi_set_lhs == multi_set_rhs
 }
 
-/// This utility function removes duplicates from the given `exprs` vector.
-/// Note that this function does not necessarily preserve its input ordering.
-pub fn deduplicate_physical_exprs(exprs: &mut Vec<Arc<dyn PhysicalExpr>>) {
-    // TODO: Once we can use `HashSet`s with `Arc<dyn PhysicalExpr>`, this
-    //       function should use a `HashSet` to reduce computational complexity.
-    // See issue: https://github.com/apache/datafusion/issues/8027
-    let mut idx = 0;
-    while idx < exprs.len() {
-        let mut rest_idx = idx + 1;
-        while rest_idx < exprs.len() {
-            if exprs[idx].eq(&exprs[rest_idx]) {
-                exprs.swap_remove(rest_idx);
-            } else {
-                rest_idx += 1;
+use crate::{expressions, LexOrdering, PhysicalSortExpr};
+use arrow::compute::SortOptions;
+use arrow::datatypes::Schema;
+use datafusion_common::plan_err;
+use datafusion_common::Result;
+use datafusion_expr::{Expr, SortExpr};
+
+/// Converts logical sort expressions to physical sort expressions
+///
+/// This function transforms a collection of logical sort expressions into their physical
+/// representation that can be used during query execution.
+///
+/// # Arguments
+///
+/// * `schema` - The schema containing column definitions
+/// * `sort_order` - A collection of logical sort expressions grouped into lexicographic orderings
+///
+/// # Returns
+///
+/// A vector of lexicographic orderings for physical execution, or an error if the transformation fails
+///
+/// # Examples
+///
+/// ```
+/// // Create orderings from columns "id" and "name"
+/// # use arrow::datatypes::{Schema, Field, DataType};
+/// # use datafusion_physical_expr::create_ordering;
+/// # use datafusion_common::Column;
+/// # use datafusion_expr::{Expr, SortExpr};
+/// #
+/// // Create a schema with two fields
+/// let schema = Schema::new(vec![
+///     Field::new("id", DataType::Int32, false),
+///     Field::new("name", DataType::Utf8, false),
+/// ]);
+///
+/// let sort_exprs = vec![
+///     vec![
+///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "id")), asc: true, nulls_first: false }
+///     ],
+///     vec![
+///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "name")), asc: false, nulls_first: true }
+///     ]
+/// ];
+/// let result = create_ordering(&schema, &sort_exprs).unwrap();
+/// ```
+pub fn create_ordering(
+    schema: &Schema,
+    sort_order: &[Vec<SortExpr>],
+) -> Result<Vec<LexOrdering>> {
+    let mut all_sort_orders = vec![];
+
+    for (group_idx, exprs) in sort_order.iter().enumerate() {
+        // Construct PhysicalSortExpr objects from Expr objects:
+        let mut sort_exprs = LexOrdering::default();
+        for (expr_idx, sort) in exprs.iter().enumerate() {
+            match &sort.expr {
+                Expr::Column(col) => match expressions::col(&col.name, schema) {
+                    Ok(expr) => {
+                        sort_exprs.push(PhysicalSortExpr {
+                            expr,
+                            options: SortOptions {
+                                descending: !sort.asc,
+                                nulls_first: sort.nulls_first,
+                            },
+                        });
+                    }
+                    // Cannot find expression in the projected_schema, stop iterating
+                    // since rest of the orderings are violated
+                    Err(_) => break,
+                },
+                expr => {
+                    return plan_err!(
+                        "Expected single column reference in sort_order[{}][{}], got {}",
+                        group_idx,
+                        expr_idx,
+                        expr
+                    );
+                }
             }
         }
-        idx += 1;
+        if !sort_exprs.is_empty() {
+            all_sort_orders.push(sort_exprs);
+        }
     }
+    Ok(all_sort_orders)
+}
+
+/// Create a physical sort expression from a logical expression
+pub fn create_physical_sort_expr(
+    e: &SortExpr,
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<PhysicalSortExpr> {
+    let SortExpr {
+        expr,
+        asc,
+        nulls_first,
+    } = e;
+    Ok(PhysicalSortExpr {
+        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+        options: SortOptions {
+            descending: !asc,
+            nulls_first: *nulls_first,
+        },
+    })
+}
+
+/// Create vector of physical sort expression from a vector of logical expression
+pub fn create_physical_sort_exprs(
+    exprs: &[SortExpr],
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<LexOrdering> {
+    exprs
+        .iter()
+        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
+        .collect::<Result<LexOrdering>>()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
 
     use crate::expressions::{Column, Literal};
     use crate::physical_expr::{
-        deduplicate_physical_exprs, physical_exprs_bag_equal, physical_exprs_contains,
-        physical_exprs_equal, PhysicalExpr,
+        physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
 
     use datafusion_common::ScalarValue;
@@ -209,42 +301,5 @@ mod tests {
         assert!(!physical_exprs_equal(list4.as_slice(), list3.as_slice()));
         assert!(physical_exprs_bag_equal(list3.as_slice(), list3.as_slice()));
         assert!(physical_exprs_bag_equal(list4.as_slice(), list4.as_slice()));
-    }
-
-    #[test]
-    fn test_deduplicate_physical_exprs() {
-        let lit_true = &(Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
-            as Arc<dyn PhysicalExpr>);
-        let lit_false = &(Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
-            as Arc<dyn PhysicalExpr>);
-        let lit4 = &(Arc::new(Literal::new(ScalarValue::Int32(Some(4))))
-            as Arc<dyn PhysicalExpr>);
-        let lit2 = &(Arc::new(Literal::new(ScalarValue::Int32(Some(2))))
-            as Arc<dyn PhysicalExpr>);
-        let col_a_expr = &(Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>);
-        let col_b_expr = &(Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>);
-
-        // First vector in the tuple is arguments, second one is the expected value.
-        let test_cases = vec![
-            // ---------- TEST CASE 1----------//
-            (
-                vec![
-                    lit_true, lit_false, lit4, lit2, col_a_expr, col_a_expr, col_b_expr,
-                    lit_true, lit2,
-                ],
-                vec![lit_true, lit_false, lit4, lit2, col_a_expr, col_b_expr],
-            ),
-            // ---------- TEST CASE 2----------//
-            (
-                vec![lit_true, lit_true, lit_false, lit4],
-                vec![lit_true, lit4, lit_false],
-            ),
-        ];
-        for (exprs, expected) in test_cases {
-            let mut exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            let expected = expected.into_iter().cloned().collect::<Vec<_>>();
-            deduplicate_physical_exprs(&mut exprs);
-            assert!(physical_exprs_equal(&exprs, &expected));
-        }
     }
 }

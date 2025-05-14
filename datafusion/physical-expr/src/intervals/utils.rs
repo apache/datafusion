@@ -6,7 +6,7 @@
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+//   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -24,8 +24,8 @@ use crate::{
     PhysicalExpr,
 };
 
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-use arrow_schema::{DataType, SchemaRef};
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::Operator;

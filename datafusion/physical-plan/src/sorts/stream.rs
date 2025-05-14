@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Fuse, StreamExt};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -49,7 +49,7 @@ pub trait PartitionedStream: std::fmt::Debug + Send {
     ) -> Poll<Option<Self::Output>>;
 }
 
-/// A newtype wrapper around a set of fused [`SendableRecordBatchStream`]
+/// A new type wrapper around a set of fused [`SendableRecordBatchStream`]
 /// that implements debug, and skips over empty [`RecordBatch`]
 struct FusedStreams(Vec<Fuse<SendableRecordBatchStream>>);
 
@@ -93,7 +93,7 @@ pub struct RowCursorStream {
 impl RowCursorStream {
     pub fn try_new(
         schema: &Schema,
-        expressions: LexOrderingRef,
+        expressions: &LexOrdering,
         streams: Vec<SendableRecordBatchStream>,
         reservation: MemoryReservation,
     ) -> Result<Self> {
@@ -159,6 +159,8 @@ pub struct FieldCursorStream<T: CursorArray> {
     sort: PhysicalSortExpr,
     /// Input streams
     streams: FusedStreams,
+    /// Create new reservations for each array
+    reservation: MemoryReservation,
     phantom: PhantomData<fn(T) -> T>,
 }
 
@@ -171,11 +173,16 @@ impl<T: CursorArray> std::fmt::Debug for FieldCursorStream<T> {
 }
 
 impl<T: CursorArray> FieldCursorStream<T> {
-    pub fn new(sort: PhysicalSortExpr, streams: Vec<SendableRecordBatchStream>) -> Self {
+    pub fn new(
+        sort: PhysicalSortExpr,
+        streams: Vec<SendableRecordBatchStream>,
+        reservation: MemoryReservation,
+    ) -> Self {
         let streams = streams.into_iter().map(|s| s.fuse()).collect();
         Self {
             sort,
             streams: FusedStreams(streams),
+            reservation,
             phantom: Default::default(),
         }
     }
@@ -183,8 +190,15 @@ impl<T: CursorArray> FieldCursorStream<T> {
     fn convert_batch(&mut self, batch: &RecordBatch) -> Result<ArrayValues<T::Values>> {
         let value = self.sort.expr.evaluate(batch)?;
         let array = value.into_array(batch.num_rows())?;
+        let size_in_mem = array.get_buffer_memory_size();
         let array = array.as_any().downcast_ref::<T>().expect("field values");
-        Ok(ArrayValues::new(self.sort.options, array))
+        let mut array_reservation = self.reservation.new_empty();
+        array_reservation.try_grow(size_in_mem)?;
+        Ok(ArrayValues::new(
+            self.sort.options,
+            array,
+            array_reservation,
+        ))
     }
 }
 

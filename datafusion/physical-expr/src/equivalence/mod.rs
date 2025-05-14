@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::expressions::Column;
-use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
+use crate::{LexRequirement, PhysicalExpr};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
@@ -27,7 +27,7 @@ mod ordering;
 mod projection;
 mod properties;
 
-pub use class::{ConstExpr, EquivalenceClass, EquivalenceGroup};
+pub use class::{AcrossPartitions, ConstExpr, EquivalenceClass, EquivalenceGroup};
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::{
@@ -41,14 +41,9 @@ pub use properties::{
 /// It will also filter out entries that are ordered if the next entry is;
 /// for instance, `vec![floor(a) Some(ASC), a Some(ASC)]` will be collapsed to
 /// `vec![a Some(ASC)]`.
+#[deprecated(since = "45.0.0", note = "Use LexRequirement::collapse")]
 pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
-    let mut output = Vec::<PhysicalSortRequirement>::new();
-    for item in input {
-        if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-            output.push(item);
-        }
-    }
-    LexRequirement::new(output)
+    input.collapse()
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
@@ -77,10 +72,43 @@ mod tests {
     use crate::expressions::col;
     use crate::PhysicalSortExpr;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{SchemaRef, SortOptions};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{plan_datafusion_err, Result};
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
+    use datafusion_physical_expr_common::sort_expr::{
+        LexOrdering, PhysicalSortRequirement,
+    };
+
+    /// Converts a string to a physical sort expression
+    ///
+    /// # Example
+    /// * `"a"` -> (`"a"`, `SortOptions::default()`)
+    /// * `"a ASC"` -> (`"a"`, `SortOptions { descending: false, nulls_first: false }`)
+    pub fn parse_sort_expr(name: &str, schema: &SchemaRef) -> PhysicalSortExpr {
+        let mut parts = name.split_whitespace();
+        let name = parts.next().expect("empty sort expression");
+        let mut sort_expr = PhysicalSortExpr::new(
+            col(name, schema).expect("invalid column name"),
+            SortOptions::default(),
+        );
+
+        if let Some(options) = parts.next() {
+            sort_expr = match options {
+                "ASC" => sort_expr.asc(),
+                "DESC" => sort_expr.desc(),
+                _ => panic!(
+                    "unknown sort options. Expected 'ASC' or 'DESC', got {options}"
+                ),
+            }
+        }
+
+        assert!(
+            parts.next().is_none(),
+            "unexpected tokens in column name. Expected 'name' / 'name ASC' / 'name DESC' but got  '{name}'"
+        );
+
+        sort_expr
+    }
 
     pub fn output_schema(
         mapping: &ProjectionMapping,
@@ -254,16 +282,16 @@ mod tests {
         // This new entry is redundant, size shouldn't increase
         eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
-        let eq_groups = &eq_properties.eq_group().classes[0];
+        let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 2);
         assert!(eq_groups.contains(&col_a_expr));
         assert!(eq_groups.contains(&col_b_expr));
 
-        // b and c are aliases. Exising equivalence class should expand,
+        // b and c are aliases. Existing equivalence class should expand,
         // however there shouldn't be any new equivalence class
         eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
-        let eq_groups = &eq_properties.eq_group().classes[0];
+        let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 3);
         assert!(eq_groups.contains(&col_a_expr));
         assert!(eq_groups.contains(&col_b_expr));
@@ -277,7 +305,7 @@ mod tests {
         // Hence equivalent class count should decrease from 2 to 1.
         eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
-        let eq_groups = &eq_properties.eq_group().classes[0];
+        let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 5);
         assert!(eq_groups.contains(&col_a_expr));
         assert!(eq_groups.contains(&col_b_expr));

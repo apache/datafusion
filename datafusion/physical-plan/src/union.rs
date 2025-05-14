@@ -27,19 +27,22 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    execution_mode_from_children,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::{
+    boundedness_from_children, emission_type_from_children, InvariantLevel,
+};
 use crate::metrics::BaselineMetrics;
+use crate::projection::{make_with_child, ProjectionExec};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{calculate_union, EquivalenceProperties};
 
@@ -135,14 +138,11 @@ impl UnionExec {
             .map(|plan| plan.output_partitioning().partition_count())
             .sum();
         let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
-
-        // Determine execution mode:
-        let mode = execution_mode_from_children(inputs.iter());
-
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            mode,
+            emission_type_from_children(inputs),
+            boundedness_from_children(inputs),
         ))
     }
 }
@@ -157,6 +157,7 @@ impl DisplayAs for UnionExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "UnionExec")
             }
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }
@@ -173,6 +174,14 @@ impl ExecutionPlan for UnionExec {
 
     fn properties(&self) -> &PlanProperties {
         &self.cache
+    }
+
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
+        (self.inputs().len() >= 2)
+            .then_some(())
+            .ok_or(DataFusionError::Internal(
+                "UnionExec should have at least 2 children".into(),
+            ))
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -229,13 +238,17 @@ impl ExecutionPlan for UnionExec {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, context)?;
                 debug!("Found a Union partition to execute");
-                return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
+                return Ok(Box::pin(ObservedStream::new(
+                    stream,
+                    baseline_metrics,
+                    None,
+                )));
             } else {
                 partition -= input.output_partitioning().partition_count();
             }
         }
 
-        warn!("Error in Union: Partition {} not found", partition);
+        warn!("Error in Union: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in Union")
     }
@@ -245,16 +258,36 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        let stats = self
-            .inputs
-            .iter()
-            .map(|stat| stat.statistics())
-            .collect::<Result<Vec<_>>>()?;
+        self.partition_statistics(None)
+    }
 
-        Ok(stats
-            .into_iter()
-            .reduce(stats_union)
-            .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition_idx) = partition {
+            // For a specific partition, find which input it belongs to
+            let mut remaining_idx = partition_idx;
+            for input in &self.inputs {
+                let input_partition_count = input.output_partitioning().partition_count();
+                if remaining_idx < input_partition_count {
+                    // This partition belongs to this input
+                    return input.partition_statistics(Some(remaining_idx));
+                }
+                remaining_idx -= input_partition_count;
+            }
+            // If we get here, the partition index is out of bounds
+            Ok(Statistics::new_unknown(&self.schema()))
+        } else {
+            // Collect statistics from all inputs
+            let stats = self
+                .inputs
+                .iter()
+                .map(|input_exec| input_exec.partition_statistics(None))
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(stats
+                .into_iter()
+                .reduce(stats_union)
+                .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+        }
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -263,6 +296,27 @@ impl ExecutionPlan for UnionExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    /// Tries to push `projection` down through `union`. If possible, performs the
+    /// pushdown and returns a new [`UnionExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection doesn't narrow the schema, we shouldn't try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        let new_children = self
+            .children()
+            .into_iter()
+            .map(|child| make_with_child(projection, child))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(Arc::new(UnionExec::new(new_children))))
     }
 }
 
@@ -335,10 +389,12 @@ impl InterleaveExec {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = inputs[0].output_partitioning().clone();
-        // Determine execution mode:
-        let mode = execution_mode_from_children(inputs.iter());
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children(inputs),
+            boundedness_from_children(inputs),
+        )
     }
 }
 
@@ -352,6 +408,7 @@ impl DisplayAs for InterleaveExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "InterleaveExec")
             }
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }
@@ -417,10 +474,14 @@ impl ExecutionPlan for InterleaveExec {
                 self.schema(),
                 input_stream_vec,
             ));
-            return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
+            return Ok(Box::pin(ObservedStream::new(
+                stream,
+                baseline_metrics,
+                None,
+            )));
         }
 
-        warn!("Error in InterleaveExec: Partition {} not found", partition);
+        warn!("Error in InterleaveExec: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in InterleaveExec")
     }
@@ -430,10 +491,17 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         let stats = self
             .inputs
             .iter()
-            .map(|stat| stat.statistics())
+            .map(|stat| stat.partition_statistics(None))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(stats
@@ -579,6 +647,7 @@ fn col_stats_union(
     left.distinct_count = Precision::Absent;
     left.min_value = left.min_value.min(&right.min_value);
     left.max_value = left.max_value.max(&right.max_value);
+    left.sum_value = left.sum_value.add(&right.sum_value);
     left.null_count = left.null_count.add(&right.null_count);
 
     left
@@ -600,10 +669,11 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::collect;
-    use crate::memory::MemoryExec;
     use crate::test;
+    use crate::test::TestMemoryExec;
 
-    use arrow_schema::{DataType, SortOptions};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -671,18 +741,21 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
+                    sum_value: Precision::Exact(ScalarValue::Float32(Some(42.0))),
                     null_count: Precision::Absent,
                 },
             ],
@@ -696,18 +769,21 @@ mod tests {
                     distinct_count: Precision::Exact(3),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(1),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::from("c")),
                     min_value: Precision::Exact(ScalarValue::from("b")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
             ],
@@ -722,18 +798,21 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
                     null_count: Precision::Exact(1),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
             ],
@@ -814,14 +893,14 @@ mod tests {
                 .iter()
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
-            let child1 = Arc::new(
-                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
+            let child1 = Arc::new(TestMemoryExec::update_cache(Arc::new(
+                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(first_orderings)?,
-            );
-            let child2 = Arc::new(
-                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
+            )));
+            let child2 = Arc::new(TestMemoryExec::update_cache(Arc::new(
+                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(second_orderings)?,
-            );
+            )));
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
             union_expected_eq.add_new_orderings(union_expected_orderings);
@@ -844,9 +923,9 @@ mod tests {
     ) {
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
-        let rhs_orderings = &rhs.oeq_class.orderings;
-        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
-        for rhs_ordering in rhs_orderings {
+        let rhs_orderings = rhs.oeq_class();
+        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{err_msg}");
+        for rhs_ordering in rhs_orderings.iter() {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
         }
     }

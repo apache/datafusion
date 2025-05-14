@@ -17,14 +17,16 @@
 
 //! A custom binary heap implementation for performant top K aggregation
 
-use arrow::datatypes::i256;
-use arrow_array::cast::AsArray;
-use arrow_array::{downcast_primitive, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-use arrow_schema::DataType;
+use arrow::array::{
+    cast::AsArray,
+    types::{IntervalDayTime, IntervalMonthDayNano},
+};
+use arrow::array::{downcast_primitive, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow::buffer::ScalarBuffer;
+use arrow::datatypes::{i256, DataType};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_physical_expr::aggregate::utils::adjust_output_array;
+
 use half::f16;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
@@ -151,10 +153,11 @@ where
     }
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
+        let nulls = None;
         let (vals, map_idxs) = self.heap.drain();
-        let vals = Arc::new(PrimitiveArray::<VAL>::from_iter_values(vals));
-        let vals = adjust_output_array(&self.data_type, vals).expect("Type is incorrect");
-        (vals, map_idxs)
+        let arr = PrimitiveArray::<VAL>::new(ScalarBuffer::from(vals), nulls)
+            .with_data_type(self.data_type.clone());
+        (Arc::new(arr), map_idxs)
     }
 }
 
@@ -345,7 +348,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
                 prefix, connector, hi.val, idx, hi.map_idx
             ));
             let new_prefix = if is_tail { "" } else { "│   " };
-            let child_prefix = format!("{}{}", prefix, new_prefix);
+            let child_prefix = format!("{prefix}{new_prefix}");
 
             let left_idx = idx * 2 + 1;
             let right_idx = idx * 2 + 2;
@@ -366,10 +369,10 @@ impl<VAL: ValueType> TopKHeap<VAL> {
 impl<VAL: ValueType> Display for TopKHeap<VAL> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut output = String::new();
-        if self.heap.first().is_some() {
+        if !self.heap.is_empty() {
             self._tree_print(0, String::new(), true, &mut output);
         }
-        write!(f, "{}", output)
+        write!(f, "{output}")
     }
 }
 
@@ -482,6 +485,8 @@ pub fn new_heap(
 
 #[cfg(test)]
 mod tests {
+    use insta::assert_snapshot;
+
     use super::*;
 
     #[test]
@@ -491,10 +496,9 @@ mod tests {
         heap.append_or_replace(1, 1, &mut map);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=1 idx=0, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         Ok(())
     }
@@ -511,11 +515,10 @@ val=1 idx=0, bucket=1
         assert_eq!(map, vec![(2, 0), (1, 1)]);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         Ok(())
     }
@@ -529,22 +532,20 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(2, 2, &mut map);
         heap.append_or_replace(3, 3, &mut map);
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=3 idx=0, bucket=3
 ├── val=1 idx=1, bucket=1
 └── val=2 idx=2, bucket=2
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         let mut map = vec![];
         heap.append_or_replace(0, 0, &mut map);
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 ├── val=1 idx=1, bucket=1
 └── val=0 idx=2, bucket=0
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
         assert_eq!(map, vec![(2, 0), (0, 2)]);
 
         Ok(())
@@ -560,24 +561,22 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(3, 3, &mut map);
         heap.append_or_replace(4, 4, &mut map);
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=4 idx=0, bucket=4
 ├── val=3 idx=1, bucket=3
 │   └── val=1 idx=3, bucket=1
 └── val=2 idx=2, bucket=2
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         let mut map = vec![];
         heap.replace_if_better(1, 0, &mut map);
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=4 idx=0, bucket=4
 ├── val=1 idx=1, bucket=1
 │   └── val=0 idx=3, bucket=3
 └── val=2 idx=2, bucket=2
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
         assert_eq!(map, vec![(1, 1), (3, 3)]);
 
         Ok(())
@@ -592,11 +591,10 @@ val=4 idx=0, bucket=4
         heap.append_or_replace(2, 2, &mut map);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         assert_eq!(heap.worst_val(), Some(&2));
         assert_eq!(heap.worst_map_idx(), 2);
@@ -613,11 +611,10 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(2, 2, &mut map);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         let (vals, map_idxs) = heap.drain();
         assert_eq!(vals, vec![1, 2]);
@@ -636,20 +633,18 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(2, 2, &mut map);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         let numbers = vec![(0, 1), (1, 2)];
         heap.renumber(numbers.as_slice());
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=1
 └── val=1 idx=1, bucket=2
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         Ok(())
     }

@@ -17,30 +17,33 @@
 
 //! [`SessionState`]: information required to run queries in a session
 
+use std::any::Any;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
-use crate::catalog_common::information_schema::{
-    InformationSchemaProvider, INFORMATION_SCHEMA,
-};
-use crate::catalog_common::MemoryCatalogProviderList;
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
-use crate::datasource::function::{TableFunction, TableFunctionImpl};
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
-use crate::physical_optimizer::optimizer::PhysicalOptimizer;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow_schema::{DataType, SchemaRef};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_catalog::Session;
+use datafusion_catalog::information_schema::{
+    InformationSchemaProvider, INFORMATION_SCHEMA,
+};
+
+use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_catalog::MemoryCatalogProviderList;
+use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    config_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
+    config_err, exec_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
     ResolvedTableReference, TableReference,
 };
 use datafusion_execution::config::SessionConfig;
@@ -48,7 +51,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::planner::{ExprPlanner, TypePlanner};
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
@@ -62,20 +65,20 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_sql::parser::{DFParser, Statement};
+use datafusion_session::Session;
+use datafusion_sql::parser::{DFParserBuilder, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
-use sqlparser::ast::Expr as SQLExpr;
+use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
 use sqlparser::dialect::dialect_from_str;
-use std::any::Any;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
 
@@ -126,8 +129,10 @@ pub struct SessionState {
     session_id: String,
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
-    /// Provides support for customising the SQL planner, e.g. to add support for custom operators like `->>` or `?`
+    /// Provides support for customizing the SQL planner, e.g. to add support for custom operators like `->>` or `?`
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
+    /// Provides support for customizing the SQL type planning
+    type_planner: Option<Arc<dyn TypePlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
@@ -171,6 +176,9 @@ pub struct SessionState {
     /// It will be invoked on `CREATE FUNCTION` statements.
     /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
+    /// Cache logical plans of prepared statements for later execution.
+    /// Key is the prepared statement name.
+    prepared_plans: HashMap<String, Arc<PreparedPlan>>,
 }
 
 impl Debug for SessionState {
@@ -189,6 +197,7 @@ impl Debug for SessionState {
             .field("table_factories", &self.table_factories)
             .field("function_factory", &self.function_factory)
             .field("expr_planners", &self.expr_planners)
+            .field("type_planner", &self.type_planner)
             .field("query_planners", &self.query_planner)
             .field("analyzer", &self.analyzer)
             .field("optimizer", &self.optimizer)
@@ -197,6 +206,7 @@ impl Debug for SessionState {
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
+            .field("prepared_plans", &self.prepared_plans)
             .finish()
     }
 }
@@ -227,15 +237,15 @@ impl Session for SessionState {
     }
 
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
-        self.scalar_functions()
+        &self.scalar_functions
     }
 
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
-        self.aggregate_functions()
+        &self.aggregate_functions
     }
 
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
-        self.window_functions()
+        &self.window_functions
     }
 
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {
@@ -248,6 +258,18 @@ impl Session for SessionState {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn table_options(&self) -> &TableOptions {
+        self.table_options()
+    }
+
+    fn table_options_mut(&mut self) -> &mut TableOptions {
+        self.table_options_mut()
+    }
+
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        self.task_ctx()
     }
 }
 
@@ -263,22 +285,6 @@ impl SessionState {
             .build()
     }
 
-    /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    pub fn new_with_config_rt_and_catalog_list(
-        config: SessionConfig,
-        runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogProviderList>,
-    ) -> Self {
-        SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_catalog_list(catalog_list)
-            .with_default_features()
-            .build()
-    }
-
     pub(crate) fn resolve_table_ref(
         &self,
         table_ref: impl Into<TableReference>,
@@ -289,16 +295,18 @@ impl SessionState {
             .resolve(&catalog.default_catalog, &catalog.default_schema)
     }
 
-    pub(crate) fn schema_for_ref(
+    /// Retrieve the [`SchemaProvider`] for a specific [`TableReference`], if it
+    /// exists.
+    pub fn schema_for_ref(
         &self,
         table_ref: impl Into<TableReference>,
     ) -> datafusion_common::Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
         if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
         {
-            return Ok(Arc::new(InformationSchemaProvider::new(
-                self.catalog_list.clone(),
-            )));
+            return Ok(Arc::new(InformationSchemaProvider::new(Arc::clone(
+                &self.catalog_list,
+            ))));
         }
 
         self.catalog_list
@@ -315,53 +323,6 @@ impl SessionState {
             })
     }
 
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Replace the random session id.
-    pub fn with_session_id(mut self, session_id: String) -> Self {
-        self.session_id = session_id;
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// override default query planner with `query_planner`
-    pub fn with_query_planner(
-        mut self,
-        query_planner: Arc<dyn QueryPlanner + Send + Sync>,
-    ) -> Self {
-        self.query_planner = query_planner;
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Override the [`AnalyzerRule`]s optimizer plan rules.
-    pub fn with_analyzer_rules(
-        mut self,
-        rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
-    ) -> Self {
-        self.analyzer = Analyzer::with_rules(rules);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Replace the entire list of [`OptimizerRule`]s used to optimize plans
-    pub fn with_optimizer_rules(
-        mut self,
-        rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
-    ) -> Self {
-        self.optimizer = Optimizer::with_rules(rules);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Replace the entire list of [`PhysicalOptimizerRule`]s used to optimize plans
-    pub fn with_physical_optimizer_rules(
-        mut self,
-        physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
-    ) -> Self {
-        self.physical_optimizers = PhysicalOptimizer::with_rules(physical_optimizers);
-        self
-    }
-
     /// Add `analyzer_rule` to the end of the list of
     /// [`AnalyzerRule`]s used to rewrite queries.
     pub fn add_analyzer_rule(
@@ -369,17 +330,6 @@ impl SessionState {
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
     ) -> &Self {
         self.analyzer.rules.push(analyzer_rule);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Add `optimizer_rule` to the end of the list of
-    /// [`OptimizerRule`]s used to rewrite queries.
-    pub fn add_optimizer_rule(
-        mut self,
-        optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
-    ) -> Self {
-        self.optimizer.rules.push(optimizer_rule);
         self
     }
 
@@ -393,50 +343,9 @@ impl SessionState {
         self.optimizer.rules.push(optimizer_rule);
     }
 
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Add `physical_optimizer_rule` to the end of the list of
-    /// [`PhysicalOptimizerRule`]s used to rewrite queries.
-    pub fn add_physical_optimizer_rule(
-        mut self,
-        physical_optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
-    ) -> Self {
-        self.physical_optimizers.rules.push(physical_optimizer_rule);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Adds a new [`ConfigExtension`] to TableOptions
-    pub fn add_table_options_extension<T: ConfigExtension>(
-        mut self,
-        extension: T,
-    ) -> Self {
-        self.table_options.extensions.insert(extension);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
-    pub fn with_function_factory(
-        mut self,
-        function_factory: Arc<dyn FunctionFactory>,
-    ) -> Self {
-        self.function_factory = Some(function_factory);
-        self
-    }
-
     /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
     pub fn set_function_factory(&mut self, function_factory: Arc<dyn FunctionFactory>) {
         self.function_factory = Some(function_factory);
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Replace the extension [`SerializerRegistry`]
-    pub fn with_serializer_registry(
-        mut self,
-        registry: Arc<dyn SerializerRegistry>,
-    ) -> Self {
-        self.serializer_registry = registry;
-        self
     }
 
     /// Get the function factory
@@ -469,15 +378,24 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                      Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi."
+                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
-        let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+
+        let mut statements = DFParserBuilder::new(sql)
+            .with_dialect(dialect.as_ref())
+            .with_recursion_limit(recursion_limit)
+            .build()?
+            .parse_statements()?;
+
         if statements.len() > 1 {
             return not_impl_err!(
                 "The context currently only supports a single SQL statement"
             );
         }
+
         let statement = statements.pop_front().ok_or_else(|| {
             plan_datafusion_err!("No SQL statements were provided in the query string")
         })?;
@@ -492,31 +410,47 @@ impl SessionState {
         sql: &str,
         dialect: &str,
     ) -> datafusion_common::Result<SQLExpr> {
+        self.sql_to_expr_with_alias(sql, dialect).map(|x| x.expr)
+    }
+
+    /// parse a sql string into a sqlparser-rs AST [`SQLExprWithAlias`].
+    ///
+    /// See [`Self::create_logical_expr`] for parsing sql to [`Expr`].
+    pub fn sql_to_expr_with_alias(
+        &self,
+        sql: &str,
+        dialect: &str,
+    ) -> datafusion_common::Result<SQLExprWithAlias> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
-                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi."
+                         Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
 
-        let expr = DFParser::parse_sql_into_expr_with_dialect(sql, dialect.as_ref())?;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let expr = DFParserBuilder::new(sql)
+            .with_dialect(dialect.as_ref())
+            .with_recursion_limit(recursion_limit)
+            .build()?
+            .parse_expr()?;
 
         Ok(expr)
     }
 
     /// Resolve all table references in the SQL statement. Does not include CTE references.
     ///
-    /// See [`catalog::resolve_table_references`] for more information.
+    /// See [`datafusion_sql::resolve::resolve_table_references`] for more information.
     ///
-    /// [`catalog::resolve_table_references`]: crate::catalog_common::resolve_table_references
+    /// [`datafusion_sql::resolve::resolve_table_references`]: datafusion_sql::resolve::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        let (table_refs, _) = crate::catalog_common::resolve_table_references(
+        let (table_refs, _) = datafusion_sql::resolve::resolve_table_references(
             statement,
             enable_ident_normalization,
         )?;
@@ -536,8 +470,9 @@ impl SessionState {
         };
 
         for reference in references {
-            let resolved = &self.resolve_table_ref(reference);
-            if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
+            let resolved = self.resolve_table_ref(reference);
+            if let Entry::Vacant(v) = provider.tables.entry(resolved) {
+                let resolved = v.key();
                 if let Ok(schema) = self.schema_for_ref(resolved.clone()) {
                     if let Some(table) = schema.table(&resolved.table).await? {
                         v.insert(provider_as_source(table));
@@ -559,6 +494,8 @@ impl SessionState {
             enable_options_value_normalization: sql_parser_options
                 .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
+            map_varchar_to_utf8view: sql_parser_options.map_varchar_to_utf8view,
+            collect_spans: sql_parser_options.collect_spans,
         }
     }
 
@@ -594,7 +531,7 @@ impl SessionState {
     ) -> datafusion_common::Result<Expr> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
 
-        let sql_expr = self.sql_to_expr(sql, dialect)?;
+        let sql_expr = self.sql_to_expr_with_alias(sql, dialect)?;
 
         let provider = SessionContextProvider {
             state: self,
@@ -602,7 +539,7 @@ impl SessionState {
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-        query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
+        query.sql_to_expr_with_alias(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
     /// Returns the [`Analyzer`] for this session
@@ -613,6 +550,11 @@ impl SessionState {
     /// Returns the [`Optimizer`] for this session
     pub fn optimizer(&self) -> &Optimizer {
         &self.optimizer
+    }
+
+    /// Returns the [`ExprPlanner`]s for this session
+    pub fn expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
     }
 
     /// Returns the [`QueryPlanner`] for this session
@@ -644,9 +586,10 @@ impl SessionState {
 
                     return Ok(LogicalPlan::Explain(Explain {
                         verbose: e.verbose,
-                        plan: e.plan.clone(),
+                        plan: Arc::clone(&e.plan),
+                        explain_format: e.explain_format.clone(),
                         stringified_plans,
-                        schema: e.schema.clone(),
+                        schema: Arc::clone(&e.schema),
                         logical_optimization_succeeded: false,
                     }));
                 }
@@ -673,16 +616,17 @@ impl SessionState {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans
                         .push(StringifiedPlan::new(plan_type, err.to_string()));
-                    (e.plan.clone(), false)
+                    (Arc::clone(&e.plan), false)
                 }
                 Err(e) => return Err(e),
             };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose: e.verbose,
+                explain_format: e.explain_format.clone(),
                 plan,
                 stringified_plans,
-                schema: e.schema.clone(),
+                schema: Arc::clone(&e.schema),
                 logical_optimization_succeeded,
             }))
         } else {
@@ -794,18 +738,17 @@ impl SessionState {
         self.config.options()
     }
 
-    /// return the TableOptions options with its extensions
-    pub fn default_table_options(&self) -> TableOptions {
-        self.table_options
-            .combine_with_session_config(self.config_options())
-    }
-
     /// Return the table options
     pub fn table_options(&self) -> &TableOptions {
         &self.table_options
     }
 
-    /// Return mutable table options
+    /// return the TableOptions options with its extensions
+    pub fn default_table_options(&self) -> TableOptions {
+        Session::default_table_options(self)
+    }
+
+    /// Returns a mutable reference to [`TableOptions`]
     pub fn table_options_mut(&mut self) -> &mut TableOptions {
         &mut self.table_options
     }
@@ -904,7 +847,41 @@ impl SessionState {
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
         let udtf = self.table_functions.remove(name);
-        Ok(udtf.map(|x| x.function().clone()))
+        Ok(udtf.map(|x| Arc::clone(x.function())))
+    }
+
+    /// Store the logical plan and the parameter types of a prepared statement.
+    pub(crate) fn store_prepared(
+        &mut self,
+        name: String,
+        data_types: Vec<DataType>,
+        plan: Arc<LogicalPlan>,
+    ) -> datafusion_common::Result<()> {
+        match self.prepared_plans.entry(name) {
+            Entry::Vacant(e) => {
+                e.insert(Arc::new(PreparedPlan { data_types, plan }));
+                Ok(())
+            }
+            Entry::Occupied(e) => {
+                exec_err!("Prepared statement '{}' already exists", e.key())
+            }
+        }
+    }
+
+    /// Get the prepared plan with the given name.
+    pub(crate) fn get_prepared(&self, name: &str) -> Option<Arc<PreparedPlan>> {
+        self.prepared_plans.get(name).map(Arc::clone)
+    }
+
+    /// Remove the prepared plan with the given name.
+    pub(crate) fn remove_prepared(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<()> {
+        match self.prepared_plans.remove(name) {
+            Some(_) => Ok(()),
+            None => exec_err!("Prepared statement '{}' does not exist", name),
+        }
     }
 }
 
@@ -916,6 +893,7 @@ pub struct SessionStateBuilder {
     session_id: Option<String>,
     analyzer: Option<Analyzer>,
     expr_planners: Option<Vec<Arc<dyn ExprPlanner>>>,
+    type_planner: Option<Arc<dyn TypePlanner>>,
     optimizer: Option<Optimizer>,
     physical_optimizers: Option<PhysicalOptimizer>,
     query_planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
@@ -939,12 +917,19 @@ pub struct SessionStateBuilder {
 }
 
 impl SessionStateBuilder {
-    /// Returns a new [`SessionStateBuilder`] with no options set.
+    /// Returns a new empty [`SessionStateBuilder`].
+    ///
+    /// See [`Self::with_default_features`] to install the default set of functions,
+    /// catalogs, etc.
+    ///
+    /// To create a `SessionStateBuilder` with default features such as functions,
+    /// please see [`Self::new_with_default_features`].
     pub fn new() -> Self {
         Self {
             session_id: None,
             analyzer: None,
             expr_planners: None,
+            type_planner: None,
             optimizer: None,
             physical_optimizers: None,
             query_planner: None,
@@ -968,9 +953,10 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Returns a new [SessionStateBuilder] based on an existing [SessionState]
+    /// Returns a new [SessionStateBuilder] based on an existing [SessionState].
+    ///
     /// The session id for the new builder will be unset; all other fields will
-    /// be cloned from what is set in the provided session state. If the default
+    /// be cloned from `existing`. If the default
     /// catalog exists in existing session state, the new session state will not
     /// create default catalog and schema.
     pub fn new_from_existing(existing: SessionState) -> Self {
@@ -992,6 +978,7 @@ impl SessionStateBuilder {
             session_id: None,
             analyzer: Some(existing.analyzer),
             expr_planners: Some(existing.expr_planners),
+            type_planner: existing.type_planner,
             optimizer: Some(existing.optimizer),
             physical_optimizers: Some(existing.physical_optimizers),
             query_planner: Some(existing.query_planner),
@@ -1018,15 +1005,60 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Create default builder with defaults for table_factories, file formats, expr_planners and builtin
+    /// Adds defaults for table_factories, file formats, expr_planners and builtin
     /// scalar, aggregate and windows functions.
-    pub fn with_default_features(self) -> Self {
-        self.with_table_factories(SessionStateDefaults::default_table_factories())
-            .with_file_formats(SessionStateDefaults::default_file_formats())
-            .with_expr_planners(SessionStateDefaults::default_expr_planners())
-            .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
-            .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
-            .with_window_functions(SessionStateDefaults::default_window_functions())
+    ///
+    /// Note overwrites any previously registered items with the same name.
+    pub fn with_default_features(mut self) -> Self {
+        self.table_factories
+            .get_or_insert_with(HashMap::new)
+            .extend(SessionStateDefaults::default_table_factories());
+
+        self.file_formats
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_file_formats());
+
+        self.expr_planners
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_expr_planners());
+
+        self.scalar_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_scalar_functions());
+
+        self.aggregate_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_aggregate_functions());
+
+        self.window_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_window_functions());
+
+        self.table_functions
+            .get_or_insert_with(HashMap::new)
+            .extend(
+                SessionStateDefaults::default_table_functions()
+                    .into_iter()
+                    .map(|f| (f.name().to_string(), f)),
+            );
+
+        self
+    }
+
+    /// Returns a new [`SessionStateBuilder`] with default features.
+    ///
+    /// This is equivalent to calling [`Self::new()`] followed by [`Self::with_default_features()`].
+    ///
+    /// ```
+    /// use datafusion::execution::session_state::SessionStateBuilder;
+    ///
+    /// // Create a new SessionState with default features
+    /// let session_state = SessionStateBuilder::new_with_default_features()
+    ///     .with_session_id("my_session".to_string())
+    ///     .build();
+    /// ```
+    pub fn new_with_default_features() -> Self {
+        Self::new().with_default_features()
     }
 
     /// Set the session id.
@@ -1086,6 +1118,12 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set the [`TypePlanner`] used to customize the behavior of the SQL planner.
+    pub fn with_type_planner(mut self, type_planner: Arc<dyn TypePlanner>) -> Self {
+        self.type_planner = Some(type_planner);
+        self
+    }
+
     /// Set the [`PhysicalOptimizerRule`]s used to optimize plans.
     pub fn with_physical_optimizer_rules(
         mut self,
@@ -1132,6 +1170,19 @@ impl SessionStateBuilder {
         table_functions: HashMap<String, Arc<TableFunction>>,
     ) -> Self {
         self.table_functions = Some(table_functions);
+        self
+    }
+
+    /// Set the list of [`TableFunction`]s
+    pub fn with_table_function_list(
+        mut self,
+        table_functions: Vec<Arc<TableFunction>>,
+    ) -> Self {
+        let functions = table_functions
+            .into_iter()
+            .map(|f| (f.name().to_string(), f))
+            .collect();
+        self.table_functions = Some(functions);
         self
     }
 
@@ -1279,6 +1330,7 @@ impl SessionStateBuilder {
             session_id,
             analyzer,
             expr_planners,
+            type_planner,
             optimizer,
             physical_optimizers,
             query_planner,
@@ -1301,32 +1353,36 @@ impl SessionStateBuilder {
         } = self;
 
         let config = config.unwrap_or_default();
-        let runtime_env = runtime_env.unwrap_or(Arc::new(RuntimeEnv::default()));
+        let runtime_env = runtime_env.unwrap_or_else(|| Arc::new(RuntimeEnv::default()));
 
         let mut state = SessionState {
-            session_id: session_id.unwrap_or(Uuid::new_v4().to_string()),
+            session_id: session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
             analyzer: analyzer.unwrap_or_default(),
             expr_planners: expr_planners.unwrap_or_default(),
+            type_planner,
             optimizer: optimizer.unwrap_or_default(),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
-            query_planner: query_planner.unwrap_or(Arc::new(DefaultQueryPlanner {})),
-            catalog_list: catalog_list
-                .unwrap_or(Arc::new(MemoryCatalogProviderList::new())
-                    as Arc<dyn CatalogProviderList>),
+            query_planner: query_planner
+                .unwrap_or_else(|| Arc::new(DefaultQueryPlanner {})),
+            catalog_list: catalog_list.unwrap_or_else(|| {
+                Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>
+            }),
             table_functions: table_functions.unwrap_or_default(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: serializer_registry
-                .unwrap_or(Arc::new(EmptySerializerRegistry)),
+                .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
-            table_options: table_options
-                .unwrap_or(TableOptions::default_from_session_config(config.options())),
+            table_options: table_options.unwrap_or_else(|| {
+                TableOptions::default_from_session_config(config.options())
+            }),
             config,
             execution_props: execution_props.unwrap_or_default(),
             table_factories: table_factories.unwrap_or_default(),
             runtime_env,
             function_factory,
+            prepared_plans: HashMap::new(),
         };
 
         if let Some(file_formats) = file_formats {
@@ -1371,10 +1427,14 @@ impl SessionStateBuilder {
                 &state.runtime_env,
             );
 
-            state.catalog_list.register_catalog(
+            let existing_default_catalog = state.catalog_list.register_catalog(
                 state.config.options().catalog.default_catalog.clone(),
                 Arc::new(default_catalog),
             );
+
+            if existing_default_catalog.is_some() {
+                debug!("Overwrote the default catalog");
+            }
         }
 
         if let Some(analyzer_rules) = analyzer_rules {
@@ -1414,6 +1474,11 @@ impl SessionStateBuilder {
     /// Returns the current expr_planners value
     pub fn expr_planners(&mut self) -> &mut Option<Vec<Arc<dyn ExprPlanner>>> {
         &mut self.expr_planners
+    }
+
+    /// Returns the current type_planner value
+    pub fn type_planner(&mut self) -> &mut Option<Arc<dyn TypePlanner>> {
+        &mut self.type_planner
     }
 
     /// Returns the current optimizer value
@@ -1538,6 +1603,7 @@ impl Debug for SessionStateBuilder {
             .field("table_factories", &self.table_factories)
             .field("function_factory", &self.function_factory)
             .field("expr_planners", &self.expr_planners)
+            .field("type_planner", &self.type_planner)
             .field("query_planners", &self.query_planner)
             .field("analyzer_rules", &self.analyzer_rules)
             .field("analyzer", &self.analyzer)
@@ -1571,19 +1637,27 @@ impl From<SessionState> for SessionStateBuilder {
 /// having a direct dependency on the [`SessionState`] struct (and core crate)
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
-    tables: HashMap<String, Arc<dyn TableSource>>,
+    tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
 }
 
-impl<'a> ContextProvider for SessionContextProvider<'a> {
+impl ContextProvider for SessionContextProvider<'_> {
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        &self.state.expr_planners
+        self.state.expr_planners()
+    }
+
+    fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
+        if let Some(type_planner) = &self.state.type_planner {
+            Some(Arc::clone(type_planner))
+        } else {
+            None
+        }
     }
 
     fn get_table_source(
         &self,
         name: TableReference,
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
-        let name = self.state.resolve_table_ref(name).to_string();
+        let name = self.state.resolve_table_ref(name);
         self.tables
             .get(&name)
             .cloned()
@@ -1671,7 +1745,7 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
             .ok_or(plan_datafusion_err!(
                 "There is no registered file format with ext {ext}"
             ))
-            .map(|file_type| format_as_file_type(file_type.clone()))
+            .map(|file_type| format_as_file_type(Arc::clone(file_type)))
     }
 }
 
@@ -1684,7 +1758,7 @@ impl FunctionRegistry for SessionState {
         let result = self.scalar_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDF named \"{name}\" in the registry")
+            plan_datafusion_err!("There is no UDF named \"{name}\" in the registry. Use session context `register_udf` function to register a custom UDF")
         })
     }
 
@@ -1692,7 +1766,7 @@ impl FunctionRegistry for SessionState {
         let result = self.aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDAF named \"{name}\" in the registry")
+            plan_datafusion_err!("There is no UDAF named \"{name}\" in the registry. Use session context `register_udaf` function to register a custom UDAF")
         })
     }
 
@@ -1700,7 +1774,7 @@ impl FunctionRegistry for SessionState {
         let result = self.window_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry")
+            plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry. Use session context `register_udwf` function to register a custom UDWF")
         })
     }
 
@@ -1709,7 +1783,8 @@ impl FunctionRegistry for SessionState {
         udf: Arc<ScalarUDF>,
     ) -> datafusion_common::Result<Option<Arc<ScalarUDF>>> {
         udf.aliases().iter().for_each(|alias| {
-            self.scalar_functions.insert(alias.clone(), udf.clone());
+            self.scalar_functions
+                .insert(alias.clone(), Arc::clone(&udf));
         });
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
@@ -1719,7 +1794,8 @@ impl FunctionRegistry for SessionState {
         udaf: Arc<AggregateUDF>,
     ) -> datafusion_common::Result<Option<Arc<AggregateUDF>>> {
         udaf.aliases().iter().for_each(|alias| {
-            self.aggregate_functions.insert(alias.clone(), udaf.clone());
+            self.aggregate_functions
+                .insert(alias.clone(), Arc::clone(&udaf));
         });
         Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
     }
@@ -1729,7 +1805,8 @@ impl FunctionRegistry for SessionState {
         udwf: Arc<WindowUDF>,
     ) -> datafusion_common::Result<Option<Arc<WindowUDF>>> {
         udwf.aliases().iter().for_each(|alias| {
-            self.window_functions.insert(alias.clone(), udwf.clone());
+            self.window_functions
+                .insert(alias.clone(), Arc::clone(&udwf));
         });
         Ok(self.window_functions.insert(udwf.name().into(), udwf))
     }
@@ -1823,7 +1900,7 @@ impl From<&SessionState> for TaskContext {
             state.scalar_functions.clone(),
             state.aggregate_functions.clone(),
             state.window_functions.clone(),
-            state.runtime_env.clone(),
+            Arc::clone(&state.runtime_env),
         )
     }
 }
@@ -1858,7 +1935,7 @@ impl<'a> SessionSimplifyProvider<'a> {
     }
 }
 
-impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
+impl SimplifyInfo for SessionSimplifyProvider<'_> {
     fn is_boolean_type(&self, expr: &Expr) -> datafusion_common::Result<bool> {
         Ok(expr.get_type(self.df_schema)? == DataType::Boolean)
     }
@@ -1876,20 +1953,38 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct PreparedPlan {
+    /// Data types of the parameters
+    pub(crate) data_types: Vec<DataType>,
+    /// The prepared logical plan
+    pub(crate) plan: Arc<LogicalPlan>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
-    use crate::catalog_common::MemoryCatalogProviderList;
+    use crate::common::assert_contains;
+    use crate::config::ConfigOptions;
+    use crate::datasource::empty::EmptyTable;
+    use crate::datasource::provider_as_source;
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
-    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema};
+    use crate::logical_expr::planner::ExprPlanner;
+    use crate::logical_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+    use crate::physical_plan::ExecutionPlan;
+    use crate::sql::planner::ContextProvider;
+    use crate::sql::{ResolvedTableReference, TableReference};
+    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_optimizer::Optimizer;
+    use datafusion_physical_plan::display::DisplayableExecutionPlan;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -2031,5 +2126,164 @@ mod tests {
         assert_eq!(table_factories.len(), 1);
         assert!(table_factories.contains_key("employee"));
         Ok(())
+    }
+
+    #[test]
+    fn test_with_default_features_not_override() -> Result<()> {
+        use crate::test_util::TestTableFactory;
+
+        // Test whether the table_factory has been overridden.
+        let table_factory = Arc::new(TestTableFactory {});
+        let session_state = SessionStateBuilder::new()
+            .with_table_factory("test".to_string(), table_factory)
+            .with_default_features()
+            .build();
+        assert!(session_state.table_factories().get("test").is_some());
+
+        Ok(())
+    }
+
+    /// This test demonstrates why it's more convenient and somewhat necessary to provide
+    /// an `expr_planners` method for `SessionState`.
+    #[tokio::test]
+    async fn test_with_expr_planners() -> Result<()> {
+        // A helper method for planning count wildcard with or without expr planners.
+        async fn plan_count_wildcard(
+            with_expr_planners: bool,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            let mut context_provider = MyContextProvider::new().with_table(
+                "t",
+                provider_as_source(Arc::new(EmptyTable::new(Schema::empty().into()))),
+            );
+            if with_expr_planners {
+                context_provider = context_provider.with_expr_planners();
+            }
+
+            let state = &context_provider.state;
+            let statement = state.sql_to_statement("select count(*) from t", "mysql")?;
+            let plan = SqlToRel::new(&context_provider).statement_to_plan(statement)?;
+            state.create_physical_plan(&plan).await
+        }
+
+        // Planning count wildcard without expr planners should fail.
+        let got = plan_count_wildcard(false).await;
+        assert_contains!(
+            got.unwrap_err().to_string(),
+            "Physical plan does not support logical expression Wildcard"
+        );
+
+        // Planning count wildcard with expr planners should succeed.
+        let got = plan_count_wildcard(true).await?;
+        let displayable = DisplayableExecutionPlan::new(got.as_ref());
+        assert_eq!(
+            displayable.indent(false).to_string(),
+            "ProjectionExec: expr=[0 as count(*)]\n  PlaceholderRowExec\n"
+        );
+
+        Ok(())
+    }
+
+    /// A `ContextProvider` based on `SessionState`.
+    ///
+    /// Almost all planning context are retrieved from the `SessionState`.
+    struct MyContextProvider {
+        /// The session state.
+        state: SessionState,
+        /// Registered tables.
+        tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
+        /// Controls whether to return expression planners when called `ContextProvider::expr_planners`.
+        return_expr_planners: bool,
+    }
+
+    impl MyContextProvider {
+        /// Creates a new `SessionContextProvider`.
+        pub fn new() -> Self {
+            Self {
+                state: SessionStateBuilder::default()
+                    .with_default_features()
+                    .build(),
+                tables: HashMap::new(),
+                return_expr_planners: false,
+            }
+        }
+
+        /// Registers a table.
+        ///
+        /// The catalog and schema are provided by default.
+        pub fn with_table(mut self, table: &str, source: Arc<dyn TableSource>) -> Self {
+            self.tables.insert(
+                ResolvedTableReference {
+                    catalog: "default".to_string().into(),
+                    schema: "public".to_string().into(),
+                    table: table.to_string().into(),
+                },
+                source,
+            );
+            self
+        }
+
+        /// Sets the `return_expr_planners` flag to true.
+        pub fn with_expr_planners(self) -> Self {
+            Self {
+                return_expr_planners: true,
+                ..self
+            }
+        }
+    }
+
+    impl ContextProvider for MyContextProvider {
+        fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+            let resolved_table_ref = ResolvedTableReference {
+                catalog: "default".to_string().into(),
+                schema: "public".to_string().into(),
+                table: name.table().to_string().into(),
+            };
+            let source = self.tables.get(&resolved_table_ref).cloned().unwrap();
+            Ok(source)
+        }
+
+        /// We use a `return_expr_planners` flag to demonstrate why it's necessary to
+        /// return the expression planners in the `SessionState`.
+        ///
+        /// Note, the default implementation returns an empty slice.
+        fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+            if self.return_expr_planners {
+                self.state.expr_planners()
+            } else {
+                &[]
+            }
+        }
+
+        fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+            self.state.scalar_functions().get(name).cloned()
+        }
+
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            self.state.aggregate_functions().get(name).cloned()
+        }
+
+        fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+            self.state.window_functions().get(name).cloned()
+        }
+
+        fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+            None
+        }
+
+        fn options(&self) -> &ConfigOptions {
+            self.state.config_options()
+        }
+
+        fn udf_names(&self) -> Vec<String> {
+            self.state.scalar_functions().keys().cloned().collect()
+        }
+
+        fn udaf_names(&self) -> Vec<String> {
+            self.state.aggregate_functions().keys().cloned().collect()
+        }
+
+        fn udwf_names(&self) -> Vec<String> {
+            self.state.window_functions().keys().cloned().collect()
+        }
     }
 }

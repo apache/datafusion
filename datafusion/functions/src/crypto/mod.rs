@@ -27,12 +27,12 @@ pub mod sha224;
 pub mod sha256;
 pub mod sha384;
 pub mod sha512;
-make_udf_function!(digest::DigestFunc, DIGEST, digest);
-make_udf_function!(md5::Md5Func, MD5, md5);
-make_udf_function!(sha224::SHA224Func, SHA224, sha224);
-make_udf_function!(sha256::SHA256Func, SHA256, sha256);
-make_udf_function!(sha384::SHA384Func, SHA384, sha384);
-make_udf_function!(sha512::SHA512Func, SHA512, sha512);
+make_udf_function!(digest::DigestFunc, digest);
+make_udf_function!(md5::Md5Func, md5);
+make_udf_function!(sha224::SHA224Func, sha224);
+make_udf_function!(sha256::SHA256Func, sha256);
+make_udf_function!(sha384::SHA384Func, sha384);
+make_udf_function!(sha512::SHA512Func, sha512);
 
 pub mod expr_fn {
     export_functions!((

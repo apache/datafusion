@@ -15,15 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
-use arrow::datatypes::DataType;
-
+use arrow::datatypes::{DataType, Field};
+use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility, WindowUDFImpl,
 };
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use std::any::Any;
+use std::fmt::Debug;
 
 mod roundtrip_logical_plan;
 mod roundtrip_physical_plan;
@@ -66,12 +69,14 @@ impl ScalarUDFImpl for MyRegexUdf {
             plan_err!("regex_udf only accepts Utf8 arguments")
         }
     }
-    fn invoke(
+
+    fn invoke_with_args(
         &self,
-        _args: &[ColumnarValue],
+        _args: ScalarFunctionArgs,
     ) -> datafusion_common::Result<ColumnarValue> {
-        unimplemented!()
+        panic!("dummy - not implemented")
     }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -124,4 +129,55 @@ impl AggregateUDFImpl for MyAggregateUDF {
 pub struct MyAggregateUdfNode {
     #[prost(string, tag = "1")]
     pub result: String,
+}
+
+#[derive(Debug)]
+pub(in crate::cases) struct CustomUDWF {
+    signature: Signature,
+    payload: String,
+}
+
+impl CustomUDWF {
+    pub fn new(payload: String) -> Self {
+        Self {
+            signature: Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+            payload,
+        }
+    }
+}
+
+impl WindowUDFImpl for CustomUDWF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "custom_udwf"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn partition_evaluator(
+        &self,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(CustomUDWFEvaluator {}))
+    }
+
+    fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+        Ok(Field::new(field_args.name(), DataType::UInt64, false))
+    }
+}
+
+#[derive(Debug)]
+struct CustomUDWFEvaluator;
+
+impl PartitionEvaluator for CustomUDWFEvaluator {}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub(in crate::cases) struct CustomUDWFNode {
+    #[prost(string, tag = "1")]
+    pub payload: String,
 }

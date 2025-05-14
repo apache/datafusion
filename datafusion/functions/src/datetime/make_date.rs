@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
@@ -26,12 +26,46 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8, Utf8View};
 use chrono::prelude::*;
 
-use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Make a date from year/month/day component parts.",
+    syntax_example = "make_date(year, month, day)",
+    sql_example = r#"```sql
+> select make_date(2023, 1, 31);
++-------------------------------------------+
+| make_date(Int64(2023),Int64(1),Int64(31)) |
++-------------------------------------------+
+| 2023-01-31                                |
++-------------------------------------------+
+> select make_date('2023', '01', '31');
++-----------------------------------------------+
+| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
++-----------------------------------------------+
+| 2023-01-31                                    |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
+"#,
+    argument(
+        name = "year",
+        description = "Year to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "month",
+        description = "Month to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "day",
+        description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    )
+)]
 #[derive(Debug)]
 pub struct MakeDateFunc {
     signature: Signature,
@@ -72,16 +106,13 @@ impl ScalarUDFImpl for MakeDateFunc {
         Ok(Date32)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 3 {
-            return exec_err!(
-                "make_date function requires 3 arguments, got {}",
-                args.len()
-            );
-        }
-
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
         // first, identify if any of the arguments is an Array. If yes, store its `len`,
         // as any scalar will need to be converted to an array of len `len`.
+        let args = args.args;
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -89,9 +120,11 @@ impl ScalarUDFImpl for MakeDateFunc {
                 ColumnarValue::Array(a) => Some(a.len()),
             });
 
-        let years = args[0].cast_to(&Int32, None)?;
-        let months = args[1].cast_to(&Int32, None)?;
-        let days = args[2].cast_to(&Int32, None)?;
+        let [years, months, days] = take_function_args(self.name(), args)?;
+
+        let years = years.cast_to(&Int32, None)?;
+        let months = months.cast_to(&Int32, None)?;
+        let days = days.cast_to(&Int32, None)?;
 
         let scalar_value_fn = |col: &ColumnarValue| -> Result<i32> {
             let ColumnarValue::Scalar(s) = col else {
@@ -152,46 +185,8 @@ impl ScalarUDFImpl for MakeDateFunc {
         Ok(value)
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_make_date_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_make_date_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Make a date from year/month/day component parts.")
-            .with_syntax_example("make_date(year, month, day)")
-            .with_argument(
-                "year",
-                " Year to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.", )
-            .with_argument(
-                "month",
-                "Month to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.",
-            )
-            .with_argument("day", "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.")
-            .with_sql_example(r#"```sql
-> select make_date(2023, 1, 31);
-+-------------------------------------------+
-| make_date(Int64(2023),Int64(1),Int64(31)) |
-+-------------------------------------------+
-| 2023-01-31                                |
-+-------------------------------------------+
-> select make_date('2023', '01', '31');
-+-----------------------------------------------+
-| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
-+-----------------------------------------------+
-| 2023-01-31                                    |
-+-----------------------------------------------+
-```
-
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
-"#)
-            .build()
-            .unwrap()
-    })
 }
 
 /// Converts the year/month/day fields to an `i32` representing the days from
@@ -228,19 +223,39 @@ fn make_date_inner<F: FnMut(i32)>(
 mod tests {
     use crate::datetime::make_date::MakeDateFunc;
     use arrow::array::{Array, Date32Array, Int32Array, Int64Array, UInt32Array};
-    use datafusion_common::ScalarValue;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
 
+    fn invoke_make_date_with_args(
+        args: Vec<ColumnarValue>,
+        number_rows: usize,
+    ) -> Result<ColumnarValue, DataFusionError> {
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args,
+            arg_fields: arg_fields.iter().collect(),
+            number_rows,
+            return_field: &Field::new("f", DataType::Date32, true),
+        };
+        MakeDateFunc::new().invoke_with_args(args)
+    }
+
     #[test]
     fn test_make_date() {
-        let res = MakeDateFunc::new()
-            .invoke(&[
+        let res = invoke_make_date_with_args(
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2024))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
-            ])
-            .expect("that make_date parsed values without error");
+            ],
+            1,
+        )
+        .expect("that make_date parsed values without error");
 
         if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
             assert_eq!(19736, date.unwrap());
@@ -248,13 +263,15 @@ mod tests {
             panic!("Expected a scalar value")
         }
 
-        let res = MakeDateFunc::new()
-            .invoke(&[
+        let res = invoke_make_date_with_args(
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(2024))),
                 ColumnarValue::Scalar(ScalarValue::UInt64(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
-            ])
-            .expect("that make_date parsed values without error");
+            ],
+            1,
+        )
+        .expect("that make_date parsed values without error");
 
         if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
             assert_eq!(19736, date.unwrap());
@@ -262,13 +279,15 @@ mod tests {
             panic!("Expected a scalar value")
         }
 
-        let res = MakeDateFunc::new()
-            .invoke(&[
+        let res = invoke_make_date_with_args(
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("2024".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("1".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
-            ])
-            .expect("that make_date parsed values without error");
+            ],
+            1,
+        )
+        .expect("that make_date parsed values without error");
 
         if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
             assert_eq!(19736, date.unwrap());
@@ -279,13 +298,16 @@ mod tests {
         let years = Arc::new((2021..2025).map(Some).collect::<Int64Array>());
         let months = Arc::new((1..5).map(Some).collect::<Int32Array>());
         let days = Arc::new((11..15).map(Some).collect::<UInt32Array>());
-        let res = MakeDateFunc::new()
-            .invoke(&[
+        let batch_len = years.len();
+        let res = invoke_make_date_with_args(
+            vec![
                 ColumnarValue::Array(years),
                 ColumnarValue::Array(months),
                 ColumnarValue::Array(days),
-            ])
-            .expect("that make_date parsed values without error");
+            ],
+            batch_len,
+        )
+        .unwrap();
 
         if let ColumnarValue::Array(array) = res {
             assert_eq!(array.len(), 4);
@@ -304,41 +326,52 @@ mod tests {
         //
 
         // invalid number of arguments
-        let res = MakeDateFunc::new()
-            .invoke(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))]);
+        let res = invoke_make_date_with_args(
+            vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
+            1,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: make_date function requires 3 arguments, got 1"
         );
 
         // invalid type
-        let res = MakeDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = invoke_make_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            1,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Casting from Interval(YearMonth) to Int32 not supported"
         );
 
         // overflow of month
-        let res = MakeDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
-            ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
-        ]);
+        let res = invoke_make_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+                ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+            ],
+            1,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Can't cast value 18446744073709551615 to type Int32"
         );
 
         // overflow of day
-        let res = MakeDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
-            ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
-        ]);
+        let res = invoke_make_date_with_args(
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+                ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
+            ],
+            1,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Can't cast value 4294967295 to type Int32"

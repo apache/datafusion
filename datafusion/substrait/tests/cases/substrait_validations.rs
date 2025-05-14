@@ -18,15 +18,15 @@
 #[cfg(test)]
 mod tests {
 
-    // verify the schema compatability validations
-    mod schema_compatability {
+    // verify the schema compatibility validations
+    mod schema_compatibility {
         use crate::utils::test::read_json;
         use datafusion::arrow::datatypes::{DataType, Field};
-        use datafusion::catalog_common::TableReference;
-        use datafusion::common::{DFSchema, Result};
+        use datafusion::common::{DFSchema, Result, TableReference};
         use datafusion::datasource::empty::EmptyTable;
         use datafusion::prelude::SessionContext;
         use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+        use insta::assert_snapshot;
         use std::collections::HashMap;
         use std::sync::Arc;
 
@@ -65,13 +65,15 @@ mod tests {
                 vec![("a", DataType::Int32, false), ("b", DataType::Int32, true)];
 
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+            let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-            assert_eq!(
-                format!("{}", plan),
-                "Projection: DATA.a, DATA.b\
-                \n  TableScan: DATA"
-            );
+            assert_snapshot!(
+            plan,
+            @r#"
+                Projection: DATA.a, DATA.b
+                  TableScan: DATA
+                "#
+                        );
             Ok(())
         }
 
@@ -86,13 +88,15 @@ mod tests {
                 ("c", DataType::Int32, false),
             ];
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+            let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-            assert_eq!(
-                format!("{}", plan),
-                "Projection: DATA.a, DATA.b\
-                \n  TableScan: DATA projection=[a, b]"
-            );
+            assert_snapshot!(
+            plan,
+            @r#"
+                Projection: DATA.a, DATA.b
+                  TableScan: DATA projection=[a, b]
+                "#
+                        );
             Ok(())
         }
 
@@ -109,13 +113,15 @@ mod tests {
                 ("b", DataType::Int32, false),
             ];
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+            let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-            assert_eq!(
-                format!("{}", plan),
-                "Projection: DATA.a, DATA.b\
-                \n  TableScan: DATA projection=[a, b]"
-            );
+            assert_snapshot!(
+            plan,
+            @r#"
+                Projection: DATA.a, DATA.b
+                  TableScan: DATA projection=[a, b]
+                "#
+                        );
             Ok(())
         }
 
@@ -128,7 +134,7 @@ mod tests {
                 vec![("a", DataType::Int32, false), ("c", DataType::Int32, true)];
 
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let res = from_substrait_plan(&ctx, &proto_plan).await;
+            let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
             assert!(res.is_err());
             Ok(())
         }
@@ -140,7 +146,7 @@ mod tests {
 
             let ctx =
                 generate_context_with_table("DATA", vec![("a", DataType::Date32, true)])?;
-            let res = from_substrait_plan(&ctx, &proto_plan).await;
+            let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
             assert!(res.is_err());
             Ok(())
         }

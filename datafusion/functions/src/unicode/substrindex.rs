@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
@@ -25,13 +25,43 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = r#"Returns the substring from str before count occurrences of the delimiter delim.
+If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#,
+    syntax_example = "substr_index(str, delim, count)",
+    sql_example = r#"```sql
+> select substr_index('www.apache.org', '.', 1);
++---------------------------------------------------------+
+| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(1)) |
++---------------------------------------------------------+
+| www                                                     |
++---------------------------------------------------------+
+> select substr_index('www.apache.org', '.', -1);
++----------------------------------------------------------+
+| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(-1)) |
++----------------------------------------------------------+
+| org                                                      |
++----------------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "delim",
+        description = "The string to find in str to split str."
+    ),
+    argument(
+        name = "count",
+        description = "The number of times to search for the delimiter. Can be either a positive or negative number."
+    )
+)]
 #[derive(Debug)]
 pub struct SubstrIndexFunc {
     signature: Signature,
@@ -78,8 +108,11 @@ impl ScalarUDFImpl for SubstrIndexFunc {
         utf8_to_str_type(&arg_types[0], "substr_index")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(substr_index, vec![])(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(substr_index, vec![])(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -87,40 +120,8 @@ impl ScalarUDFImpl for SubstrIndexFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_substr_index_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_substr_index_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(r#"Returns the substring from str before count occurrences of the delimiter delim.
-If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
-If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#)
-            .with_syntax_example("substr_index(str, delim, count)")
-            .with_sql_example(r#"```sql
-> select substr_index('www.apache.org', '.', 1);
-+---------------------------------------------------------+
-| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(1)) |
-+---------------------------------------------------------+
-| www                                                     |
-+---------------------------------------------------------+
-> select substr_index('www.apache.org', '.', -1);
-+----------------------------------------------------------+
-| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(-1)) |
-+----------------------------------------------------------+
-| org                                                      |
-+----------------------------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("delim", "The string to find in str to split str.")
-            .with_argument("count", "The number of times to search for the delimiter. Can be either a positive or negative number.")
-            .build()
-            .unwrap()
-    })
 }
 
 /// Returns the substring from str before count occurrences of the delimiter delim. If count is positive, everything to the left of the final delimiter (counting from the left) is returned. If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
@@ -129,18 +130,13 @@ If count is negative, everything to the right of the final delimiter (counting f
 /// SUBSTRING_INDEX('www.apache.org', '.', -2) = apache.org
 /// SUBSTRING_INDEX('www.apache.org', '.', -1) = org
 fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!(
-            "substr_index was called with {} arguments. It requires 3.",
-            args.len()
-        );
-    }
+    let [str, delim, count] = take_function_args("substr_index", args)?;
 
-    match args[0].data_type() {
+    match str.data_type() {
         DataType::Utf8 => {
-            let string_array = args[0].as_string::<i32>();
-            let delimiter_array = args[1].as_string::<i32>();
-            let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
+            let string_array = str.as_string::<i32>();
+            let delimiter_array = delim.as_string::<i32>();
+            let count_array: &PrimitiveArray<Int64Type> = count.as_primitive();
             substr_index_general::<Int32Type, _, _>(
                 string_array,
                 delimiter_array,
@@ -148,9 +144,9 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
             )
         }
         DataType::LargeUtf8 => {
-            let string_array = args[0].as_string::<i64>();
-            let delimiter_array = args[1].as_string::<i64>();
-            let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
+            let string_array = str.as_string::<i64>();
+            let delimiter_array = delim.as_string::<i64>();
+            let count_array: &PrimitiveArray<Int64Type> = count.as_primitive();
             substr_index_general::<Int64Type, _, _>(
                 string_array,
                 delimiter_array,
@@ -158,9 +154,9 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
             )
         }
         DataType::Utf8View => {
-            let string_array = args[0].as_string_view();
-            let delimiter_array = args[1].as_string_view();
-            let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
+            let string_array = str.as_string_view();
+            let delimiter_array = delim.as_string_view();
+            let count_array: &PrimitiveArray<Int64Type> = count.as_primitive();
             substr_index_general::<Int32Type, _, _>(
                 string_array,
                 delimiter_array,
@@ -250,7 +246,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
@@ -262,7 +258,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
@@ -274,7 +270,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
@@ -286,7 +282,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(-1i64)),
@@ -298,7 +294,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
@@ -310,7 +306,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
@@ -322,7 +318,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from("")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),

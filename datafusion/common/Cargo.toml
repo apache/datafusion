@@ -28,46 +28,50 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_common"
-path = "src/lib.rs"
 
 [features]
 avro = ["apache-avro"]
 backtrace = []
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
+recursive_protection = ["dep:recursive"]
 
 [dependencies]
 ahash = { workspace = true }
-apache-avro = { version = "0.16", default-features = false, features = [
+apache-avro = { version = "0.17", default-features = false, features = [
     "bzip",
     "snappy",
     "xz",
     "zstandard",
 ], optional = true }
 arrow = { workspace = true }
-arrow-array = { workspace = true }
-arrow-buffer = { workspace = true }
-arrow-schema = { workspace = true }
-chrono = { workspace = true }
+arrow-ipc = { workspace = true }
+base64 = "0.22.1"
 half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
-libc = "0.2.140"
-num_cpus = { workspace = true }
+libc = "0.2.172"
+log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
-pyo3 = { version = "0.22.0", optional = true }
+pyo3 = { version = "0.24.2", optional = true }
+recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true }
 tokio = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-instant = { version = "0.1", features = ["wasm-bindgen"] }
+web-time = "1.1.0"
 
 [dev-dependencies]
+chrono = { workspace = true }
+insta = { workspace = true }
 rand = { workspace = true }

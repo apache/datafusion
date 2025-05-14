@@ -22,71 +22,82 @@ use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
+use crate::datasource::dynamic_file::DynamicListTableFactory;
+use crate::execution::session_state::SessionStateBuilder;
 use crate::{
+    catalog::listing_schema::ListingSchemaProvider,
     catalog::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
-    catalog_common::listing_schema::ListingSchemaProvider,
-    catalog_common::memory::MemorySchemaProvider,
-    catalog_common::MemoryCatalogProvider,
     dataframe::DataFrame,
-    datasource::{
-        function::{TableFunction, TableFunctionImpl},
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
+    datasource::listing::{
+        ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
     datasource::{provider_as_source, MemTable, ViewTable},
     error::{DataFusionError, Result},
-    execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
+    execution::{
+        options::ArrowReadOptions,
+        runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
+        FunctionRegistry,
+    },
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, LogicalPlan, LogicalPlanBuilder, SetVariable, TableType, UNNAMED_TABLE,
+        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, SetVariable,
+        TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
     variable::{VarProvider, VarType},
 };
 
-use arrow::datatypes::SchemaRef;
+// backwards compatibility
+pub use crate::execution::session_state::SessionState;
+
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::Schema;
+use datafusion_catalog::memory::MemorySchemaProvider;
+use datafusion_catalog::MemoryCatalogProvider;
+use datafusion_catalog::{
+    DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
+};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, SchemaReference, TableReference,
+    DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
+pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
+pub use datafusion_execution::TaskContext;
+pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
+use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
+use datafusion_optimizer::Analyzer;
+use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
+use datafusion_session::SessionStore;
 
-// backwards compatibility
-pub use crate::execution::session_state::SessionState;
-
-use crate::datasource::dynamic_file::DynamicListTableFactory;
-use crate::execution::session_state::SessionStateBuilder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_catalog::{DynamicFileCatalog, SessionStore, UrlTableFactory};
-pub use datafusion_execution::config::SessionConfig;
-pub use datafusion_execution::TaskContext;
-pub use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
-mod avro;
 mod csv;
 mod json;
 #[cfg(feature = "parquet")]
 mod parquet;
+
+#[cfg(feature = "avro")]
+mod avro;
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
@@ -389,8 +400,11 @@ impl SessionContext {
             current_catalog_list,
             Arc::clone(&factory) as Arc<dyn UrlTableFactory>,
         ));
+
+        let session_id = self.session_id.clone();
         let ctx: SessionContext = self
             .into_state_builder()
+            .with_session_id(session_id)
             .with_catalog_list(catalog_list)
             .build()
             .into();
@@ -507,7 +521,7 @@ impl SessionContext {
 
     /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.state.read().runtime_env().clone()
+        Arc::clone(self.state.read().runtime_env())
     }
 
     /// Returns an id that uniquely identifies this `SessionContext`.
@@ -687,7 +701,39 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
-
+            LogicalPlan::Statement(Statement::Prepare(Prepare {
+                name,
+                input,
+                data_types,
+            })) => {
+                // The number of parameters must match the specified data types length.
+                if !data_types.is_empty() {
+                    let param_names = input.get_parameter_names()?;
+                    if param_names.len() != data_types.len() {
+                        return plan_err!(
+                            "Prepare specifies {} data types but query has {} parameters",
+                            data_types.len(),
+                            param_names.len()
+                        );
+                    }
+                }
+                // Store the unoptimized plan into the session state. Although storing the
+                // optimized plan or the physical plan would be more efficient, doing so is
+                // not currently feasible. This is because `now()` would be optimized to a
+                // constant value, causing each EXECUTE to yield the same result, which is
+                // incorrect behavior.
+                self.state.write().store_prepared(name, data_types, input)?;
+                self.return_empty_dataframe()
+            }
+            LogicalPlan::Statement(Statement::Execute(execute)) => {
+                self.execute_prepared(execute)
+            }
+            LogicalPlan::Statement(Statement::Deallocate(deallocate)) => {
+                self.state
+                    .write()
+                    .remove_prepared(deallocate.name.as_str())?;
+                self.return_empty_dataframe()
+            }
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
@@ -818,6 +864,16 @@ impl SessionContext {
         }
     }
 
+    /// Applies the `TypeCoercion` rewriter to the logical plan.
+    fn apply_type_coercion(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
+        let options = ConfigOptions::default();
+        Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())]).execute_and_check(
+            logical_plan,
+            &options,
+            |_, _| {},
+        )
+    }
+
     async fn create_view(&self, cmd: CreateView) -> Result<DataFrame> {
         let CreateView {
             name,
@@ -836,13 +892,14 @@ impl SessionContext {
         match (or_replace, view) {
             (true, Ok(_)) => {
                 self.deregister_table(name.clone())?;
-                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
-
+                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
-                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
+                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
@@ -983,11 +1040,68 @@ impl SessionContext {
             variable, value, ..
         } = stmt;
 
-        let mut state = self.state.write();
-        state.config_mut().options_mut().set(&variable, &value)?;
-        drop(state);
+        // Check if this is a runtime configuration
+        if variable.starts_with("datafusion.runtime.") {
+            self.set_runtime_variable(&variable, &value)?;
+        } else {
+            let mut state = self.state.write();
+            state.config_mut().options_mut().set(&variable, &value)?;
+            drop(state);
+        }
 
         self.return_empty_dataframe()
+    }
+
+    fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
+        let key = variable.strip_prefix("datafusion.runtime.").unwrap();
+
+        match key {
+            "memory_limit" => {
+                let memory_limit = Self::parse_memory_limit(value)?;
+
+                let mut state = self.state.write();
+                let mut builder =
+                    RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
+                builder = builder.with_memory_limit(memory_limit, 1.0);
+                *state = SessionStateBuilder::from(state.clone())
+                    .with_runtime_env(Arc::new(builder.build()?))
+                    .build();
+            }
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "Unknown runtime configuration: {variable}"
+                )))
+            }
+        }
+        Ok(())
+    }
+
+    /// Parse memory limit from string to number of bytes
+    /// Supports formats like '1.5G', '100M', '512K'
+    ///
+    /// # Examples
+    /// ```
+    /// use datafusion::execution::context::SessionContext;
+    ///
+    /// assert_eq!(SessionContext::parse_memory_limit("1M").unwrap(), 1024 * 1024);
+    /// assert_eq!(SessionContext::parse_memory_limit("1.5G").unwrap(), (1.5 * 1024.0 * 1024.0 * 1024.0) as usize);
+    /// ```
+    pub fn parse_memory_limit(limit: &str) -> Result<usize> {
+        let (number, unit) = limit.split_at(limit.len() - 1);
+        let number: f64 = number.parse().map_err(|_| {
+            DataFusionError::Plan(format!(
+                "Failed to parse number from memory limit '{limit}'"
+            ))
+        })?;
+
+        match unit {
+            "K" => Ok((number * 1024.0) as usize),
+            "M" => Ok((number * 1024.0 * 1024.0) as usize),
+            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            _ => Err(DataFusionError::Plan(format!(
+                "Unsupported unit '{unit}' in memory limit '{limit}'"
+            ))),
+        }
     }
 
     async fn create_custom_table(
@@ -1010,7 +1124,7 @@ impl SessionContext {
         Ok(table)
     }
 
-    async fn find_and_deregister<'a>(
+    async fn find_and_deregister(
         &self,
         table_ref: impl Into<TableReference>,
         table_type: TableType,
@@ -1086,6 +1200,49 @@ impl SessionContext {
         } else {
             self.return_empty_dataframe()
         }
+    }
+
+    fn execute_prepared(&self, execute: Execute) -> Result<DataFrame> {
+        let Execute {
+            name, parameters, ..
+        } = execute;
+        let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
+            exec_datafusion_err!("Prepared statement '{}' does not exist", name)
+        })?;
+
+        // Only allow literals as parameters for now.
+        let mut params: Vec<ScalarValue> = parameters
+            .into_iter()
+            .map(|e| match e {
+                Expr::Literal(scalar) => Ok(scalar),
+                _ => not_impl_err!("Unsupported parameter type: {}", e),
+            })
+            .collect::<Result<_>>()?;
+
+        // If the prepared statement provides data types, cast the params to those types.
+        if !prepared.data_types.is_empty() {
+            if params.len() != prepared.data_types.len() {
+                return exec_err!(
+                    "Prepared statement '{}' expects {} parameters, but {} provided",
+                    name,
+                    prepared.data_types.len(),
+                    params.len()
+                );
+            }
+            params = params
+                .into_iter()
+                .zip(prepared.data_types.iter())
+                .map(|(e, dt)| e.cast_to(dt))
+                .collect::<Result<_>>()?;
+        }
+
+        let params = ParamValues::List(params);
+        let plan = prepared
+            .plan
+            .as_ref()
+            .clone()
+            .replace_params_with_values(&params)?;
+        Ok(DataFrame::new(self.state(), plan))
     }
 
     /// Registers a variable provider within this context.
@@ -1299,6 +1456,29 @@ impl SessionContext {
         Ok(())
     }
 
+    fn register_type_check<P: DataFilePaths>(
+        &self,
+        table_paths: P,
+        extension: impl AsRef<str>,
+    ) -> Result<()> {
+        let table_paths = table_paths.to_urls()?;
+        if table_paths.is_empty() {
+            return exec_err!("No table paths were provided");
+        }
+
+        // check if the file extension matches the expected extension
+        let extension = extension.as_ref();
+        for path in &table_paths {
+            let file_path = path.as_str();
+            if !file_path.ends_with(extension) && !path.is_collection() {
+                return exec_err!(
+                    "File path '{file_path}' does not match the expected extension '{extension}'"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Registers an Arrow file as a table that can be referenced from
     /// SQL statements executed against this context.
     pub async fn register_arrow(
@@ -1352,8 +1532,8 @@ impl SessionContext {
     /// Registers a [`TableProvider`] as a table that can be
     /// referenced from SQL statements executed against this context.
     ///
-    /// Returns the [`TableProvider`] previously registered for this
-    /// reference, if any
+    /// If a table of the same name was already registered, returns "Table
+    /// already exists" error.
     pub fn register_table(
         &self,
         table_ref: impl Into<TableReference>,
@@ -1401,10 +1581,7 @@ impl SessionContext {
     /// provided reference.
     ///
     /// [`register_table`]: SessionContext::register_table
-    pub async fn table<'a>(
-        &self,
-        table_ref: impl Into<TableReference>,
-    ) -> Result<DataFrame> {
+    pub async fn table(&self, table_ref: impl Into<TableReference>) -> Result<DataFrame> {
         let table_ref: TableReference = table_ref.into();
         let provider = self.table_provider(table_ref.clone()).await?;
         let plan = LogicalPlanBuilder::scan(
@@ -1431,7 +1608,7 @@ impl SessionContext {
     }
 
     /// Return a [`TableProvider`] for the specified table.
-    pub async fn table_provider<'a>(
+    pub async fn table_provider(
         &self,
         table_ref: impl Into<TableReference>,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -1469,7 +1646,7 @@ impl SessionContext {
 
     /// Get reference to [`SessionState`]
     pub fn state_ref(&self) -> Arc<RwLock<SessionState>> {
-        self.state.clone()
+        Arc::clone(&self.state)
     }
 
     /// Get weak reference to [`SessionState`]
@@ -1531,7 +1708,7 @@ impl FunctionRegistry for SessionContext {
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
-        self.state.read().expr_planners()
+        self.state.read().expr_planners().to_vec()
     }
 
     fn register_expr_planner(
@@ -1688,7 +1865,7 @@ impl<'a> BadPlanVisitor<'a> {
     }
 }
 
-impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
+impl<'n> TreeNodeVisitor<'n> for BadPlanVisitor<'_> {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
@@ -1712,22 +1889,24 @@ impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::path::PathBuf;
-
     use super::{super::options::CsvReadOptions, *};
-    use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
-    use crate::execution::runtime_env::RuntimeEnvBuilder;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
+    use arrow::datatypes::{DataType, TimeUnit};
+    use std::error::Error;
+    use std::path::PathBuf;
 
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common_runtime::SpawnedTask;
+    use insta::{allow_duplicates, assert_snapshot};
 
     use crate::catalog::SchemaProvider;
     use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
+    use datafusion_expr::planner::TypePlanner;
+    use sqlparser::ast;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -1783,14 +1962,13 @@ mod tests {
             plan_and_collect(&ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
                 .await?;
 
-        let expected = [
-            "+----------------------+------------------------+---------------------+",
-            "| @@version            | @name                  | @integer + Int64(1) |",
-            "+----------------------+------------------------+---------------------+",
-            "| system-var-@@version | user-defined-var-@name | 42                  |",
-            "+----------------------+------------------------+---------------------+",
-        ];
-        assert_batches_eq!(expected, &results);
+        assert_snapshot!(batches_to_string(&results), @r"
+        +----------------------+------------------------+---------------------+
+        | @@version            | @name                  | @integer + Int64(1) |
+        +----------------------+------------------------+---------------------+
+        | system-var-@@version | user-defined-var-@name | 42                  |
+        +----------------------+------------------------+---------------------+
+        ");
 
         Ok(())
     }
@@ -1825,7 +2003,7 @@ mod tests {
     #[tokio::test]
     async fn send_context_to_threads() -> Result<()> {
         // ensure SessionContexts can be used in a multi-threaded
-        // environment. Usecase is for concurrent planing.
+        // environment. Use case is for concurrent planing.
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
         let ctx = Arc::new(create_ctx(&tmp_dir, partition_count).await?);
@@ -1853,14 +2031,12 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
             .set_str("datafusion.catalog.has_header", "true");
         let session_state = SessionStateBuilder::new()
             .with_config(cfg)
-            .with_runtime_env(runtime)
             .with_default_features()
             .build();
         let ctx = SessionContext::new_with_state(session_state);
@@ -1873,14 +2049,15 @@ mod tests {
         let actual = arrow::util::pretty::pretty_format_batches(&result)
             .unwrap()
             .to_string();
-        let expected = r#"+--------------------+
-| c_name             |
-+--------------------+
-| Customer#000000002 |
-| Customer#000000003 |
-| Customer#000000004 |
-+--------------------+"#;
-        assert_eq!(actual, expected);
+        assert_snapshot!(actual, @r"
+        +--------------------+
+        | c_name             |
+        +--------------------+
+        | Customer#000000002 |
+        | Customer#000000003 |
+        | Customer#000000004 |
+        +--------------------+
+        ");
 
         Ok(())
     }
@@ -1905,14 +2082,15 @@ mod tests {
         let actual = arrow::util::pretty::pretty_format_batches(&result)
             .unwrap()
             .to_string();
-        let expected = r#"+--------------------+
-| c_name             |
-+--------------------+
-| Customer#000000002 |
-| Customer#000000003 |
-| Customer#000000004 |
-+--------------------+"#;
-        assert_eq!(actual, expected);
+        assert_snapshot!(actual, @r"
+        +--------------------+
+        | c_name             |
+        +--------------------+
+        | Customer#000000002 |
+        | Customer#000000003 |
+        | Customer#000000004 |
+        +--------------------+
+        ");
 
         Ok(())
     }
@@ -1944,10 +2122,16 @@ mod tests {
             Err(DataFusionError::Plan(_))
         ));
 
-        assert!(matches!(
-            ctx.sql("select * from datafusion.public.test").await,
-            Err(DataFusionError::Plan(_))
-        ));
+        let err = ctx
+            .sql("select * from datafusion.public.test")
+            .await
+            .unwrap_err();
+        let err = err
+            .source()
+            .and_then(|err| err.downcast_ref::<DataFusionError>())
+            .unwrap();
+
+        assert!(matches!(err, &DataFusionError::Plan(_)));
 
         Ok(())
     }
@@ -1989,6 +2173,8 @@ mod tests {
             .unwrap();
         ctx.register_catalog("my_catalog", Arc::new(catalog));
 
+        let mut results = Vec::new();
+
         for table_ref in &["my_catalog.my_schema.test", "my_schema.test", "test"] {
             let result = plan_and_collect(
                 &ctx,
@@ -1997,14 +2183,18 @@ mod tests {
             .await
             .unwrap();
 
-            let expected = [
-                "+-------+",
-                "| count |",
-                "+-------+",
-                "| 1     |",
-                "+-------+",
-            ];
-            assert_batches_eq!(expected, &result);
+            results.push(result);
+        }
+        allow_duplicates! {
+            for result in &results {
+                assert_snapshot!(batches_to_string(result), @r"
+                +-------+
+                | count |
+                +-------+
+                | 1     |
+                +-------+
+                ");
+            }
         }
     }
 
@@ -2039,15 +2229,14 @@ mod tests {
         )
         .await?;
 
-        let expected = [
-            "+-----+-------+",
-            "| cat | total |",
-            "+-----+-------+",
-            "| a   | 1     |",
-            "| b   | 3     |",
-            "+-----+-------+",
-        ];
-        assert_batches_eq!(expected, &result);
+        assert_snapshot!(batches_to_string(&result), @r"
+        +-----+-------+
+        | cat | total |
+        +-----+-------+
+        | a   | 1     |
+        | b   | 3     |
+        +-----+-------+
+        ");
 
         Ok(())
     }
@@ -2124,6 +2313,38 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn custom_type_planner() -> Result<()> {
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_type_planner(Arc::new(MyTypePlanner {}))
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        let result = ctx
+            .sql("SELECT DATETIME '2021-01-01 00:00:00'")
+            .await?
+            .collect()
+            .await?;
+        assert_snapshot!(batches_to_string(&result), @r#"
+        +-----------------------------+
+        | Utf8("2021-01-01 00:00:00") |
+        +-----------------------------+
+        | 2021-01-01T00:00:00         |
+        +-----------------------------+
+        "#);
+        Ok(())
+    }
+    #[test]
+    fn preserve_session_context_id() -> Result<()> {
+        let ctx = SessionContext::new();
+        // it does make sense to preserve session id in this case
+        // as  `enable_url_table()` can be seen as additional configuration
+        // option on ctx.
+        // some systems like datafusion ballista relies on stable session_id
+        assert_eq!(ctx.session_id(), ctx.enable_url_table().session_id());
+        Ok(())
+    }
+
     struct MyPhysicalPlanner {}
 
     #[async_trait]
@@ -2183,5 +2404,26 @@ mod tests {
         .await?;
 
         Ok(ctx)
+    }
+
+    #[derive(Debug)]
+    struct MyTypePlanner {}
+
+    impl TypePlanner for MyTypePlanner {
+        fn plan_type(&self, sql_type: &ast::DataType) -> Result<Option<DataType>> {
+            match sql_type {
+                ast::DataType::Datetime(precision) => {
+                    let precision = match precision {
+                        Some(0) => TimeUnit::Second,
+                        Some(3) => TimeUnit::Millisecond,
+                        Some(6) => TimeUnit::Microsecond,
+                        None | Some(9) => TimeUnit::Nanosecond,
+                        _ => unreachable!(),
+                    };
+                    Ok(Some(DataType::Timestamp(precision, None)))
+                }
+                _ => Ok(None),
+            }
+        }
     }
 }

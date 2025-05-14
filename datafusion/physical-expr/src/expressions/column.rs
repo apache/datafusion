@@ -18,19 +18,17 @@
 //! Physical column reference: [`Column`]
 
 use std::any::Any;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::physical_expr::PhysicalExpr;
 use arrow::{
-    datatypes::{DataType, Schema},
+    datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use arrow_schema::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::ColumnarValue;
-
-use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
 /// Represents the column at a given index in a RecordBatch
 ///
@@ -43,7 +41,7 @@ use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 ///
 /// # Example:
 ///  If the schema is `a`, `b`, `c` the `Column` for `b` would be represented by
-///  index 1, since `b` is the second colum in the schema.
+///  index 1, since `b` is the second column in the schema.
 ///
 /// ```
 /// # use datafusion_physical_expr::expressions::Column;
@@ -129,6 +127,10 @@ impl PhysicalExpr for Column {
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
+    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+        Ok(input_schema.field(self.index).clone())
+    }
+
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![]
     }
@@ -140,18 +142,8 @@ impl PhysicalExpr for Column {
         Ok(self)
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for Column {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self == x)
-            .unwrap_or(false)
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
     }
 }
 

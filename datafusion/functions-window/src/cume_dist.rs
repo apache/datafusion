@@ -21,18 +21,18 @@ use datafusion_common::arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::Result;
-use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
     Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_macros::user_doc;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
 use std::iter;
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 define_udwf_and_expr!(
     CumeDist,
@@ -41,6 +41,26 @@ define_udwf_and_expr!(
 );
 
 /// CumeDist calculates the cume_dist in the window function with order by
+#[user_doc(
+    doc_section(label = "Ranking Functions"),
+    description = "Relative rank of the current row: (number of rows preceding or peer with the current row) / (total rows).",
+    syntax_example = "cume_dist()",
+    sql_example = r#"```sql
+    --Example usage of the cume_dist window function:
+    SELECT salary,
+       cume_dist() OVER (ORDER BY salary) AS cume_dist
+    FROM employees;
+```
+```sql
++--------+-----------+
+| salary | cume_dist |
++--------+-----------+
+| 30000  | 0.33      |
+| 50000  | 0.67      |
+| 70000  | 1.00      |
++--------+-----------+
+```"#
+)]
 #[derive(Debug)]
 pub struct CumeDist {
     signature: Signature,
@@ -49,7 +69,7 @@ pub struct CumeDist {
 impl CumeDist {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(0, Volatility::Immutable),
+            signature: Signature::nullary(Volatility::Immutable),
         }
     }
 }
@@ -86,23 +106,8 @@ impl WindowUDFImpl for CumeDist {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_cume_dist_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_cume_dist_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).",
-            )
-            .with_syntax_example("cume_dist()")
-            .build()
-            .unwrap()
-    })
 }
 
 #[derive(Debug, Default)]
@@ -123,7 +128,7 @@ impl PartitionEvaluator for CumeDistEvaluator {
                     let len = range.end - range.start;
                     *acc += len as u64;
                     let value: f64 = (*acc as f64) / scalar;
-                    let result = iter::repeat(value).take(len);
+                    let result = iter::repeat_n(value, len);
                     Some(result)
                 })
                 .flatten(),

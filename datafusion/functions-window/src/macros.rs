@@ -29,12 +29,12 @@
 /// # Parameters
 ///
 /// * `$UDWF`: The struct which defines the [`Signature`](datafusion_expr::Signature)
-///     of the user-defined window function.
+///   of the user-defined window function.
 /// * `$OUT_FN_NAME`: The basename to generate a unique function name like
-///     `$OUT_FN_NAME_udwf`.
+///   `$OUT_FN_NAME_udwf`.
 /// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
-///     automatically resolves to `$UDWF::default()`.
+///   automatically resolves to `$UDWF::default()`.
 ///
 /// # Example
 ///
@@ -99,21 +99,16 @@ macro_rules! get_or_init_udwf {
 
     ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr, $CTOR:path) => {
         paste::paste! {
-            #[doc = concat!(" Singleton instance of [`", stringify!($OUT_FN_NAME), "`], ensures the user-defined")]
-            #[doc = concat!(" window function is only created once.")]
-            #[allow(non_upper_case_globals)]
-            static [<STATIC_ $UDWF>]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
-                std::sync::OnceLock::new();
-
             #[doc = concat!(" Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [`", stringify!($OUT_FN_NAME), "`].")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
             pub fn [<$OUT_FN_NAME _udwf>]() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-                [<STATIC_ $UDWF>]
-                    .get_or_init(|| {
+                // Singleton instance of UDWF, ensures it is only created once.
+                static INSTANCE: std::sync::LazyLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
+                    std::sync::LazyLock::new(|| {
                         std::sync::Arc::new(datafusion_expr::WindowUDF::from($CTOR()))
-                    })
-                    .clone()
+                    });
+                std::sync::Arc::clone(&INSTANCE)
             }
         }
     };
@@ -127,13 +122,13 @@ macro_rules! get_or_init_udwf {
 /// # Parameters
 ///
 /// * `$UDWF`: The struct which defines the [`Signature`] of the
-///     user-defined window function.
+///   user-defined window function.
 /// * `$OUT_FN_NAME`: The basename to generate a unique function name like
-///     `$OUT_FN_NAME_udwf`.
+///   `$OUT_FN_NAME_udwf`.
 /// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `[$($PARAM:ident),+]`: An array of 1 or more parameters
-///     for the generated function. The type of parameters is [`Expr`].
-///     When omitted this creates a function with zero parameters.
+///   for the generated function. The type of parameters is [`Expr`].
+///   When omitted this creates a function with zero parameters.
 ///
 /// [`Signature`]: datafusion_expr::Signature
 /// [`Expr`]: datafusion_expr::Expr
@@ -337,15 +332,15 @@ macro_rules! create_udwf_expr {
 /// # Arguments
 ///
 /// * `$UDWF`: The struct which defines the [`Signature`] of the
-///     user-defined window function.
+///   user-defined window function.
 /// * `$OUT_FN_NAME`: The basename to generate a unique function name like
-///     `$OUT_FN_NAME_udwf`.
+///   `$OUT_FN_NAME_udwf`.
 /// * (optional) `[$($PARAM:ident),+]`: An array of 1 or more parameters
-///     for the generated function. The type of parameters is [`Expr`].
-///     When omitted this creates a function with zero parameters.
+///   for the generated function. The type of parameters is [`Expr`].
+///   When omitted this creates a function with zero parameters.
 /// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
-///     automatically resolves to `$UDWF::default()`.
+///   automatically resolves to `$UDWF::default()`.
 ///
 /// [`Signature`]: datafusion_expr::Signature
 /// [`Expr`]: datafusion_expr::Expr

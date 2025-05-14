@@ -15,22 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int32Array};
-use arrow::compute::SortOptions;
-use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::Schema;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use datafusion_common::ScalarValue;
-use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_expr::PhysicalExprRef;
+use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
-use itertools::Itertools;
-use rand::Rng;
-
+use arrow::array::{ArrayRef, Int32Array};
+use arrow::compute::SortOptions;
+use arrow::datatypes::Schema;
+use arrow::record_batch::RecordBatch;
+use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::JoinSide;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::BinaryExpr;
 use datafusion::physical_plan::collect;
@@ -39,9 +36,13 @@ use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
-use datafusion::physical_plan::memory::MemoryExec;
-
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::ScalarValue;
+use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::PhysicalExprRef;
+
+use itertools::Itertools;
+use rand::Rng;
 use test_utils::stagger_batch_with_seed;
 
 // Determines what Fuzz tests needs to run
@@ -85,7 +86,7 @@ fn col_lt_col_filter(schema1: Arc<Schema>, schema2: Arc<Schema>) -> JoinFilter {
             .with_nullable(true),
     ]);
 
-    JoinFilter::new(less_filter, column_indices, intermediate_schema)
+    JoinFilter::new(less_filter, column_indices, Arc::new(intermediate_schema))
 }
 
 #[tokio::test]
@@ -96,7 +97,7 @@ async fn test_inner_join_1k_filtered() {
         JoinType::Inner,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -108,7 +109,7 @@ async fn test_inner_join_1k() {
         JoinType::Inner,
         None,
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -120,7 +121,7 @@ async fn test_left_join_1k() {
         JoinType::Left,
         None,
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -132,7 +133,7 @@ async fn test_left_join_1k_filtered() {
         JoinType::Left,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -144,7 +145,7 @@ async fn test_right_join_1k() {
         JoinType::Right,
         None,
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -156,7 +157,7 @@ async fn test_right_join_1k_filtered() {
         JoinType::Right,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -168,13 +169,11 @@ async fn test_full_join_1k() {
         JoinType::Full,
         None,
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
 #[tokio::test]
-// flaky for HjSmj case
-// https://github.com/apache/datafusion/issues/12359
 async fn test_full_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -182,55 +181,103 @@ async fn test_full_join_1k_filtered() {
         JoinType::Full,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::NljHj], false)
+    .run_test(&[NljHj, HjSmj], false)
     .await
 }
 
 #[tokio::test]
-async fn test_semi_join_1k() {
+async fn test_left_semi_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::LeftSemi,
         None,
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
 #[tokio::test]
-async fn test_semi_join_1k_filtered() {
+async fn test_left_semi_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::LeftSemi,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
 #[tokio::test]
-async fn test_anti_join_1k() {
+async fn test_right_semi_join_1k() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightSemi,
+        None,
+    )
+    .run_test(&[HjSmj, NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_right_semi_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightSemi,
+        Some(Box::new(col_lt_col_filter)),
+    )
+    .run_test(&[HjSmj, NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_left_anti_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::LeftAnti,
         None,
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
 #[tokio::test]
-async fn test_anti_join_1k_filtered() {
+async fn test_left_anti_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::LeftAnti,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_right_anti_join_1k() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightAnti,
+        None,
+    )
+    .run_test(&[HjSmj, NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_right_anti_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightAnti,
+        Some(Box::new(col_lt_col_filter)),
+    )
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -242,7 +289,7 @@ async fn test_left_mark_join_1k() {
         JoinType::LeftMark,
         None,
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -254,7 +301,7 @@ async fn test_left_mark_join_1k_filtered() {
         JoinType::LeftMark,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -304,7 +351,7 @@ impl JoinFuzzTestCase {
     /// on-condition schema
     fn intermediate_schema(&self) -> Schema {
         let filter_schema = if let Some(filter) = self.join_filter() {
-            filter.schema().to_owned()
+            filter.schema().as_ref().to_owned()
         } else {
             Schema::empty()
         };
@@ -402,13 +449,15 @@ impl JoinFuzzTestCase {
         column_indices
     }
 
-    fn left_right(&self) -> (Arc<MemoryExec>, Arc<MemoryExec>) {
+    fn left_right(&self) -> (Arc<DataSourceExec>, Arc<DataSourceExec>) {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
         let left =
-            Arc::new(MemoryExec::try_new(&[self.input1.clone()], schema1, None).unwrap());
+            MemorySourceConfig::try_new_exec(&[self.input1.clone()], schema1, None)
+                .unwrap();
         let right =
-            Arc::new(MemoryExec::try_new(&[self.input2.clone()], schema2, None).unwrap());
+            MemorySourceConfig::try_new_exec(&[self.input2.clone()], schema2, None)
+                .unwrap();
         (left, right)
     }
 
@@ -460,10 +509,11 @@ impl JoinFuzzTestCase {
         let intermediate_schema = self.intermediate_schema();
         let expression = self.composite_filter_expression();
 
-        let filter = JoinFilter::new(expression, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(expression, column_indices, Arc::new(intermediate_schema));
 
         Arc::new(
-            NestedLoopJoinExec::try_new(left, right, Some(filter), &self.join_type)
+            NestedLoopJoinExec::try_new(left, right, Some(filter), &self.join_type, None)
                 .unwrap(),
         )
     }
@@ -512,14 +562,14 @@ impl JoinFuzzTestCase {
             nlj_formatted_sorted.sort_unstable();
 
             if debug
-                && ((join_tests.contains(&JoinTestType::NljHj) && nlj_rows != hj_rows)
-                    || (join_tests.contains(&JoinTestType::HjSmj) && smj_rows != hj_rows))
+                && ((join_tests.contains(&NljHj) && nlj_rows != hj_rows)
+                    || (join_tests.contains(&HjSmj) && smj_rows != hj_rows))
             {
                 let fuzz_debug = "fuzz_test_debug";
                 std::fs::remove_dir_all(fuzz_debug).unwrap_or(());
                 std::fs::create_dir_all(fuzz_debug).unwrap();
                 let out_dir_name = &format!("{fuzz_debug}/batch_size_{batch_size}");
-                println!("Test result data mismatch found. HJ rows {}, SMJ rows {}, NLJ rows {}", hj_rows, smj_rows, nlj_rows);
+                println!("Test result data mismatch found. HJ rows {hj_rows}, SMJ rows {smj_rows}, NLJ rows {nlj_rows}");
                 println!("The debug is ON. Input data will be saved to {out_dir_name}");
 
                 Self::save_partitioned_batches_as_parquet(
@@ -533,11 +583,11 @@ impl JoinFuzzTestCase {
                     "input2",
                 );
 
-                if join_tests.contains(&JoinTestType::NljHj) && nlj_rows != hj_rows {
+                if join_tests.contains(&NljHj) && nlj_rows != hj_rows {
                     println!("=============== HashJoinExec ==================");
-                    hj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+                    hj_formatted_sorted.iter().for_each(|s| println!("{s}"));
                     println!("=============== NestedLoopJoinExec ==================");
-                    nlj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+                    nlj_formatted_sorted.iter().for_each(|s| println!("{s}"));
 
                     Self::save_partitioned_batches_as_parquet(
                         &nlj_collected,
@@ -551,11 +601,11 @@ impl JoinFuzzTestCase {
                     );
                 }
 
-                if join_tests.contains(&JoinTestType::HjSmj) && smj_rows != hj_rows {
+                if join_tests.contains(&HjSmj) && smj_rows != hj_rows {
                     println!("=============== HashJoinExec ==================");
-                    hj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+                    hj_formatted_sorted.iter().for_each(|s| println!("{s}"));
                     println!("=============== SortMergeJoinExec ==================");
-                    smj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+                    smj_formatted_sorted.iter().for_each(|s| println!("{s}"));
 
                     Self::save_partitioned_batches_as_parquet(
                         &hj_collected,
@@ -570,11 +620,11 @@ impl JoinFuzzTestCase {
                 }
             }
 
-            if join_tests.contains(&JoinTestType::NljHj) {
-                let err_msg_rowcnt = format!("NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {}", batch_size);
+            if join_tests.contains(&NljHj) {
+                let err_msg_rowcnt = format!("NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {batch_size}");
                 assert_eq!(nlj_rows, hj_rows, "{}", err_msg_rowcnt.as_str());
 
-                let err_msg_contents = format!("NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {}", batch_size);
+                let err_msg_contents = format!("NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {batch_size}");
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
                 for (i, (nlj_line, hj_line)) in nlj_formatted_sorted
@@ -591,7 +641,7 @@ impl JoinFuzzTestCase {
                 }
             }
 
-            if join_tests.contains(&JoinTestType::HjSmj) {
+            if join_tests.contains(&HjSmj) {
                 let err_msg_row_cnt = format!("HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}", &batch_size);
                 assert_eq!(hj_rows, smj_rows, "{}", err_msg_row_cnt.as_str());
 
@@ -645,7 +695,7 @@ impl JoinFuzzTestCase {
         std::fs::create_dir_all(out_path).unwrap();
 
         input.iter().enumerate().for_each(|(idx, batch)| {
-            let file_path = format!("{out_path}/file_{}.parquet", idx);
+            let file_path = format!("{out_path}/file_{idx}.parquet");
             let mut file = std::fs::File::create(&file_path).unwrap();
             println!(
                 "{}: Saving batch idx {} rows {} to parquet {}",

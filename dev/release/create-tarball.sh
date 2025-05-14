@@ -53,11 +53,6 @@ if [ "$#" -ne 2 ]; then
     exit
 fi
 
-if [[ -z "${GH_TOKEN}" ]]; then
-    echo "Please set personal github token through GH_TOKEN environment variable"
-    exit
-fi
-
 version=$1
 rc=$2
 tag="${version}-rc${rc}"
@@ -116,9 +111,6 @@ echo "---------------------------------------------------------"
 # the files in the tarball are prefixed with {version} (e.g. 4.0.1)
 mkdir -p ${distdir}
 (cd "${SOURCE_TOP_DIR}" && git archive ${release_hash} --prefix ${release}/ | gzip > ${tarball})
-
-echo "Running rat license checker on ${tarball}"
-${SOURCE_DIR}/run-rat.sh ${tarball}
 
 echo "Signing tarball and creating checksums"
 gpg --armor --output ${tarball}.asc --detach-sig ${tarball}

@@ -17,7 +17,7 @@
 
 use crate::error::{_plan_datafusion_err, _plan_err};
 use crate::{Result, ScalarValue};
-use arrow_schema::DataType;
+use arrow::datatypes::DataType;
 use std::collections::HashMap;
 
 /// The parameter value corresponding to the placeholder

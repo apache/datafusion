@@ -30,7 +30,7 @@ use arrow::{
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct UnKnownColumn {
     name: String,
 }
@@ -87,14 +87,19 @@ impl PhysicalExpr for UnKnownColumn {
         Ok(self)
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 
-impl PartialEq<dyn Any> for UnKnownColumn {
-    fn eq(&self, _other: &dyn Any) -> bool {
+impl Hash for UnKnownColumn {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+impl PartialEq for UnKnownColumn {
+    fn eq(&self, _other: &Self) -> bool {
         // UnknownColumn is not a valid expression, so it should not be equal to any other expression.
         // See https://github.com/apache/datafusion/pull/11536
         false

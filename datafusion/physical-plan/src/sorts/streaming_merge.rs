@@ -24,11 +24,11 @@ use crate::sorts::{
     stream::{FieldCursorStream, RowCursorStream},
 };
 use crate::SendableRecordBatchStream;
+use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
-use arrow_array::*;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 macro_rules! primitive_merge_helper {
     ($t:ty, $($v:ident),+) => {
@@ -38,7 +38,8 @@ macro_rules! primitive_merge_helper {
 
 macro_rules! merge_helper {
     ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
-        let streams = FieldCursorStream::<$t>::new($sort, $streams);
+        let streams =
+            FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
             $schema,
@@ -51,16 +52,30 @@ macro_rules! merge_helper {
     }};
 }
 
-#[derive(Default)]
 pub struct StreamingMergeBuilder<'a> {
     streams: Vec<SendableRecordBatchStream>,
     schema: Option<SchemaRef>,
-    expressions: LexOrderingRef<'a>,
+    expressions: &'a LexOrdering,
     metrics: Option<BaselineMetrics>,
     batch_size: Option<usize>,
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     enable_round_robin_tie_breaker: bool,
+}
+
+impl Default for StreamingMergeBuilder<'_> {
+    fn default() -> Self {
+        Self {
+            streams: vec![],
+            schema: None,
+            expressions: LexOrdering::empty(),
+            metrics: None,
+            batch_size: None,
+            fetch: None,
+            reservation: None,
+            enable_round_robin_tie_breaker: false,
+        }
+    }
 }
 
 impl<'a> StreamingMergeBuilder<'a> {
@@ -81,7 +96,7 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    pub fn with_expressions(mut self, expressions: LexOrderingRef<'a>) -> Self {
+    pub fn with_expressions(mut self, expressions: &'a LexOrdering) -> Self {
         self.expressions = expressions;
         self
     }
@@ -106,6 +121,10 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
+    /// information.
+    ///
+    /// [SortPreservingMergeExec::with_round_robin_repartition]: crate::sorts::sort_preserving_merge::SortPreservingMergeExec::with_round_robin_repartition
     pub fn with_round_robin_tie_breaker(
         mut self,
         enable_round_robin_tie_breaker: bool,
@@ -158,6 +177,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             downcast_primitive! {
                 data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker),
                 DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
                 DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
                 DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
                 DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)

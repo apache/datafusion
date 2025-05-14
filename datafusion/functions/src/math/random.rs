@@ -16,18 +16,24 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::Float64Array;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 use rand::{thread_rng, Rng};
 
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
-use datafusion_expr::ColumnarValue;
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = r#"Returns a random float value in the range [0, 1).
+The random seed is unique to each row."#,
+    syntax_example = "random()"
+)]
 #[derive(Debug)]
 pub struct RandomFunc {
     signature: Signature,
@@ -42,7 +48,7 @@ impl Default for RandomFunc {
 impl RandomFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![], Volatility::Volatile),
+            signature: Signature::nullary(Volatility::Volatile),
         }
     }
 }
@@ -64,13 +70,12 @@ impl ScalarUDFImpl for RandomFunc {
         Ok(Float64)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("{} function does not accept arguments", self.name())
-    }
-
-    fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if !args.args.is_empty() {
+            return internal_err!("{} function does not accept arguments", self.name());
+        }
         let mut rng = thread_rng();
-        let mut values = vec![0.0; num_rows];
+        let mut values = vec![0.0; args.number_rows];
         // Equivalent to set each element with rng.gen_range(0.0..1.0), but more efficient
         rng.fill(&mut values[..]);
         let array = Float64Array::from(values);
@@ -79,22 +84,6 @@ impl ScalarUDFImpl for RandomFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_random_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_random_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                r#"Returns a random float value in the range [0, 1).
-The random seed is unique to each row."#,
-            )
-            .with_syntax_example("random()")
-            .build()
-            .unwrap()
-    })
 }

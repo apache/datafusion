@@ -15,41 +15,46 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
+pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+};
+pub use crate::metrics::Metric;
+pub use crate::ordering::InputOrderMode;
+pub use crate::stream::EmptyRecordBatchStream;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
-use futures::stream::{StreamExt, TryStreamExt};
-use tokio::task::JoinSet;
-
-use datafusion_common::config::ConfigOptions;
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-use datafusion_common::{exec_err, Result};
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
-use datafusion_execution::TaskContext;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, udf, Distribution, Partitioning, PhysicalExpr,
+    expressions, Distribution, Partitioning, PhysicalExpr,
 };
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, LexRequirement};
+
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
-pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-pub use crate::metrics::Metric;
 use crate::metrics::MetricsSet;
-pub use crate::ordering::InputOrderMode;
+use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-pub use crate::stream::EmptyRecordBatchStream;
 use crate::stream::RecordBatchStreamAdapter;
+
+use arrow::array::{Array, RecordBatch};
+use arrow::datatypes::SchemaRef;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common_runtime::JoinSet;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
+
+use futures::stream::{StreamExt, TryStreamExt};
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -71,7 +76,7 @@ use crate::stream::RecordBatchStreamAdapter;
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
     /// Implementation note: this method can just proxy to
     /// [`static_name`](ExecutionPlan::static_name) if no special action is
@@ -80,7 +85,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// range of use cases.
     fn name(&self) -> &str;
 
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
     fn static_name() -> &'static str
     where
@@ -109,6 +114,15 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// This information is available via methods on [`ExecutionPlanProperties`]
     /// trait, which is implemented for all `ExecutionPlan`s.
     fn properties(&self) -> &PlanProperties;
+
+    /// Returns an error if this individual node does not conform to its invariants.
+    /// These invariants are typically only checked in debug mode.
+    ///
+    /// A default set of invariants is provided in the default implementation.
+    /// Extension nodes can provide their own invariants.
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
+        Ok(())
+    }
 
     /// Specifies the data distribution requirements for all the
     /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
@@ -249,13 +263,32 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// used.
     /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
+    /// To enable timely cancellation, the [`Stream`] that is returned must not
+    /// block the CPU indefinitely and must yield back to the tokio runtime regularly.
+    /// In a typical [`ExecutionPlan`], this automatically happens unless there are
+    /// special circumstances; e.g. when the computational complexity of processing a
+    /// batch is superlinear. See this [general guideline][async-guideline] for more context
+    /// on this point, which explains why one should avoid spending a long time without
+    /// reaching an `await`/yield point in asynchronous runtimes.
+    /// This can be achieved by manually returning [`Poll::Pending`] and setting up wakers
+    /// appropriately, or the use of [`tokio::task::yield_now()`] when appropriate.
+    /// In special cases that warrant manual yielding, determination for "regularly" may be
+    /// made using a timer (being careful with the overhead-heavy system call needed to
+    /// take the time), or by counting rows or batches.
+    ///
+    /// The [cancellation benchmark] tracks some cases of how quickly queries can
+    /// be cancelled.
+    ///
     /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
     /// for structures to help ensure all background tasks are cancelled.
     ///
     /// [`spawn`]: tokio::task::spawn
-    /// [`JoinSet`]: tokio::task::JoinSet
+    /// [cancellation benchmark]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md#cancellation
+    /// [`JoinSet`]: datafusion_common_runtime::JoinSet
     /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
+    /// [`Poll::Pending`]: std::task::Poll::Pending
+    /// [async-guideline]: https://ryhl.io/blog/async-what-is-blocking/
     ///
     /// # Implementation Examples
     ///
@@ -271,8 +304,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::array::RecordBatch;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     /// # use datafusion_physical_plan::memory::MemoryStream;
@@ -301,8 +334,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::array::RecordBatch;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     /// # use datafusion_physical_plan::memory::MemoryStream;
@@ -336,8 +369,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::array::RecordBatch;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use futures::TryStreamExt;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -393,7 +426,27 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// For TableScan executors, which supports filter pushdown, special attention
     /// needs to be paid to whether the stats returned by this method are exact or not
+    #[deprecated(since = "48.0.0", note = "Use `partition_statistics` method instead")]
     fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    /// Returns statistics for a specific partition of this `ExecutionPlan` node.
+    /// If statistics are not available, should return [`Statistics::new_unknown`]
+    /// (the default), not an error.
+    /// If `partition` is `None`, it returns statistics for the entire plan.
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(idx) = partition {
+            // Validate partition index
+            let partition_count = self.properties().partitioning.partition_count();
+            if idx >= partition_count {
+                return internal_err!(
+                    "Invalid partition index: {}, the partition count is {}",
+                    idx,
+                    partition_count
+                );
+            }
+        }
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
@@ -422,6 +475,93 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
     }
+
+    /// Attempts to push down the given projection into the input of this `ExecutionPlan`.
+    ///
+    /// If the operator supports this optimization, the resulting plan will be:
+    /// `self_new <- projection <- source`, starting from `projection <- self <- source`.
+    /// Otherwise, it returns the current `ExecutionPlan` as-is.
+    ///
+    /// Returns `Ok(Some(...))` if pushdown is applied, `Ok(None)` if it is not supported
+    /// or not possible, or `Err` on failure.
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
+
+    /// Collect filters that this node can push down to its children.
+    /// Filters that are being pushed down from parents are passed in,
+    /// and the node may generate additional filters to push down.
+    /// For example, given the plan FilterExec -> HashJoinExec -> DataSourceExec,
+    /// what will happen is that we recurse down the plan calling `ExecutionPlan::gather_filters_for_pushdown`:
+    /// 1. `FilterExec::gather_filters_for_pushdown` is called with no parent
+    ///    filters so it only returns that `FilterExec` wants to push down its own predicate.
+    /// 2. `HashJoinExec::gather_filters_for_pushdown` is called with the filter from
+    ///    `FilterExec`, which it only allows to push down to one side of the join (unless it's on the join key)
+    ///    but it also adds its own filters (e.g. pushing down a bloom filter of the hash table to the scan side of the join).
+    /// 3. `DataSourceExec::gather_filters_for_pushdown` is called with both filters from `HashJoinExec`
+    ///    and `FilterExec`, however `DataSourceExec::gather_filters_for_pushdown` doesn't actually do anything
+    ///    since it has no children and no additional filters to push down.
+    ///    It's only once [`ExecutionPlan::handle_child_pushdown_result`] is called on `DataSourceExec` as we recurse
+    ///    up the plan that `DataSourceExec` can actually bind the filters.
+    ///
+    /// The default implementation bars all parent filters from being pushed down and adds no new filters.
+    /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
+    fn gather_filters_for_pushdown(
+        &self,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        Ok(
+            FilterDescription::new_with_child_count(self.children().len())
+                .all_parent_filters_unsupported(parent_filters),
+        )
+    }
+
+    /// Handle the result of a child pushdown.
+    /// This is called as we recurse back up the plan tree after recursing down and calling [`ExecutionPlan::gather_filters_for_pushdown`].
+    /// Once we know what the result of pushing down filters into children is we ask the current node what it wants to do with that result.
+    /// For a `DataSourceExec` that may be absorbing the filters to apply them during the scan phase
+    /// (also known as late materialization).
+    /// A `FilterExec` may absorb any filters its children could not absorb, or if there are no filters left it
+    /// may remove itself from the plan altogether.
+    /// It combines both [`ChildPushdownResult::parent_filters`] and [`ChildPushdownResult::self_filters`] into a single
+    /// predicate and replaces it's own predicate.
+    /// Then it passes [`PredicateSupport::Supported`] for each parent predicate to the parent.
+    /// A `HashJoinExec` may ignore the pushdown result since it needs to apply the filters as part of the join anyhow.
+    /// It passes [`ChildPushdownResult::parent_filters`] back up to it's parents wrapped in [`FilterPushdownPropagation::transparent`]
+    /// and [`ChildPushdownResult::self_filters`] is discarded.
+    ///
+    /// The default implementation is a no-op that passes the result of pushdown from the children to its parent.
+    ///
+    /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::transparent(
+            child_pushdown_result,
+        ))
+    }
+}
+
+/// [`ExecutionPlan`] Invariant Level
+///
+/// What set of assertions ([Invariant]s)  holds for a particular `ExecutionPlan`
+///
+/// [Invariant]: https://en.wikipedia.org/wiki/Invariant_(mathematics)#Invariants_in_computer_science
+#[derive(Clone, Copy)]
+pub enum InvariantLevel {
+    /// Invariants that are always true for the [`ExecutionPlan`] node
+    /// such as the number of expected children.
+    Always,
+    /// Invariants that must hold true for the [`ExecutionPlan`] node
+    /// to be "executable", such as ordering and/or distribution requirements
+    /// being fulfilled.
+    Executable,
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -431,11 +571,6 @@ pub trait ExecutionPlanProperties {
     /// partitions.
     fn output_partitioning(&self) -> &Partitioning;
 
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns [`ExecutionMode::PipelineBreaking`] to indicate this.
-    fn execution_mode(&self) -> ExecutionMode;
-
     /// If the output of this `ExecutionPlan` within each partition is sorted,
     /// returns `Some(keys)` describing the ordering. A `None` return value
     /// indicates no assumptions should be made on the output ordering.
@@ -443,7 +578,15 @@ pub trait ExecutionPlanProperties {
     /// For example, `SortExec` (obviously) produces sorted output as does
     /// `SortPreservingMergeStream`. Less obviously, `Projection` produces sorted
     /// output if its input is sorted as it does not reorder the input rows.
-    fn output_ordering(&self) -> Option<LexOrderingRef>;
+    fn output_ordering(&self) -> Option<&LexOrdering>;
+
+    /// Boundedness information of the stream corresponding to this `ExecutionPlan`.
+    /// For more details, see [`Boundedness`].
+    fn boundedness(&self) -> Boundedness;
+
+    /// Indicates how the stream of this `ExecutionPlan` emits its results.
+    /// For more details, see [`EmissionType`].
+    fn pipeline_behavior(&self) -> EmissionType;
 
     /// Get the [`EquivalenceProperties`] within the plan.
     ///
@@ -455,13 +598,15 @@ pub trait ExecutionPlanProperties {
     /// If this ExecutionPlan makes no changes to the schema of the rows flowing
     /// through it or how columns within each row relate to each other, it
     /// should return the equivalence properties of its input. For
-    /// example, since `FilterExec` may remove rows from its input, but does not
+    /// example, since [`FilterExec`] may remove rows from its input, but does not
     /// otherwise modify them, it preserves its input equivalence properties.
     /// However, since `ProjectionExec` may calculate derived expressions, it
     /// needs special handling.
     ///
     /// See also [`ExecutionPlan::maintains_input_order`] and [`Self::output_ordering`]
     /// for related concepts.
+    ///
+    /// [`FilterExec`]: crate::filter::FilterExec
     fn equivalence_properties(&self) -> &EquivalenceProperties;
 }
 
@@ -470,12 +615,16 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
         self.properties().output_partitioning()
     }
 
-    fn execution_mode(&self) -> ExecutionMode {
-        self.properties().execution_mode()
+    fn output_ordering(&self) -> Option<&LexOrdering> {
+        self.properties().output_ordering()
     }
 
-    fn output_ordering(&self) -> Option<LexOrderingRef> {
-        self.properties().output_ordering()
+    fn boundedness(&self) -> Boundedness {
+        self.properties().boundedness
+    }
+
+    fn pipeline_behavior(&self) -> EmissionType {
+        self.properties().emission_type
     }
 
     fn equivalence_properties(&self) -> &EquivalenceProperties {
@@ -488,12 +637,16 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
         self.properties().output_partitioning()
     }
 
-    fn execution_mode(&self) -> ExecutionMode {
-        self.properties().execution_mode()
+    fn output_ordering(&self) -> Option<&LexOrdering> {
+        self.properties().output_ordering()
     }
 
-    fn output_ordering(&self) -> Option<LexOrderingRef> {
-        self.properties().output_ordering()
+    fn boundedness(&self) -> Boundedness {
+        self.properties().boundedness
+    }
+
+    fn pipeline_behavior(&self) -> EmissionType {
+        self.properties().emission_type
     }
 
     fn equivalence_properties(&self) -> &EquivalenceProperties {
@@ -501,82 +654,142 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
     }
 }
 
-/// Describes the execution mode of the result of calling
-/// [`ExecutionPlan::execute`] with respect to its size and behavior.
+/// Represents whether a stream of data **generated** by an operator is bounded (finite)
+/// or unbounded (infinite).
 ///
-/// The mode of the execution plan is determined by the mode of its input
-/// execution plans and the details of the operator itself. For example, a
-/// `FilterExec` operator will have the same execution mode as its input, but a
-/// `SortExec` operator may have a different execution mode than its input,
-/// depending on how the input stream is sorted.
+/// This is used to determine whether an execution plan will eventually complete
+/// processing all its data (bounded) or could potentially run forever (unbounded).
 ///
-/// There are three possible execution modes: `Bounded`, `Unbounded` and
-/// `PipelineBreaking`.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum ExecutionMode {
-    /// The stream is bounded / finite.
-    ///
-    /// In this case the stream will eventually return `None` to indicate that
-    /// there are no more records to process.
+/// For unbounded streams, it also tracks whether the operator requires finite memory
+/// to process the stream or if memory usage could grow unbounded.
+///
+/// Boundedness of the output stream is based on the the boundedness of the input stream and the nature of
+/// the operator. For example, limit or topk with fetch operator can convert an unbounded stream to a bounded stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Boundedness {
+    /// The data stream is bounded (finite) and will eventually complete
     Bounded,
-    /// The stream is unbounded / infinite.
-    ///
-    /// In this case, the stream will never be done (never return `None`),
-    /// except in case of error.
-    ///
-    /// This mode is often used in "Steaming" use cases where data is
-    /// incrementally processed as it arrives.
-    ///
-    /// Note that even though the operator generates an unbounded stream of
-    /// results, it can execute with bounded memory and incrementally produces
-    /// output.
-    Unbounded,
-    /// Some of the operator's input stream(s) are unbounded, but the operator
-    /// cannot generate streaming results from these streaming inputs.
-    ///
-    /// In this case, the execution mode will be pipeline breaking, e.g. the
-    /// operator requires unbounded memory to generate results. This
-    /// information is used by the planner when performing sanity checks
-    /// on plans processings unbounded data sources.
-    PipelineBreaking,
+    /// The data stream is unbounded (infinite) and could run forever
+    Unbounded {
+        /// Whether this operator requires infinite memory to process the unbounded stream.
+        /// If false, the operator can process an infinite stream with bounded memory.
+        /// If true, memory usage may grow unbounded while processing the stream.
+        ///
+        /// For example, `Median` requires infinite memory to compute the median of an unbounded stream.
+        /// `Min/Max` requires infinite memory if the stream is unordered, but can be computed with bounded memory if the stream is ordered.
+        requires_infinite_memory: bool,
+    },
 }
 
-impl ExecutionMode {
-    /// Check whether the execution mode is unbounded or not.
+impl Boundedness {
     pub fn is_unbounded(&self) -> bool {
-        matches!(self, ExecutionMode::Unbounded)
-    }
-
-    /// Check whether the execution is pipeline friendly. If so, operator can
-    /// execute safely.
-    pub fn pipeline_friendly(&self) -> bool {
-        matches!(self, ExecutionMode::Bounded | ExecutionMode::Unbounded)
+        matches!(self, Boundedness::Unbounded { .. })
     }
 }
 
-/// Conservatively "combines" execution modes of a given collection of operators.
-pub(crate) fn execution_mode_from_children<'a>(
+/// Represents how an operator emits its output records.
+///
+/// This is used to determine whether an operator emits records incrementally as they arrive,
+/// only emits a final result at the end, or can do both. Note that it generates the output -- record batch with `batch_size` rows
+/// but it may still buffer data internally until it has enough data to emit a record batch or the source is exhausted.
+///
+/// For example, in the following plan:
+/// ```text
+///   SortExec [EmissionType::Final]
+///     |_ on: [col1 ASC]
+///     FilterExec [EmissionType::Incremental]
+///       |_ pred: col2 > 100
+///       DataSourceExec [EmissionType::Incremental]
+///         |_ file: "data.csv"
+/// ```
+/// - DataSourceExec emits records incrementally as it reads from the file
+/// - FilterExec processes and emits filtered records incrementally as they arrive
+/// - SortExec must wait for all input records before it can emit the sorted result,
+///   since it needs to see all values to determine their final order
+///
+/// Left joins can emit both incrementally and finally:
+/// - Incrementally emit matches as they are found
+/// - Finally emit non-matches after all input is processed
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmissionType {
+    /// Records are emitted incrementally as they arrive and are processed
+    Incremental,
+    /// Records are only emitted once all input has been processed
+    Final,
+    /// Records can be emitted both incrementally and as a final result
+    Both,
+}
+
+/// Utility to determine an operator's boundedness based on its children's boundedness.
+///
+/// Assumes boundedness can be inferred from child operators:
+/// - Unbounded (requires_infinite_memory: true) takes precedence.
+/// - Unbounded (requires_infinite_memory: false) is considered next.
+/// - Otherwise, the operator is bounded.
+///
+/// **Note:** This is a general-purpose utility and may not apply to
+/// all multi-child operators. Ensure your operator's behavior aligns
+/// with these assumptions before using.
+pub(crate) fn boundedness_from_children<'a>(
     children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
-) -> ExecutionMode {
-    let mut result = ExecutionMode::Bounded;
-    for mode in children.into_iter().map(|child| child.execution_mode()) {
-        match (mode, result) {
-            (ExecutionMode::PipelineBreaking, _)
-            | (_, ExecutionMode::PipelineBreaking) => {
-                // If any of the modes is `PipelineBreaking`, so is the result:
-                return ExecutionMode::PipelineBreaking;
+) -> Boundedness {
+    let mut unbounded_with_finite_mem = false;
+
+    for child in children {
+        match child.boundedness() {
+            Boundedness::Unbounded {
+                requires_infinite_memory: true,
+            } => {
+                return Boundedness::Unbounded {
+                    requires_infinite_memory: true,
+                }
             }
-            (ExecutionMode::Unbounded, _) | (_, ExecutionMode::Unbounded) => {
-                // Unbounded mode eats up bounded mode:
-                result = ExecutionMode::Unbounded;
+            Boundedness::Unbounded {
+                requires_infinite_memory: false,
+            } => {
+                unbounded_with_finite_mem = true;
             }
-            (ExecutionMode::Bounded, ExecutionMode::Bounded) => {
-                // When both modes are bounded, so is the result:
-                result = ExecutionMode::Bounded;
-            }
+            Boundedness::Bounded => {}
         }
     }
-    result
+
+    if unbounded_with_finite_mem {
+        Boundedness::Unbounded {
+            requires_infinite_memory: false,
+        }
+    } else {
+        Boundedness::Bounded
+    }
+}
+
+/// Determines the emission type of an operator based on its children's pipeline behavior.
+///
+/// The precedence of emission types is:
+/// - `Final` has the highest precedence.
+/// - `Both` is next: if any child emits both incremental and final results, the parent inherits this behavior unless a `Final` is present.
+/// - `Incremental` is the default if all children emit incremental results.
+///
+/// **Note:** This is a general-purpose utility and may not apply to
+/// all multi-child operators. Verify your operator's behavior aligns
+/// with these assumptions.
+pub(crate) fn emission_type_from_children<'a>(
+    children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
+) -> EmissionType {
+    let mut inc_and_final = false;
+
+    for child in children {
+        match child.pipeline_behavior() {
+            EmissionType::Final => return EmissionType::Final,
+            EmissionType::Both => inc_and_final = true,
+            EmissionType::Incremental => continue,
+        }
+    }
+
+    if inc_and_final {
+        EmissionType::Both
+    } else {
+        EmissionType::Incremental
+    }
 }
 
 /// Stores certain, often expensive to compute, plan properties used in query
@@ -591,8 +804,10 @@ pub struct PlanProperties {
     pub eq_properties: EquivalenceProperties,
     /// See [ExecutionPlanProperties::output_partitioning]
     pub partitioning: Partitioning,
-    /// See [ExecutionPlanProperties::execution_mode]
-    pub execution_mode: ExecutionMode,
+    /// See [ExecutionPlanProperties::pipeline_behavior]
+    pub emission_type: EmissionType,
+    /// See [ExecutionPlanProperties::boundedness]
+    pub boundedness: Boundedness,
     /// See [ExecutionPlanProperties::output_ordering]
     output_ordering: Option<LexOrdering>,
 }
@@ -602,14 +817,16 @@ impl PlanProperties {
     pub fn new(
         eq_properties: EquivalenceProperties,
         partitioning: Partitioning,
-        execution_mode: ExecutionMode,
+        emission_type: EmissionType,
+        boundedness: Boundedness,
     ) -> Self {
         // Output ordering can be derived from `eq_properties`.
         let output_ordering = eq_properties.output_ordering();
         Self {
             eq_properties,
             partitioning,
-            execution_mode,
+            emission_type,
+            boundedness,
             output_ordering,
         }
     }
@@ -617,12 +834,6 @@ impl PlanProperties {
     /// Overwrite output partitioning with its new value.
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.partitioning = partitioning;
-        self
-    }
-
-    /// Overwrite the execution Mode with its new value.
-    pub fn with_execution_mode(mut self, execution_mode: ExecutionMode) -> Self {
-        self.execution_mode = execution_mode;
         self
     }
 
@@ -635,6 +846,24 @@ impl PlanProperties {
         self
     }
 
+    /// Overwrite boundedness with its new value.
+    pub fn with_boundedness(mut self, boundedness: Boundedness) -> Self {
+        self.boundedness = boundedness;
+        self
+    }
+
+    /// Overwrite emission type with its new value.
+    pub fn with_emission_type(mut self, emission_type: EmissionType) -> Self {
+        self.emission_type = emission_type;
+        self
+    }
+
+    /// Overwrite constraints with its new value.
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.eq_properties = self.eq_properties.with_constraints(constraints);
+        self
+    }
+
     pub fn equivalence_properties(&self) -> &EquivalenceProperties {
         &self.eq_properties
     }
@@ -643,16 +872,12 @@ impl PlanProperties {
         &self.partitioning
     }
 
-    pub fn output_ordering(&self) -> Option<LexOrderingRef> {
-        self.output_ordering.as_deref()
-    }
-
-    pub fn execution_mode(&self) -> ExecutionMode {
-        self.execution_mode
+    pub fn output_ordering(&self) -> Option<&LexOrdering> {
+        self.output_ordering.as_ref()
     }
 
     /// Get schema of the node.
-    fn schema(&self) -> &SchemaRef {
+    pub(crate) fn schema(&self) -> &SchemaRef {
         self.eq_properties.schema()
     }
 }
@@ -706,9 +931,11 @@ pub fn with_new_children_if_necessary(
     }
 }
 
-/// Return a [wrapper](DisplayableExecutionPlan) around an
+/// Return a [`DisplayableExecutionPlan`] wrapper around an
 /// [`ExecutionPlan`] which can be displayed in various easier to
 /// understand ways.
+///
+/// See examples on [`DisplayableExecutionPlan`]
 pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
     DisplayableExecutionPlan::new(plan)
 }
@@ -824,7 +1051,7 @@ pub fn execute_stream_partitioned(
 /// and context. It then checks if there are any columns in the input that might
 /// violate the `not null` constraints specified in the `sink_schema`. If there are
 /// such columns, it wraps the resulting stream to enforce the `not null` constraints
-/// by invoking the `check_not_null_contraits` function on each batch of the stream.
+/// by invoking the [`check_not_null_constraints`] function on each batch of the stream.
 pub fn execute_input_stream(
     input: Arc<dyn ExecutionPlan>,
     sink_schema: SchemaRef,
@@ -927,8 +1154,8 @@ pub enum CardinalityEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;
 
@@ -989,6 +1216,10 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
             unimplemented!()
         }
     }
@@ -1054,6 +1285,10 @@ mod tests {
         fn statistics(&self) -> Result<Statistics> {
             unimplemented!()
         }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+            unimplemented!()
+        }
     }
 
     #[test]
@@ -1098,9 +1333,9 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_starts_with(
-            result.err().unwrap().message().as_ref(),
-            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        assert_eq!(
+            result.err().unwrap().strip_backtrace(),
+            "Execution error: Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
     }
@@ -1123,9 +1358,9 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_starts_with(
-            result.err().unwrap().message().as_ref(),
-            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        assert_eq!(
+            result.err().unwrap().strip_backtrace(),
+            "Execution error: Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
     }
@@ -1147,9 +1382,9 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_starts_with(
-            result.err().unwrap().message().as_ref(),
-            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        assert_eq!(
+            result.err().unwrap().strip_backtrace(),
+            "Execution error: Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
     }
@@ -1190,21 +1425,10 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_starts_with(
-            result.err().unwrap().message().as_ref(),
-            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        assert_eq!(
+            result.err().unwrap().strip_backtrace(),
+            "Execution error: Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
-    }
-
-    fn assert_starts_with(actual: impl AsRef<str>, expected_prefix: impl AsRef<str>) {
-        let actual = actual.as_ref();
-        let expected_prefix = expected_prefix.as_ref();
-        assert!(
-            actual.starts_with(expected_prefix),
-            "Expected '{}' to start with '{}'",
-            actual,
-            expected_prefix
-        );
     }
 }

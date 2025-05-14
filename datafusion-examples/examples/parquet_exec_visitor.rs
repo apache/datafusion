@@ -18,8 +18,10 @@
 use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{ListingOptions, PartitionedFile};
-use datafusion::datasource::physical_plan::ParquetExec;
+use datafusion::datasource::listing::ListingOptions;
+use datafusion::datasource::physical_plan::{FileGroup, ParquetSource};
+use datafusion::datasource::source::DataSourceExec;
+use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{
@@ -83,27 +85,30 @@ async fn main() {
 /// and `file_groups` from the FileScanConfig.
 #[derive(Debug)]
 struct ParquetExecVisitor {
-    file_groups: Option<Vec<Vec<PartitionedFile>>>,
+    file_groups: Option<Vec<FileGroup>>,
     bytes_scanned: Option<MetricValue>,
 }
 
 impl ExecutionPlanVisitor for ParquetExecVisitor {
-    type Error = datafusion_common::DataFusionError;
+    type Error = DataFusionError;
 
     /// This function is called once for every node in the tree.
     /// Based on your needs implement either `pre_visit` (visit each node before its children/inputs)
     /// or `post_visit` (visit each node after its children/inputs)
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         // If needed match on a specific `ExecutionPlan` node type
-        let maybe_parquet_exec = plan.as_any().downcast_ref::<ParquetExec>();
-        if let Some(parquet_exec) = maybe_parquet_exec {
-            self.file_groups = Some(parquet_exec.base_config().file_groups.clone());
+        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            if let Some((file_config, _)) =
+                data_source_exec.downcast_to_file_source::<ParquetSource>()
+            {
+                self.file_groups = Some(file_config.file_groups.clone());
 
-            let metrics = match parquet_exec.metrics() {
-                None => return Ok(true),
-                Some(metrics) => metrics,
-            };
-            self.bytes_scanned = metrics.sum_by_name("bytes_scanned");
+                let metrics = match data_source_exec.metrics() {
+                    None => return Ok(true),
+                    Some(metrics) => metrics,
+                };
+                self.bytes_scanned = metrics.sum_by_name("bytes_scanned");
+            }
         }
         Ok(true)
     }

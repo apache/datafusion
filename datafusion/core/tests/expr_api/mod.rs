@@ -15,20 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{
+    builder::{ListBuilder, StringBuilder},
+    ArrayRef, Int64Array, RecordBatch, StringArray, StructArray,
+};
+use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
-use arrow_array::builder::{ListBuilder, StringBuilder};
-use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StructArray};
-use arrow_schema::{DataType, Field};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::ExprFunctionExt;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_aggregate::first_last::first_value_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
+use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use sqlparser::ast::NullTreatment;
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 mod parse_sql_expr;
 mod simplification;
@@ -302,16 +307,45 @@ async fn test_aggregate_ext_null_treatment() {
     .await;
 }
 
+#[tokio::test]
+async fn test_create_physical_expr() {
+    // create_physical_expr does not simplify the expression
+    // 1 + 1
+    create_expr_test(lit(1i32) + lit(2i32), "1 + 2");
+    // However, you can run the simplifier before creating the physical
+    // expression. This mimics what delta.rs and other non-sql libraries do to
+    // create predicates
+    //
+    // 1 + 1
+    create_simplified_expr_test(lit(1i32) + lit(2i32), "3");
+}
+
+#[tokio::test]
+async fn test_create_physical_expr_coercion() {
+    // create_physical_expr does apply type coercion and unwrapping in cast
+    //
+    // expect the cast on the literals
+    // compare string function to int  `id = 1`
+    create_expr_test(col("id").eq(lit(1i32)), "id@0 = CAST(1 AS Utf8)");
+    create_expr_test(lit(1i32).eq(col("id")), "CAST(1 AS Utf8) = id@0");
+    // compare int col to string literal `i = '202410'`
+    // Note this casts the column (not the field)
+    create_expr_test(col("i").eq(lit("202410")), "CAST(i@1 AS Utf8) = 202410");
+    create_expr_test(lit("202410").eq(col("i")), "202410 = CAST(i@1 AS Utf8)");
+    // however, when simplified the casts on i should removed
+    // https://github.com/apache/datafusion/issues/14944
+    create_simplified_expr_test(col("i").eq(lit("202410")), "CAST(i@1 AS Utf8) = 202410");
+    create_simplified_expr_test(lit("202410").eq(col("i")), "CAST(i@1 AS Utf8) = 202410");
+}
+
 /// Evaluates the specified expr as an aggregate and compares the result to the
 /// expected result.
 async fn evaluate_agg_test(expr: Expr, expected_lines: Vec<&str>) {
-    let batch = test_batch();
-
     let ctx = SessionContext::new();
     let group_expr = vec![];
     let agg_expr = vec![expr];
     let result = ctx
-        .read_batch(batch)
+        .read_batch(TEST_BATCH.clone())
         .unwrap()
         .aggregate(group_expr, agg_expr)
         .unwrap()
@@ -324,65 +358,89 @@ async fn evaluate_agg_test(expr: Expr, expected_lines: Vec<&str>) {
 
     assert_eq!(
         expected_lines, actual_lines,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected_lines, actual_lines
+        "\n\nexpected:\n\n{expected_lines:#?}\nactual:\n\n{actual_lines:#?}\n\n"
     );
 }
 
 /// Converts the `Expr` to a `PhysicalExpr`, evaluates it against the provided
 /// `RecordBatch` and compares the result to the expected result.
 fn evaluate_expr_test(expr: Expr, expected_lines: Vec<&str>) {
-    let batch = test_batch();
+    let batch = &TEST_BATCH;
     let df_schema = DFSchema::try_from(batch.schema()).unwrap();
     let physical_expr = SessionContext::new()
         .create_physical_expr(expr, &df_schema)
         .unwrap();
 
-    let result = physical_expr.evaluate(&batch).unwrap();
+    let result = physical_expr.evaluate(batch).unwrap();
     let array = result.into_array(1).unwrap();
     let result = pretty_format_columns("expr", &[array]).unwrap().to_string();
     let actual_lines = result.lines().collect::<Vec<_>>();
 
     assert_eq!(
         expected_lines, actual_lines,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected_lines, actual_lines
+        "\n\nexpected:\n\n{expected_lines:#?}\nactual:\n\n{actual_lines:#?}\n\n"
     );
 }
 
-static TEST_BATCH: OnceLock<RecordBatch> = OnceLock::new();
+/// Creates the physical expression from Expr and compares the Debug expression
+/// to the expected result.
+fn create_expr_test(expr: Expr, expected_expr: &str) {
+    let batch = &TEST_BATCH;
+    let df_schema = DFSchema::try_from(batch.schema()).unwrap();
+    let physical_expr = SessionContext::new()
+        .create_physical_expr(expr, &df_schema)
+        .unwrap();
 
-fn test_batch() -> RecordBatch {
-    TEST_BATCH
-        .get_or_init(|| {
-            let string_array: ArrayRef = Arc::new(StringArray::from(vec!["1", "2", "3"]));
-            let int_array: ArrayRef =
-                Arc::new(Int64Array::from_iter(vec![Some(10), None, Some(5)]));
-
-            // { a: "2021-02-01" } { a: "2021-02-02" } { a: "2021-02-03" }
-            let struct_array: ArrayRef = Arc::from(StructArray::from(vec![(
-                Arc::new(Field::new("a", DataType::Utf8, false)),
-                Arc::new(StringArray::from(vec![
-                    "2021-02-01",
-                    "2021-02-02",
-                    "2021-02-03",
-                ])) as _,
-            )]));
-
-            // ["one"] ["two", "three", "four"] ["five"]
-            let mut builder = ListBuilder::new(StringBuilder::new());
-            builder.append_value([Some("one")]);
-            builder.append_value([Some("two"), Some("three"), Some("four")]);
-            builder.append_value([Some("five")]);
-            let list_array: ArrayRef = Arc::new(builder.finish());
-
-            RecordBatch::try_from_iter(vec![
-                ("id", string_array),
-                ("i", int_array),
-                ("props", struct_array),
-                ("list", list_array),
-            ])
-            .unwrap()
-        })
-        .clone()
+    assert_eq!(physical_expr.to_string(), expected_expr);
 }
+
+/// Creates the physical expression from Expr and runs the expr simplifier
+fn create_simplified_expr_test(expr: Expr, expected_expr: &str) {
+    let batch = &TEST_BATCH;
+    let df_schema = DFSchema::try_from(batch.schema()).unwrap();
+
+    // Simplify the expression first
+    let props = ExecutionProps::new();
+    let simplify_context =
+        SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+    let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
+    let simplified = simplifier.simplify(expr).unwrap();
+    create_expr_test(simplified, expected_expr);
+}
+
+/// Returns a Batch with 3 rows and 4 columns:
+///
+/// id: Utf8
+/// i: Int64
+/// props: Struct
+/// list: List<String>
+static TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
+    let string_array: ArrayRef = Arc::new(StringArray::from(vec!["1", "2", "3"]));
+    let int_array: ArrayRef =
+        Arc::new(Int64Array::from_iter(vec![Some(10), None, Some(5)]));
+
+    // { a: "2021-02-01" } { a: "2021-02-02" } { a: "2021-02-03" }
+    let struct_array: ArrayRef = Arc::from(StructArray::from(vec![(
+        Arc::new(Field::new("a", DataType::Utf8, false)),
+        Arc::new(StringArray::from(vec![
+            "2021-02-01",
+            "2021-02-02",
+            "2021-02-03",
+        ])) as _,
+    )]));
+
+    // ["one"] ["two", "three", "four"] ["five"]
+    let mut builder = ListBuilder::new(StringBuilder::new());
+    builder.append_value([Some("one")]);
+    builder.append_value([Some("two"), Some("three"), Some("four")]);
+    builder.append_value([Some("five")]);
+    let list_array: ArrayRef = Arc::new(builder.finish());
+
+    RecordBatch::try_from_iter(vec![
+        ("id", string_array),
+        ("i", int_array),
+        ("props", struct_array),
+        ("list", list_array),
+    ])
+    .unwrap()
+});

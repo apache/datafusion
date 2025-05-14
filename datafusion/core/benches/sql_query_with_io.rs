@@ -17,9 +17,8 @@
 
 use std::{fmt::Write, sync::Arc, time::Duration};
 
-use arrow::array::{Int64Builder, UInt64Builder};
-use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{Int64Builder, RecordBatch, UInt64Builder};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use datafusion::{

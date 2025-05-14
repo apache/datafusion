@@ -2,6 +2,7 @@
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
@@ -18,31 +19,34 @@
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
 mod min_max_bytes;
+mod min_max_struct;
 
 use arrow::array::{
-    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
-    LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float16Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    DataType, Decimal128Type, Decimal256Type, DurationMicrosecondType,
+    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow_schema::IntervalUnit;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
+use std::cmp::Ordering;
 use std::fmt::Debug;
 
 use arrow::datatypes::i256;
@@ -53,16 +57,17 @@ use arrow::datatypes::{
 };
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
+use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
-    Volatility,
+    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
+    SetMonotonicity, Signature, Volatility,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
+use datafusion_macros::user_doc;
 use half::f16;
 use std::mem::size_of_val;
 use std::ops::Deref;
-use std::sync::OnceLock;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
@@ -85,6 +90,20 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     }
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the maximum value in the specified column.",
+    syntax_example = "max(expression)",
+    sql_example = r#"```sql
+> SELECT max(column_name) FROM table_name;
++----------------------+
+| max(column_name)      |
++----------------------+
+| 150                  |
++----------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 // MAX aggregate UDF
 #[derive(Debug)]
 pub struct Max {
@@ -112,8 +131,12 @@ macro_rules! primitive_max_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
-                if *cur < new {
-                    *cur = new
+                match (new).partial_cmp(cur) {
+                    Some(Ordering::Greater) | None => {
+                        // new is Greater or None
+                        *cur = new
+                    }
+                    _ => {}
                 }
             })
             // Initialize each accumulator to $NATIVE::MIN
@@ -131,8 +154,12 @@ macro_rules! primitive_min_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
-                if *cur > new {
-                    *cur = new
+                match (new).partial_cmp(cur) {
+                    Some(Ordering::Less) | None => {
+                        // new is Less or NaN
+                        *cur = new
+                    }
+                    _ => {}
                 }
             })
             // Initialize each accumulator to $NATIVE::MAX
@@ -241,6 +268,8 @@ impl AggregateUDFImpl for Max {
                 | Binary
                 | LargeBinary
                 | BinaryView
+                | Duration(_)
+                | Struct(_)
         )
     }
 
@@ -295,6 +324,18 @@ impl AggregateUDFImpl for Max {
             Timestamp(Nanosecond, _) => {
                 primitive_max_accumulator!(data_type, i64, TimestampNanosecondType)
             }
+            Duration(Second) => {
+                primitive_max_accumulator!(data_type, i64, DurationSecondType)
+            }
+            Duration(Millisecond) => {
+                primitive_max_accumulator!(data_type, i64, DurationMillisecondType)
+            }
+            Duration(Microsecond) => {
+                primitive_max_accumulator!(data_type, i64, DurationMicrosecondType)
+            }
+            Duration(Nanosecond) => {
+                primitive_max_accumulator!(data_type, i64, DurationNanosecondType)
+            }
             Decimal128(_, _) => {
                 primitive_max_accumulator!(data_type, i128, Decimal128Type)
             }
@@ -304,7 +345,9 @@ impl AggregateUDFImpl for Max {
             Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
                 Ok(Box::new(MinMaxBytesAccumulator::new_max(data_type.clone())))
             }
-
+            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_max(
+                data_type.clone(),
+            ))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for max({})", data_type),
         }
@@ -336,32 +379,14 @@ impl AggregateUDFImpl for Max {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_max_doc())
+        self.doc()
     }
-}
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_max_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Returns the maximum value in the specified column.")
-            .with_syntax_example("max(expression)")
-            .with_sql_example(
-                r#"```sql
-> SELECT max(column_name) FROM table_name;
-+----------------------+
-| max(column_name)      |
-+----------------------+
-| 150                  |
-+----------------------+
-```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        // `MAX` is monotonically increasing as it always increases or stays
+        // the same as new values are seen.
+        SetMonotonicity::Increasing
+    }
 }
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types
@@ -373,7 +398,7 @@ macro_rules! typed_min_max_batch_string {
         ScalarValue::$SCALAR(value)
     }};
 }
-// Statically-typed version of min/max(array) -> ScalarValue for binay types.
+// Statically-typed version of min/max(array) -> ScalarValue for binary types.
 macro_rules! typed_min_max_batch_binary {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
@@ -514,6 +539,33 @@ macro_rules! min_max_batch {
                     $OP
                 )
             }
+            DataType::Duration(TimeUnit::Second) => {
+                typed_min_max_batch!($VALUES, DurationSecondArray, DurationSecond, $OP)
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    DurationMillisecondArray,
+                    DurationMillisecond,
+                    $OP
+                )
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    DurationMicrosecondArray,
+                    DurationMicrosecond,
+                    $OP
+                )
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    DurationNanosecondArray,
+                    DurationNanosecond,
+                    $OP
+                )
+            }
             other => {
                 // This should have been handled before
                 return internal_err!(
@@ -564,12 +616,56 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
+        DataType::Struct(_) => min_max_batch_struct(values, Ordering::Greater)?,
+        DataType::Dictionary(_, _) => {
+            let values = values.as_any_dictionary().values();
+            min_batch(values)?
+        }
         _ => min_max_batch!(values, min),
     })
 }
 
+fn min_max_batch_struct(array: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
+    if array.len() == array.null_count() {
+        return ScalarValue::try_from(array.data_type());
+    }
+    let mut extreme = ScalarValue::try_from_array(array, 0)?;
+    for i in 1..array.len() {
+        let current = ScalarValue::try_from_array(array, i)?;
+        if current.is_null() {
+            continue;
+        }
+        if extreme.is_null() {
+            extreme = current;
+            continue;
+        }
+        if let Some(cmp) = extreme.partial_cmp(&current) {
+            if cmp == ordering {
+                extreme = current;
+            }
+        }
+    }
+    // use force_clone to free array reference
+    Ok(extreme.force_clone())
+}
+
+macro_rules! min_max_struct {
+    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
+        if $VALUE.is_null() {
+            $DELTA.clone()
+        } else if $DELTA.is_null() {
+            $VALUE.clone()
+        } else {
+            match $VALUE.partial_cmp(&$DELTA) {
+                Some(choose_min_max!($OP)) => $DELTA.clone(),
+                _ => $VALUE.clone(),
+            }
+        }
+    }};
+}
+
 /// dynamically-typed max(array) -> ScalarValue
-fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
+pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
     Ok(match values.data_type() {
         DataType::Utf8 => {
             typed_min_max_batch_string!(values, StringArray, Utf8, max_string)
@@ -606,6 +702,11 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 LargeBinary,
                 max_binary
             )
+        }
+        DataType::Struct(_) => min_max_batch_struct(values, Ordering::Less)?,
+        DataType::Dictionary(_, _) => {
+            let values = values.as_any_dictionary().values();
+            max_batch(values)?
         }
         _ => min_max_batch!(values, max),
     })
@@ -877,6 +978,13 @@ macro_rules! min_max {
             ) => {
                 typed_min_max!(lhs, rhs, DurationNanosecond, $OP)
             }
+
+            (
+                lhs @ ScalarValue::Struct(_),
+                rhs @ ScalarValue::Struct(_),
+            ) => {
+                min_max_struct!(lhs, rhs, $OP)
+            }
             e => {
                 return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
@@ -987,6 +1095,20 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the minimum value in the specified column.",
+    syntax_example = "min(expression)",
+    sql_example = r#"```sql
+> SELECT min(column_name) FROM table_name;
++----------------------+
+| min(column_name)      |
++----------------------+
+| 12                   |
++----------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 #[derive(Debug)]
 pub struct Min {
     signature: Signature,
@@ -1072,6 +1194,8 @@ impl AggregateUDFImpl for Min {
                 | Binary
                 | LargeBinary
                 | BinaryView
+                | Duration(_)
+                | Struct(_)
         )
     }
 
@@ -1126,6 +1250,18 @@ impl AggregateUDFImpl for Min {
             Timestamp(Nanosecond, _) => {
                 primitive_min_accumulator!(data_type, i64, TimestampNanosecondType)
             }
+            Duration(Second) => {
+                primitive_min_accumulator!(data_type, i64, DurationSecondType)
+            }
+            Duration(Millisecond) => {
+                primitive_min_accumulator!(data_type, i64, DurationMillisecondType)
+            }
+            Duration(Microsecond) => {
+                primitive_min_accumulator!(data_type, i64, DurationMicrosecondType)
+            }
+            Duration(Nanosecond) => {
+                primitive_min_accumulator!(data_type, i64, DurationNanosecondType)
+            }
             Decimal128(_, _) => {
                 primitive_min_accumulator!(data_type, i128, Decimal128Type)
             }
@@ -1135,7 +1271,9 @@ impl AggregateUDFImpl for Min {
             Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
                 Ok(Box::new(MinMaxBytesAccumulator::new_min(data_type.clone())))
             }
-
+            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_min(
+                data_type.clone(),
+            ))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for min({})", data_type),
         }
@@ -1168,30 +1306,14 @@ impl AggregateUDFImpl for Min {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_min_doc())
+        self.doc()
     }
-}
 
-fn get_min_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Returns the minimum value in the specified column.")
-            .with_syntax_example("min(expression)")
-            .with_sql_example(
-                r#"```sql
-> SELECT min(column_name) FROM table_name;
-+----------------------+
-| min(column_name)      |
-+----------------------+
-| 12                   |
-+----------------------+
-```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        // `MIN` is monotonically decreasing as it always decreases or stays
+        // the same as new values are seen.
+        SetMonotonicity::Decreasing
+    }
 }
 
 /// An accumulator to compute the minimum value
@@ -1570,8 +1692,11 @@ make_udaf_expr_and_func!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{
-        IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+    use arrow::{
+        array::DictionaryArray,
+        datatypes::{
+            IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+        },
     };
     use std::sync::Arc;
 
@@ -1595,7 +1720,7 @@ mod tests {
         assert_eq!(
             min_res,
             ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                -2, 4
+                -2, 4,
             )))
         );
 
@@ -1607,7 +1732,7 @@ mod tests {
         assert_eq!(
             max_res,
             ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                5, 34
+                5, 34,
             )))
         );
 
@@ -1797,9 +1922,31 @@ mod tests {
     #[test]
     fn test_get_min_max_return_type_coerce_dictionary() -> Result<()> {
         let data_type =
-            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let result = get_min_max_result_type(&[data_type])?;
-        assert_eq!(result, vec![DataType::Int32]);
+        assert_eq!(result, vec![DataType::Utf8]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_min_max_dictionary() -> Result<()> {
+        let values = StringArray::from(vec!["b", "c", "a", "🦀", "d"]);
+        let keys = Int32Array::from(vec![Some(0), Some(1), Some(2), None, Some(4)]);
+        let dict_array =
+            DictionaryArray::try_new(keys, Arc::new(values) as ArrayRef).unwrap();
+        let dict_array_ref = Arc::new(dict_array) as ArrayRef;
+        let rt_type =
+            get_min_max_result_type(&[dict_array_ref.data_type().clone()])?[0].clone();
+
+        let mut min_acc = MinAccumulator::try_new(&rt_type)?;
+        min_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
+        let min_result = min_acc.evaluate()?;
+        assert_eq!(min_result, ScalarValue::Utf8(Some("a".to_string())));
+
+        let mut max_acc = MaxAccumulator::try_new(&rt_type)?;
+        max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
+        let max_result = max_acc.evaluate()?;
+        assert_eq!(max_result, ScalarValue::Utf8(Some("🦀".to_string())));
         Ok(())
     }
 }

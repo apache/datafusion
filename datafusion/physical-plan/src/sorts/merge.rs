@@ -99,19 +99,25 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 
     /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
     ///
-    /// To address the issue of unbalanced polling between partitions due to tie-breakers being based
-    /// on partition index, especially in cases of low cardinality, we are making changes to the winner
-    /// selection mechanism. Previously, partitions with smaller indices were consistently chosen as the winners,
-    /// leading to an uneven distribution of polling. This caused upstream operator buffers for the other partitions
-    /// to grow excessively, as they continued receiving data without consuming it.
+    /// This option controls the tie-breaker strategy and attempts to avoid the
+    /// issue of unbalanced polling between partitions
     ///
-    /// For example, an upstream operator like a repartition execution would keep sending data to certain partitions,
-    /// but those partitions wouldn't consume the data if they weren't selected as winners. This resulted in inefficient buffer usage.
+    /// If `true`, when multiple partitions have the same value, the partition
+    /// that has the fewest poll counts is selected. This strategy ensures that
+    /// multiple partitions with the same value are chosen equally, distributing
+    /// the polling load in a round-robin fashion. This approach balances the
+    /// workload more effectively across partitions and avoids excessive buffer
+    /// growth.
     ///
-    /// To resolve this, we are modifying the tie-breaking logic. Instead of always choosing the partition with the smallest index,
-    /// we now select the partition that has the fewest poll counts for the same value.
-    /// This ensures that multiple partitions with the same value are chosen equally, distributing the polling load in a round-robin fashion.
-    /// This approach balances the workload more effectively across partitions and avoids excessive buffer growth.
+    /// if `false`, partitions with smaller indices are consistently chosen as
+    /// the winners, which can lead to an uneven distribution of polling and potentially
+    /// causing upstream operator buffers for the other partitions to grow
+    /// excessively, as they continued receiving data without consuming it.
+    ///
+    /// For example, an upstream operator like `RepartitionExec` execution would
+    /// keep sending data to certain partitions, but those partitions wouldn't
+    /// consume the data if they weren't selected as winners. This resulted in
+    /// inefficient buffer usage.
     enable_round_robin_tie_breaker: bool,
 
     /// Flag indicating whether we are in the mode of round-robin
@@ -211,9 +217,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         // we skip the following block. Until then, this function may be called multiple
         // times and can return Poll::Pending if any partition returns Poll::Pending.
         if self.loser_tree.is_empty() {
-            let remaining_partitions = self.uninitiated_partitions.clone();
-            for i in remaining_partitions {
-                match self.maybe_poll_stream(cx, i) {
+            while let Some(&partition_idx) = self.uninitiated_partitions.front() {
+                match self.maybe_poll_stream(cx, partition_idx) {
                     Poll::Ready(Err(e)) => {
                         self.aborted = true;
                         return Poll::Ready(Some(Err(e)));
@@ -222,10 +227,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                         // If a partition returns Poll::Pending, to avoid continuously polling it
                         // and potentially increasing upstream buffer sizes, we move it to the
                         // back of the polling queue.
-                        if let Some(front) = self.uninitiated_partitions.pop_front() {
-                            // This pop_front can never return `None`.
-                            self.uninitiated_partitions.push_back(front);
-                        }
+                        self.uninitiated_partitions.rotate_left(1);
+
                         // This function could remain in a pending state, so we manually wake it here.
                         // However, this approach can be investigated further to find a more natural way
                         // to avoid disrupting the runtime scheduler.
@@ -235,10 +238,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     _ => {
                         // If the polling result is Poll::Ready(Some(batch)) or Poll::Ready(None),
                         // we remove this partition from the queue so it is not polled again.
-                        self.uninitiated_partitions.retain(|idx| *idx != i);
+                        self.uninitiated_partitions.pop_front();
                     }
                 }
             }
+
+            // Claim the memory for the uninitiated partitions
+            self.uninitiated_partitions.shrink_to_fit();
             self.init_loser_tree();
         }
 

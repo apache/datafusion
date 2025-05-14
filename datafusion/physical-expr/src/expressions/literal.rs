@@ -18,10 +18,10 @@
 //! Literal expressions for physical operations
 
 use std::any::Any;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
+use crate::physical_expr::PhysicalExpr;
 
 use arrow::{
     datatypes::{DataType, Schema},
@@ -86,25 +86,16 @@ impl PhysicalExpr for Literal {
         Ok(self)
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
             range: Interval::try_new(self.value().clone(), self.value().clone())?,
+            preserves_lex_ordering: true,
         })
     }
-}
 
-impl PartialEq<dyn Any> for Literal {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self == x)
-            .unwrap_or(false)
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 
@@ -121,12 +112,13 @@ mod tests {
     use super::*;
 
     use arrow::array::Int32Array;
-    use arrow::datatypes::*;
+    use arrow::datatypes::Field;
     use datafusion_common::cast::as_int32_array;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn literal_i32() -> Result<()> {
-        // create an arbitrary record bacth
+        // create an arbitrary record batch
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let a = Int32Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
@@ -146,6 +138,18 @@ mod tests {
         for i in 0..literal_array.len() {
             assert_eq!(literal_array.value(i), 42);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        // create and evaluate a literal expression
+        let expr = lit(42i32);
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "42");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "42");
 
         Ok(())
     }

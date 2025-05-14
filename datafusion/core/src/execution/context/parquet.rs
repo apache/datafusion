@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use super::super::options::{ParquetReadOptions, ReadOptions};
 use super::{DataFilePaths, DataFrame, ExecutionPlan, Result, SessionContext};
-use crate::datasource::physical_plan::parquet::plan_to_parquet;
+use datafusion_datasource_parquet::plan_to_parquet;
 
 use datafusion_common::TableReference;
 use parquet::file::properties::WriterProperties;
@@ -49,6 +49,8 @@ impl SessionContext {
     ) -> Result<()> {
         let listing_options = options
             .to_listing_options(&self.copied_config(), self.copied_table_options());
+
+        self.register_type_check(table_path.as_ref(), &listing_options.file_extension)?;
 
         self.register_listing_table(
             table_ref,
@@ -281,10 +283,10 @@ mod tests {
             )
             .await;
         let binding = DataFilePaths::to_urls(&path2).unwrap();
-        let expexted_path = binding[0].as_str();
+        let expected_path = binding[0].as_str();
         assert_eq!(
             read_df.unwrap_err().strip_backtrace(),
-            format!("Execution error: File path '{}' does not match the expected extension '.parquet'", expexted_path)
+            format!("Execution error: File path '{expected_path}' does not match the expected extension '.parquet'")
         );
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
@@ -316,7 +318,7 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(total_rows, 0);
 
-        // Read the datafram from doule dot folder;
+        // Read the dataframe from double dot folder;
         let read_df = ctx
             .read_parquet(
                 &path5,

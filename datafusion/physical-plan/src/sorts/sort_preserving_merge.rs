@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the sort preserving merge plan
+//! [`SortPreservingMergeExec`] merges multiple sorted streams into one sorted stream.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -32,19 +33,29 @@ use crate::{
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement,
-};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
 ///
-/// This takes an input execution plan and a list of sort expressions, and
-/// provided each partition of the input plan is sorted with respect to
-/// these sort expressions, this operator will yield a single partition
-/// that is also sorted with respect to them
+/// # Overview
+///
+/// This operator implements a K-way merge. It is used to merge multiple sorted
+/// streams into a single sorted stream and is highly optimized.
+///
+/// ## Inputs:
+///
+/// 1. A list of sort expressions
+/// 2. An input plan, where each partition is sorted with respect to
+///    these sort expressions.
+///
+/// ## Output:
+///
+/// 1. A single partition that is also sorted with respect to the expressions
+///
+/// ## Diagram
 ///
 /// ```text
 /// ┌─────────────────────────┐
@@ -58,12 +69,12 @@ use log::{debug, trace};
 /// ┌─────────────────────────┐  │  └───────────────────┘    └─┬─────┴───────────────────────┘
 /// │ ╔═══╦═══╗               │  │
 /// │ ║ B ║ E ║     ...       │──┘                             │
-/// │ ╚═══╩═══╝               │              Note Stable Sort: the merged stream
-/// └─────────────────────────┘                places equal rows from stream 1
+/// │ ╚═══╩═══╝               │              Stable sort if `enable_round_robin_repartition=false`:
+/// └─────────────────────────┘              the merged stream places equal rows from stream 1
 ///   Stream 2
 ///
 ///
-///  Input Streams                                             Output stream
+///  Input Partitions                                          Output Partition
 ///    (sorted)                                                  (sorted)
 /// ```
 ///
@@ -73,7 +84,7 @@ use log::{debug, trace};
 /// the output and inputs are not polled again.
 #[derive(Debug, Clone)]
 pub struct SortPreservingMergeExec {
-    /// Input plan
+    /// Input plan with sorted partitions
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: LexOrdering,
@@ -83,7 +94,9 @@ pub struct SortPreservingMergeExec {
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
+    /// Use round-robin selection of tied winners of loser tree
+    ///
+    /// See [`Self::with_round_robin_repartition`] for more information.
     enable_round_robin_repartition: bool,
 }
 
@@ -108,6 +121,14 @@ impl SortPreservingMergeExec {
     }
 
     /// Sets the selection strategy of tied winners of the loser tree algorithm
+    ///
+    /// If true (the default) equal output rows are placed in the merged stream
+    /// in round robin fashion. This approach consumes input streams at more
+    /// even rates when there are many rows with the same sort key.
+    ///
+    /// If false, equal output rows are always placed in the merged stream in
+    /// the order of the inputs, resulting in potentially slower execution but a
+    /// stable output order.
     pub fn with_round_robin_repartition(
         mut self,
         enable_round_robin_repartition: bool,
@@ -122,8 +143,8 @@ impl SortPreservingMergeExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> LexOrderingRef {
-        &self.expr
+    pub fn expr(&self) -> &LexOrdering {
+        self.expr.as_ref()
     }
 
     /// Fetch
@@ -131,7 +152,8 @@ impl SortPreservingMergeExec {
         self.fetch
     }
 
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    /// Creates the cache object that stores the plan properties
+    /// such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         ordering: LexOrdering,
@@ -142,7 +164,8 @@ impl SortPreservingMergeExec {
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
-            input.execution_mode(),               // Execution Mode
+            input.pipeline_behavior(),            // Pipeline Behavior
+            input.boundedness(),                  // Boundedness
         )
     }
 }
@@ -158,6 +181,19 @@ impl DisplayAs for SortPreservingMergeExec {
                 write!(f, "SortPreservingMergeExec: [{}]", self.expr)?;
                 if let Some(fetch) = self.fetch {
                     write!(f, ", fetch={fetch}")?;
+                };
+
+                Ok(())
+            }
+            DisplayFormatType::TreeRender => {
+                for (i, e) in self.expr().iter().enumerate() {
+                    e.fmt_sql(f)?;
+                    if i != self.expr().len() - 1 {
+                        write!(f, ", ")?;
+                    }
+                }
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "limit={fetch}")?;
                 };
 
                 Ok(())
@@ -205,9 +241,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
-        vec![Some(PhysicalSortRequirement::from_sort_exprs(
-            self.expr.iter(),
-        ))]
+        vec![Some(LexRequirement::from(self.expr.clone()))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -233,10 +267,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!(
-            "Start SortPreservingMergeExec::execute for partition: {}",
-            partition
-        );
+        trace!("Start SortPreservingMergeExec::execute for partition: {partition}");
         if 0 != partition {
             return internal_err!(
                 "SortPreservingMergeExec invalid partition {partition}"
@@ -245,8 +276,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
         let input_partitions = self.input.output_partitioning().partition_count();
         trace!(
-            "Number of input partitions of  SortPreservingMergeExec::execute: {}",
-            input_partitions
+            "Number of input partitions of  SortPreservingMergeExec::execute: {input_partitions}"
         );
         let schema = self.schema();
 
@@ -309,11 +339,48 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(None)
     }
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    /// Tries to swap the projection with its input [`SortPreservingMergeExec`].
+    /// If this is possible, it returns the new [`SortPreservingMergeExec`] whose
+    /// child is a projection. Otherwise, it returns None.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        let mut updated_exprs = LexOrdering::default();
+        for sort in self.expr() {
+            let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
+            else {
+                return Ok(None);
+            };
+            updated_exprs.push(PhysicalSortExpr {
+                expr: updated_expr,
+                options: sort.options,
+            });
+        }
+
+        Ok(Some(Arc::new(
+            SortPreservingMergeExec::new(
+                updated_exprs,
+                make_with_child(projection, self.input())?,
+            )
+            .with_fetch(self.fetch()),
+        )))
     }
 }
 
@@ -328,22 +395,24 @@ mod tests {
     use super::*;
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::execution_plan::{Boundedness, EmissionType};
     use crate::expressions::col;
-    use crate::memory::MemoryExec;
     use crate::metrics::{MetricValue, Timestamp};
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::TestMemoryExec;
     use crate::test::{self, assert_is_pending, make_partition};
-    use crate::{collect, common, ExecutionMode};
+    use crate::{collect, common};
 
-    use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampNanosecondArray};
+    use arrow::array::{
+        ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray,
+        TimestampNanosecondArray,
+    };
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::Int64Array;
-    use arrow_schema::SchemaRef;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_batches_eq, assert_contains, DataFusionError};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::config::SessionConfig;
@@ -355,6 +424,7 @@ mod tests {
 
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use futures::{FutureExt, Stream, StreamExt};
+    use insta::assert_snapshot;
     use tokio::time::timeout;
 
     // The number in the function is highly related to the memory limit we are testing
@@ -395,9 +465,10 @@ mod tests {
             },
         ]);
 
-        let exec = MemoryExec::try_new(&[rbs], schema, None).unwrap();
-        let repartition_exec =
-            RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(2))?;
+        let repartition_exec = RepartitionExec::try_new(
+            TestMemoryExec::try_new_exec(&[rbs], schema, None).unwrap(),
+            Partitioning::RoundRobinBatch(2),
+        )?;
         let coalesce_batches_exec =
             CoalesceBatchesExec::new(Arc::new(repartition_exec), target_batch_size);
         let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec))
@@ -487,9 +558,14 @@ mod tests {
 
         let schema = batch.schema();
         let sort = LexOrdering::default(); // no sort expressions
-        let exec = MemoryExec::try_new(&[vec![batch.clone()], vec![batch]], schema, None)
-            .unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let exec = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()], vec![batch]],
+            schema,
+            None,
+        )
+        .unwrap();
+
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let res = collect(merge, task_ctx).await.unwrap_err();
         assert_contains!(
@@ -675,8 +751,8 @@ mod tests {
                 options: Default::default(),
             },
         ]);
-        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let exec = TestMemoryExec::try_new_exec(partitions, schema, None).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, context).await.unwrap();
         assert_batches_eq!(exp, collected.as_slice());
@@ -751,7 +827,7 @@ mod tests {
 
     // Split the provided record batch into multiple batch_size record batches
     fn split_batch(sorted: &RecordBatch, batch_size: usize) -> Vec<RecordBatch> {
-        let batches = (sorted.num_rows() + batch_size - 1) / batch_size;
+        let batches = sorted.num_rows().div_ceil(batch_size);
 
         // Split the sorted RecordBatch into multiple
         (0..batches)
@@ -783,9 +859,7 @@ mod tests {
         let sorted = basic_sort(csv, sort, context).await;
         let split: Vec<_> = sizes.iter().map(|x| split_batch(&sorted, *x)).collect();
 
-        Ok(Arc::new(
-            MemoryExec::try_new(&split, sorted.schema(), None).unwrap(),
-        ))
+        Ok(TestMemoryExec::try_new_exec(&split, sorted.schema(), None).unwrap())
     }
 
     #[tokio::test]
@@ -913,31 +987,29 @@ mod tests {
                 },
             },
         ]);
-        let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let exec =
+            TestMemoryExec::try_new_exec(&[vec![b1], vec![b2]], schema, None).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_batches_eq!(
-            &[
-                "+---+---+-------------------------------+",
-                "| a | b | c                             |",
-                "+---+---+-------------------------------+",
-                "| 1 |   | 1970-01-01T00:00:00.000000008 |",
-                "| 1 |   | 1970-01-01T00:00:00.000000008 |",
-                "| 2 | a |                               |",
-                "| 7 | b | 1970-01-01T00:00:00.000000006 |",
-                "| 2 | b |                               |",
-                "| 9 | d |                               |",
-                "| 3 | e | 1970-01-01T00:00:00.000000004 |",
-                "| 3 | g | 1970-01-01T00:00:00.000000005 |",
-                "| 4 | h |                               |",
-                "| 5 | i | 1970-01-01T00:00:00.000000004 |",
-                "+---+---+-------------------------------+",
-            ],
-            collected.as_slice()
-        );
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
+            +---+---+-------------------------------+
+            | a | b | c                             |
+            +---+---+-------------------------------+
+            | 1 |   | 1970-01-01T00:00:00.000000008 |
+            | 1 |   | 1970-01-01T00:00:00.000000008 |
+            | 2 | a |                               |
+            | 7 | b | 1970-01-01T00:00:00.000000006 |
+            | 2 | b |                               |
+            | 9 | d |                               |
+            | 3 | e | 1970-01-01T00:00:00.000000004 |
+            | 3 | g | 1970-01-01T00:00:00.000000005 |
+            | 4 | h |                               |
+            | 5 | i | 1970-01-01T00:00:00.000000004 |
+            +---+---+-------------------------------+
+            "#);
     }
 
     #[tokio::test]
@@ -955,25 +1027,21 @@ mod tests {
                 nulls_first: true,
             },
         }]);
-        let exec = MemoryExec::try_new(&[vec![batch]], schema, None).unwrap();
-        let merge = Arc::new(
-            SortPreservingMergeExec::new(sort, Arc::new(exec)).with_fetch(Some(2)),
-        );
+        let exec = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let merge =
+            Arc::new(SortPreservingMergeExec::new(sort, exec).with_fetch(Some(2)));
 
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_batches_eq!(
-            &[
-                "+---+---+",
-                "| a | b |",
-                "+---+---+",
-                "| 1 | a |",
-                "| 2 | b |",
-                "+---+---+",
-            ],
-            collected.as_slice()
-        );
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
+            +---+---+
+            | a | b |
+            +---+---+
+            | 1 | a |
+            | 2 | b |
+            +---+---+
+            "#);
     }
 
     #[tokio::test]
@@ -991,26 +1059,23 @@ mod tests {
                 nulls_first: true,
             },
         }]);
-        let exec = MemoryExec::try_new(&[vec![batch]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let exec = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_batches_eq!(
-            &[
-                "+---+---+",
-                "| a | b |",
-                "+---+---+",
-                "| 1 | a |",
-                "| 2 | b |",
-                "| 7 | c |",
-                "| 9 | d |",
-                "| 3 | e |",
-                "+---+---+",
-            ],
-            collected.as_slice()
-        );
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
+            +---+---+
+            | a | b |
+            +---+---+
+            | 1 | a |
+            | 2 | b |
+            | 7 | c |
+            | 9 | d |
+            | 3 | e |
+            +---+---+
+            "#);
     }
 
     #[tokio::test]
@@ -1100,23 +1165,23 @@ mod tests {
             expr: col("b", &schema).unwrap(),
             options: Default::default(),
         }]);
-        let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let exec =
+            TestMemoryExec::try_new_exec(&[vec![b1], vec![b2]], schema, None).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx)
             .await
             .unwrap();
-        let expected = [
-            "+----+---+",
-            "| a  | b |",
-            "+----+---+",
-            "| 1  | a |",
-            "| 10 | b |",
-            "| 2  | c |",
-            "| 20 | d |",
-            "+----+---+",
-        ];
-        assert_batches_eq!(expected, collected.as_slice());
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
+            +----+---+
+            | a  | b |
+            +----+---+
+            | 1  | a |
+            | 10 | b |
+            | 2  | c |
+            | 20 | d |
+            +----+---+
+            "#);
 
         // Now, validate metrics
         let metrics = merge.metrics().unwrap();
@@ -1211,8 +1276,8 @@ mod tests {
             },
         }]);
 
-        let exec = MemoryExec::try_new(&partitions, schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let exec = TestMemoryExec::try_new_exec(&partitions, schema, None).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
@@ -1220,35 +1285,32 @@ mod tests {
         // Expect the data to be sorted first by "batch_number" (because
         // that was the order it was fed in, even though only "value"
         // is in the sort key)
-        assert_batches_eq!(
-            &[
-                "+--------------+-------+",
-                "| batch_number | value |",
-                "+--------------+-------+",
-                "| 0            | A     |",
-                "| 1            | A     |",
-                "| 2            | A     |",
-                "| 3            | A     |",
-                "| 4            | A     |",
-                "| 5            | A     |",
-                "| 6            | A     |",
-                "| 7            | A     |",
-                "| 8            | A     |",
-                "| 9            | A     |",
-                "| 0            | B     |",
-                "| 1            | B     |",
-                "| 2            | B     |",
-                "| 3            | B     |",
-                "| 4            | B     |",
-                "| 5            | B     |",
-                "| 6            | B     |",
-                "| 7            | B     |",
-                "| 8            | B     |",
-                "| 9            | B     |",
-                "+--------------+-------+",
-            ],
-            collected.as_slice()
-        );
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
+                +--------------+-------+
+                | batch_number | value |
+                +--------------+-------+
+                | 0            | A     |
+                | 1            | A     |
+                | 2            | A     |
+                | 3            | A     |
+                | 4            | A     |
+                | 5            | A     |
+                | 6            | A     |
+                | 7            | A     |
+                | 8            | A     |
+                | 9            | A     |
+                | 0            | B     |
+                | 1            | B     |
+                | 2            | B     |
+                | 3            | B     |
+                | 4            | B     |
+                | 5            | B     |
+                | 6            | B     |
+                | 7            | B     |
+                | 8            | B     |
+                | 9            | B     |
+                +--------------+-------+
+            "#);
     }
 
     /// It returns pending for the 2nd partition until the 3rd partition is polled. The 1st
@@ -1273,8 +1335,14 @@ mod tests {
                 .iter()
                 .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
                 .collect::<LexOrdering>()]);
-            let mode = ExecutionMode::Unbounded;
-            PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
+            PlanProperties::new(
+                eq_properties,
+                Partitioning::Hash(columns, 3),
+                EmissionType::Incremental,
+                Boundedness::Unbounded {
+                    requires_infinite_memory: false,
+                },
+            )
         }
     }
 
@@ -1316,6 +1384,10 @@ mod tests {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "CongestedExec",).unwrap()
+                }
+                DisplayFormatType::TreeRender => {
+                    // TODO: collect info
+                    write!(f, "").unwrap()
                 }
             }
             Ok(())

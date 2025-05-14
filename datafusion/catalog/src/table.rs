@@ -21,17 +21,32 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::session::Session;
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, Constraints, Statistics};
+use datafusion_expr::Expr;
+
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    CreateExternalTable, Expr, LogicalPlan, TableProviderFilterPushDown, TableType,
+    CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
 use datafusion_physical_plan::ExecutionPlan;
 
-/// Source table
+/// A table which can be queried and modified.
+///
+/// Please see [`CatalogProvider`] for details of implementing a custom catalog.
+///
+/// [`TableProvider`] represents a source of data which can provide data as
+/// Apache Arrow [`RecordBatch`]es. Implementations of this trait provide
+/// important information for planning such as:
+///
+/// 1. [`Self::schema`]: The schema (columns and their types) of the table
+/// 2. [`Self::supports_filters_pushdown`]: Should filters be pushed into this scan
+/// 2. [`Self::scan`]: An [`ExecutionPlan`] that can read data
+///
+/// [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
+/// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
 pub trait TableProvider: Debug + Sync + Send {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
@@ -188,7 +203,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// ```rust
     /// # use std::any::Any;
     /// # use std::sync::Arc;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use async_trait::async_trait;
     /// # use datafusion_catalog::{TableProvider, Session};
     /// # use datafusion_common::Result;
@@ -247,6 +262,9 @@ pub trait TableProvider: Debug + Sync + Send {
     }
 
     /// Get statistics for this table, if available
+    /// Although not presently used in mainline DataFusion, this allows implementation specific
+    /// behavior for downstream repositories, in conjunction with specialized optimizer rules to
+    /// perform operations such as re-ordering of joins.
     fn statistics(&self) -> Option<Statistics> {
         None
     }
@@ -270,7 +288,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// See [`DataSinkExec`] for the common pattern of inserting a
     /// streams of `RecordBatch`es as files to an ObjectStore.
     ///
-    /// [`DataSinkExec`]: datafusion_physical_plan::insert::DataSinkExec
+    /// [`DataSinkExec`]: datafusion_datasource::sink::DataSinkExec
     async fn insert_into(
         &self,
         _state: &dyn Session,
@@ -293,4 +311,41 @@ pub trait TableProviderFactory: Debug + Sync + Send {
         state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>>;
+}
+
+/// A trait for table function implementations
+pub trait TableFunctionImpl: Debug + Sync + Send {
+    /// Create a table provider
+    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
+}
+
+/// A table that uses a function to generate data
+#[derive(Debug)]
+pub struct TableFunction {
+    /// Name of the table function
+    name: String,
+    /// Function implementation
+    fun: Arc<dyn TableFunctionImpl>,
+}
+
+impl TableFunction {
+    /// Create a new table function
+    pub fn new(name: String, fun: Arc<dyn TableFunctionImpl>) -> Self {
+        Self { name, fun }
+    }
+
+    /// Get the name of the table function
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Get the implementation of the table function
+    pub fn function(&self) -> &Arc<dyn TableFunctionImpl> {
+        &self.fun
+    }
+
+    /// Get the function implementation and generate a table
+    pub fn create_table_provider(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        self.fun.call(args)
+    }
 }

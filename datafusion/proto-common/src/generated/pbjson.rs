@@ -985,6 +985,9 @@ impl serde::Serialize for ColumnStats {
         if self.max_value.is_some() {
             len += 1;
         }
+        if self.sum_value.is_some() {
+            len += 1;
+        }
         if self.null_count.is_some() {
             len += 1;
         }
@@ -997,6 +1000,9 @@ impl serde::Serialize for ColumnStats {
         }
         if let Some(v) = self.max_value.as_ref() {
             struct_ser.serialize_field("maxValue", v)?;
+        }
+        if let Some(v) = self.sum_value.as_ref() {
+            struct_ser.serialize_field("sumValue", v)?;
         }
         if let Some(v) = self.null_count.as_ref() {
             struct_ser.serialize_field("nullCount", v)?;
@@ -1018,6 +1024,8 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             "minValue",
             "max_value",
             "maxValue",
+            "sum_value",
+            "sumValue",
             "null_count",
             "nullCount",
             "distinct_count",
@@ -1028,6 +1036,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
         enum GeneratedField {
             MinValue,
             MaxValue,
+            SumValue,
             NullCount,
             DistinctCount,
         }
@@ -1053,6 +1062,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                         match value {
                             "minValue" | "min_value" => Ok(GeneratedField::MinValue),
                             "maxValue" | "max_value" => Ok(GeneratedField::MaxValue),
+                            "sumValue" | "sum_value" => Ok(GeneratedField::SumValue),
                             "nullCount" | "null_count" => Ok(GeneratedField::NullCount),
                             "distinctCount" | "distinct_count" => Ok(GeneratedField::DistinctCount),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -1076,6 +1086,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             {
                 let mut min_value__ = None;
                 let mut max_value__ = None;
+                let mut sum_value__ = None;
                 let mut null_count__ = None;
                 let mut distinct_count__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -1091,6 +1102,12 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                                 return Err(serde::de::Error::duplicate_field("maxValue"));
                             }
                             max_value__ = map_.next_value()?;
+                        }
+                        GeneratedField::SumValue => {
+                            if sum_value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sumValue"));
+                            }
+                            sum_value__ = map_.next_value()?;
                         }
                         GeneratedField::NullCount => {
                             if null_count__.is_some() {
@@ -1109,6 +1126,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                 Ok(ColumnStats {
                     min_value: min_value__,
                     max_value: max_value__,
+                    sum_value: sum_value__,
                     null_count: null_count__,
                     distinct_count: distinct_count__,
                 })
@@ -1512,7 +1530,7 @@ impl serde::Serialize for CsvOptions {
         if self.compression != 0 {
             len += 1;
         }
-        if self.schema_infer_max_rec != 0 {
+        if self.schema_infer_max_rec.is_some() {
             len += 1;
         }
         if !self.date_format.is_empty() {
@@ -1531,6 +1549,9 @@ impl serde::Serialize for CsvOptions {
             len += 1;
         }
         if !self.null_value.is_empty() {
+            len += 1;
+        }
+        if !self.null_regex.is_empty() {
             len += 1;
         }
         if !self.comment.is_empty() {
@@ -1571,10 +1592,10 @@ impl serde::Serialize for CsvOptions {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
             struct_ser.serialize_field("compression", &v)?;
         }
-        if self.schema_infer_max_rec != 0 {
+        if let Some(v) = self.schema_infer_max_rec.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&self.schema_infer_max_rec).as_str())?;
+            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&v).as_str())?;
         }
         if !self.date_format.is_empty() {
             struct_ser.serialize_field("dateFormat", &self.date_format)?;
@@ -1593,6 +1614,9 @@ impl serde::Serialize for CsvOptions {
         }
         if !self.null_value.is_empty() {
             struct_ser.serialize_field("nullValue", &self.null_value)?;
+        }
+        if !self.null_regex.is_empty() {
+            struct_ser.serialize_field("nullRegex", &self.null_regex)?;
         }
         if !self.comment.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1644,6 +1668,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "timeFormat",
             "null_value",
             "nullValue",
+            "null_regex",
+            "nullRegex",
             "comment",
             "double_quote",
             "doubleQuote",
@@ -1666,6 +1692,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             TimestampTzFormat,
             TimeFormat,
             NullValue,
+            NullRegex,
             Comment,
             DoubleQuote,
             NewlinesInValues,
@@ -1703,6 +1730,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "timestampTzFormat" | "timestamp_tz_format" => Ok(GeneratedField::TimestampTzFormat),
                             "timeFormat" | "time_format" => Ok(GeneratedField::TimeFormat),
                             "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
+                            "nullRegex" | "null_regex" => Ok(GeneratedField::NullRegex),
                             "comment" => Ok(GeneratedField::Comment),
                             "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
@@ -1738,6 +1766,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut timestamp_tz_format__ = None;
                 let mut time_format__ = None;
                 let mut null_value__ = None;
+                let mut null_regex__ = None;
                 let mut comment__ = None;
                 let mut double_quote__ = None;
                 let mut newlines_in_values__ = None;
@@ -1787,7 +1816,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 return Err(serde::de::Error::duplicate_field("schemaInferMaxRec"));
                             }
                             schema_infer_max_rec__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::DateFormat => {
@@ -1825,6 +1854,12 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 return Err(serde::de::Error::duplicate_field("nullValue"));
                             }
                             null_value__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NullRegex => {
+                            if null_regex__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullRegex"));
+                            }
+                            null_regex__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Comment => {
                             if comment__.is_some() {
@@ -1866,13 +1901,14 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     quote: quote__.unwrap_or_default(),
                     escape: escape__.unwrap_or_default(),
                     compression: compression__.unwrap_or_default(),
-                    schema_infer_max_rec: schema_infer_max_rec__.unwrap_or_default(),
+                    schema_infer_max_rec: schema_infer_max_rec__,
                     date_format: date_format__.unwrap_or_default(),
                     datetime_format: datetime_format__.unwrap_or_default(),
                     timestamp_format: timestamp_format__.unwrap_or_default(),
                     timestamp_tz_format: timestamp_tz_format__.unwrap_or_default(),
                     time_format: time_format__.unwrap_or_default(),
                     null_value: null_value__.unwrap_or_default(),
+                    null_regex: null_regex__.unwrap_or_default(),
                     comment: comment__.unwrap_or_default(),
                     double_quote: double_quote__.unwrap_or_default(),
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
@@ -3071,9 +3107,6 @@ impl serde::Serialize for Field {
         if !self.metadata.is_empty() {
             len += 1;
         }
-        if self.dict_id != 0 {
-            len += 1;
-        }
         if self.dict_ordered {
             len += 1;
         }
@@ -3092,11 +3125,6 @@ impl serde::Serialize for Field {
         }
         if !self.metadata.is_empty() {
             struct_ser.serialize_field("metadata", &self.metadata)?;
-        }
-        if self.dict_id != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("dictId", ToString::to_string(&self.dict_id).as_str())?;
         }
         if self.dict_ordered {
             struct_ser.serialize_field("dictOrdered", &self.dict_ordered)?;
@@ -3117,8 +3145,6 @@ impl<'de> serde::Deserialize<'de> for Field {
             "nullable",
             "children",
             "metadata",
-            "dict_id",
-            "dictId",
             "dict_ordered",
             "dictOrdered",
         ];
@@ -3130,7 +3156,6 @@ impl<'de> serde::Deserialize<'de> for Field {
             Nullable,
             Children,
             Metadata,
-            DictId,
             DictOrdered,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3158,7 +3183,6 @@ impl<'de> serde::Deserialize<'de> for Field {
                             "nullable" => Ok(GeneratedField::Nullable),
                             "children" => Ok(GeneratedField::Children),
                             "metadata" => Ok(GeneratedField::Metadata),
-                            "dictId" | "dict_id" => Ok(GeneratedField::DictId),
                             "dictOrdered" | "dict_ordered" => Ok(GeneratedField::DictOrdered),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -3184,7 +3208,6 @@ impl<'de> serde::Deserialize<'de> for Field {
                 let mut nullable__ = None;
                 let mut children__ = None;
                 let mut metadata__ = None;
-                let mut dict_id__ = None;
                 let mut dict_ordered__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -3220,14 +3243,6 @@ impl<'de> serde::Deserialize<'de> for Field {
                                 map_.next_value::<std::collections::HashMap<_, _>>()?
                             );
                         }
-                        GeneratedField::DictId => {
-                            if dict_id__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("dictId"));
-                            }
-                            dict_id__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
                         GeneratedField::DictOrdered => {
                             if dict_ordered__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictOrdered"));
@@ -3242,7 +3257,6 @@ impl<'de> serde::Deserialize<'de> for Field {
                     nullable: nullable__.unwrap_or_default(),
                     children: children__.unwrap_or_default(),
                     metadata: metadata__.unwrap_or_default(),
-                    dict_id: dict_id__.unwrap_or_default(),
                     dict_ordered: dict_ordered__.unwrap_or_default(),
                 })
             }
@@ -3932,7 +3946,7 @@ impl serde::Serialize for JsonOptions {
         if self.compression != 0 {
             len += 1;
         }
-        if self.schema_infer_max_rec != 0 {
+        if self.schema_infer_max_rec.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.JsonOptions", len)?;
@@ -3941,10 +3955,10 @@ impl serde::Serialize for JsonOptions {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
             struct_ser.serialize_field("compression", &v)?;
         }
-        if self.schema_infer_max_rec != 0 {
+        if let Some(v) = self.schema_infer_max_rec.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&self.schema_infer_max_rec).as_str())?;
+            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -4022,14 +4036,14 @@ impl<'de> serde::Deserialize<'de> for JsonOptions {
                                 return Err(serde::de::Error::duplicate_field("schemaInferMaxRec"));
                             }
                             schema_infer_max_rec__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(JsonOptions {
                     compression: compression__.unwrap_or_default(),
-                    schema_infer_max_rec: schema_infer_max_rec__.unwrap_or_default(),
+                    schema_infer_max_rec: schema_infer_max_rec__,
                 })
             }
         }
@@ -4925,6 +4939,9 @@ impl serde::Serialize for ParquetOptions {
         if self.binary_as_string {
             len += 1;
         }
+        if self.skip_arrow_metadata {
+            len += 1;
+        }
         if self.dictionary_page_size_limit != 0 {
             len += 1;
         }
@@ -4955,6 +4972,9 @@ impl serde::Serialize for ParquetOptions {
         if self.column_index_truncate_length_opt.is_some() {
             len += 1;
         }
+        if self.statistics_truncate_length_opt.is_some() {
+            len += 1;
+        }
         if self.encoding_opt.is_some() {
             len += 1;
         }
@@ -4962,6 +4982,9 @@ impl serde::Serialize for ParquetOptions {
             len += 1;
         }
         if self.bloom_filter_ndv_opt.is_some() {
+            len += 1;
+        }
+        if self.coerce_int96_opt.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetOptions", len)?;
@@ -5017,6 +5040,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.binary_as_string {
             struct_ser.serialize_field("binaryAsString", &self.binary_as_string)?;
+        }
+        if self.skip_arrow_metadata {
+            struct_ser.serialize_field("skipArrowMetadata", &self.skip_arrow_metadata)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5084,6 +5110,15 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.statistics_truncate_length_opt.as_ref() {
+            match v {
+                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("statisticsTruncateLength", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
         if let Some(v) = self.encoding_opt.as_ref() {
             match v {
                 parquet_options::EncodingOpt::Encoding(v) => {
@@ -5104,6 +5139,13 @@ impl serde::Serialize for ParquetOptions {
                     #[allow(clippy::needless_borrow)]
                     #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("bloomFilterNdv", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        if let Some(v) = self.coerce_int96_opt.as_ref() {
+            match v {
+                parquet_options::CoerceInt96Opt::CoerceInt96(v) => {
+                    struct_ser.serialize_field("coerceInt96", v)?;
                 }
             }
         }
@@ -5146,6 +5188,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "schemaForceViewTypes",
             "binary_as_string",
             "binaryAsString",
+            "skip_arrow_metadata",
+            "skipArrowMetadata",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -5165,11 +5209,15 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxStatisticsSize",
             "column_index_truncate_length",
             "columnIndexTruncateLength",
+            "statistics_truncate_length",
+            "statisticsTruncateLength",
             "encoding",
             "bloom_filter_fpp",
             "bloomFilterFpp",
             "bloom_filter_ndv",
             "bloomFilterNdv",
+            "coerce_int96",
+            "coerceInt96",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5189,6 +5237,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             BloomFilterOnWrite,
             SchemaForceViewTypes,
             BinaryAsString,
+            SkipArrowMetadata,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -5199,9 +5248,11 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             StatisticsEnabled,
             MaxStatisticsSize,
             ColumnIndexTruncateLength,
+            StatisticsTruncateLength,
             Encoding,
             BloomFilterFpp,
             BloomFilterNdv,
+            CoerceInt96,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5238,6 +5289,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "bloomFilterOnWrite" | "bloom_filter_on_write" => Ok(GeneratedField::BloomFilterOnWrite),
                             "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::SchemaForceViewTypes),
                             "binaryAsString" | "binary_as_string" => Ok(GeneratedField::BinaryAsString),
+                            "skipArrowMetadata" | "skip_arrow_metadata" => Ok(GeneratedField::SkipArrowMetadata),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -5248,9 +5300,11 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "statisticsEnabled" | "statistics_enabled" => Ok(GeneratedField::StatisticsEnabled),
                             "maxStatisticsSize" | "max_statistics_size" => Ok(GeneratedField::MaxStatisticsSize),
                             "columnIndexTruncateLength" | "column_index_truncate_length" => Ok(GeneratedField::ColumnIndexTruncateLength),
+                            "statisticsTruncateLength" | "statistics_truncate_length" => Ok(GeneratedField::StatisticsTruncateLength),
                             "encoding" => Ok(GeneratedField::Encoding),
                             "bloomFilterFpp" | "bloom_filter_fpp" => Ok(GeneratedField::BloomFilterFpp),
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
+                            "coerceInt96" | "coerce_int96" => Ok(GeneratedField::CoerceInt96),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5285,6 +5339,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut bloom_filter_on_write__ = None;
                 let mut schema_force_view_types__ = None;
                 let mut binary_as_string__ = None;
+                let mut skip_arrow_metadata__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -5295,9 +5350,11 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut statistics_enabled_opt__ = None;
                 let mut max_statistics_size_opt__ = None;
                 let mut column_index_truncate_length_opt__ = None;
+                let mut statistics_truncate_length_opt__ = None;
                 let mut encoding_opt__ = None;
                 let mut bloom_filter_fpp_opt__ = None;
                 let mut bloom_filter_ndv_opt__ = None;
+                let mut coerce_int96_opt__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EnablePageIndex => {
@@ -5398,6 +5455,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             binary_as_string__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::SkipArrowMetadata => {
+                            if skip_arrow_metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skipArrowMetadata"));
+                            }
+                            skip_arrow_metadata__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictionaryPageSizeLimit"));
@@ -5464,6 +5527,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             column_index_truncate_length_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(x.0));
                         }
+                        GeneratedField::StatisticsTruncateLength => {
+                            if statistics_truncate_length_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("statisticsTruncateLength"));
+                            }
+                            statistics_truncate_length_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(x.0));
+                        }
                         GeneratedField::Encoding => {
                             if encoding_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("encoding"));
@@ -5481,6 +5550,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("bloomFilterNdv"));
                             }
                             bloom_filter_ndv_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::BloomFilterNdvOpt::BloomFilterNdv(x.0));
+                        }
+                        GeneratedField::CoerceInt96 => {
+                            if coerce_int96_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("coerceInt96"));
+                            }
+                            coerce_int96_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::CoerceInt96Opt::CoerceInt96);
                         }
                     }
                 }
@@ -5500,6 +5575,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     bloom_filter_on_write: bloom_filter_on_write__.unwrap_or_default(),
                     schema_force_view_types: schema_force_view_types__.unwrap_or_default(),
                     binary_as_string: binary_as_string__.unwrap_or_default(),
+                    skip_arrow_metadata: skip_arrow_metadata__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
@@ -5510,9 +5586,11 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     statistics_enabled_opt: statistics_enabled_opt__,
                     max_statistics_size_opt: max_statistics_size_opt__,
                     column_index_truncate_length_opt: column_index_truncate_length_opt__,
+                    statistics_truncate_length_opt: statistics_truncate_length_opt__,
                     encoding_opt: encoding_opt__,
                     bloom_filter_fpp_opt: bloom_filter_fpp_opt__,
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
+                    coerce_int96_opt: coerce_int96_opt__,
                 })
             }
         }

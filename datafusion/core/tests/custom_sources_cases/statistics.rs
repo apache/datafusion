@@ -26,17 +26,18 @@ use datafusion::{
     error::Result,
     logical_expr::Expr,
     physical_plan::{
-        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
-        Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+        PlanProperties, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
     scalar::ScalarValue,
 };
+use datafusion_catalog::Session;
 use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -64,12 +65,11 @@ impl StatisticsValidation {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(2),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -141,6 +141,10 @@ impl DisplayAs for StatisticsValidation {
                     self.stats.num_rows,
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -180,6 +184,14 @@ impl ExecutionPlan for StatisticsValidation {
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
     }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            Ok(Statistics::new_unknown(&self.schema))
+        } else {
+            Ok(self.stats.clone())
+        }
+    }
 }
 
 fn init_ctx(stats: Statistics, schema: Schema) -> Result<SessionContext> {
@@ -200,12 +212,14 @@ fn fully_defined() -> (Statistics, Schema) {
                     distinct_count: Precision::Exact(2),
                     max_value: Precision::Exact(ScalarValue::Int32(Some(1023))),
                     min_value: Precision::Exact(ScalarValue::Int32(Some(-24))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(13),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(5486))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-6783))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(5),
                 },
             ],
@@ -226,7 +240,7 @@ async fn sql_basic() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
 
     // the statistics should be those of the source
-    assert_eq!(stats, physical_plan.statistics()?);
+    assert_eq!(stats, physical_plan.partition_statistics(None)?);
 
     Ok(())
 }
@@ -242,7 +256,7 @@ async fn sql_filter() -> Result<()> {
         .unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
-    let stats = physical_plan.statistics()?;
+    let stats = physical_plan.partition_statistics(None)?;
     assert_eq!(stats.num_rows, Precision::Inexact(1));
 
     Ok(())
@@ -264,7 +278,7 @@ async fn sql_limit() -> Result<()> {
             column_statistics: col_stats,
             total_byte_size: Precision::Absent
         },
-        physical_plan.statistics()?
+        physical_plan.partition_statistics(None)?
     );
 
     let df = ctx
@@ -273,7 +287,7 @@ async fn sql_limit() -> Result<()> {
         .unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is larger than the original number of lines, statistics remain unchanged
-    assert_eq!(stats, physical_plan.statistics()?);
+    assert_eq!(stats, physical_plan.partition_statistics(None)?);
 
     Ok(())
 }
@@ -290,7 +304,7 @@ async fn sql_window() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    let result = physical_plan.statistics()?;
+    let result = physical_plan.partition_statistics(None)?;
 
     assert_eq!(stats.num_rows, result.num_rows);
     let col_stats = result.column_statistics;

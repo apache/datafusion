@@ -21,20 +21,20 @@ use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::Array;
-use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
-
 use crate::aggregate::AggregateFunctionExpr;
+use crate::window::standard::add_new_ordering_expr_with_partition_by;
 use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
 };
-use crate::{reverse_order_bys, PhysicalExpr};
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
+
+use arrow::array::Array;
+use arrow::record_batch::RecordBatch;
+use arrow::{array::ArrayRef, datatypes::Field};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// A window expr that takes the form of an aggregate function.
 ///
@@ -52,13 +52,13 @@ impl PlainAggregateWindowExpr {
     pub fn new(
         aggregate: Arc<AggregateFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: LexOrderingRef,
+        order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
-            order_by: LexOrdering::from_ref(order_by),
+            order_by: order_by.clone(),
             window_frame,
         }
     }
@@ -66,6 +66,23 @@ impl PlainAggregateWindowExpr {
     /// Get aggregate expr of AggregateWindowExpr
     pub fn get_aggregate_expr(&self) -> &AggregateFunctionExpr {
         &self.aggregate
+    }
+
+    pub fn add_equal_orderings(
+        &self,
+        eq_properties: &mut EquivalenceProperties,
+        window_expr_index: usize,
+    ) {
+        if let Some(expr) = self
+            .get_aggregate_expr()
+            .get_result_ordering(window_expr_index)
+        {
+            add_new_ordering_expr_with_partition_by(
+                eq_properties,
+                expr,
+                &self.partition_by,
+            );
+        }
     }
 }
 
@@ -124,7 +141,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> LexOrderingRef {
+    fn order_by(&self) -> &LexOrdering {
         self.order_by.as_ref()
     }
 
@@ -135,7 +152,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
         self.aggregate.reverse_expr().map(|reverse_expr| {
             let reverse_window_frame = self.window_frame.reverse();
-            if reverse_window_frame.start_bound.is_unbounded() {
+            if reverse_window_frame.is_ever_expanding() {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),

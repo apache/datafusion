@@ -19,32 +19,18 @@
 
 use std::sync::Arc;
 
-use arrow::{array::ArrayRef, datatypes::DataType};
+use arrow::datatypes::{DataType, Field, Fields};
 
-use arrow_array::{
-    Array, BooleanArray, GenericListArray, ListArray, OffsetSizeTrait, Scalar,
-    UInt32Array,
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar, UInt32Array,
 };
-use arrow_buffer::OffsetBuffer;
-use arrow_schema::{Field, Fields};
-use datafusion_common::cast::{as_large_list_array, as_list_array};
+use arrow::buffer::OffsetBuffer;
+use datafusion_common::cast::{
+    as_fixed_size_list_array, as_large_list_array, as_list_array,
+};
 use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 
-use core::any::type_name;
-use datafusion_common::DataFusionError;
 use datafusion_expr::ColumnarValue;
-
-macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast to {}",
-                type_name::<$ARRAY_TYPE>()
-            ))
-        })?
-    }};
-}
-pub(crate) use downcast_arg;
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
@@ -114,7 +100,7 @@ pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
                     let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
 
                     aligned_array = Arc::new(GenericListArray::<O>::try_new(
-                        Arc::new(Field::new("item", data_type, true)),
+                        Arc::new(Field::new_list_field(data_type, true)),
                         offsets,
                         aligned_array,
                         None,
@@ -246,8 +232,16 @@ pub(crate) fn compute_array_dims(
 
     loop {
         match value.data_type() {
-            DataType::List(..) => {
-                value = downcast_arg!(value, ListArray).value(0);
+            DataType::List(_) => {
+                value = as_list_array(&value)?.value(0);
+                res.push(Some(value.len() as u64));
+            }
+            DataType::LargeList(_) => {
+                value = as_large_list_array(&value)?.value(0);
+                res.push(Some(value.len() as u64));
+            }
+            DataType::FixedSizeList(..) => {
+                value = as_fixed_size_list_array(&value)?.value(0);
                 res.push(Some(value.len() as u64));
             }
             _ => return Ok(Some(res)),
@@ -273,28 +267,29 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::ListArray;
     use arrow::datatypes::Int64Type;
-    use datafusion_common::utils::array_into_list_array_nullable;
+    use datafusion_common::utils::SingleRowListArrayBuilder;
 
     /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]
     fn test_align_array_dimensions() {
-        let array1d_1 =
+        let array1d_1: ArrayRef =
             Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
                 Some(vec![Some(1), Some(2), Some(3)]),
                 Some(vec![Some(4), Some(5)]),
             ]));
-        let array1d_2 =
+        let array1d_2: ArrayRef =
             Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
                 Some(vec![Some(6), Some(7), Some(8)]),
             ]));
 
-        let array2d_1 = Arc::new(array_into_list_array_nullable(
-            Arc::clone(&array1d_1) as ArrayRef
-        )) as ArrayRef;
-        let array2d_2 = Arc::new(array_into_list_array_nullable(
-            Arc::clone(&array1d_2) as ArrayRef
-        )) as ArrayRef;
+        let array2d_1: ArrayRef = Arc::new(
+            SingleRowListArrayBuilder::new(Arc::clone(&array1d_1)).build_list_array(),
+        );
+        let array2d_2 = Arc::new(
+            SingleRowListArrayBuilder::new(Arc::clone(&array1d_2)).build_list_array(),
+        );
 
         let res = align_array_dimensions::<i32>(vec![
             array1d_1.to_owned(),
@@ -310,10 +305,11 @@ mod tests {
             expected_dim
         );
 
-        let array3d_1 = Arc::new(array_into_list_array_nullable(array2d_1)) as ArrayRef;
-        let array3d_2 = array_into_list_array_nullable(array2d_2.to_owned());
-        let res =
-            align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2)]).unwrap();
+        let array3d_1: ArrayRef =
+            Arc::new(SingleRowListArrayBuilder::new(array2d_1).build_list_array());
+        let array3d_2: ArrayRef =
+            Arc::new(SingleRowListArrayBuilder::new(array2d_2).build_list_array());
+        let res = align_array_dimensions::<i32>(vec![array1d_1, array3d_2]).unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
         let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());

@@ -55,7 +55,7 @@ pub enum TableProviderFilterPushDown {
 pub enum TableType {
     /// An ordinary physical table.
     Base,
-    /// A non-materialised table that itself uses a query internally to provide data.
+    /// A non-materialized table that itself uses a query internally to provide data.
     View,
     /// A transient table.
     Temporary,
@@ -71,24 +71,33 @@ impl std::fmt::Display for TableType {
     }
 }
 
-/// Access schema information and filter push-down capabilities.
+/// Planning time information about a table.
 ///
-/// The TableSource trait is used during logical query planning and
-/// optimizations and provides a subset of the functionality of the
-/// `TableProvider` trait in the (core) `datafusion` crate. The `TableProvider`
-/// trait provides additional capabilities needed for physical query execution
-/// (such as the ability to perform a scan).
+/// This trait is used during logical query planning and optimizations, and
+/// provides a subset of the [`TableProvider`] trait, such as schema information
+/// and filter push-down capabilities. The [`TableProvider`] trait provides
+/// additional information needed for physical query execution, such as the
+/// ability to perform a scan or insert data.
+///
+/// # See Also:
+///
+/// [`DefaultTableSource`]  to go from [`TableProvider`], to `TableSource`
+///
+/// # Rationale
 ///
 /// The reason for having two separate traits is to avoid having the logical
 /// plan code be dependent on the DataFusion execution engine. Some projects use
 /// DataFusion's logical plans and have their own execution engine.
+///
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
+/// [`DefaultTableSource`]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
 pub trait TableSource: Sync + Send {
     fn as_any(&self) -> &dyn Any;
 
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
-    /// Get primary key indices, if one exists.
+    /// Get primary key indices, if any
     fn constraints(&self) -> Option<&Constraints> {
         None
     }
@@ -99,7 +108,7 @@ pub trait TableSource: Sync + Send {
     }
 
     /// Tests whether the table provider can make use of any or all filter expressions
-    /// to optimise data retrieval.
+    /// to optimize data retrieval. Only non-volatile expressions are passed to this function.
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
@@ -110,6 +119,8 @@ pub trait TableSource: Sync + Send {
     }
 
     /// Get the Logical plan of this table provider, if available.
+    ///
+    /// For example, a view may have a logical plan, but a CSV file does not.
     fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
         None
     }

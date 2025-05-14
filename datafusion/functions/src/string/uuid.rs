@@ -16,18 +16,32 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use arrow::array::GenericStringArray;
+use arrow::array::GenericStringBuilder;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Utf8;
+use rand::Rng;
 use uuid::Uuid;
 
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.",
+    syntax_example = "uuid()",
+    sql_example = r#"```sql
+> select uuid();
++--------------------------------------+
+| uuid()                               |
++--------------------------------------+
+| 6ec17ef8-1934-41cc-8d59-d0c8f9eea1f0 |
++--------------------------------------+
+```"#
+)]
 #[derive(Debug)]
 pub struct UuidFunc {
     signature: Signature,
@@ -64,40 +78,36 @@ impl ScalarUDFImpl for UuidFunc {
         Ok(Utf8)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("{} function does not accept arguments", self.name())
-    }
-
     /// Prints random (v4) uuid values per row
     /// uuid() = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
-    fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
-        let values = std::iter::repeat_with(|| Uuid::new_v4().to_string()).take(num_rows);
-        let array = GenericStringArray::<i32>::from_iter_values(values);
-        Ok(ColumnarValue::Array(Arc::new(array)))
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if !args.args.is_empty() {
+            return internal_err!("{} function does not accept arguments", self.name());
+        }
+
+        // Generate random u128 values
+        let mut rng = rand::thread_rng();
+        let mut randoms = vec![0u128; args.number_rows];
+        rng.fill(&mut randoms[..]);
+
+        let mut builder = GenericStringBuilder::<i32>::with_capacity(
+            args.number_rows,
+            args.number_rows * 36,
+        );
+
+        let mut buffer = [0u8; 36];
+        for x in &mut randoms {
+            // From Uuid::new_v4(): Mask out the version and variant bits
+            *x = *x & 0xFFFFFFFFFFFF4FFFBFFFFFFFFFFFFFFF | 0x40008000000000000000;
+            let uuid = Uuid::from_u128(*x);
+            let fmt = uuid::fmt::Hyphenated::from_uuid(uuid);
+            builder.append_value(fmt.encode_lower(&mut buffer));
+        }
+
+        Ok(ColumnarValue::Array(Arc::new(builder.finish())))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_uuid_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_uuid_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.")
-            .with_syntax_example("uuid()")
-            .with_sql_example(r#"```sql
-> select uuid();
-+--------------------------------------+
-| uuid()                               |
-+--------------------------------------+
-| 6ec17ef8-1934-41cc-8d59-d0c8f9eea1f0 |
-+--------------------------------------+
-```"#)
-            .build()
-            .unwrap()
-    })
 }

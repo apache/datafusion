@@ -16,19 +16,47 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::types::logical_string;
 use datafusion_common::utils::datafusion_strsim;
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::type_coercion::binary::{
+    binary_to_string_coercion, string_coercion,
+};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.",
+    syntax_example = "levenshtein(str1, str2)",
+    sql_example = r#"```sql
+> select levenshtein('kitten', 'sitting');
++---------------------------------------------+
+| levenshtein(Utf8("kitten"),Utf8("sitting")) |
++---------------------------------------------+
+| 3                                           |
++---------------------------------------------+
+```"#,
+    argument(
+        name = "str1",
+        description = "String expression to compute Levenshtein distance with str2."
+    ),
+    argument(
+        name = "str2",
+        description = "String expression to compute Levenshtein distance with str1."
+    )
+)]
 #[derive(Debug)]
 pub struct LevenshteinFunc {
     signature: Signature,
@@ -43,7 +71,13 @@ impl Default for LevenshteinFunc {
 impl LevenshteinFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -62,15 +96,23 @@ impl ScalarUDFImpl for LevenshteinFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "levenshtein")
+        if let Some(coercion_data_type) = string_coercion(&arg_types[0], &arg_types[1])
+            .or_else(|| binary_to_string_coercion(&arg_types[0], &arg_types[1]))
+        {
+            utf8_to_int_type(&coercion_data_type, "levenshtein")
+        } else {
+            exec_err!("Unsupported data types for levenshtein. Expected Utf8, LargeUtf8 or Utf8View")
+        }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
-                make_scalar_function(levenshtein::<i32>, vec![])(args)
+                make_scalar_function(levenshtein::<i32>, vec![])(&args.args)
             }
-            DataType::LargeUtf8 => make_scalar_function(levenshtein::<i64>, vec![])(args),
+            DataType::LargeUtf8 => {
+                make_scalar_function(levenshtein::<i64>, vec![])(&args.args)
+            }
             other => {
                 exec_err!("Unsupported data type {other:?} for function levenshtein")
             }
@@ -78,94 +120,85 @@ impl ScalarUDFImpl for LevenshteinFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_levenshtein_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_levenshtein_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.")
-            .with_syntax_example("levenshtein(str1, str2)")
-            .with_sql_example(r#"```sql
-> select levenshtein('kitten', 'sitting');
-+---------------------------------------------+
-| levenshtein(Utf8("kitten"),Utf8("sitting")) |
-+---------------------------------------------+
-| 3                                           |
-+---------------------------------------------+
-```"#)
-            .with_argument("str1", "String expression to compute Levenshtein distance with str2.")
-            .with_argument("str2", "String expression to compute Levenshtein distance with str1.")
-            .build()
-            .unwrap()
-    })
 }
 
 ///Returns the Levenshtein distance between the two given strings.
 /// LEVENSHTEIN('kitten', 'sitting') = 3
-pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!(
-            "levenshtein function requires two arguments, got {}",
-            args.len()
-        );
-    }
+fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [str1, str2] = take_function_args("levenshtein", args)?;
 
-    match args[0].data_type() {
-        DataType::Utf8View => {
-            let str1_array = as_string_view_array(&args[0])?;
-            let str2_array = as_string_view_array(&args[1])?;
-            let result = str1_array
-                .iter()
-                .zip(str2_array.iter())
-                .map(|(string1, string2)| match (string1, string2) {
-                    (Some(string1), Some(string2)) => {
-                        Some(datafusion_strsim::levenshtein(string1, string2) as i32)
-                    }
-                    _ => None,
-                })
-                .collect::<Int32Array>();
-            Ok(Arc::new(result) as ArrayRef)
+    if let Some(coercion_data_type) =
+        string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
+            binary_to_string_coercion(args[0].data_type(), args[1].data_type())
+        })
+    {
+        let str1 = if str1.data_type() == &coercion_data_type {
+            Arc::clone(str1)
+        } else {
+            arrow::compute::kernels::cast::cast(&str1, &coercion_data_type)?
+        };
+        let str2 = if str2.data_type() == &coercion_data_type {
+            Arc::clone(str2)
+        } else {
+            arrow::compute::kernels::cast::cast(&str2, &coercion_data_type)?
+        };
+
+        match coercion_data_type {
+            DataType::Utf8View => {
+                let str1_array = as_string_view_array(&str1)?;
+                let str2_array = as_string_view_array(&str2)?;
+                let result = str1_array
+                    .iter()
+                    .zip(str2_array.iter())
+                    .map(|(string1, string2)| match (string1, string2) {
+                        (Some(string1), Some(string2)) => {
+                            Some(datafusion_strsim::levenshtein(string1, string2) as i32)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Int32Array>();
+                Ok(Arc::new(result) as ArrayRef)
+            }
+            DataType::Utf8 => {
+                let str1_array = as_generic_string_array::<T>(&str1)?;
+                let str2_array = as_generic_string_array::<T>(&str2)?;
+                let result = str1_array
+                    .iter()
+                    .zip(str2_array.iter())
+                    .map(|(string1, string2)| match (string1, string2) {
+                        (Some(string1), Some(string2)) => {
+                            Some(datafusion_strsim::levenshtein(string1, string2) as i32)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Int32Array>();
+                Ok(Arc::new(result) as ArrayRef)
+            }
+            DataType::LargeUtf8 => {
+                let str1_array = as_generic_string_array::<T>(&str1)?;
+                let str2_array = as_generic_string_array::<T>(&str2)?;
+                let result = str1_array
+                    .iter()
+                    .zip(str2_array.iter())
+                    .map(|(string1, string2)| match (string1, string2) {
+                        (Some(string1), Some(string2)) => {
+                            Some(datafusion_strsim::levenshtein(string1, string2) as i64)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Int64Array>();
+                Ok(Arc::new(result) as ArrayRef)
+            }
+            other => {
+                exec_err!(
+                    "levenshtein was called with {other} datatype arguments. It requires Utf8View, Utf8 or LargeUtf8."
+                )
+            }
         }
-        DataType::Utf8 => {
-            let str1_array = as_generic_string_array::<T>(&args[0])?;
-            let str2_array = as_generic_string_array::<T>(&args[1])?;
-            let result = str1_array
-                .iter()
-                .zip(str2_array.iter())
-                .map(|(string1, string2)| match (string1, string2) {
-                    (Some(string1), Some(string2)) => {
-                        Some(datafusion_strsim::levenshtein(string1, string2) as i32)
-                    }
-                    _ => None,
-                })
-                .collect::<Int32Array>();
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        DataType::LargeUtf8 => {
-            let str1_array = as_generic_string_array::<T>(&args[0])?;
-            let str2_array = as_generic_string_array::<T>(&args[1])?;
-            let result = str1_array
-                .iter()
-                .zip(str2_array.iter())
-                .map(|(string1, string2)| match (string1, string2) {
-                    (Some(string1), Some(string2)) => {
-                        Some(datafusion_strsim::levenshtein(string1, string2) as i64)
-                    }
-                    _ => None,
-                })
-                .collect::<Int64Array>();
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => {
-            exec_err!(
-                "levenshtein was called with {other} datatype arguments. It requires Utf8View, Utf8 or LargeUtf8."
-            )
-        }
+    } else {
+        exec_err!("Unsupported data types for levenshtein. Expected Utf8, LargeUtf8 or Utf8View")
     }
 }
 

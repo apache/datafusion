@@ -16,14 +16,13 @@
 // under the License.
 
 use arrow::array::{ArrayRef, BooleanArray};
-use arrow::datatypes::Int64Type;
+use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
-use arrow_schema::{DataType, Field, Schema};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
 
 fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
@@ -32,7 +31,7 @@ fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
         return_type: data_type,
         schema: &schema,
         ignore_nulls: false,
-        ordering_req: LexOrderingRef::default(),
+        ordering_req: &LexOrdering::default(),
         is_reversed: false,
         name: "SUM(f)",
         is_distinct: false,

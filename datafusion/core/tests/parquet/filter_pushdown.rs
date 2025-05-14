@@ -26,6 +26,8 @@
 //! select * from data limit 10;
 //! ```
 
+use std::path::Path;
+
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::collect;
@@ -67,7 +69,7 @@ fn generate_file(tempdir: &TempDir, props: WriterProperties) -> TestParquetFile 
 async fn single_file() {
     // Only create the parquet file once as it is fairly large
 
-    let tempdir = TempDir::new().unwrap();
+    let tempdir = TempDir::new_in(Path::new(".")).unwrap();
     // Set row group size smaller so can test with fewer rows
     let props = WriterProperties::builder()
         .set_max_row_group_size(1024)
@@ -223,7 +225,7 @@ async fn single_file() {
 
 #[tokio::test]
 async fn single_file_small_data_pages() {
-    let tempdir = TempDir::new().unwrap();
+    let tempdir = TempDir::new_in(Path::new(".")).unwrap();
 
     // Set low row count limit to improve page filtering
     let props = WriterProperties::builder()

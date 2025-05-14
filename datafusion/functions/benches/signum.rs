@@ -17,12 +17,13 @@
 
 extern crate criterion;
 
+use arrow::datatypes::DataType;
 use arrow::{
-    datatypes::{Float32Type, Float64Type},
+    datatypes::{Field, Float32Type, Float64Type},
     util::bench_util::create_primitive_array,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::signum;
 use std::sync::Arc;
 
@@ -30,19 +31,52 @@ fn criterion_benchmark(c: &mut Criterion) {
     let signum = signum();
     for size in [1024, 4096, 8192] {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
+        let batch_len = f32_array.len();
         let f32_args = vec![ColumnarValue::Array(f32_array)];
-        c.bench_function(&format!("signum f32 array: {}", size), |b| {
+        let arg_fields_owned = f32_args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
+        c.bench_function(&format!("signum f32 array: {size}"), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(signum.invoke(&f32_args).unwrap())
+                black_box(
+                    signum
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: f32_args.clone(),
+                            arg_fields: arg_fields.clone(),
+                            number_rows: batch_len,
+                            return_field: &Field::new("f", DataType::Float32, true),
+                        })
+                        .unwrap(),
+                )
             })
         });
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
+        let batch_len = f64_array.len();
+
         let f64_args = vec![ColumnarValue::Array(f64_array)];
-        c.bench_function(&format!("signum f64 array: {}", size), |b| {
+        let arg_fields_owned = f64_args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
+        c.bench_function(&format!("signum f64 array: {size}"), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(signum.invoke(&f64_args).unwrap())
+                black_box(
+                    signum
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: f64_args.clone(),
+                            arg_fields: arg_fields.clone(),
+                            number_rows: batch_len,
+                            return_field: &Field::new("f", DataType::Float64, true),
+                        })
+                        .unwrap(),
+                )
             })
         });
     }

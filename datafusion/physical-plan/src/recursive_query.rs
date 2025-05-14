@@ -21,12 +21,13 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{
+use super::work_table::{ReservedBatches, WorkTable, WorkTableExec};
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    work_table::{ReservedBatches, WorkTable, WorkTableExec},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
+use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -95,6 +96,26 @@ impl RecursiveQueryExec {
         })
     }
 
+    /// Ref to name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Ref to static term
+    pub fn static_term(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.static_term
+    }
+
+    /// Ref to recursive term
+    pub fn recursive_term(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.recursive_term
+    }
+
+    /// is distinct
+    pub fn is_distinct(&self) -> bool {
+        self.is_distinct
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
@@ -102,7 +123,8 @@ impl RecursiveQueryExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -125,7 +147,7 @@ impl ExecutionPlan for RecursiveQueryExec {
     }
 
     // TODO: control these hints and see whether we can
-    // infer some from the child plans (static/recurisve terms).
+    // infer some from the child plans (static/recursive terms).
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![false, false]
     }
@@ -134,10 +156,10 @@ impl ExecutionPlan for RecursiveQueryExec {
         vec![false, false]
     }
 
-    fn required_input_distribution(&self) -> Vec<datafusion_physical_expr::Distribution> {
+    fn required_input_distribution(&self) -> Vec<crate::Distribution> {
         vec![
-            datafusion_physical_expr::Distribution::SinglePartition,
-            datafusion_physical_expr::Distribution::SinglePartition,
+            crate::Distribution::SinglePartition,
+            crate::Distribution::SinglePartition,
         ]
     }
 
@@ -162,8 +184,7 @@ impl ExecutionPlan for RecursiveQueryExec {
         // TODO: we might be able to handle multiple partitions in the future.
         if partition != 0 {
             return Err(DataFusionError::Internal(format!(
-                "RecursiveQueryExec got an invalid partition {} (expected 0)",
-                partition
+                "RecursiveQueryExec got an invalid partition {partition} (expected 0)"
             )));
         }
 
@@ -200,6 +221,10 @@ impl DisplayAs for RecursiveQueryExec {
                     "RecursiveQueryExec: name={}, is_distinct={}",
                     self.name, self.is_distinct
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

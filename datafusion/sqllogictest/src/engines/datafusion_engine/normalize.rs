@@ -15,21 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::super::conversion::*;
+use super::error::{DFSqlLogicTestError, Result};
 use crate::engines::output::DFColumnType;
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::DataFusionError;
+use datafusion::common::DataFusionError;
+use datafusion::config::ConfigField;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
-use super::super::conversion::*;
-use super::error::{DFSqlLogicTestError, Result};
-
-/// Converts `batches` to a result as expected by sqllogicteset.
-pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
+/// Converts `batches` to a result as expected by sqllogictest.
+pub fn convert_batches(
+    batches: Vec<RecordBatch>,
+    is_spark_path: bool,
+) -> Result<Vec<Vec<String>>> {
     if batches.is_empty() {
         Ok(vec![])
     } else {
@@ -47,7 +49,16 @@ pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<Strin
                 )));
             }
 
-            let new_rows = convert_batch(batch)?
+            // Convert a single batch to a `Vec<Vec<String>>` for comparison, flatten expanded rows, and normalize each.
+            let new_rows = (0..batch.num_rows())
+                .map(|row| {
+                    batch
+                        .columns()
+                        .iter()
+                        .map(|col| cell_to_string(col, row, is_spark_path))
+                        .collect::<Result<Vec<String>>>()
+                })
+                .collect::<Result<Vec<Vec<String>>>>()?
                 .into_iter()
                 .flat_map(expand_row)
                 .map(normalize_paths);
@@ -120,17 +131,17 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
 /// normalize path references
 ///
 /// ```text
-/// CsvExec: files={1 group: [[path/to/datafusion/testing/data/csv/aggregate_test_100.csv]]}, ...
+/// DataSourceExec: files={1 group: [[path/to/datafusion/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 ///
 /// into:
 ///
 /// ```text
-/// CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
+/// DataSourceExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
     row.iter_mut().for_each(|s| {
-        let workspace_root: &str = workspace_root().as_ref();
+        let workspace_root: &str = WORKSPACE_ROOT.as_ref();
         if s.contains(workspace_root) {
             *s = s.replace(workspace_root, "WORKSPACE_ROOT");
         }
@@ -138,47 +149,30 @@ fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
     row
 }
 
-/// return the location of the datafusion checkout
-fn workspace_root() -> &'static object_store::path::Path {
-    static WORKSPACE_ROOT_LOCK: OnceLock<object_store::path::Path> = OnceLock::new();
-    WORKSPACE_ROOT_LOCK.get_or_init(|| {
-        // e.g. /Software/datafusion/datafusion/core
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+/// The location of the datafusion checkout
+static WORKSPACE_ROOT: LazyLock<object_store::path::Path> = LazyLock::new(|| {
+    // e.g. /Software/datafusion/datafusion/core
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-        // e.g. /Software/datafusion/datafusion
-        let workspace_root = dir
-            .parent()
-            .expect("Can not find parent of datafusion/core")
-            // e.g. /Software/datafusion
-            .parent()
-            .expect("parent of datafusion")
-            .to_string_lossy();
+    // e.g. /Software/datafusion/datafusion
+    let workspace_root = dir
+        .parent()
+        .expect("Can not find parent of datafusion/core")
+        // e.g. /Software/datafusion
+        .parent()
+        .expect("parent of datafusion")
+        .to_string_lossy();
 
-        let sanitized_workplace_root = if cfg!(windows) {
-            // Object store paths are delimited with `/`, e.g. `/datafusion/datafusion/testing/data/csv/aggregate_test_100.csv`.
-            // The default windows delimiter is `\`, so the workplace path is `datafusion\datafusion`.
-            workspace_root
-                .replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
-        } else {
-            workspace_root.to_string()
-        };
+    let sanitized_workplace_root = if cfg!(windows) {
+        // Object store paths are delimited with `/`, e.g. `/datafusion/datafusion/testing/data/csv/aggregate_test_100.csv`.
+        // The default windows delimiter is `\`, so the workplace path is `datafusion\datafusion`.
+        workspace_root.replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
+    } else {
+        workspace_root.to_string()
+    };
 
-        object_store::path::Path::parse(sanitized_workplace_root).unwrap()
-    })
-}
-
-/// Convert a single batch to a `Vec<Vec<String>>` for comparison
-fn convert_batch(batch: RecordBatch) -> Result<Vec<Vec<String>>> {
-    (0..batch.num_rows())
-        .map(|row| {
-            batch
-                .columns()
-                .iter()
-                .map(|col| cell_to_string(col, row))
-                .collect::<Result<Vec<String>>>()
-        })
-        .collect()
-}
+    object_store::path::Path::parse(sanitized_workplace_root).unwrap()
+});
 
 macro_rules! get_row_value {
     ($array_type:ty, $column: ident, $row: ident) => {{
@@ -198,7 +192,7 @@ macro_rules! get_row_value {
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
 ///
-pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
+pub fn cell_to_string(col: &ArrayRef, row: usize, is_spark_path: bool) -> Result<String> {
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"
         Ok(NULL_STR.to_string())
@@ -215,15 +209,20 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
                 Ok(f32_to_str(get_row_value!(array::Float32Array, col, row)))
             }
             DataType::Float64 => {
-                Ok(f64_to_str(get_row_value!(array::Float64Array, col, row)))
+                let result = get_row_value!(array::Float64Array, col, row);
+                if is_spark_path {
+                    Ok(spark_f64_to_str(result))
+                } else {
+                    Ok(f64_to_str(result))
+                }
             }
-            DataType::Decimal128(precision, scale) => {
+            DataType::Decimal128(_, scale) => {
                 let value = get_row_value!(array::Decimal128Array, col, row);
-                Ok(i128_to_str(value, precision, scale))
+                Ok(decimal_128_to_str(value, *scale))
             }
-            DataType::Decimal256(precision, scale) => {
+            DataType::Decimal256(_, scale) => {
                 let value = get_row_value!(array::Decimal256Array, col, row);
-                Ok(i256_to_str(value, precision, scale))
+                Ok(decimal_256_to_str(value, *scale))
             }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
                 array::LargeStringArray,
@@ -241,11 +240,20 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
             DataType::Dictionary(_, _) => {
                 let dict = col.as_any_dictionary();
                 let key = dict.normalized_keys()[row];
-                Ok(cell_to_string(dict.values(), key)?)
+                Ok(cell_to_string(dict.values(), key, is_spark_path)?)
             }
             _ => {
-                let f = ArrayFormatter::try_new(col.as_ref(), &DEFAULT_FORMAT_OPTIONS);
-                Ok(f.unwrap().value(row).to_string())
+                let mut datafusion_format_options =
+                    datafusion::config::FormatOptions::default();
+
+                datafusion_format_options.set("null", "NULL").unwrap();
+
+                let arrow_format_options: arrow::util::display::FormatOptions =
+                    (&datafusion_format_options).try_into().unwrap();
+
+                let f = ArrayFormatter::try_new(col.as_ref(), &arrow_format_options)?;
+
+                Ok(f.value(row).to_string())
             }
         }
         .map_err(DFSqlLogicTestError::Arrow)
@@ -253,7 +261,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
 }
 
 /// Converts columns to a result as expected by sqllogicteset.
-pub(crate) fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
+pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
     columns
         .iter()
         .map(|f| f.data_type())

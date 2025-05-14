@@ -124,7 +124,7 @@ logical_plan
 02)--TableScan: values projection=[a, b, c]
 physical_plan
 01)ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # error on 0 arguments
 query error
@@ -151,66 +151,66 @@ query error DataFusion error: Execution error: named_struct requires an even num
 select named_struct('a', 1, 'b');
 
 # error on even argument not a string literal #1
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got Int64\(1\) instead at position 0
+query error DataFusion error: Execution error: named_struct requires 0\-th \(0\-indexed\) field name as non\-empty constant string
 select named_struct(1, 'a');
 
 # error on even argument not a string literal #2
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got Int64\(0\) instead at position 2
+query error DataFusion error: Execution error: named_struct requires 2\-th \(0\-indexed\) field name as non\-empty constant string
 select named_struct('corret', 1, 0, 'wrong');
 
 # error on even argument not a string literal #3
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got values\.a instead at position 0
+query error DataFusion error: Execution error: named_struct requires 0\-th \(0\-indexed\) field name as non\-empty constant string
 select named_struct(values.a, 'a') from values;
 
 # error on even argument not a string literal #4
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got values\.c instead at position 0
+query error DataFusion error: Execution error: named_struct requires 0\-th \(0\-indexed\) field name as non\-empty constant string
 select named_struct(values.c, 'c') from values;
 
 # named_struct with mixed scalar and array values #1
 query ?
 select named_struct('scalar', 27, 'array', values.a, 'null', NULL) from values;
 ----
-{scalar: 27, array: 1, null: }
-{scalar: 27, array: 2, null: }
-{scalar: 27, array: 3, null: }
+{scalar: 27, array: 1, null: NULL}
+{scalar: 27, array: 2, null: NULL}
+{scalar: 27, array: 3, null: NULL}
 
 query ?
 select {'scalar': 27, 'array': values.a, 'null': NULL} from values;
 ----
-{scalar: 27, array: 1, null: }
-{scalar: 27, array: 2, null: }
-{scalar: 27, array: 3, null: }
+{scalar: 27, array: 1, null: NULL}
+{scalar: 27, array: 2, null: NULL}
+{scalar: 27, array: 3, null: NULL}
 
 # named_struct with mixed scalar and array values #2
 query ?
 select named_struct('array', values.a, 'scalar', 27, 'null', NULL) from values;
 ----
-{array: 1, scalar: 27, null: }
-{array: 2, scalar: 27, null: }
-{array: 3, scalar: 27, null: }
+{array: 1, scalar: 27, null: NULL}
+{array: 2, scalar: 27, null: NULL}
+{array: 3, scalar: 27, null: NULL}
 
 query ?
 select {'array': values.a, 'scalar': 27, 'null': NULL} from values;
 ----
-{array: 1, scalar: 27, null: }
-{array: 2, scalar: 27, null: }
-{array: 3, scalar: 27, null: }
+{array: 1, scalar: 27, null: NULL}
+{array: 2, scalar: 27, null: NULL}
+{array: 3, scalar: 27, null: NULL}
 
 # named_struct with mixed scalar and array values #3
 query ?
 select named_struct('null', NULL, 'array', values.a, 'scalar', 27) from values;
 ----
-{null: , array: 1, scalar: 27}
-{null: , array: 2, scalar: 27}
-{null: , array: 3, scalar: 27}
+{null: NULL, array: 1, scalar: 27}
+{null: NULL, array: 2, scalar: 27}
+{null: NULL, array: 3, scalar: 27}
 
 # named_struct with mixed scalar and array values #4
 query ?
 select named_struct('null_array', values.n, 'array', values.a, 'scalar', 27, 'null', NULL) from values;
 ----
-{null_array: , array: 1, scalar: 27, null: }
-{null_array: , array: 2, scalar: 27, null: }
-{null_array: , array: 3, scalar: 27, null: }
+{null_array: NULL, array: 1, scalar: 27, null: NULL}
+{null_array: NULL, array: 2, scalar: 27, null: NULL}
+{null_array: NULL, array: 3, scalar: 27, null: NULL}
 
 # named_struct arrays only
 query ?
@@ -286,7 +286,7 @@ drop table struct_values;
 statement ok
 CREATE OR REPLACE VIEW complex_view AS 
 SELECT {
-    'user': {
+    'user_information': {
         'info': {
             'personal': {
                 'name': 'John Doe',
@@ -347,22 +347,22 @@ SELECT {
 } AS complex_data;
 
 query T
-SELECT complex_data.user.info.personal.name FROM complex_view;
+SELECT complex_data.user_information.info.personal.name FROM complex_view;
 ----
 John Doe
 
 query I
-SELECT complex_data.user.info.personal.age FROM complex_view;
+SELECT complex_data.user_information.info.personal.age FROM complex_view;
 ----
 30
 
 query T
-SELECT complex_data.user.info.address.city FROM complex_view;
+SELECT complex_data.user_information.info.address.city FROM complex_view;
 ----
 Anytown
 
 query T
-SELECT complex_data.user.preferences.languages[2] FROM complex_view;
+SELECT complex_data.user_information.preferences.languages[2] FROM complex_view;
 ----
 es
 
@@ -459,14 +459,14 @@ create table t as values({r: 'a', c: 1}), ({r: 'b', c: 2.3});
 query ?
 select * from t;
 ----
-{c0: a, c1: 1.0}
-{c0: b, c1: 2.3}
+{r: a, c: 1.0}
+{r: b, c: 2.3}
 
 query T
 select arrow_typeof(column1) from t;
 ----
-Struct([Field { name: "c0", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "c0", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
 
 statement ok
 drop table t;
@@ -595,3 +595,40 @@ Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_
 
 statement ok
 drop table t;
+
+
+# Test struct field access with subscript notation
+# This tests accessing struct fields using the subscript notation with string literals
+
+statement ok
+create table test (struct_field struct(substruct int)) as values (struct(1));
+
+query ??
+select *
+from test as test1, test as test2 where
+test1.struct_field['substruct'] = test2.struct_field['substruct'];
+----
+{substruct: 1} {substruct: 1}
+
+statement ok
+DROP TABLE test;
+
+statement ok
+create table test (struct_field struct(substruct struct(subsubstruct int))) as values (struct(struct(1)));
+
+query ??
+select *
+from test as test1, test as test2 where
+test1.struct_field.substruct['subsubstruct'] = test2.struct_field.substruct['subsubstruct'];
+----
+{substruct: {subsubstruct: 1}} {substruct: {subsubstruct: 1}}
+
+query ??
+select *
+from test AS test1, test AS test2 where
+test1.struct_field['substruct']['subsubstruct'] = test2.struct_field['substruct']['subsubstruct'];
+----
+{substruct: {subsubstruct: 1}} {substruct: {subsubstruct: 1}}
+
+statement ok
+drop table test;

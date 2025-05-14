@@ -22,9 +22,10 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, physical_exprs_bag_equal};
+use crate::physical_expr::physical_exprs_bag_equal;
 use crate::PhysicalExpr;
 
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
@@ -32,7 +33,6 @@ use arrow::compute::take;
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion_common::cast::{
     as_boolean_array, as_generic_binary_array, as_string_array,
 };
@@ -44,8 +44,8 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 
 use ahash::RandomState;
+use datafusion_common::HashMap;
 use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
 
 /// InList
 pub struct InListExpr {
@@ -244,7 +244,7 @@ trait IsEqual: HashValue {
     fn is_equal(&self, other: &Self) -> bool;
 }
 
-impl<'a, T: IsEqual + ?Sized> IsEqual for &'a T {
+impl<T: IsEqual + ?Sized> IsEqual for &T {
     fn is_equal(&self, other: &Self) -> bool {
         T::is_equal(self, other)
     }
@@ -399,25 +399,39 @@ impl PhysicalExpr for InListExpr {
         )))
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.expr.hash(&mut s);
-        self.negated.hash(&mut s);
-        self.list.hash(&mut s);
-        // Add `self.static_filter` when hash is available
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.expr.fmt_sql(f)?;
+        if self.negated {
+            write!(f, " NOT")?;
+        }
+
+        write!(f, " IN (")?;
+        for (i, expr) in self.list.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            expr.fmt_sql(f)?;
+        }
+        write!(f, ")")
     }
 }
 
-impl PartialEq<dyn Any> for InListExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.expr.eq(&x.expr)
-                    && physical_exprs_bag_equal(&self.list, &x.list)
-                    && self.negated == x.negated
-            })
-            .unwrap_or(false)
+impl PartialEq for InListExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr)
+            && physical_exprs_bag_equal(&self.list, &other.list)
+            && self.negated == other.negated
+    }
+}
+
+impl Eq for InListExpr {}
+
+impl Hash for InListExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.negated.hash(state);
+        self.list.hash(state);
+        // Add `self.static_filter` when hash is available
     }
 }
 
@@ -455,6 +469,7 @@ mod tests {
     use crate::expressions::{col, lit, try_cast};
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 
@@ -1421,6 +1436,46 @@ mod tests {
                 &schema
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let col_a = col("a", &schema)?;
+
+        // Test: a IN ('a', 'b')
+        let list = vec![lit("a"), lit("b")];
+        let expr = in_list(Arc::clone(&col_a), list, &false, &schema)?;
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        let display_string = expr.to_string();
+        assert_eq!(sql_string, "a IN (a, b)");
+        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])");
+
+        // Test: a NOT IN ('a', 'b')
+        let list = vec![lit("a"), lit("b")];
+        let expr = in_list(Arc::clone(&col_a), list, &true, &schema)?;
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        let display_string = expr.to_string();
+        assert_eq!(sql_string, "a NOT IN (a, b)");
+        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])");
+
+        // Test: a IN ('a', 'b', NULL)
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
+        let expr = in_list(Arc::clone(&col_a), list, &false, &schema)?;
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        let display_string = expr.to_string();
+        assert_eq!(sql_string, "a IN (a, b, NULL)");
+        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])");
+
+        // Test: a NOT IN ('a', 'b', NULL)
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
+        let expr = in_list(Arc::clone(&col_a), list, &true, &schema)?;
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        let display_string = expr.to_string();
+        assert_eq!(sql_string, "a NOT IN (a, b, NULL)");
+        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])");
 
         Ok(())
     }

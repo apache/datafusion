@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
-use std::fmt::{self, Debug, Formatter};
+use std::fmt::{self, Debug, Formatter, Write};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::vec;
@@ -29,14 +29,18 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-use crate::expr::AggregateFunction;
+use crate::expr::{
+    schema_name_from_exprs, schema_name_from_exprs_comma_separated_without_space,
+    schema_name_from_sorts, AggregateFunction, AggregateFunctionParams, ExprListDisplay,
+    WindowFunctionParams,
+};
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
-use crate::{Accumulator, Expr};
+use crate::{expr_vec_fmt, Accumulator, Expr};
 use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
@@ -96,6 +100,7 @@ impl fmt::Display for AggregateUDF {
 }
 
 /// Arguments passed to [`AggregateUDFImpl::value_from_stats`]
+#[derive(Debug)]
 pub struct StatisticsArgs<'a> {
     /// The statistics of the aggregate input
     pub statistics: &'a Statistics,
@@ -119,9 +124,12 @@ impl AggregateUDF {
     where
         F: AggregateUDFImpl + 'static,
     {
-        Self {
-            inner: Arc::new(fun),
-        }
+        Self::new_from_shared_impl(Arc::new(fun))
+    }
+
+    /// Create a new `AggregateUDF` from a `[AggregateUDFImpl]` trait object
+    pub fn new_from_shared_impl(fun: Arc<dyn AggregateUDFImpl>) -> AggregateUDF {
+        Self { inner: fun }
     }
 
     /// Return the underlying [`AggregateUDFImpl`] trait object for this function
@@ -160,6 +168,37 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    /// See [`AggregateUDFImpl::schema_name`] for more details.
+    pub fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.schema_name(params)
+    }
+
+    /// Returns a human readable expression.
+    ///
+    /// See [`Expr::human_display`] for details.
+    pub fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.human_display(params)
+    }
+
+    pub fn window_function_schema_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        self.inner.window_function_schema_name(params)
+    }
+
+    /// See [`AggregateUDFImpl::display_name`] for more details.
+    pub fn display_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.display_name(params)
+    }
+
+    pub fn window_function_display_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        self.inner.window_function_display_name(params)
     }
 
     pub fn is_nullable(&self) -> bool {
@@ -276,6 +315,16 @@ impl AggregateUDF {
         self.inner.default_value(data_type)
     }
 
+    /// See [`AggregateUDFImpl::supports_null_handling_clause`] for more details.
+    pub fn supports_null_handling_clause(&self) -> bool {
+        self.inner.supports_null_handling_clause()
+    }
+
+    /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
+    pub fn is_ordered_set_aggregate(&self) -> bool {
+        self.inner.is_ordered_set_aggregate()
+    }
+
     /// Returns the documentation for this Aggregate UDF.
     ///
     /// Documentation can be accessed programmatically as well as
@@ -307,7 +356,7 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use std::sync::OnceLock;
+/// # use std::sync::LazyLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr, Documentation};
@@ -329,18 +378,14 @@ where
 ///   }
 /// }
 ///
-/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-///
-/// fn get_doc() -> &'static Documentation {
-///     DOCUMENTATION.get_or_init(|| {
-///         Documentation::builder()
-///             .with_doc_section(DOC_SECTION_AGGREGATE)
-///             .with_description("calculates a geometric mean")
-///             .with_syntax_example("geo_mean(2.0)")
+/// static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+///         Documentation::builder(DOC_SECTION_AGGREGATE, "calculates a geometric mean", "geo_mean(2.0)")
 ///             .with_argument("arg1", "The Float64 number for the geometric mean")
 ///             .build()
-///             .unwrap()
-///     })
+///     });
+///
+/// fn get_doc() -> &'static Documentation {
+///     &DOCUMENTATION
 /// }
 ///    
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
@@ -383,6 +428,244 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Returns this function's name
     fn name(&self) -> &str;
 
+    /// Returns the name of the column this expression would create
+    ///
+    /// See [`Expr::schema_name`] for details
+    ///
+    /// Example of schema_name: count(DISTINCT column1) FILTER (WHERE column2 > 10) ORDER BY [..]
+    fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        let AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        } = params;
+
+        // exclude the first function argument(= column) in ordered set aggregate function,
+        // because it is duplicated with the WITHIN GROUP clause in schema name.
+        let args = if self.is_ordered_set_aggregate() {
+            &args[1..]
+        } else {
+            &args[..]
+        };
+
+        let mut schema_name = String::new();
+
+        schema_name.write_fmt(format_args!(
+            "{}({}{})",
+            self.name(),
+            if *distinct { "DISTINCT " } else { "" },
+            schema_name_from_exprs_comma_separated_without_space(args)?
+        ))?;
+
+        if let Some(null_treatment) = null_treatment {
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
+        }
+
+        if let Some(filter) = filter {
+            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+        };
+
+        if let Some(order_by) = order_by {
+            let clause = match self.is_ordered_set_aggregate() {
+                true => "WITHIN GROUP",
+                false => "ORDER BY",
+            };
+
+            schema_name.write_fmt(format_args!(
+                " {} [{}]",
+                clause,
+                schema_name_from_sorts(order_by)?
+            ))?;
+        };
+
+        Ok(schema_name)
+    }
+
+    /// Returns a human readable expression.
+    ///
+    /// See [`Expr::human_display`] for details.
+    fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+        let AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        } = params;
+
+        let mut schema_name = String::new();
+
+        schema_name.write_fmt(format_args!(
+            "{}({}{})",
+            self.name(),
+            if *distinct { "DISTINCT " } else { "" },
+            ExprListDisplay::comma_separated(args.as_slice())
+        ))?;
+
+        if let Some(null_treatment) = null_treatment {
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
+        }
+
+        if let Some(filter) = filter {
+            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+        };
+
+        if let Some(order_by) = order_by {
+            schema_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                schema_name_from_sorts(order_by)?
+            ))?;
+        };
+
+        Ok(schema_name)
+    }
+
+    /// Returns the name of the column this expression would create
+    ///
+    /// See [`Expr::schema_name`] for details
+    ///
+    /// Different from `schema_name` in that it is used for window aggregate function
+    ///
+    /// Example of schema_name: count(DISTINCT column1) FILTER (WHERE column2 > 10) [PARTITION BY [..]] [ORDER BY [..]]
+    fn window_function_schema_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        let WindowFunctionParams {
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+            null_treatment,
+        } = params;
+
+        let mut schema_name = String::new();
+        schema_name.write_fmt(format_args!(
+            "{}({})",
+            self.name(),
+            schema_name_from_exprs(args)?
+        ))?;
+
+        if let Some(null_treatment) = null_treatment {
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
+        }
+
+        if !partition_by.is_empty() {
+            schema_name.write_fmt(format_args!(
+                " PARTITION BY [{}]",
+                schema_name_from_exprs(partition_by)?
+            ))?;
+        }
+
+        if !order_by.is_empty() {
+            schema_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                schema_name_from_sorts(order_by)?
+            ))?;
+        };
+
+        schema_name.write_fmt(format_args!(" {window_frame}"))?;
+
+        Ok(schema_name)
+    }
+
+    /// Returns the user-defined display name of function, given the arguments
+    ///
+    /// This can be used to customize the output column name generated by this
+    /// function.
+    ///
+    /// Defaults to `function_name([DISTINCT] column1, column2, ..) [null_treatment] [filter] [order_by [..]]`
+    fn display_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        let AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        } = params;
+
+        let mut display_name = String::new();
+
+        display_name.write_fmt(format_args!(
+            "{}({}{})",
+            self.name(),
+            if *distinct { "DISTINCT " } else { "" },
+            expr_vec_fmt!(args)
+        ))?;
+
+        if let Some(nt) = null_treatment {
+            display_name.write_fmt(format_args!(" {nt}"))?;
+        }
+        if let Some(fe) = filter {
+            display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
+        }
+        if let Some(ob) = order_by {
+            display_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                ob.iter()
+                    .map(|o| format!("{o}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))?;
+        }
+
+        Ok(display_name)
+    }
+
+    /// Returns the user-defined display name of function, given the arguments
+    ///
+    /// This can be used to customize the output column name generated by this
+    /// function.
+    ///
+    /// Different from `display_name` in that it is used for window aggregate function
+    ///
+    /// Defaults to `function_name([DISTINCT] column1, column2, ..) [null_treatment] [partition by [..]] [order_by [..]]`
+    fn window_function_display_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        let WindowFunctionParams {
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+            null_treatment,
+        } = params;
+
+        let mut display_name = String::new();
+
+        display_name.write_fmt(format_args!(
+            "{}({})",
+            self.name(),
+            expr_vec_fmt!(args)
+        ))?;
+
+        if let Some(null_treatment) = null_treatment {
+            display_name.write_fmt(format_args!(" {null_treatment}"))?;
+        }
+
+        if !partition_by.is_empty() {
+            display_name.write_fmt(format_args!(
+                " PARTITION BY [{}]",
+                expr_vec_fmt!(partition_by)
+            ))?;
+        }
+
+        if !order_by.is_empty() {
+            display_name
+                .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
+        };
+
+        display_name.write_fmt(format_args!(
+            " {} BETWEEN {} AND {}",
+            window_frame.units, window_frame.start_bound, window_frame.end_bound
+        ))?;
+
+        Ok(display_name)
+    }
+
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.
     fn signature(&self) -> &Signature;
@@ -393,7 +676,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Whether the aggregate function is nullable.
     ///
-    /// Nullable means that that the function could return `null` for any inputs.
+    /// Nullable means that the function could return `null` for any inputs.
     /// For example, aggregate functions like `COUNT` always return a non null value
     /// but others like `MIN` will return `NULL` if there is nullable input.
     /// Note that if the function is declared as *not* nullable, make sure the [`AggregateUDFImpl::default_value`] is `non-null`
@@ -632,12 +915,30 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ScalarValue::try_from(data_type)
     }
 
+    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
+    /// If the function does not, return false
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    /// If this function is ordered-set aggregate function, return true
+    /// If the function is not, return false
+    fn is_ordered_set_aggregate(&self) -> bool {
+        false
+    }
+
     /// Returns the documentation for this Aggregate UDF.
     ///
     /// Documentation can be accessed programmatically as well as
     /// generating publicly facing documentation.
     fn documentation(&self) -> Option<&Documentation> {
         None
+    }
+
+    /// Indicates whether the aggregation function is monotonic as a set
+    /// function. See [`SetMonotonicity`] for details.
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        SetMonotonicity::NotMonotonic
     }
 }
 
@@ -820,6 +1121,27 @@ pub mod aggregate_doc_sections {
         label: "Approximate Functions",
         description: None,
     };
+}
+
+/// Indicates whether an aggregation function is monotonic as a set
+/// function. A set function is monotonically increasing if its value
+/// increases as its argument grows (as a set). Formally, `f` is a
+/// monotonically increasing set function if `f(S) >= f(T)` whenever `S`
+/// is a superset of `T`.
+///
+/// For example `COUNT` and `MAX` are monotonically increasing as their
+/// values always increase (or stay the same) as new values are seen. On
+/// the other hand, `MIN` is monotonically decreasing as its value always
+/// decreases or stays the same as new values are seen.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetMonotonicity {
+    /// Aggregate value increases or stays the same as the input set grows.
+    Increasing,
+    /// Aggregate value decreases or stays the same as the input set grows.
+    Decreasing,
+    /// Aggregate value may increase, decrease, or stay the same as the input
+    /// set grows.
+    NotMonotonic,
 }
 
 #[cfg(test)]

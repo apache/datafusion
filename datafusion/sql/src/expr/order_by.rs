@@ -21,9 +21,11 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
-use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
+use sqlparser::ast::{
+    Expr as SQLExpr, OrderByExpr, OrderByOptions, Value, ValueWithSpan,
+};
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Convert sql [OrderByExpr] to `Vec<Expr>`.
     ///
     /// `input_schema` and `additional_schema` are used to resolve column references in the order-by expressions.
@@ -39,13 +41,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// If false, interpret numeric literals as constant values.
     pub(crate) fn order_by_to_sort_expr(
         &self,
-        exprs: Vec<OrderByExpr>,
+        order_by_exprs: Vec<OrderByExpr>,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
         additional_schema: Option<&DFSchema>,
     ) -> Result<Vec<SortExpr>> {
-        if exprs.is_empty() {
+        if order_by_exprs.is_empty() {
             return Ok(vec![]);
         }
 
@@ -59,21 +61,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             None => input_schema,
         };
 
-        let mut expr_vec = vec![];
-        for e in exprs {
+        let mut sort_expr_vec = Vec::with_capacity(order_by_exprs.len());
+
+        let make_sort_expr =
+            |expr: Expr, asc: Option<bool>, nulls_first: Option<bool>| {
+                let asc = asc.unwrap_or(true);
+                // When asc is true, by default nulls last to be consistent with postgres
+                // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
+                let nulls_first = nulls_first.unwrap_or(!asc);
+                Sort::new(expr, asc, nulls_first)
+            };
+
+        for order_by_expr in order_by_exprs {
             let OrderByExpr {
-                asc,
                 expr,
-                nulls_first,
+                options: OrderByOptions { asc, nulls_first },
                 with_fill,
-            } = e;
+            } = order_by_expr;
 
             if let Some(with_fill) = with_fill {
                 return not_impl_err!("ORDER BY WITH FILL is not supported: {with_fill}");
             }
 
             let expr = match expr {
-                SQLExpr::Value(Value::Number(v, _)) if literal_to_column => {
+                SQLExpr::Value(ValueWithSpan {
+                    value: Value::Number(v, _),
+                    span: _,
+                }) if literal_to_column => {
                     let field_index = v
                         .parse::<usize>()
                         .map_err(|err| plan_datafusion_err!("{}", err))?;
@@ -98,15 +112,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
                 }
             };
-            let asc = asc.unwrap_or(true);
-            expr_vec.push(Sort::new(
-                expr,
-                asc,
-                // When asc is true, by default nulls last to be consistent with postgres
-                // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                nulls_first.unwrap_or(!asc),
-            ))
+            sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
         }
-        Ok(expr_vec)
+
+        Ok(sort_expr_vec)
     }
 }

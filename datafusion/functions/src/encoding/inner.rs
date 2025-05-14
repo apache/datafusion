@@ -28,17 +28,32 @@ use base64::{engine::general_purpose, Engine as _};
 use datafusion_common::{
     cast::{as_generic_binary_array, as_generic_string_array},
     not_impl_err, plan_err,
+    utils::take_function_args,
 };
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_BINARY_STRING;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
 
+#[user_doc(
+    doc_section(label = "Binary String Functions"),
+    description = "Encode binary data into a textual representation.",
+    syntax_example = "encode(expression, format)",
+    argument(
+        name = "expression",
+        description = "Expression containing string or binary data"
+    ),
+    argument(
+        name = "format",
+        description = "Supported formats are: `base64`, `hex`"
+    ),
+    related_udf(name = "decode")
+)]
 #[derive(Debug)]
 pub struct EncodeFunc {
     signature: Signature,
@@ -58,22 +73,6 @@ impl EncodeFunc {
     }
 }
 
-static ENCODE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_encode_doc() -> &'static Documentation {
-    ENCODE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_BINARY_STRING)
-            .with_description("Encode binary data into a textual representation.")
-            .with_syntax_example("encode(expression, format)")
-            .with_argument("expression", "Expression containing string or binary data")
-            .with_argument("format", "Supported formats are: `base64`, `hex`")
-            .with_related_udf("decode")
-            .build()
-            .unwrap()
-    })
-}
-
 impl ScalarUDFImpl for EncodeFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -87,33 +86,44 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].to_owned())
+        use DataType::*;
+
+        Ok(match arg_types[0] {
+            Utf8 => Utf8,
+            LargeUtf8 => LargeUtf8,
+            Utf8View => Utf8,
+            Binary => Utf8,
+            LargeBinary => LargeUtf8,
+            Null => Null,
+            _ => {
+                return plan_err!(
+                    "The encode function can only accept Utf8 or Binary or Null."
+                );
+            }
+        })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        encode(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        encode(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return plan_err!(
-                "{} expects to get 2 arguments, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        }
+        let [expression, format] = take_function_args(self.name(), arg_types)?;
 
-        if arg_types[1] != DataType::Utf8 {
+        if format != &DataType::Utf8 {
             return Err(DataFusionError::Plan("2nd argument should be Utf8".into()));
         }
 
-        match arg_types[0] {
-            DataType::Utf8 | DataType::Binary | DataType::Null => {
+        match expression {
+            DataType::Utf8 | DataType::Utf8View | DataType::Null => {
                 Ok(vec![DataType::Utf8; 2])
             }
-            DataType::LargeUtf8 | DataType::LargeBinary => {
-                Ok(vec![DataType::LargeUtf8, DataType::Utf8])
-            }
+            DataType::LargeUtf8 => Ok(vec![DataType::LargeUtf8, DataType::Utf8]),
+            DataType::Binary => Ok(vec![DataType::Binary, DataType::Utf8]),
+            DataType::LargeBinary => Ok(vec![DataType::LargeBinary, DataType::Utf8]),
             _ => plan_err!(
                 "1st argument should be Utf8 or Binary or Null, got {:?}",
                 arg_types[0]
@@ -122,10 +132,21 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_encode_doc())
+        self.doc()
     }
 }
 
+#[user_doc(
+    doc_section(label = "Binary String Functions"),
+    description = "Decode binary data from textual representation in string.",
+    syntax_example = "decode(expression, format)",
+    argument(
+        name = "expression",
+        description = "Expression containing encoded string data"
+    ),
+    argument(name = "format", description = "Same arguments as [encode](#encode)"),
+    related_udf(name = "encode")
+)]
 #[derive(Debug)]
 pub struct DecodeFunc {
     signature: Signature,
@@ -145,22 +166,6 @@ impl DecodeFunc {
     }
 }
 
-static DECODE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_decode_doc() -> &'static Documentation {
-    DECODE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_BINARY_STRING)
-            .with_description("Decode binary data from textual representation in string.")
-            .with_syntax_example("decode(expression, format)")
-            .with_argument("expression", "Expression containing encoded string data")
-            .with_argument("format", "Same arguments as [encode](#encode)")
-            .with_related_udf("encode")
-            .build()
-            .unwrap()
-    })
-}
-
 impl ScalarUDFImpl for DecodeFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -177,8 +182,11 @@ impl ScalarUDFImpl for DecodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        decode(args)
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        decode(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -195,7 +203,7 @@ impl ScalarUDFImpl for DecodeFunc {
         }
 
         match arg_types[0] {
-            DataType::Utf8 | DataType::Binary | DataType::Null => {
+            DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::Null => {
                 Ok(vec![DataType::Binary, DataType::Utf8])
             }
             DataType::LargeUtf8 | DataType::LargeBinary => {
@@ -209,7 +217,7 @@ impl ScalarUDFImpl for DecodeFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_decode_doc())
+        self.doc()
     }
 }
 
@@ -224,6 +232,7 @@ fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8 => encoding.encode_utf8_array::<i32>(a.as_ref()),
             DataType::LargeUtf8 => encoding.encode_utf8_array::<i64>(a.as_ref()),
+            DataType::Utf8View => encoding.encode_utf8_array::<i32>(a.as_ref()),
             DataType::Binary => encoding.encode_binary_array::<i32>(a.as_ref()),
             DataType::LargeBinary => encoding.encode_binary_array::<i64>(a.as_ref()),
             other => exec_err!(
@@ -237,6 +246,9 @@ fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
                 }
                 ScalarValue::LargeUtf8(a) => Ok(encoding
                     .encode_large_scalar(a.as_ref().map(|s: &String| s.as_bytes()))),
+                ScalarValue::Utf8View(a) => {
+                    Ok(encoding.encode_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
+                }
                 ScalarValue::Binary(a) => Ok(
                     encoding.encode_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))
                 ),
@@ -255,6 +267,7 @@ fn decode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8 => encoding.decode_utf8_array::<i32>(a.as_ref()),
             DataType::LargeUtf8 => encoding.decode_utf8_array::<i64>(a.as_ref()),
+            DataType::Utf8View => encoding.decode_utf8_array::<i32>(a.as_ref()),
             DataType::Binary => encoding.decode_binary_array::<i32>(a.as_ref()),
             DataType::LargeBinary => encoding.decode_binary_array::<i64>(a.as_ref()),
             other => exec_err!(
@@ -268,6 +281,9 @@ fn decode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
                 }
                 ScalarValue::LargeUtf8(a) => encoding
                     .decode_large_scalar(a.as_ref().map(|s: &String| s.as_bytes())),
+                ScalarValue::Utf8View(a) => {
+                    encoding.decode_scalar(a.as_ref().map(|s: &String| s.as_bytes()))
+                }
                 ScalarValue::Binary(a) => {
                     encoding.decode_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))
                 }
@@ -294,7 +310,7 @@ fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
     let out_len = input.len() / 2;
     let buf = &mut buf[..out_len];
     hex::decode_to_slice(input, buf).map_err(|e| {
-        DataFusionError::Internal(format!("Failed to decode from hex: {}", e))
+        DataFusionError::Internal(format!("Failed to decode from hex: {e}"))
     })?;
     Ok(out_len)
 }
@@ -303,7 +319,7 @@ fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
     general_purpose::STANDARD_NO_PAD
         .decode_slice(input, buf)
         .map_err(|e| {
-            DataFusionError::Internal(format!("Failed to decode from base64: {}", e))
+            DataFusionError::Internal(format!("Failed to decode from base64: {e}"))
         })
 }
 
@@ -403,15 +419,13 @@ impl Encoding {
                     .decode(value)
                     .map_err(|e| {
                         DataFusionError::Internal(format!(
-                            "Failed to decode value using base64: {}",
-                            e
+                            "Failed to decode value using base64: {e}"
                         ))
                     })?
             }
             Self::Hex => hex::decode(value).map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "Failed to decode value using hex: {}",
-                    e
+                    "Failed to decode value using hex: {e}"
                 ))
             })?,
         };
@@ -431,15 +445,13 @@ impl Encoding {
                     .decode(value)
                     .map_err(|e| {
                         DataFusionError::Internal(format!(
-                            "Failed to decode value using base64: {}",
-                            e
+                            "Failed to decode value using base64: {e}"
                         ))
                     })?
             }
             Self::Hex => hex::decode(value).map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "Failed to decode value using hex: {}",
-                    e
+                    "Failed to decode value using hex: {e}"
                 ))
             })?,
         };
@@ -512,54 +524,42 @@ impl FromStr for Encoding {
     }
 }
 
-/// Encodes the given data, accepts Binary, LargeBinary, Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
+/// Encodes the given data, accepts Binary, LargeBinary, Utf8, Utf8View or LargeUtf8 and returns a [`ColumnarValue`].
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
 fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!(
-            "{:?} args were supplied but encode takes exactly two arguments",
-            args.len()
-        );
-    }
-    let encoding = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
-                method.parse::<Encoding>()
-            }
+    let [expression, format] = take_function_args("encode", args)?;
+
+    let encoding = match format {
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+            Some(Some(method)) => method.parse::<Encoding>(),
             _ => not_impl_err!(
-                "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported"
+                "Second argument to encode must be non null constant string: Encode using dynamically decided method is not yet supported. Got {scalar:?}"
             ),
         },
         ColumnarValue::Array(_) => not_impl_err!(
             "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported"
         ),
     }?;
-    encode_process(&args[0], encoding)
+    encode_process(expression, encoding)
 }
 
-/// Decodes the given data, accepts Binary, LargeBinary, Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
+/// Decodes the given data, accepts Binary, LargeBinary, Utf8, Utf8View or LargeUtf8 and returns a [`ColumnarValue`].
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
 fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!(
-            "{:?} args were supplied but decode takes exactly two arguments",
-            args.len()
-        );
-    }
-    let encoding = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
-                method.parse::<Encoding>()
-            }
+    let [expression, format] = take_function_args("decode", args)?;
+
+    let encoding = match format {
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+            Some(Some(method))=> method.parse::<Encoding>(),
             _ => not_impl_err!(
-                "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported"
+                "Second argument to decode must be a non null constant string: Decode using dynamically decided method is not yet supported. Got {scalar:?}"
             ),
         },
         ColumnarValue::Array(_) => not_impl_err!(
             "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported"
         ),
     }?;
-    decode_process(&args[0], encoding)
+    decode_process(expression, encoding)
 }
