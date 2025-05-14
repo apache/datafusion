@@ -348,7 +348,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
                 prefix, connector, hi.val, idx, hi.map_idx
             ));
             let new_prefix = if is_tail { "" } else { "│   " };
-            let child_prefix = format!("{}{}", prefix, new_prefix);
+            let child_prefix = format!("{prefix}{new_prefix}");
 
             let left_idx = idx * 2 + 1;
             let right_idx = idx * 2 + 2;
@@ -372,7 +372,7 @@ impl<VAL: ValueType> Display for TopKHeap<VAL> {
         if !self.heap.is_empty() {
             self._tree_print(0, String::new(), true, &mut output);
         }
-        write!(f, "{}", output)
+        write!(f, "{output}")
     }
 }
 

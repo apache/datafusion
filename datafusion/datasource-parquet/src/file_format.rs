@@ -916,7 +916,7 @@ pub fn statistics_from_parquet_meta_calc(
                         .ok();
                     }
                     Err(e) => {
-                        debug!("Failed to create statistics converter: {}", e);
+                        debug!("Failed to create statistics converter: {e}");
                         null_counts_array[idx] = Precision::Exact(num_rows);
                     }
                 }
@@ -1139,9 +1139,8 @@ impl FileSink for ParquetSink {
                         parquet_props.clone(),
                     )
                     .await?;
-                let mut reservation =
-                    MemoryConsumer::new(format!("ParquetSink[{}]", path))
-                        .register(context.memory_pool());
+                let mut reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
+                    .register(context.memory_pool());
                 file_write_tasks.spawn(async move {
                     while let Some(batch) = rx.recv().await {
                         writer.write(&batch).await?;

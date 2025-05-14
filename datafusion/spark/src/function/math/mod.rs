@@ -16,19 +16,22 @@
 // under the License.
 
 pub mod expm1;
+pub mod hex;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(expm1::SparkExpm1, expm1);
+make_udf_function!(hex::SparkHex, hex);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
     export_functions!((expm1, "Returns exp(expr) - 1 as a Float64.", arg1));
+    export_functions!((hex, "Computes hex value of the given column.", arg1));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![expm1()]
+    vec![expm1(), hex()]
 }

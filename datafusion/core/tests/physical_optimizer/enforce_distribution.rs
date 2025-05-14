@@ -19,19 +19,25 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::parquet_exec_with_sort;
 use crate::physical_optimizer::test_utils::{
     check_integrity, coalesce_partitions_exec, repartition_exec, schema,
     sort_merge_join_exec, sort_preserving_merge_exec,
 };
+use crate::physical_optimizer::test_utils::{
+    parquet_exec_with_sort, parquet_exec_with_stats,
+};
 
+use arrow::array::{RecordBatch, UInt64Array, UInt8Array};
 use arrow::compute::SortOptions;
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::datasource::MemTable;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
@@ -525,8 +531,7 @@ impl TestConfig {
 
         assert_eq!(
             &expected_lines, &actual_lines,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected_lines, actual_lines
+            "\n\nexpected:\n\n{expected_lines:#?}\nactual:\n\n{actual_lines:#?}\n\n"
         );
 
         Ok(optimized)
@@ -3473,6 +3478,106 @@ fn optimize_away_unnecessary_repartition2() -> Result<()> {
     Ok(())
 }
 
+/// Ensures that `DataSourceExec` has been repartitioned into `target_partitions` file groups
+#[tokio::test]
+async fn test_distribute_sort_parquet() -> Result<()> {
+    let test_config: TestConfig =
+        TestConfig::default().with_prefer_repartition_file_scans(1000);
+    assert!(
+        test_config.config.optimizer.repartition_file_scans,
+        "should enable scans to be repartitioned"
+    );
+
+    let schema = schema();
+    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+        expr: col("c", &schema).unwrap(),
+        options: SortOptions::default(),
+    }]);
+    let physical_plan = sort_exec(sort_key, parquet_exec_with_stats(10000 * 8192), false);
+
+    // prior to optimization, this is the starting plan
+    let starting = &[
+        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
+        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+    ];
+    plans_matches_expected!(starting, physical_plan.clone());
+
+    // what the enforce distribution run does.
+    let expected = &[
+        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
+        "  CoalescePartitionsExec",
+        "    DataSourceExec: file_groups={10 groups: [[x:0..8192000], [x:8192000..16384000], [x:16384000..24576000], [x:24576000..32768000], [x:32768000..40960000], [x:40960000..49152000], [x:49152000..57344000], [x:57344000..65536000], [x:65536000..73728000], [x:73728000..81920000]]}, projection=[a, b, c, d, e], file_type=parquet",
+    ];
+    test_config.run(expected, physical_plan.clone(), &[Run::Distribution])?;
+
+    // what the sort parallelization (in enforce sorting), does after the enforce distribution changes
+    let expected = &[
+        "SortPreservingMergeExec: [c@2 ASC]",
+        "  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]",
+        "    DataSourceExec: file_groups={10 groups: [[x:0..8192000], [x:8192000..16384000], [x:16384000..24576000], [x:24576000..32768000], [x:32768000..40960000], [x:40960000..49152000], [x:49152000..57344000], [x:57344000..65536000], [x:65536000..73728000], [x:73728000..81920000]]}, projection=[a, b, c, d, e], file_type=parquet",
+    ];
+    test_config.run(expected, physical_plan, &[Run::Distribution, Run::Sorting])?;
+    Ok(())
+}
+
+/// Ensures that `DataSourceExec` has been repartitioned into `target_partitions` memtable groups
+#[tokio::test]
+async fn test_distribute_sort_memtable() -> Result<()> {
+    let test_config: TestConfig =
+        TestConfig::default().with_prefer_repartition_file_scans(1000);
+    assert!(
+        test_config.config.optimizer.repartition_file_scans,
+        "should enable scans to be repartitioned"
+    );
+
+    let mem_table = create_memtable()?;
+    let session_config = SessionConfig::new()
+        .with_repartition_file_min_size(1000)
+        .with_target_partitions(3);
+    let ctx = SessionContext::new_with_config(session_config);
+    ctx.register_table("users", Arc::new(mem_table))?;
+
+    let dataframe = ctx.sql("SELECT * FROM users order by id;").await?;
+    let physical_plan = dataframe.create_physical_plan().await?;
+
+    // this is the final, optimized plan
+    let expected = &[
+        "SortPreservingMergeExec: [id@0 ASC NULLS LAST]",
+        "  SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]",
+        "    DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]",
+    ];
+    plans_matches_expected!(expected, physical_plan);
+
+    Ok(())
+}
+
+/// Create a [`MemTable`] with 100 batches of 8192 rows each, in 1 partition
+fn create_memtable() -> Result<MemTable> {
+    let mut batches = Vec::with_capacity(100);
+    for _ in 0..100 {
+        batches.push(create_record_batch()?);
+    }
+    let partitions = vec![batches];
+    MemTable::try_new(get_schema(), partitions)
+}
+
+fn create_record_batch() -> Result<RecordBatch> {
+    let id_array = UInt8Array::from(vec![1; 8192]);
+    let account_array = UInt64Array::from(vec![9000; 8192]);
+
+    Ok(RecordBatch::try_new(
+        get_schema(),
+        vec![Arc::new(id_array), Arc::new(account_array)],
+    )
+    .unwrap())
+}
+
+fn get_schema() -> SchemaRef {
+    SchemaRef::new(Schema::new(vec![
+        Field::new("id", DataType::UInt8, false),
+        Field::new("bank_account", DataType::UInt64, true),
+    ]))
+}
 #[test]
 fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     // Create a base plan
