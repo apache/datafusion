@@ -18,9 +18,11 @@
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Debug;
-use std::ops::Range;
+use std::ops::{Deref, Range};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
@@ -561,12 +563,14 @@ pub fn coerce_int96_to_resolution(
     let parquet_fields: HashMap<_, _> = parquet_schema
         .columns()
         .iter()
-        .map(|f| {
+        .enumerate()
+        .map(|(idx, f)| {
             let dt = f.physical_type();
             if dt.eq(&Type::INT96) {
                 transform = true;
             }
-            (f.name(), dt)
+            println!("{:?}, {:?}", f.path().string(), dt);
+            ((idx, f.path().string()), dt)
         })
         .collect();
 
@@ -574,21 +578,129 @@ pub fn coerce_int96_to_resolution(
         return None;
     }
 
-    let transformed_fields: Vec<Arc<Field>> = file_schema
+    type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
+
+    let max_level = None;
+
+    let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
+
+    let normalized_schema = {
+        let max_level = match max_level.unwrap_or(usize::MAX) {
+            0 => usize::MAX,
+            val => val,
+        };
+        // TODO: Only DFS fields that need it.
+        let mut stack: Vec<(usize, &FieldRef, NestedFields, Option<NestedFields>)> =
+            file_schema
+                .fields()
+                .iter()
+                .rev()
+                .map(|f| (0, f, fields.clone(), None))
+                .collect();
+
+        while let Some((depth, field_ref, parent_fields, child_fields)) = stack.pop() {
+            match field_ref.data_type() {
+                DataType::Struct(ff) if depth < max_level => {
+                    if let Some(child_fields) = child_fields {
+                        // This is the second time popping off this struct.
+                        assert_eq!(child_fields.borrow().len(), ff.len());
+                        let updated_field = Field::new_struct(
+                            field_ref.name(),
+                            child_fields.borrow().as_slice(),
+                            field_ref.is_nullable(),
+                        );
+                        parent_fields.borrow_mut().push(Arc::new(updated_field));
+                    } else {
+                        let child_fields =
+                            Rc::new(RefCell::new(Vec::with_capacity(ff.len())));
+                        stack.push((
+                            depth,
+                            field_ref,
+                            parent_fields,
+                            Some(child_fields.clone()),
+                        ));
+                        // Need to zip these in reverse to maintain original order
+                        for fff in ff.into_iter().rev() {
+                            stack.push((depth + 1, fff, child_fields.clone(), None));
+                        }
+                    }
+                }
+                DataType::List(ff) if depth < max_level => {
+                    if let Some(child_fields) = child_fields {
+                        // This is the second time popping off this list.
+                        assert_eq!(child_fields.borrow().len(), 1);
+                        let updated_field = Field::new_list(
+                            field_ref.name(),
+                            child_fields.borrow()[0].clone(),
+                            field_ref.is_nullable(),
+                        );
+                        parent_fields.borrow_mut().push(Arc::new(updated_field));
+                    } else {
+                        let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
+                        stack.push((
+                            depth,
+                            field_ref,
+                            parent_fields,
+                            Some(child_fields.clone()),
+                        ));
+                        stack.push((depth + 1, ff, child_fields.clone(), None));
+                    }
+                }
+                _ => {
+                    let updated_field = Field::new(
+                        field_ref.name(),
+                        field_ref.data_type().clone(),
+                        field_ref.is_nullable(),
+                    );
+                    parent_fields.borrow_mut().push(Arc::new(updated_field));
+                }
+            }
+        }
+        assert_eq!(fields.borrow().len(), file_schema.fields.len());
+        Schema::new(fields.borrow_mut().deref().as_slice())
+    };
+
+    // let normalized_schema = file_schema.normalize(".", None).unwrap();
+    println!("normalized fields");
+    normalized_schema
         .fields
         .iter()
-        .map(|field| match parquet_fields.get(field.name().as_str()) {
-            Some(Type::INT96) => {
-                field_with_new_type(field, DataType::Timestamp(*time_unit, None))
-            }
-            _ => Arc::clone(field),
-        })
-        .collect();
+        .for_each(|field| println!("{:?}", field));
 
-    Some(Schema::new_with_metadata(
-        transformed_fields,
-        file_schema.metadata.clone(),
-    ))
+    println!("file_schema fields");
+    file_schema
+        .fields
+        .iter()
+        .for_each(|field| println!("{:?}", field));
+
+    // file_schema
+    //     .fields
+    //     .iter()
+    //     .zip(normalized_schema.fields.iter())
+    //     .enumerate()
+    //     .for_each(|(idx, (field, normalized_field))| {
+    //         println!("idx: {:?}", idx);
+    //         println!("field: {:?}", field);
+    //         println!("normalized field: {:?}", normalized_field);
+    //     });
+
+    // let transformed_fields: Vec<Arc<Field>> = file_schema
+    //     .fields
+    //     .iter()
+    //     .map(|field| match parquet_fields.get(field.name().as_str()) {
+    //         Some(Type::INT96) => {
+    //             field_with_new_type(field, DataType::Timestamp(*time_unit, None))
+    //         }
+    //         _ => Arc::clone(field),
+    //     })
+    //     .collect();
+
+    // Some(Schema::new_with_metadata(
+    //     transformed_fields,
+    //     file_schema.metadata.clone(),
+    // ))
+
+    return None;
 }
 
 /// Coerces the file schema if the table schema uses a view type.
@@ -1611,6 +1723,7 @@ mod tests {
             repeated group list {
               optional group element {
                 optional int96 c0;
+                optional int96 c1;
               }
             }
           }
@@ -1626,26 +1739,13 @@ mod tests {
             coerce_int96_to_resolution(&descr, &arrow_schema, &TimeUnit::Microsecond)
                 .unwrap();
 
-        result
-            .flattened_fields()
-            .iter()
-            .for_each(|field| match field.data_type() {
-                DataType::Timestamp(TimeUnit::Microsecond, None) => {}
-                DataType::Struct(fields) => {
-                    assert_eq!(
-                        fields[0].data_type(),
-                        &DataType::Timestamp(TimeUnit::Microsecond, None)
-                    )
-                }
-                DataType::List(field) => {
-                    assert_eq!(
-                        field.data_type(),
-                        &DataType::Timestamp(TimeUnit::Microsecond, None)
-                    )
-                }
-                _ => {
-                    assert!(false);
-                }
-            })
+        result.flattened_fields().iter().for_each(|field| {
+            if field.data_type().is_primitive() {
+                assert_eq!(
+                    field.data_type(),
+                    &DataType::Timestamp(TimeUnit::Microsecond, None)
+                );
+            }
+        })
     }
 }
