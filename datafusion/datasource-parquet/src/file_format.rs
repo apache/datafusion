@@ -568,7 +568,6 @@ pub fn coerce_int96_to_resolution(
             if dt.eq(&Type::INT96) {
                 transform = true;
             }
-            println!("{:?}, {:?}", f.path().string(), dt);
             (f.path().string(), dt)
         })
         .collect();
@@ -579,7 +578,6 @@ pub fn coerce_int96_to_resolution(
 
     type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
     type StackContext<'a> = (
-        usize,
         Vec<&'a str>,
         &'a FieldRef,
         NestedFields,
@@ -589,27 +587,18 @@ pub fn coerce_int96_to_resolution(
     let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
 
     let transformed_schema = {
-        // let max_level = match max_level.unwrap_or(usize::MAX) {
-        //     0 => usize::MAX,
-        //     val => val,
-        // };
-        let max_level = usize::MAX;
-        // TODO: Only DFS fields that need it.
         let mut stack: Vec<StackContext> = file_schema
             .fields()
             .iter()
             .rev()
-            .map(|f| {
-                let name_vec: Vec<&str> = vec![f.name()];
-                (0, name_vec, f, Rc::clone(&fields), None)
-            })
+            .map(|f| (vec![f.name().as_str()], f, Rc::clone(&fields), None))
             .collect();
 
-        while let Some((depth, parquet_path, field_ref, parent_fields, child_fields)) =
+        while let Some((parquet_path, field_ref, parent_fields, child_fields)) =
             stack.pop()
         {
             match field_ref.data_type() {
-                DataType::Struct(ff) if depth < max_level => {
+                DataType::Struct(ff) => {
                     if let Some(child_fields) = child_fields {
                         // This is the second time popping off this struct.
                         let child_fields = child_fields.borrow();
@@ -624,7 +613,6 @@ pub fn coerce_int96_to_resolution(
                         let child_fields =
                             Rc::new(RefCell::new(Vec::with_capacity(ff.len())));
                         stack.push((
-                            depth,
                             parquet_path.clone(),
                             field_ref,
                             parent_fields,
@@ -636,7 +624,6 @@ pub fn coerce_int96_to_resolution(
                             parquet_path.push(".");
                             parquet_path.push(fff.name());
                             stack.push((
-                                depth + 1,
                                 parquet_path,
                                 fff,
                                 Rc::clone(&child_fields),
@@ -645,7 +632,7 @@ pub fn coerce_int96_to_resolution(
                         }
                     }
                 }
-                DataType::List(ff) if depth < max_level => {
+                DataType::List(ff) => {
                     if let Some(child_fields) = child_fields {
                         // This is the second time popping off this list.
                         assert_eq!(child_fields.borrow().len(), 1);
@@ -660,7 +647,6 @@ pub fn coerce_int96_to_resolution(
                         let mut parquet_path = parquet_path.clone();
                         parquet_path.push(".list");
                         stack.push((
-                            depth,
                             parquet_path.clone(),
                             field_ref,
                             parent_fields,
@@ -670,7 +656,6 @@ pub fn coerce_int96_to_resolution(
                         parquet_path.push(".");
                         parquet_path.push(ff.name());
                         stack.push((
-                            depth + 1,
                             parquet_path.clone(),
                             ff,
                             Rc::clone(&child_fields),
@@ -698,18 +683,6 @@ pub fn coerce_int96_to_resolution(
             file_schema.metadata.clone(),
         )
     };
-
-    println!("transformed_schema fields");
-    transformed_schema
-        .fields
-        .iter()
-        .for_each(|field| println!("{:?}", field));
-
-    println!("file_schema fields");
-    file_schema
-        .fields
-        .iter()
-        .for_each(|field| println!("{:?}", field));
 
     Some(transformed_schema)
 }
