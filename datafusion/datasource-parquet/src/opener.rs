@@ -160,6 +160,7 @@ impl FileOpener for ParquetOpener {
                             // We expect a single container -> if all containers are false skip this file
                             if values.into_iter().all(|v| !v) {
                                 // Return an empty stream
+                                file_metrics.files_pruned_statistics.add(1);
                                 return Ok(futures::stream::empty().boxed());
                             }
                         }

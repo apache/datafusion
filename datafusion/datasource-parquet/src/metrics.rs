@@ -27,6 +27,10 @@ use datafusion_physical_plan::metrics::{
 /// [`ParquetFileReaderFactory`]: super::ParquetFileReaderFactory
 #[derive(Debug, Clone)]
 pub struct ParquetFileMetrics {
+    /// Number of files pruned by partition of file level statistics
+    /// This often happens at planning time but may happen at execution time
+    /// if dynamic filters (e.g. from a join) result in additional pruning.
+    pub files_pruned_statistics: Count,
     /// Number of times the predicate could not be evaluated
     pub predicate_evaluation_errors: Count,
     /// Number of row groups whose bloom filters were checked and matched (not pruned)
@@ -122,7 +126,11 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .subset_time("metadata_load_time", partition);
 
+        let files_pruned_statistics =
+            MetricBuilder::new(metrics).counter("files_pruned_statistics", partition);
+
         Self {
+            files_pruned_statistics,
             predicate_evaluation_errors,
             row_groups_matched_bloom_filter,
             row_groups_pruned_bloom_filter,

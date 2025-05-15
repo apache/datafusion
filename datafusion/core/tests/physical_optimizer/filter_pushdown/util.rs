@@ -70,7 +70,7 @@ impl FileOpener for TestOpener {
     fn open(
         &self,
         _file_meta: FileMeta,
-        file: PartitionedFile,
+        _file: PartitionedFile,
     ) -> Result<FileOpenFuture> {
         let mut batches = self.batches.clone();
         if let Some(batch_size) = self.batch_size {
