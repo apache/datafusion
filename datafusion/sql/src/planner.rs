@@ -249,6 +249,14 @@ impl PlannerContext {
         schema
     }
 
+    pub fn extend_outer_query_schema(&mut self, schema: &DFSchemaRef) -> Result<()> {
+        match self.outer_query_schema.as_mut() {
+            Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
+            None => self.outer_query_schema = Some(Arc::clone(schema)),
+        };
+        Ok(())
+    }
+
     pub fn set_table_schema(
         &mut self,
         mut schema: Option<DFSchemaRef>,
