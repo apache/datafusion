@@ -660,11 +660,6 @@ pub fn coerce_int96_to_resolution(
                     // a vector for child_fields, push the list node back onto the stack to be
                     // processed again (see below) after processing its child.
                     let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
-                    let mut list_path = parquet_path.clone();
-                    // Spark uses a 3-tier definition for arrays/lists that result in a group
-                    // named "list" that is not maintained when parsing to Arrow. We just push
-                    // this name into the path.
-                    list_path.push(".list");
                     // Note that here we push the list back onto the stack with its
                     // parent_fields in the same position, now with Some(child_fields).
                     stack.push((
@@ -675,8 +670,11 @@ pub fn coerce_int96_to_resolution(
                     ));
                     // Build up a normalized path that we'll use as a key into the original
                     // int96_fields set above to test if this originated as int96.
-                    let mut child_path = list_path.clone();
-                    child_path.push(".");
+                    let mut child_path = parquet_path.clone();
+                    // Spark uses a definition for arrays/lists that results in a group
+                    // named "list" that is not maintained when parsing to Arrow. We just push
+                    // this name into the path.
+                    child_path.push(".list.");
                     child_path.push(unprocessed_child.name());
                     // Note that here we push the field onto the stack using the list's
                     // new child_fields vector as the field's parent_fields.
