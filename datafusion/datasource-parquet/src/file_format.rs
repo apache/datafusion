@@ -698,6 +698,47 @@ pub fn coerce_int96_to_resolution(
                     );
                     parent_fields.borrow_mut().push(Arc::new(processed_list));
                 }
+                (DataType::Map(unprocessed_child, _), None) => {
+                    // This is the first time popping off this map. We don't yet know the
+                    // correct types of its child (i.e., if they need coercing) so we create
+                    // a vector for child_fields, push the map node back onto the stack to be
+                    // processed again (see below) after processing its child.
+                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
+                    // Note that here we push the map back onto the stack with its
+                    // parent_fields in the same position, now with Some(child_fields).
+                    stack.push((
+                        parquet_path.clone(),
+                        current_field,
+                        parent_fields,
+                        Some(Rc::clone(&child_fields)),
+                    ));
+                    // Build up a normalized path that we'll use as a key into the original
+                    // int96_fields set above to test if this originated as int96.
+                    let mut child_path = parquet_path.clone();
+                    child_path.push(".");
+                    child_path.push(unprocessed_child.name());
+                    // Note that here we push the field onto the stack using the map's
+                    // new child_fields vector as the field's parent_fields.
+                    stack.push((
+                        child_path.clone(),
+                        unprocessed_child,
+                        Rc::clone(&child_fields),
+                        None,
+                    ));
+                }
+                (DataType::Map(_, sorted), Some(processed_children)) => {
+                    // This is the second time popping off this map. The child_fields vector
+                    // now contains one field that has been DFS'd into, and we can construct
+                    // the resulting map with correct child type.
+                    let processed_children = processed_children.borrow();
+                    assert_eq!(processed_children.len(), 1);
+                    let processed_map = Field::new(
+                        current_field.name(),
+                        DataType::Map(Arc::clone(&processed_children[0]), *sorted),
+                        current_field.is_nullable(),
+                    );
+                    parent_fields.borrow_mut().push(Arc::new(processed_map));
+                }
                 (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
                     if int96_fields.contains(parquet_path.concat().as_str()) =>
                 // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
@@ -1773,9 +1814,9 @@ mod tests {
 
     #[test]
     fn coerce_int96_to_resolution_with_nested_types() {
-        // This schema originates from Comet's CometFuzzTestSuite ParquetGenerator only using int96
-        // primitive types with generateStruct and generateArray set to true, with one additional
-        // field added to make sure all fields in a struct get modified.
+        // This schema is derived from Comet's CometFuzzTestSuite ParquetGenerator only using int96
+        // primitive types with generateStruct, generateArray, and generateMap set to true, with one
+        // additional field added to c4's struct to make sure all fields in a struct get modified.
         // https://github.com/apache/datafusion-comet/blob/main/spark/src/main/scala/org/apache/comet/testing/ParquetGenerator.scala
         let spark_schema = "
         message spark_schema {
@@ -1800,6 +1841,22 @@ mod tests {
               optional group element {
                 optional int96 c0;
                 optional int96 c1;
+              }
+            }
+          }
+          optional group c5 (MAP) {
+            repeated group key_value {
+              required int96 key;
+              optional int96 value;
+            }
+          }
+          optional group c6 (LIST) {
+            repeated group list {
+              optional group element (MAP) {
+                repeated group key_value {
+                  required int96 key;
+                  optional int96 value;
+                }
               }
             }
           }
@@ -1864,6 +1921,42 @@ mod tests {
                             true,
                         ),
                     ],
+                    true,
+                ),
+                true,
+            ),
+            Field::new_map(
+                "c5",
+                "key_value",
+                Field::new(
+                    "key",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    false,
+                ),
+                Field::new(
+                    "value",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                false,
+                true,
+            ),
+            Field::new_list(
+                "c6",
+                Field::new_map(
+                    "element",
+                    "key_value",
+                    Field::new(
+                        "key",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        false,
+                    ),
+                    Field::new(
+                        "value",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    false,
                     true,
                 ),
                 true,
