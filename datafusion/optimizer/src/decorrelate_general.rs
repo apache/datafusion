@@ -17,42 +17,35 @@
 
 //! [`GeneralPullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
 
-use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::ops::Deref;
-use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::decorrelate::UN_MATCHED_ROW_INDICATOR;
-use crate::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
-use crate::utils::has_all_column_refs;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
-use arrow::compute::kernels::cmp::eq;
-use arrow::datatypes::Schema;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
-    TreeNodeRewriter, TreeNodeVisitor,
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
-use datafusion_common::{
-    internal_err, not_impl_err, Column, DFSchemaRef, HashMap, Result,
-};
-use datafusion_expr::expr::Exists;
+use datafusion_common::{internal_err, Column, Result};
+use datafusion_expr::expr::{self, Exists};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     conjunction, disjunction, split_conjunction, split_disjunction,
 };
 use datafusion_expr::{
-    binary_expr, col, expr_fn, lit, table_scan, Aggregate, BinaryExpr, Cast, Expr,
-    JoinType, LogicalPlan, LogicalPlanBuilder, Operator as ExprOperator, Subquery,
+    binary_expr, col, lit, BinaryExpr, Cast, Expr, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Operator as ExprOperator, Subquery,
 };
-use datafusion_functions_aggregate::count;
+// use datafusion_sql::unparser::Unparser;
+
 use datafusion_sql::unparser::Unparser;
-use datafusion_sql::TableReference;
+// use datafusion_sql::TableReference;
 use indexmap::map::Entry;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
@@ -164,6 +157,7 @@ struct UnnestingInfo {
 struct Unnesting {
     info: Arc<UnnestingInfo>, // cclasses: union find data structure of equivalent columns
     equivalences: UnionFind,
+    need_handle_count_bug: bool,
 
     // for each outer exprs on the left, the set of exprs
     // on the right required pulling up for the join condition to happen
@@ -175,8 +169,9 @@ struct Unnesting {
     // to grouped_by
     // and push every
     pulled_up_columns: Vec<Column>,
-    //these predicates are disjunctive (combined by `Or` operator)
+    //these predicates are conjunctive
     pulled_up_predicates: Vec<Expr>,
+    count_exprs_dectected: IndexSet<Expr>,
     // mapping from outer ref column to new column, if any
     // i.e in some subquery (
     // ... where outer.column_c=inner.column_a
@@ -442,7 +437,6 @@ impl DependentJoinTracker {
                     })
                     .cloned()
                     .collect();
-                println!("{:?}", pulled_up_expr);
 
                 if !pulled_up_expr.is_empty() {
                     for expr in pulled_up_expr.iter() {
@@ -546,6 +540,10 @@ impl DependentJoinTracker {
                 let is_static = agg.group_expr.is_empty(); // TODO: grouping set also needs to check is_static
                 let next_node = node.children.first().unwrap();
                 let mut only_child = self.nodes.swap_remove(next_node).unwrap();
+                // keep this for later projection
+                let mut original_expr = agg.aggr_expr.clone();
+                original_expr.extend_from_slice(&agg.group_expr);
+
                 self.general_decorrelate(
                     &mut only_child,
                     unnesting,
@@ -559,32 +557,73 @@ impl DependentJoinTracker {
                     let replaced_col = unnesting.get_replaced_col(col);
                     agg.group_expr.push(Expr::Column(replaced_col.clone()));
                 }
-
-                let need_handle_count_bug = true;
-                if need_handle_count_bug {
-                    let un_matched_row = lit(true).alias(UN_MATCHED_ROW_INDICATOR);
-                    agg.group_expr.push(un_matched_row.clone());
-                    // unnesting.pulled_up_predicates.push(value);
+                for agg in agg.aggr_expr.iter() {
+                    if contains_count_expr(agg) {
+                        unnesting.count_exprs_dectected.insert(agg.clone());
+                    }
                 }
 
                 if is_static {
-                    let join_condition = unnesting
-                        .pulled_up_predicates
-                        .iter()
-                        .map(|e| strip_outer_reference(e.clone()));
-                    // Building the Domain to join with the group by
-                    // TODO: maybe the construction of domain can happen somewhere else
-                    let new_plan = LogicalPlanBuilder::new(unnesting.info.domain.clone())
-                        .join_detailed(
-                            node.plan.clone(),
-                            JoinType::Left,
-                            (Vec::<Column>::new(), Vec::<Column>::new()),
-                            disjunction(join_condition),
-                            true,
-                        )?
+                    if !unnesting.count_exprs_dectected.is_empty()
+                        & unnesting.need_handle_count_bug
+                    {
+                        let un_matched_row = lit(true).alias(UN_MATCHED_ROW_INDICATOR);
+                        agg.group_expr.push(un_matched_row);
+                    }
+                    // let right = LogicalPlanBuilder::new(node.plan.clone());
+                    // the evaluation of
+                    // let mut post_join_projection = vec![];
+
+                    let join_condition =
+                        unnesting.pulled_up_predicates.iter().filter_map(|e| {
+                            let stripped_outer = strip_outer_reference(e.clone());
+                            if contains_count_expr(&stripped_outer) {
+                                unimplemented!("handle having count(*) predicate pull up")
+                                // post_join_predicates.push(stripped_outer);
+                                // return None;
+                            }
+                            return Some(stripped_outer);
+                        });
+
+                    let right = LogicalPlanBuilder::new(agg.input.deref().clone())
+                        .aggregate(agg.group_expr.clone(), agg.aggr_expr.clone())?
                         .build()?;
-                    println!("{}", new_plan);
-                    node.plan = new_plan;
+                    let mut new_plan =
+                        LogicalPlanBuilder::new(unnesting.info.domain.clone())
+                            .join_detailed(
+                                right,
+                                JoinType::Left,
+                                (Vec::<Column>::new(), Vec::<Column>::new()),
+                                conjunction(join_condition),
+                                true,
+                            )?;
+                    for expr in original_expr.iter_mut() {
+                        if contains_count_expr(expr) {
+                            let new_expr = Expr::Case(expr::Case {
+                                expr: None,
+                                when_then_expr: vec![(
+                                    Box::new(Expr::IsNull(Box::new(Expr::Column(
+                                        Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
+                                    )))),
+                                    Box::new(lit(0)),
+                                )],
+                                else_expr: Some(Box::new(Expr::Column(
+                                    Column::new_unqualified(
+                                        expr.schema_name().to_string(),
+                                    ),
+                                ))),
+                            });
+                            let mut expr_rewrite = TypeCoercionRewriter {
+                                schema: new_plan.schema(),
+                            };
+                            *expr = new_expr.rewrite(&mut expr_rewrite)?.data;
+                        }
+                    }
+                    new_plan = new_plan.project(original_expr)?;
+
+                    node.plan = new_plan.build()?;
+
+                    println!("{}", node.plan);
                     // self.remove_node(parent, node);
 
                     // 01)Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END AS count(*)
@@ -600,7 +639,7 @@ impl DependentJoinTracker {
                 }
             }
             LogicalPlan::Filter(filter) => {
-                let disjunctions: Vec<Expr> = split_disjunction(&filter.predicate)
+                let conjuctives: Vec<Expr> = split_conjunction(&filter.predicate)
                     .into_iter()
                     .cloned()
                     .collect();
@@ -611,7 +650,7 @@ impl DependentJoinTracker {
                 // for now we only implement with the approach substituting
 
                 let mut pulled_up_columns = IndexSet::new();
-                for expr in disjunctions.iter() {
+                for expr in conjuctives.iter() {
                     if !expr.contains_outer() {
                         remained_expr.push(expr.clone());
                         continue;
@@ -627,7 +666,7 @@ impl DependentJoinTracker {
                         Ok(Transformed::no(e))
                     })?;
                 }
-                filter.predicate = match disjunction(remained_expr) {
+                filter.predicate = match conjunction(remained_expr) {
                     Some(expr) => expr,
                     None => lit(true),
                 };
@@ -945,7 +984,8 @@ impl DependentJoinTracker {
             replaces: IndexMap::new(),
             pulled_up_columns: vec![],
             pulled_up_predicates: vec![],
-            // outer_col_ref_map: HashMap::new(),
+            count_exprs_dectected: IndexSet::new(), // outer_col_ref_map: HashMap::new(),
+            need_handle_count_bug: true,            // TODO
         };
         let mut accesses: IndexSet<ColumnAccess> = root_node.access_tracker.clone();
         // .iter()
@@ -1047,6 +1087,21 @@ impl DependentJoinTracker {
         Ok(result)
     }
 }
+
+fn contains_count_expr(
+    expr: &Expr,
+    // schema: &DFSchemaRef,
+    // expr_result_map_for_count_bug: &mut HashMap<String, Expr>,
+) -> bool {
+    expr.exists(|e| match e {
+        Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
+            Ok(func.name() == "count")
+        }
+        _ => Ok(false),
+    })
+    .unwrap()
+}
+
 impl fmt::Debug for DependentJoinTracker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "GeneralDecorrelation Tree:")?;
