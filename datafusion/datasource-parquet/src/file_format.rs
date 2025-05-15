@@ -564,7 +564,7 @@ pub fn coerce_int96_to_resolution(
     let int96_fields: HashSet<_> = parquet_schema
         .columns()
         .iter()
-        .filter(|f| f.physical_type().eq(&Type::INT96))
+        .filter(|f| f.physical_type() == Type::INT96)
         .map(|f| f.path().string())
         .collect();
 
@@ -611,101 +611,94 @@ pub fn coerce_int96_to_resolution(
         while let Some((parquet_path, field_ref, parent_fields, child_fields)) =
             stack.pop()
         {
-            match field_ref.data_type() {
-                DataType::Struct(ff) => {
-                    if let Some(child_fields) = child_fields {
-                        // This is the second time popping off this struct. The child_fields vector
-                        // now contains each field that has been DFS'd into, and we can construct
-                        // the resulting struct with correct child types.
-                        let child_fields = child_fields.borrow();
-                        assert_eq!(child_fields.len(), ff.len());
-                        let updated_field = Field::new_struct(
-                            field_ref.name(),
-                            child_fields.as_slice(),
-                            field_ref.is_nullable(),
-                        );
-                        parent_fields.borrow_mut().push(Arc::new(updated_field));
-                    } else {
-                        // This is the first time popping off this struct. We don't yet know the
-                        // correct types of its children (i.e., if they need coercing) so we create
-                        // a vector for child_fields, push the struct node back onto the stack to be
-                        // processed again (see above) after all of its children.
-                        let child_fields =
-                            Rc::new(RefCell::new(Vec::with_capacity(ff.len())));
-                        // Note that here we push the struct back onto the stack with its
-                        // parent_fields in the same position, now with Some(child_fields).
-                        stack.push((
-                            parquet_path.clone(),
-                            field_ref,
-                            parent_fields,
-                            Some(Rc::clone(&child_fields)),
-                        ));
-                        // Push all of the children in reverse to maintain original schema order due
-                        // to stack processing.
-                        for fff in ff.into_iter().rev() {
-                            let mut parquet_path = parquet_path.clone();
-                            // Build up a normalized path that we'll use as a key into the original
-                            // int96_fields set above to test if this originated as int96.
-                            parquet_path.push(".");
-                            parquet_path.push(fff.name());
-                            // Note that here we push the field onto the stack using the struct's
-                            // new child_fields vector as the field's parent_fields.
-                            stack.push((
-                                parquet_path,
-                                fff,
-                                Rc::clone(&child_fields),
-                                None,
-                            ));
-                        }
-                    }
-                }
-                DataType::List(ff) => {
-                    if let Some(child_fields) = child_fields {
-                        // This is the second time popping off this list. The child_fields vector
-                        // now contains one field that has been DFS'd into, and we can construct
-                        // the resulting list with correct child type.
-                        assert_eq!(child_fields.borrow().len(), 1);
-                        let updated_field = Field::new_list(
-                            field_ref.name(),
-                            Arc::clone(&child_fields.borrow()[0]),
-                            field_ref.is_nullable(),
-                        );
-                        parent_fields.borrow_mut().push(Arc::new(updated_field));
-                    } else {
-                        // This is the first time popping off this list. We don't yet know the
-                        // correct types of its child (i.e., if they need coercing) so we create
-                        // a vector for child_fields, push the list node back onto the stack to be
-                        // processed again (see above) after its child.
-                        let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
+            match (field_ref.data_type(), child_fields) {
+                (DataType::Struct(ff), None) => {
+                    // This is the first time popping off this struct. We don't yet know the
+                    // correct types of its children (i.e., if they need coercing) so we create
+                    // a vector for child_fields, push the struct node back onto the stack to be
+                    // processed again (see below) after all of its children.
+                    let child_fields =
+                        Rc::new(RefCell::new(Vec::with_capacity(ff.len())));
+                    // Note that here we push the struct back onto the stack with its
+                    // parent_fields in the same position, now with Some(child_fields).
+                    stack.push((
+                        parquet_path.clone(),
+                        field_ref,
+                        parent_fields,
+                        Some(Rc::clone(&child_fields)),
+                    ));
+                    // Push all of the children in reverse to maintain original schema order due
+                    // to stack processing.
+                    for fff in ff.into_iter().rev() {
                         let mut parquet_path = parquet_path.clone();
-                        // Spark uses a 3-tier definition for arrays/lists that result in a group
-                        // named "list" that is not maintained when parsing to Arrow. We just push
-                        // this name into the path.
-                        parquet_path.push(".list");
-                        // Note that here we push the list back onto the stack with its
-                        // parent_fields in the same position, now with Some(child_fields).
-                        stack.push((
-                            parquet_path.clone(),
-                            field_ref,
-                            parent_fields,
-                            Some(Rc::clone(&child_fields)),
-                        ));
                         // Build up a normalized path that we'll use as a key into the original
                         // int96_fields set above to test if this originated as int96.
-                        let mut parquet_path = parquet_path.clone();
                         parquet_path.push(".");
-                        parquet_path.push(ff.name());
-                        // Note that here we push the field onto the stack using the list's
+                        parquet_path.push(fff.name());
+                        // Note that here we push the field onto the stack using the struct's
                         // new child_fields vector as the field's parent_fields.
-                        stack.push((
-                            parquet_path.clone(),
-                            ff,
-                            Rc::clone(&child_fields),
-                            None,
-                        ));
+                        stack.push((parquet_path, fff, Rc::clone(&child_fields), None));
                     }
                 }
-                DataType::Timestamp(TimeUnit::Nanosecond, None)
+                (DataType::Struct(ff), Some(child_fields)) => {
+                    // This is the second time popping off this struct. The child_fields vector
+                    // now contains each field that has been DFS'd into, and we can construct
+                    // the resulting struct with correct child types.
+                    let child_fields = child_fields.borrow();
+                    assert_eq!(child_fields.len(), ff.len());
+                    let updated_field = Field::new_struct(
+                        field_ref.name(),
+                        child_fields.as_slice(),
+                        field_ref.is_nullable(),
+                    );
+                    parent_fields.borrow_mut().push(Arc::new(updated_field));
+                }
+                (DataType::List(ff), None) => {
+                    // This is the first time popping off this list. We don't yet know the
+                    // correct types of its child (i.e., if they need coercing) so we create
+                    // a vector for child_fields, push the list node back onto the stack to be
+                    // processed again (see below) after its child.
+                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
+                    let mut parquet_path = parquet_path.clone();
+                    // Spark uses a 3-tier definition for arrays/lists that result in a group
+                    // named "list" that is not maintained when parsing to Arrow. We just push
+                    // this name into the path.
+                    parquet_path.push(".list");
+                    // Note that here we push the list back onto the stack with its
+                    // parent_fields in the same position, now with Some(child_fields).
+                    stack.push((
+                        parquet_path.clone(),
+                        field_ref,
+                        parent_fields,
+                        Some(Rc::clone(&child_fields)),
+                    ));
+                    // Build up a normalized path that we'll use as a key into the original
+                    // int96_fields set above to test if this originated as int96.
+                    let mut parquet_path = parquet_path.clone();
+                    parquet_path.push(".");
+                    parquet_path.push(ff.name());
+                    // Note that here we push the field onto the stack using the list's
+                    // new child_fields vector as the field's parent_fields.
+                    stack.push((
+                        parquet_path.clone(),
+                        ff,
+                        Rc::clone(&child_fields),
+                        None,
+                    ));
+                }
+                (DataType::List(_), Some(child_fields)) => {
+                    // This is the second time popping off this list. The child_fields vector
+                    // now contains one field that has been DFS'd into, and we can construct
+                    // the resulting list with correct child type.
+                    assert_eq!(child_fields.borrow().len(), 1);
+                    let updated_field = Field::new_list(
+                        field_ref.name(),
+                        Arc::clone(&child_fields.borrow()[0]),
+                        field_ref.is_nullable(),
+                    );
+                    parent_fields.borrow_mut().push(Arc::new(updated_field));
+                }
+                (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
                     if int96_fields.contains(parquet_path.concat().as_str()) =>
                 // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
                 // time_unit.
