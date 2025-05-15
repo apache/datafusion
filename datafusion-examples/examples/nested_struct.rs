@@ -88,10 +88,10 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
 
     // Define file paths in an array for easier management
     let test_files = [
-        "test_data1.parquet",
-        "test_data2.parquet",
-        "test_data3.parquet",
         "test_data4.parquet",
+        "test_data3.parquet",
+        "test_data2.parquet",
+        "test_data1.parquet",
     ];
     let [path1, path2, path3, path4] = test_files; // Destructure for individual access
 
