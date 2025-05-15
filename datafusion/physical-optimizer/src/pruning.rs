@@ -751,6 +751,13 @@ fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
         .unwrap_or_default()
 }
 
+fn is_always_false(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.as_any()
+        .downcast_ref::<phys_expr::Literal>()
+        .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(false))))
+        .unwrap_or_default()
+}
+
 /// Describes which columns statistics are necessary to evaluate a
 /// [`PruningPredicate`].
 ///
@@ -984,11 +991,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     let mut options = RecordBatchOptions::default();
     options.row_count = Some(statistics.num_containers());
 
-    trace!(
-        "Creating statistics batch for {:#?} with {:#?}",
-        required_columns,
-        arrays
-    );
+    trace!("Creating statistics batch for {required_columns:#?} with {arrays:#?}");
 
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
         plan_datafusion_err!("Can not create statistics record batch: {err}")
@@ -1439,6 +1442,11 @@ fn build_predicate_expression(
     required_columns: &mut RequiredColumns,
     unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
 ) -> Arc<dyn PhysicalExpr> {
+    if is_always_false(expr) {
+        // Shouldn't return `unhandled_hook.handle(expr)`
+        // Because it will transfer false to true.
+        return Arc::clone(expr);
+    }
     // predicate expression can only be a binary expression
     let expr_any = expr.as_any();
     if let Some(is_null) = expr_any.downcast_ref::<phys_expr::IsNullExpr>() {
@@ -1538,6 +1546,11 @@ fn build_predicate_expression(
             build_predicate_expression(&right, schema, required_columns, unhandled_hook);
         // simplify boolean expression if applicable
         let expr = match (&left_expr, op, &right_expr) {
+            (left, Operator::And, right)
+                if is_always_false(left) || is_always_false(right) =>
+            {
+                Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(false))))
+            }
             (left, Operator::And, _) if is_always_true(left) => right_expr,
             (_, Operator::And, right) if is_always_true(right) => left_expr,
             (left, Operator::Or, right)
@@ -1545,6 +1558,9 @@ fn build_predicate_expression(
             {
                 Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(true))))
             }
+            (left, Operator::Or, _) if is_always_false(left) => right_expr,
+            (_, Operator::Or, right) if is_always_false(right) => left_expr,
+
             _ => Arc::new(phys_expr::BinaryExpr::new(left_expr, op, right_expr)),
         };
         return expr;
@@ -1904,7 +1920,7 @@ mod tests {
 
     use super::*;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{and, col, lit, or};
     use insta::assert_snapshot;
 
     use arrow::array::Decimal128Array;
@@ -2320,8 +2336,7 @@ mod tests {
             let was_new = fields.insert(field);
             if !was_new {
                 panic!(
-                    "Duplicate field in required schema: {:?}. Previous fields:\n{:#?}",
-                    field, fields
+                    "Duplicate field in required schema: {field:?}. Previous fields:\n{fields:#?}"
                 );
             }
         }
@@ -2826,8 +2841,8 @@ mod tests {
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut required_columns);
         assert_eq!(predicate_expr.to_string(), expected_expr);
-        println!("required_columns: {:#?}", required_columns); // for debugging assertions below
-                                                               // c1 < 1 should add c1_min
+        println!("required_columns: {required_columns:#?}"); // for debugging assertions below
+                                                             // c1 < 1 should add c1_min
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[0],
@@ -3585,12 +3600,10 @@ mod tests {
 
         prune_with_expr(
             // false
-            // constant literals that do NOT refer to any columns are currently not evaluated at all, hence the result is
-            // "all true"
             lit(false),
             &schema,
             &statistics,
-            &[true, true, true, true, true],
+            &[false, false, false, false, false],
         );
     }
 
@@ -5155,7 +5168,7 @@ mod tests {
         statistics: &TestStatistics,
         expected: &[bool],
     ) {
-        println!("Pruning with expr: {}", expr);
+        println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
         let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
@@ -5170,5 +5183,43 @@ mod tests {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
         build_predicate_expression(&expr, schema, required_columns, &unhandled_hook)
+    }
+
+    #[test]
+    fn test_build_predicate_expression_with_false() {
+        let expr = lit(ScalarValue::Boolean(Some(false)));
+        let schema = Schema::empty();
+        let res =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        let expected = logical2physical(&expr, &schema);
+        assert_eq!(&res, &expected);
+    }
+
+    #[test]
+    fn test_build_predicate_expression_with_and_false() {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
+        let expr = and(
+            col("c1").eq(lit("a")),
+            lit(ScalarValue::Boolean(Some(false))),
+        );
+        let res =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        let expected = logical2physical(&lit(ScalarValue::Boolean(Some(false))), &schema);
+        assert_eq!(&res, &expected);
+    }
+
+    #[test]
+    fn test_build_predicate_expression_with_or_false() {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
+        let left_expr = col("c1").eq(lit("a"));
+        let right_expr = lit(ScalarValue::Boolean(Some(false)));
+        let res = test_build_predicate_expression(
+            &or(left_expr.clone(), right_expr.clone()),
+            &schema,
+            &mut RequiredColumns::new(),
+        );
+        let expected =
+            "c1_null_count@2 != row_count@3 AND c1_min@0 <= a AND a <= c1_max@1";
+        assert_eq!(res.to_string(), expected);
     }
 }

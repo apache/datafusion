@@ -330,8 +330,7 @@ fn split_compression_string(str_setting: &str) -> Result<(String, Option<u32>)> 
             let level = &rh[..rh.len() - 1].parse::<u32>().map_err(|_| {
                 DataFusionError::Configuration(format!(
                     "Could not parse compression string. \
-                    Got codec: {} and unknown level from {}",
-                    codec, str_setting
+                    Got codec: {codec} and unknown level from {str_setting}"
                 ))
             })?;
             Ok((codec.to_owned(), Some(*level)))

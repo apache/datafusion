@@ -197,10 +197,7 @@ impl AggregationFuzzer {
         while let Some(join_handle) = join_set.join_next().await {
             // propagate errors
             join_handle.map_err(|e| {
-                DataFusionError::Internal(format!(
-                    "AggregationFuzzer task error: {:?}",
-                    e
-                ))
+                DataFusionError::Internal(format!("AggregationFuzzer task error: {e:?}"))
             })??;
         }
         Ok(())

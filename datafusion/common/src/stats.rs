@@ -233,8 +233,8 @@ impl Precision<ScalarValue> {
 impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
-            Precision::Inexact(inner) => write!(f, "Inexact({:?})", inner),
+            Precision::Exact(inner) => write!(f, "Exact({inner:?})"),
+            Precision::Inexact(inner) => write!(f, "Inexact({inner:?})"),
             Precision::Absent => write!(f, "Absent"),
         }
     }
@@ -243,8 +243,8 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
 impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
-            Precision::Inexact(inner) => write!(f, "Inexact({:?})", inner),
+            Precision::Exact(inner) => write!(f, "Exact({inner:?})"),
+            Precision::Inexact(inner) => write!(f, "Inexact({inner:?})"),
             Precision::Absent => write!(f, "Absent"),
         }
     }
@@ -572,7 +572,7 @@ impl Display for Statistics {
             .iter()
             .enumerate()
             .map(|(i, cs)| {
-                let s = format!("(Col[{}]:", i);
+                let s = format!("(Col[{i}]:");
                 let s = if cs.min_value != Precision::Absent {
                     format!("{} Min={}", s, cs.min_value)
                 } else {

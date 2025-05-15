@@ -471,7 +471,7 @@ fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
     tz.as_ref()
         .map(|tz| {
             Tz::from_str(tz).map_err(|op| {
-                DataFusionError::Execution(format!("failed on timezone {tz}: {:?}", op))
+                DataFusionError::Execution(format!("failed on timezone {tz}: {op:?}"))
             })
         })
         .transpose()

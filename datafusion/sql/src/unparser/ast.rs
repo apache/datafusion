@@ -705,9 +705,9 @@ impl fmt::Display for BuilderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UninitializedField(ref field) => {
-                write!(f, "`{}` must be initialized", field)
+                write!(f, "`{field}` must be initialized")
             }
-            Self::ValidationError(ref error) => write!(f, "{}", error),
+            Self::ValidationError(ref error) => write!(f, "{error}"),
         }
     }
 }
