@@ -1170,7 +1170,7 @@ impl PartitionColumnProjector {
         );
         if file_batch.columns().len() != expected_cols {
             // Print detailed column information to help debug the mismatch
-            debug!(
+            println!(
                 "File batch columns: {:?}",
                 file_batch
                     .schema()
@@ -1179,7 +1179,7 @@ impl PartitionColumnProjector {
                     .map(|f| f.name())
                     .collect::<Vec<_>>()
             );
-            debug!(
+            println!(
                 "Expected schema fields: {:?}",
                 self.projected_schema
                     .fields()
