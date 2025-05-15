@@ -750,7 +750,6 @@ pub fn coerce_int96_to_resolution(
                     ));
                 }
                 // Other types can be cloned as they are.
-                // TODO: Other nested types like Map.
                 _ => parent_fields.borrow_mut().push(Arc::clone(current_field)),
             }
         }
