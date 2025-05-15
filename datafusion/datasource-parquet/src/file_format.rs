@@ -1686,7 +1686,8 @@ mod tests {
     #[test]
     fn coerce_int96_to_resolution_with_mixed_timestamps() {
         // Unclear if Spark (or other writer) could generate a file with mixed timestamps like this,
-        // but we want to test the scenario just in case.
+        // but we want to test the scenario just in case since it's at least a valid schema as far
+        // as the Parquet spec is concerned.
         let spark_schema = "
         message spark_schema {
           optional int96 c0;
@@ -1708,7 +1709,8 @@ mod tests {
             coerce_int96_to_resolution(&descr, &arrow_schema, &TimeUnit::Microsecond)
                 .unwrap();
 
-        // Only the first field (c0) should be converted to a microsecond timestamp because
+        // Only the first field (c0) should be converted to a microsecond timestamp because it's the
+        // only timestamp that originated from an INT96.
         let expected_schema = Schema::new(vec![
             Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
             Field::new(
@@ -1774,13 +1776,61 @@ mod tests {
             coerce_int96_to_resolution(&descr, &arrow_schema, &TimeUnit::Microsecond)
                 .unwrap();
 
-        result.flattened_fields().iter().for_each(|field| {
-            if field.data_type().is_primitive() {
-                assert_eq!(
-                    field.data_type(),
-                    &DataType::Timestamp(TimeUnit::Microsecond, None)
-                );
-            }
-        })
+        let expected_schema = Schema::new(vec![
+            Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new_struct(
+                "c1",
+                vec![Field::new(
+                    "c0",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_struct(
+                "c2",
+                vec![Field::new_list(
+                    "c0",
+                    Field::new(
+                        "element",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_list(
+                "c3",
+                Field::new(
+                    "element",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                true,
+            ),
+            Field::new_list(
+                "c4",
+                Field::new_struct(
+                    "element",
+                    vec![
+                        Field::new(
+                            "c0",
+                            DataType::Timestamp(TimeUnit::Microsecond, None),
+                            true,
+                        ),
+                        Field::new(
+                            "c1",
+                            DataType::Timestamp(TimeUnit::Microsecond, None),
+                            true,
+                        ),
+                    ],
+                    true,
+                ),
+                true,
+            ),
+        ]);
+
+        assert_eq!(result, expected_schema);
     }
 }
