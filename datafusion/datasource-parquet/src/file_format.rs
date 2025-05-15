@@ -578,8 +578,8 @@ pub fn coerce_int96_to_resolution(
 
     type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
     type StackContext<'a> = (
-        Vec<&'a str>, // The full parquet path to the field currently being processed.
-        &'a FieldRef, // The field currently being processed.
+        Vec<&'a str>, // The Parquet column path (e.g., "c0.list.element.c1") for the current field.
+        &'a FieldRef, // The current field to be processed.
         NestedFields, // The parent's fields that this field will be (possibly) type-coerced and
         // inserted into. All fields have a parent, so this is not an Option type.
         Option<NestedFields>, // Nested types need to create their own vector of fields for their
@@ -596,8 +596,8 @@ pub fn coerce_int96_to_resolution(
     let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
 
     // TODO: It might be possible to only DFS into nested fields that we know contain an int96 if we
-    // keep track of the column index above and use that information below. That can be a future
-    // optimization for large schemas.
+    // use some sort of LPM data structure to check if we're currently DFS'ing nested types that are
+    // in a column path that contains an int96. That can be a future optimization for large schemas.
     let transformed_schema = {
         // Populate the stack with our top-level fields.
         let mut stack: Vec<StackContext> = file_schema
