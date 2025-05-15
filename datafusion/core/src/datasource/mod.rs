@@ -29,6 +29,12 @@ pub mod physical_plan;
 pub mod provider;
 mod view_test;
 
+pub use datafusion_catalog::stream;
+pub use datafusion_catalog::view;
+pub use datafusion_datasource::file_expr_rewriter;
+pub use datafusion_datasource::schema_adapter;
+pub use datafusion_datasource::source;
+
 // backwards compatibility
 pub use self::default_table_source::{
     provider_as_source, source_as_provider, DefaultTableSource,
@@ -40,11 +46,7 @@ pub use crate::logical_expr::TableType;
 pub use datafusion_catalog::cte_worktable;
 pub use datafusion_catalog::default_table_source;
 pub use datafusion_catalog::memory;
-pub use datafusion_catalog::stream;
-pub use datafusion_catalog::view;
-pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::sink;
-pub use datafusion_datasource::source;
 pub use datafusion_execution::object_store;
 pub use datafusion_physical_expr::create_ordering;
 

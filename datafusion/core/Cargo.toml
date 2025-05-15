@@ -153,7 +153,9 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
+hex = { version = "0.4" }
 insta = { workspace = true }
+itertools = { workspace = true }
 paste = "^1.0"
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.4.3"

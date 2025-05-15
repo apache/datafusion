@@ -17,6 +17,7 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::page_filter::PagePruningAccessPlanFilter;
@@ -25,13 +26,15 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_datasource::file_expr_rewriter::FileExpressionRewriter;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow::datatypes::{SchemaRef, TimeUnit};
+use arrow::datatypes::{Field, Schema, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, Column, Result, SchemaError};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -81,6 +84,8 @@ pub(super) struct ParquetOpener {
     pub enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
+    /// Filter expression rewriter factory
+    pub filter_expression_rewriter: Option<Arc<dyn FileExpressionRewriter>>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -106,10 +111,7 @@ impl FileOpener for ParquetOpener {
         let projected_schema =
             SchemaRef::from(self.table_schema.project(&self.projection)?);
         let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
-        let schema_adapter = self
-            .schema_adapter_factory
-            .create(projected_schema, Arc::clone(&self.table_schema));
-        let predicate = self.predicate.clone();
+        let mut predicate = self.predicate.clone();
         let table_schema = Arc::clone(&self.table_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
@@ -122,6 +124,8 @@ impl FileOpener for ParquetOpener {
             .global_counter("num_predicate_creation_errors");
 
         let enable_page_index = self.enable_page_index;
+
+        let filter_expression_rewriter = self.filter_expression_rewriter.clone();
 
         Ok(Box::pin(async move {
             // Don't load the page index yet. Since it is not stored inline in
@@ -145,6 +149,30 @@ impl FileOpener for ParquetOpener {
             // - The "virtual" file schema: this is the table schema minus any hive partition columns and projections. This is what the file schema is coerced to.
             // - The physical file schema: this is the schema as defined by the parquet file. This is what the parquet file actually contains.
             let mut physical_file_schema = Arc::clone(reader_metadata.schema());
+            let mut filter_schema = Arc::clone(&physical_file_schema);
+
+            // Try to rewrite the predicate using our filter expression rewriter
+            // This must happen before build_row_filter and other subsequent steps
+            // so that they all use the rewritten predicate if it was rewritten.
+            if let Some(original_predicate) = predicate.clone() {
+                if let Some(filter_rewriter) = filter_expression_rewriter.as_ref() {
+                    if let Ok(rewritten) = filter_rewriter
+                        .rewrite(Arc::clone(&filter_schema), original_predicate)
+                    {
+                        let mut filter_schema_builder =
+                            FilterSchemaBuilder::new(&filter_schema, &table_schema);
+                        rewritten.visit(&mut filter_schema_builder)?;
+                        filter_schema = filter_schema_builder.build();
+                        // Update the predicate to the rewritten version
+                        predicate = Some(rewritten);
+                    }
+                }
+            }
+
+            let schema_adapter = schema_adapter_factory.create(
+                Arc::clone(&projected_schema),
+                Arc::clone(&physical_file_schema),
+            );
 
             // The schema loaded from the file may not be the same as the
             // desired schema (for example if we want to instruct the parquet
@@ -158,6 +186,11 @@ impl FileOpener for ParquetOpener {
                     Arc::clone(reader_metadata.metadata()),
                     options.clone(),
                 )?;
+            }
+            if let Some(merged) =
+                apply_file_schema_type_coercions(&table_schema, &filter_schema)
+            {
+                filter_schema = Arc::new(merged);
             }
 
             if coerce_int96.is_some() {
@@ -173,19 +206,31 @@ impl FileOpener for ParquetOpener {
                         options.clone(),
                     )?;
                 }
+                if let Some(merged) = coerce_int96_to_resolution(
+                    reader_metadata.parquet_schema(),
+                    &filter_schema,
+                    &(coerce_int96.unwrap()),
+                ) {
+                    filter_schema = Arc::new(merged);
+                }
             }
 
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 predicate.as_ref(),
-                &physical_file_schema,
+                &filter_schema,
                 &predicate_creation_errors,
             );
 
             // The page index is not stored inline in the parquet footer so the
             // code above may not have read the page index structures yet. If we
             // need them for reading and they aren't yet loaded, we need to load them now.
-            if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
+            if should_enable_page_index(
+                enable_page_index,
+                predicate.as_ref(),
+                page_pruning_predicate.as_ref(),
+                filter_expression_rewriter.as_ref(),
+            ) {
                 reader_metadata = load_page_index(
                     reader_metadata,
                     &mut async_file_reader,
@@ -214,7 +259,7 @@ impl FileOpener for ParquetOpener {
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
-                    &physical_file_schema,
+                    &filter_schema,
                     &table_schema,
                     builder.metadata(),
                     reorder_predicates,
@@ -252,7 +297,7 @@ impl FileOpener for ParquetOpener {
             if let Some(predicate) = predicate.as_ref() {
                 if enable_row_group_stats_pruning {
                     row_groups.prune_by_statistics(
-                        &physical_file_schema,
+                        &filter_schema,
                         builder.parquet_schema(),
                         rg_metadata,
                         predicate,
@@ -263,7 +308,7 @@ impl FileOpener for ParquetOpener {
                 if enable_bloom_filter && !row_groups.is_empty() {
                     row_groups
                         .prune_by_bloom_filters(
-                            &physical_file_schema,
+                            &filter_schema,
                             &mut builder,
                             predicate,
                             &file_metrics,
@@ -281,7 +326,7 @@ impl FileOpener for ParquetOpener {
                 if let Some(p) = page_pruning_predicate {
                     access_plan = p.prune_plan_with_page_index(
                         access_plan,
-                        &physical_file_schema,
+                        &filter_schema,
                         builder.parquet_schema(),
                         file_metadata.as_ref(),
                         &file_metrics,
@@ -439,14 +484,116 @@ async fn load_page_index<T: AsyncFileReader>(
     }
 }
 
+/// Decide if we should enable the page index based on the provided parameters.
+/// If disabled we avoid loading the page index which may save significant IO downloading the data and CPU decoding it.
+/// If enabled we load the page index, even if we may end up not using it.
 fn should_enable_page_index(
     enable_page_index: bool,
-    page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
+    predicate: Option<&Arc<dyn PhysicalExpr>>,
+    page_pruning_predicate: Option<&Arc<PagePruningAccessPlanFilter>>,
+    file_filter_expr_rewriter: Option<&Arc<dyn FileExpressionRewriter>>,
 ) -> bool {
-    enable_page_index
-        && page_pruning_predicate.is_some()
+    // If the user explicly disabled page indexes don't load them even if we could use them.
+    if !enable_page_index {
+        return false;
+    }
+    // Now we try to decide if we can use the page index or if it would be pointless to load it.
+    if predicate.is_some() && file_filter_expr_rewriter.is_some() {
+        // If we have a predicate and a filter rewriter we need to load the page index in case the filter rewriter
+        // rewrites the predicate to one that can be pushed down to the page index, even if the original predicate can't.
+        return true;
+    }
+    // Only load the page index if we have a pruning predicate that can be pushed down to the page index.
+    page_pruning_predicate.is_some()
         && page_pruning_predicate
             .as_ref()
             .map(|p| p.filter_number() > 0)
             .unwrap_or(false)
+}
+
+/// A vistor for a PhysicalExpr that collects all column references to determine what columns the expression needs to be evaluated.
+struct FilterSchemaBuilder<'schema> {
+    filter_schema_fields: BTreeSet<Arc<Field>>,
+    file_schema: &'schema Schema,
+    table_schema: &'schema Schema,
+}
+
+impl<'schema> FilterSchemaBuilder<'schema> {
+    fn new(file_schema: &'schema Schema, table_schema: &'schema Schema) -> Self {
+        Self {
+            filter_schema_fields: BTreeSet::new(),
+            file_schema,
+            table_schema,
+        }
+    }
+
+    fn sort_fields(
+        fields: &mut Vec<Arc<Field>>,
+        table_schema: &Schema,
+        file_schema: &Schema,
+    ) {
+        fields.sort_by_key(|f| f.name().to_string());
+        fields.dedup_by_key(|f| f.name().to_string());
+        fields.sort_by_key(|f| {
+            let table_schema_index =
+                table_schema.index_of(f.name()).unwrap_or(usize::MAX);
+            let file_schema_index = file_schema.index_of(f.name()).unwrap_or(usize::MAX);
+            (table_schema_index, file_schema_index)
+        });
+    }
+
+    fn build(self) -> SchemaRef {
+        let mut fields = self.filter_schema_fields.into_iter().collect::<Vec<_>>();
+        FilterSchemaBuilder::sort_fields(
+            &mut fields,
+            self.table_schema,
+            self.file_schema,
+        );
+        Arc::new(Schema::new(fields))
+    }
+}
+
+impl<'node> TreeNodeVisitor<'node> for FilterSchemaBuilder<'_> {
+    type Node = Arc<dyn PhysicalExpr>;
+
+    fn f_down(
+        &mut self,
+        node: &'node Arc<dyn PhysicalExpr>,
+    ) -> Result<TreeNodeRecursion> {
+        if let Some(column) = node.as_any().downcast_ref::<Column>() {
+            if let Ok(field) = self.table_schema.field_with_name(column.name()) {
+                self.filter_schema_fields.insert(Arc::new(field.clone()));
+            } else if let Ok(field) = self.file_schema.field_with_name(column.name()) {
+                self.filter_schema_fields.insert(Arc::new(field.clone()));
+            } else {
+                // valid fields are the table schema's fields + the file schema's fields, preferring the table schema's fields when there is a conflict
+                let mut valid_fields = self
+                    .table_schema
+                    .fields()
+                    .iter()
+                    .chain(self.file_schema.fields().iter())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                FilterSchemaBuilder::sort_fields(
+                    &mut valid_fields,
+                    self.table_schema,
+                    self.file_schema,
+                );
+                let valid_fields = valid_fields
+                    .into_iter()
+                    .map(|f| Column::new_unqualified(f.name()))
+                    .collect();
+                let field = Column::new_unqualified(column.name());
+                return Err(datafusion_common::DataFusionError::SchemaError(
+                    SchemaError::FieldNotFound {
+                        field: Box::new(field),
+                        valid_fields,
+                    },
+                    Box::new(None),
+                ));
+            }
+        }
+
+        Ok(TreeNodeRecursion::Continue)
+    }
 }
