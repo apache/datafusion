@@ -80,18 +80,12 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let schema3 = create_schema3();
     let schema4 = create_schema4();
 
-    // Create schema adapter factory
-    println!("==> Creating schema adapter factory");
-    let adapter_factory: Arc<dyn SchemaAdapterFactory> =
-        Arc::new(NestedStructSchemaAdapterFactory);
-    println!("==> Schema adapter factory created");
-
     // Define file paths in an array for easier management
     let test_files = [
-        "test_data4.parquet",
-        "test_data3.parquet",
-        "test_data2.parquet",
         "test_data1.parquet",
+        "test_data2.parquet",
+        "test_data3.parquet",
+        "test_data4.parquet",
     ];
     let [path1, path2, path3, path4] = test_files; // Destructure for individual access
 
@@ -114,6 +108,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
             .into_iter()
+            .rev()
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
     )
