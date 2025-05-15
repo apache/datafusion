@@ -163,11 +163,6 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
 
     // assert_eq!(results[0].num_rows(), 4); // Now we have 4 rows, one from each schema
 
-    // Clean up all files
-    for path in [path1, path2, path3, path4] {
-        let _ = fs::remove_file(path);
-    }
-
     Ok(())
 }
 
