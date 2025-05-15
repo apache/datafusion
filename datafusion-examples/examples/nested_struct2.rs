@@ -152,8 +152,8 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
 
     println!("==> Executing SQL query");
     let df = ctx
-        .sql("SELECT * FROM jobs ORDER BY timestamp_utc")
-        //.sql("SELECT EXTRACT(YEAR FROM timestamp_utc) AS year, EXTRACT(MONTH FROM timestamp_utc) AS month, COUNT(*) AS count FROM jobs WHERE timestamp_utc IS NOT NULL AND timestamp_utc >= NOW() - INTERVAL '365 days' GROUP BY EXTRACT(YEAR FROM timestamp_utc), EXTRACT(MONTH FROM timestamp_utc) ORDER BY year, month")
+        // .sql("SELECT * FROM jobs ORDER BY timestamp_utc")
+        .sql("SELECT EXTRACT(YEAR FROM timestamp_utc) AS year, EXTRACT(MONTH FROM timestamp_utc) AS month, COUNT(*) AS count FROM jobs WHERE timestamp_utc IS NOT NULL AND timestamp_utc >= NOW() - INTERVAL '365 days' GROUP BY EXTRACT(YEAR FROM timestamp_utc), EXTRACT(MONTH FROM timestamp_utc) ORDER BY year, month")
         .await?;
     println!("==> Successfully executed SQL query");
 
