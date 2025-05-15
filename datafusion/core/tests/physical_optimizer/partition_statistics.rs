@@ -605,7 +605,7 @@ mod test {
         .await?;
 
         let agg_final = Arc::new(AggregateExec::try_new(
-            AggregateMode::Final,
+            AggregateMode::FinalPartitioned,
             group_by.clone(),
             aggr_expr.clone(),
             vec![None],
@@ -642,7 +642,7 @@ mod test {
         )?);
 
         let agg_final = Arc::new(AggregateExec::try_new(
-            AggregateMode::Final,
+            AggregateMode::FinalPartitioned,
             group_by.clone(),
             aggr_expr.clone(),
             vec![None],
