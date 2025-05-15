@@ -608,50 +608,51 @@ pub fn coerce_int96_to_resolution(
             .collect();
 
         // Pop fields to DFS into until we have exhausted the stack.
-        while let Some((parquet_path, field_ref, parent_fields, child_fields)) =
+        while let Some((parquet_path, current_field, parent_fields, child_fields)) =
             stack.pop()
         {
-            match (field_ref.data_type(), child_fields) {
-                (DataType::Struct(ff), None) => {
+            match (current_field.data_type(), child_fields) {
+                (DataType::Struct(unprocessed_children), None) => {
                     // This is the first time popping off this struct. We don't yet know the
                     // correct types of its children (i.e., if they need coercing) so we create
                     // a vector for child_fields, push the struct node back onto the stack to be
                     // processed again (see below) after all of its children.
-                    let child_fields =
-                        Rc::new(RefCell::new(Vec::with_capacity(ff.len())));
+                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(
+                        unprocessed_children.len(),
+                    )));
                     // Note that here we push the struct back onto the stack with its
                     // parent_fields in the same position, now with Some(child_fields).
                     stack.push((
                         parquet_path.clone(),
-                        field_ref,
+                        current_field,
                         parent_fields,
                         Some(Rc::clone(&child_fields)),
                     ));
-                    // Push all of the children in reverse to maintain original schema order due
-                    // to stack processing.
-                    for fff in ff.into_iter().rev() {
-                        let mut parquet_path = parquet_path.clone();
+                    // Push all the children in reverse to maintain original schema order due to
+                    // stack processing.
+                    for child in unprocessed_children.into_iter().rev() {
+                        let mut child_path = parquet_path.clone();
                         // Build up a normalized path that we'll use as a key into the original
                         // int96_fields set above to test if this originated as int96.
-                        parquet_path.push(".");
-                        parquet_path.push(fff.name());
+                        child_path.push(".");
+                        child_path.push(child.name());
                         // Note that here we push the field onto the stack using the struct's
                         // new child_fields vector as the field's parent_fields.
-                        stack.push((parquet_path, fff, Rc::clone(&child_fields), None));
+                        stack.push((child_path, child, Rc::clone(&child_fields), None));
                     }
                 }
-                (DataType::Struct(ff), Some(child_fields)) => {
+                (DataType::Struct(unprocessed_children), Some(processed_children)) => {
                     // This is the second time popping off this struct. The child_fields vector
                     // now contains each field that has been DFS'd into, and we can construct
                     // the resulting struct with correct child types.
-                    let child_fields = child_fields.borrow();
-                    assert_eq!(child_fields.len(), ff.len());
-                    let updated_field = Field::new_struct(
-                        field_ref.name(),
-                        child_fields.as_slice(),
-                        field_ref.is_nullable(),
+                    let processed_children = processed_children.borrow();
+                    assert_eq!(processed_children.len(), unprocessed_children.len());
+                    let processed_struct = Field::new_struct(
+                        current_field.name(),
+                        processed_children.as_slice(),
+                        current_field.is_nullable(),
                     );
-                    parent_fields.borrow_mut().push(Arc::new(updated_field));
+                    parent_fields.borrow_mut().push(Arc::new(processed_struct));
                 }
                 (DataType::List(ff), None) => {
                     // This is the first time popping off this list. We don't yet know the
@@ -668,7 +669,7 @@ pub fn coerce_int96_to_resolution(
                     // parent_fields in the same position, now with Some(child_fields).
                     stack.push((
                         parquet_path.clone(),
-                        field_ref,
+                        current_field,
                         parent_fields,
                         Some(Rc::clone(&child_fields)),
                     ));
@@ -692,9 +693,9 @@ pub fn coerce_int96_to_resolution(
                     // the resulting list with correct child type.
                     assert_eq!(child_fields.borrow().len(), 1);
                     let updated_field = Field::new_list(
-                        field_ref.name(),
+                        current_field.name(),
                         Arc::clone(&child_fields.borrow()[0]),
-                        field_ref.is_nullable(),
+                        current_field.is_nullable(),
                     );
                     parent_fields.borrow_mut().push(Arc::new(updated_field));
                 }
@@ -704,13 +705,13 @@ pub fn coerce_int96_to_resolution(
                 // time_unit.
                 {
                     parent_fields.borrow_mut().push(field_with_new_type(
-                        field_ref,
+                        current_field,
                         DataType::Timestamp(*time_unit, None),
                     ));
                 }
                 // Other types can be cloned as they are.
                 // TODO: Other nested types like map.
-                _ => parent_fields.borrow_mut().push(Arc::clone(field_ref)),
+                _ => parent_fields.borrow_mut().push(Arc::clone(current_field)),
             }
         }
         assert_eq!(fields.borrow().len(), file_schema.fields.len());
