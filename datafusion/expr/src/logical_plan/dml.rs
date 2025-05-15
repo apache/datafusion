@@ -241,3 +241,10 @@ fn make_count_schema() -> DFSchemaRef {
             .unwrap(),
     )
 }
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
+pub struct Merge {
+    pub input: Arc<LogicalPlan>,
+    pub join: Arc<LogicalPlan>,
+    pub case: Arc<Expr>,
+}
