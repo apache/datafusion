@@ -104,6 +104,8 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     println!("==> Creating ListingTableConfig for paths: {paths_str:?}");
     println!("==> Using schema4 for files with different schemas");
     println!("==> Schema difference: schema evolution from basic to expanded fields");
+    let adapter_factory: Arc<dyn SchemaAdapterFactory> =
+        Arc::new(NestedStructSchemaAdapterFactory);
 
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
@@ -112,7 +114,8 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
     )
-    .with_schema(schema4.as_ref().clone().into());
+    .with_schema(schema4.as_ref().clone().into())
+    .with_schema_adapter_factory(adapter_factory);
 
     println!("==> About to infer config");
     println!(
