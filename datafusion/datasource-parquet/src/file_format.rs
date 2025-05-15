@@ -573,6 +573,9 @@ pub fn coerce_int96_to_resolution(
         return None;
     }
 
+    // Do a DFS into the schema using a stack, looking for timestamp(nanos) fields that originated
+    // as int96 to coerce to the provided time_unit.
+
     type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
     type StackContext<'a> = (
         Vec<&'a str>,         // The path to the field referenced below
