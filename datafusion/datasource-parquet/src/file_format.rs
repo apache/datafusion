@@ -43,7 +43,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, ColumnStatistics,
-    DataFusionError, GetExt, Result, DEFAULT_PARQUET_EXTENSION,
+    DataFusionError, GetExt, HashSet, Result, DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -559,30 +559,26 @@ pub fn coerce_int96_to_resolution(
     file_schema: &Schema,
     time_unit: &TimeUnit,
 ) -> Option<Schema> {
-    let mut transform = false;
-    let parquet_fields: HashMap<_, _> = parquet_schema
+    // Traverse the parquet_schema columns looking for int96 physical types. If encountered, insert
+    // the field's full path into a set.
+    let int96_fields: HashSet<_> = parquet_schema
         .columns()
         .iter()
-        .map(|f| {
-            let dt = f.physical_type();
-            if dt.eq(&Type::INT96) {
-                transform = true;
-            }
-            (f.path().string(), dt)
-        })
+        .filter(|f| f.physical_type().eq(&Type::INT96))
+        .map(|f| f.path().string())
         .collect();
 
-    if !transform {
+    if int96_fields.is_empty() {
         // The schema doesn't contain any int96 fields, so skip the remaining logic.
         return None;
     }
 
     type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
     type StackContext<'a> = (
-        Vec<&'a str>,
-        &'a FieldRef,
-        NestedFields,
-        Option<NestedFields>,
+        Vec<&'a str>,         // The path to the field referenced below
+        &'a FieldRef,         // The field currently being processed
+        NestedFields, // The parent's fields that this field will be possibly coerced and inserted into
+        Option<NestedFields>, // Nested types need to create their own vector of fields for their children
     );
 
     let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
@@ -624,6 +620,8 @@ pub fn coerce_int96_to_resolution(
                         // processed again (see above) after all of its children.
                         let child_fields =
                             Rc::new(RefCell::new(Vec::with_capacity(ff.len())));
+                        // Note that here we push the struct back onto the stack with its
+                        // parent_fields in the same position, now with Some(child_fields).
                         stack.push((
                             parquet_path.clone(),
                             field_ref,
@@ -635,9 +633,11 @@ pub fn coerce_int96_to_resolution(
                         for fff in ff.into_iter().rev() {
                             let mut parquet_path = parquet_path.clone();
                             // Build up a normalized path that we'll use as a key into the original
-                            // parquet_fields map above to test if this originated as int96.
+                            // int96_fields set above to test if this originated as int96.
                             parquet_path.push(".");
                             parquet_path.push(fff.name());
+                            // Note that here we push the field onto the stack using the struct's
+                            // new child_fields vector as the field's parent_fields.
                             stack.push((
                                 parquet_path,
                                 fff,
@@ -670,6 +670,8 @@ pub fn coerce_int96_to_resolution(
                         // named "list" that is not maintained when parsing to Arrow. We just push
                         // this name into the path.
                         parquet_path.push(".list");
+                        // Note that here we push the list back onto the stack with its
+                        // parent_fields in the same position, now with Some(child_fields).
                         stack.push((
                             parquet_path.clone(),
                             field_ref,
@@ -677,10 +679,12 @@ pub fn coerce_int96_to_resolution(
                             Some(Rc::clone(&child_fields)),
                         ));
                         // Build up a normalized path that we'll use as a key into the original
-                        // parquet_fields map above to test if this originated as int96.
+                        // int96_fields set above to test if this originated as int96.
                         let mut parquet_path = parquet_path.clone();
                         parquet_path.push(".");
                         parquet_path.push(ff.name());
+                        // Note that here we push the field onto the stack using the list's
+                        // new child_fields vector as the field's parent_fields.
                         stack.push((
                             parquet_path.clone(),
                             ff,
@@ -690,8 +694,7 @@ pub fn coerce_int96_to_resolution(
                     }
                 }
                 DataType::Timestamp(TimeUnit::Nanosecond, None)
-                    if parquet_fields.get(parquet_path.concat().as_str())
-                        == Some(&Type::INT96) =>
+                    if int96_fields.contains(parquet_path.concat().as_str()) =>
                 // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
                 // time_unit.
                 {
