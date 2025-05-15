@@ -963,8 +963,8 @@ mod test {
             (Some(_), None) => panic!("Expected Some, got None"),
             (None, Some(_)) => panic!("Expected None, got Some"),
             (Some(expected), Some(actual)) => {
-                let expected_string = format!("{:#?}", expected);
-                let actual_string = format!("{:#?}", actual);
+                let expected_string = format!("{expected:#?}");
+                let actual_string = format!("{actual:#?}");
                 assert_eq!(expected_string, actual_string);
             }
         }

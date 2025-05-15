@@ -342,7 +342,7 @@ impl NameTracker {
             false => {
                 let mut counter = 0;
                 loop {
-                    let candidate_name = format!("{}__temp__{}", name, counter);
+                    let candidate_name = format!("{name}__temp__{counter}");
                     if self.seen_names.insert(candidate_name.clone()) {
                         return (candidate_name, NameTrackerStatus::SeenBefore);
                     }

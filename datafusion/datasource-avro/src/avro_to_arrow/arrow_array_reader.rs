@@ -117,7 +117,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             AvroSchema::Record(RecordSchema { fields, lookup, .. }) => {
                 lookup.iter().for_each(|(field_name, pos)| {
                     schema_lookup
-                        .insert(format!("{}.{}", parent_field_name, field_name), *pos);
+                        .insert(format!("{parent_field_name}.{field_name}"), *pos);
                 });
 
                 for field in fields {
@@ -131,7 +131,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 }
             }
             AvroSchema::Array(schema) => {
-                let sub_parent_field_name = format!("{}.element", parent_field_name);
+                let sub_parent_field_name = format!("{parent_field_name}.element");
                 Self::child_schema_lookup(
                     &sub_parent_field_name,
                     &schema.items,

@@ -206,7 +206,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
                             } else {
                                 index += 1;
-                                let alias_str = format!("alias{}", index);
+                                let alias_str = format!("alias{index}");
                                 inner_aggr_exprs.push(
                                     Expr::AggregateFunction(AggregateFunction::new_udf(
                                         Arc::clone(&func),
