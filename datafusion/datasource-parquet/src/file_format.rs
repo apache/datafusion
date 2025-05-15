@@ -573,6 +573,7 @@ pub fn coerce_int96_to_resolution(
         .collect();
 
     if !transform {
+        // The schema doesn't contain any int96 fields, so skip the remaining logic.
         return None;
     }
 
@@ -586,7 +587,11 @@ pub fn coerce_int96_to_resolution(
 
     let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
 
+    // TODO: It might be possible to only DFS into nested fields that we know contain an int96 if we
+    // keep track of the column index above and use that information below. That can be a future
+    // optimization for large schemas.
     let transformed_schema = {
+        // Populate the stack with our top-level fields.
         let mut stack: Vec<StackContext> = file_schema
             .fields()
             .iter()
@@ -594,13 +599,16 @@ pub fn coerce_int96_to_resolution(
             .map(|f| (vec![f.name().as_str()], f, Rc::clone(&fields), None))
             .collect();
 
+        // Pop fields to DFS into until we have exhausted the stack.
         while let Some((parquet_path, field_ref, parent_fields, child_fields)) =
             stack.pop()
         {
             match field_ref.data_type() {
                 DataType::Struct(ff) => {
                     if let Some(child_fields) = child_fields {
-                        // This is the second time popping off this struct.
+                        // This is the second time popping off this struct. The child_fields vector
+                        // now contains each field that has been DFS'd into, and we can construct
+                        // the resulting struct with correct child types.
                         let child_fields = child_fields.borrow();
                         assert_eq!(child_fields.len(), ff.len());
                         let updated_field = Field::new_struct(
@@ -610,6 +618,10 @@ pub fn coerce_int96_to_resolution(
                         );
                         parent_fields.borrow_mut().push(Arc::new(updated_field));
                     } else {
+                        // This is the first time popping off this struct. We don't yet know the
+                        // correct types of its children (i.e., if they need coercing) so we create
+                        // a vector for child_fields, push the struct node back onto the stack to be
+                        // processed again (see above) after all of its children.
                         let child_fields =
                             Rc::new(RefCell::new(Vec::with_capacity(ff.len())));
                         stack.push((
@@ -618,9 +630,12 @@ pub fn coerce_int96_to_resolution(
                             parent_fields,
                             Some(Rc::clone(&child_fields)),
                         ));
-                        // Need to zip these in reverse to maintain original order
+                        // Push all of the children in reverse to maintain original schema order due
+                        // to stack processing.
                         for fff in ff.into_iter().rev() {
                             let mut parquet_path = parquet_path.clone();
+                            // Build up a normalized path that we'll use as a key into the original
+                            // parquet_fields map above to test if this originated as int96.
                             parquet_path.push(".");
                             parquet_path.push(fff.name());
                             stack.push((
@@ -634,7 +649,9 @@ pub fn coerce_int96_to_resolution(
                 }
                 DataType::List(ff) => {
                     if let Some(child_fields) = child_fields {
-                        // This is the second time popping off this list.
+                        // This is the second time popping off this list. The child_fields vector
+                        // now contains one field that has been DFS'd into, and we can construct
+                        // the resulting list with correct child type.
                         assert_eq!(child_fields.borrow().len(), 1);
                         let updated_field = Field::new_list(
                             field_ref.name(),
@@ -643,8 +660,15 @@ pub fn coerce_int96_to_resolution(
                         );
                         parent_fields.borrow_mut().push(Arc::new(updated_field));
                     } else {
+                        // This is the first time popping off this list. We don't yet know the
+                        // correct types of its child (i.e., if they need coercing) so we create
+                        // a vector for child_fields, push the list node back onto the stack to be
+                        // processed again (see above) after its child.
                         let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
                         let mut parquet_path = parquet_path.clone();
+                        // Spark uses a 3-tier definition for arrays/lists that result in a group
+                        // named "list" that is not maintained when parsing to Arrow. We just push
+                        // this name into the path.
                         parquet_path.push(".list");
                         stack.push((
                             parquet_path.clone(),
@@ -652,6 +676,8 @@ pub fn coerce_int96_to_resolution(
                             parent_fields,
                             Some(Rc::clone(&child_fields)),
                         ));
+                        // Build up a normalized path that we'll use as a key into the original
+                        // parquet_fields map above to test if this originated as int96.
                         let mut parquet_path = parquet_path.clone();
                         parquet_path.push(".");
                         parquet_path.push(ff.name());
@@ -663,18 +689,20 @@ pub fn coerce_int96_to_resolution(
                         ));
                     }
                 }
-                _ => match field_ref.data_type() {
-                    DataType::Timestamp(TimeUnit::Nanosecond, None)
-                        if parquet_fields.get(parquet_path.concat().as_str())
-                            == Some(&Type::INT96) =>
-                    {
-                        parent_fields.borrow_mut().push(field_with_new_type(
-                            field_ref,
-                            DataType::Timestamp(*time_unit, None),
-                        ));
-                    }
-                    _ => parent_fields.borrow_mut().push(Arc::clone(field_ref)),
-                },
+                DataType::Timestamp(TimeUnit::Nanosecond, None)
+                    if parquet_fields.get(parquet_path.concat().as_str())
+                        == Some(&Type::INT96) =>
+                // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
+                // time_unit.
+                {
+                    parent_fields.borrow_mut().push(field_with_new_type(
+                        field_ref,
+                        DataType::Timestamp(*time_unit, None),
+                    ));
+                }
+                // Other types can be cloned as they are.
+                // TODO: Other nested types like map.
+                _ => parent_fields.borrow_mut().push(Arc::clone(field_ref)),
             }
         }
         assert_eq!(fields.borrow().len(), file_schema.fields.len());
