@@ -28,7 +28,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+    TreeNodeRewriter,
 };
 use datafusion_common::{internal_err, plan_err, Column, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
@@ -73,7 +74,6 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     fn supports_rewrite(&self) -> bool {
         true
     }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -87,6 +87,8 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                 }
 
+                // reWriteExpr is all the filter in the subquery that is irrelevant to the subquery execution
+                // i.e where outer=some col, or outer + binary operator with some aggregated value
                 let (subqueries, mut rewrite_expr) = self.extract_subquery_exprs(
                     &filter.predicate,
                     config.alias_generator(),
@@ -288,10 +290,12 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 ///
 /// # Arguments
 ///
-/// * `query_info` - The subquery portion of the `where` (select avg(total) from orders)
+/// * `subquery` - The subquery portion of the `where` (select avg(total) from orders)
 /// * `filter_input` - The non-subquery portion (from customers)
-/// * `outer_others` - Any additional parts to the `where` expression (and c.x = y)
 /// * `subquery_alias` - Subquery aliases
+/// # Returns
+/// * an optimize subquery if any
+/// * a map of original count expr to a transformed expr (a hacky way to handle count bug)
 fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
@@ -300,6 +304,7 @@ fn build_join(
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
+
     if !pull_up.can_pull_up {
         return Ok(None);
     }
@@ -321,6 +326,8 @@ fn build_join(
         conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
             replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
         })?;
+    // TODO: build domain from filter input
+    // select distinct columns from filter input
 
     // join our sub query into the main plan
     let new_plan = if join_filter_opt.is_none() {
