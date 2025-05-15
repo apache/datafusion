@@ -1775,6 +1775,10 @@ mod tests {
 
     #[test]
     fn coerce_int96_to_resolution_with_nested_types() {
+        // This schema originates from Comet's CometFuzzTestSuite ParquetGenerator only using int96
+        // primitive types with generateStruct and generateArray set to true, with one additional
+        // field added to make sure all fields in a struct get modified.
+        // https://github.com/apache/datafusion-comet/blob/main/spark/src/main/scala/org/apache/comet/testing/ParquetGenerator.scala
         let spark_schema = "
         message spark_schema {
           optional int96 c0;
