@@ -589,6 +589,8 @@ pub fn coerce_int96_to_resolution(
                               // we process the field, we know we have DFS'd into the children because this field is Some.
     );
 
+    // This is our top-level fields from which we will construct our schema. We pass this into our
+    // initial stack context as the parent fields, and the DFS populates it.
     let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
 
     // TODO: It might be possible to only DFS into nested fields that we know contain an int96 if we
