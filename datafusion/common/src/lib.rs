@@ -47,6 +47,7 @@ pub mod format;
 pub mod hash_utils;
 pub mod instant;
 pub mod parsers;
+pub mod pruning;
 pub mod rounding;
 pub mod scalar;
 pub mod spans;
