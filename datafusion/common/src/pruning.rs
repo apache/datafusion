@@ -131,6 +131,12 @@ pub trait PruningStatistics {
     ) -> Option<BooleanArray>;
 }
 
+/// Prune files based on their partition values.
+/// This is used both at planning time and execution time to prune
+/// files based on their partition values.
+/// This feeds into [`CompositePruningStatistics`] to allow pruning
+/// with filters that depend both on partition columns and data columns
+/// (e.g. `WHERE partition_col = data_col`).
 pub struct PartitionPruningStatistics {
     /// Values for each column for each container.
     /// The outer vectors represent the columns while the inner
@@ -262,13 +268,6 @@ impl PrunableStatistics {
 }
 
 impl PruningStatistics for PrunableStatistics {
-    /// Return the minimum values for the named column, if known.
-    ///
-    /// If the minimum value for a particular container is not known, the
-    /// returned array should have `null` in that row. If the minimum value is
-    /// not known for any row, return `None`.
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.schema.index_of(column.name()).ok()?;
         let mut values = Vec::with_capacity(self.statistics.len());
@@ -293,11 +292,6 @@ impl PruningStatistics for PrunableStatistics {
         }
     }
 
-    /// Return the maximum values for the named column, if known.
-    ///
-    /// See [`Self::min_values`] for when to return `None` and null values.
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.schema.index_of(column.name()).ok()?;
         let mut values = Vec::with_capacity(self.statistics.len());
@@ -322,24 +316,10 @@ impl PruningStatistics for PrunableStatistics {
         }
     }
 
-    /// Return the number of containers (e.g. Row Groups) being pruned with
-    /// these statistics.
-    ///
-    /// This value corresponds to the size of the [`ArrayRef`] returned by
-    /// [`Self::min_values`], [`Self::max_values`], [`Self::null_counts`],
-    /// and [`Self::row_counts`].
     fn num_containers(&self) -> usize {
         self.statistics.len()
     }
 
-    /// Return the number of null values for the named column as an
-    /// [`UInt64Array`]
-    ///
-    /// See [`Self::min_values`] for when to return `None` and null values.
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
-    ///
-    /// [`UInt64Array`]: arrow::array::UInt64Array
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.schema.index_of(column.name()).ok()?;
         let mut values = Vec::with_capacity(self.statistics.len());
@@ -366,14 +346,6 @@ impl PruningStatistics for PrunableStatistics {
         }
     }
 
-    /// Return the number of rows for the named column in each container
-    /// as an [`UInt64Array`].
-    ///
-    /// See [`Self::min_values`] for when to return `None` and null values.
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
-    ///
-    /// [`UInt64Array`]: arrow::array::UInt64Array
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
         let mut values = Vec::with_capacity(self.statistics.len());
         let mut has_row_count = false;
@@ -398,22 +370,6 @@ impl PruningStatistics for PrunableStatistics {
         }
     }
 
-    /// Returns [`BooleanArray`] where each row represents information known
-    /// about specific literal `values` in a column.
-    ///
-    /// For example, Parquet Bloom Filters implement this API to communicate
-    /// that `values` are known not to be present in a Row Group.
-    ///
-    /// The returned array has one row for each container, with the following
-    /// meanings:
-    /// * `true` if the values in `column`  ONLY contain values from `values`
-    /// * `false` if the values in `column` are NOT ANY of `values`
-    /// * `null` if the neither of the above holds or is unknown.
-    ///
-    /// If these statistics can not determine column membership for any
-    /// container, return `None` (the default).
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
     fn contained(
         &self,
         _column: &Column,
@@ -423,11 +379,19 @@ impl PruningStatistics for PrunableStatistics {
     }
 }
 
+/// Combine multiple [`PruningStatistics`] into a single
+/// [`CompositePruningStatistics`].
+/// This can be used to combine statistics from different sources,
+/// for example partition values and file statistics.
+/// This allows pruning with filters that depend on multiple sources of statistics,
+/// such as `WHERE partition_col = data_col`.
 pub struct CompositePruningStatistics {
     pub statistics: Vec<Box<dyn PruningStatistics>>,
 }
 
 impl CompositePruningStatistics {
+    /// Create a new instance of [`CompositePruningStatistics`] from
+    /// a vector of [`PruningStatistics`].
     pub fn new(statistics: Vec<Box<dyn PruningStatistics>>) -> Self {
         assert!(!statistics.is_empty());
         Self { statistics }
