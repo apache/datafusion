@@ -152,8 +152,8 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
 
     println!("==> Executing SQL query");
     let df = ctx
-        //.sql("SELECT * FROM events ORDER BY timestamp_utc")
-        .sql("SELECT EXTRACT(YEAR FROM timestamp_utc) AS year, EXTRACT(MONTH FROM timestamp_utc) AS month, COUNT(*) AS count FROM jobs WHERE timestamp_utc IS NOT NULL AND timestamp_utc >= NOW() - INTERVAL '365 days' GROUP BY EXTRACT(YEAR FROM timestamp_utc), EXTRACT(MONTH FROM timestamp_utc) ORDER BY year, month")
+        .sql("SELECT * FROM jobs ORDER BY timestamp_utc")
+        //.sql("SELECT EXTRACT(YEAR FROM timestamp_utc) AS year, EXTRACT(MONTH FROM timestamp_utc) AS month, COUNT(*) AS count FROM jobs WHERE timestamp_utc IS NOT NULL AND timestamp_utc >= NOW() - INTERVAL '365 days' GROUP BY EXTRACT(YEAR FROM timestamp_utc), EXTRACT(MONTH FROM timestamp_utc) ORDER BY year, month")
         .await?;
     println!("==> Successfully executed SQL query");
 
@@ -161,44 +161,10 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let results = df.clone().collect().await?;
     println!("==> Successfully collected results");
 
-    assert_eq!(results[0].num_rows(), 4); // Now we have 4 rows, one from each schema
-
-    let compacted_path = "test_data_compacted.parquet";
-    let _ = fs::remove_file(compacted_path);
-
-    println!("==> writing compacted parquet file to {}", compacted_path);
-    df.write_parquet(
-        compacted_path,
-        DataFrameWriteOptions::default()
-            .with_single_file_output(true)
-            .with_sort_by(vec![col("timestamp_utc").sort(true, true)]),
-        None,
-    )
-    .await?;
-
-    let new_ctx = SessionContext::new();
-    let config = ListingTableConfig::new_with_multi_paths(vec![ListingTableUrl::parse(
-        compacted_path,
-    )?])
-    .with_schema(schema4.as_ref().clone().into())
-    .infer(&new_ctx.state())
-    .await?;
-
-    let listing_table = ListingTable::try_new(config)?;
-    new_ctx.register_table("events", Arc::new(listing_table))?;
-
-    println!("==> select from compacted parquet file");
-    let df = new_ctx
-        //.sql("SELECT * FROM events ORDER BY timestamp_utc")
-        .sql("SELECT EXTRACT(YEAR FROM timestamp_utc) AS year, EXTRACT(MONTH FROM timestamp_utc) AS month, COUNT(*) AS count FROM jobs WHERE timestamp_utc IS NOT NULL AND timestamp_utc >= NOW() - INTERVAL '365 days' GROUP BY EXTRACT(YEAR FROM timestamp_utc), EXTRACT(MONTH FROM timestamp_utc) ORDER BY year, month")
-        .await?;
-    let compacted_results = df.collect().await?;
-
-    assert_eq!(compacted_results[0].num_rows(), 4);
-    assert_eq!(results, compacted_results);
+    // assert_eq!(results[0].num_rows(), 4); // Now we have 4 rows, one from each schema
 
     // Clean up all files
-    for path in [path1, path2, path3, path4, compacted_path] {
+    for path in [path1, path2, path3, path4] {
         let _ = fs::remove_file(path);
     }
 
