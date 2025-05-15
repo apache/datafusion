@@ -117,8 +117,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
     )
-    .with_schema(schema4.as_ref().clone().into())
-    .with_schema_adapter_factory(adapter_factory);
+    .with_schema(schema4.as_ref().clone().into());
 
     println!("==> About to infer config");
     println!(
