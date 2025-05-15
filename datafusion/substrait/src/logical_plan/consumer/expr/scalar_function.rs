@@ -334,27 +334,30 @@ mod tests {
         Ok(())
     }
 
-    fn n(n: i64) -> Expr {
-        Expr::Literal(ScalarValue::Int64(Some(n)))
+    fn int64_literals(integers: &[i64]) -> Vec<Expr> {
+        integers
+            .iter()
+            .map(|value| Expr::Literal(ScalarValue::Int64(Some(*value))))
+            .collect()
     }
 
     #[test]
     fn arg_list_to_binary_op_tree_1_arg() -> Result<()> {
-        let expr = arg_list_to_binary_op_tree(Operator::Or, vec![n(1)])?;
+        let expr = arg_list_to_binary_op_tree(Operator::Or, int64_literals(&[1]))?;
         assert_snapshot!(expr.to_string(), @"Int64(1)");
         Ok(())
     }
 
     #[test]
     fn arg_list_to_binary_op_tree_2_args() -> Result<()> {
-        let expr = arg_list_to_binary_op_tree(Operator::Or, vec![n(1), n(2)])?;
+        let expr = arg_list_to_binary_op_tree(Operator::Or, int64_literals(&[1, 2]))?;
         assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2)");
         Ok(())
     }
 
     #[test]
     fn arg_list_to_binary_op_tree_3_args() -> Result<()> {
-        let expr = arg_list_to_binary_op_tree(Operator::Or, vec![n(1), n(2), n(3)])?;
+        let expr = arg_list_to_binary_op_tree(Operator::Or, int64_literals(&[1, 2, 3]))?;
         assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2) OR Int64(3)");
         Ok(())
     }
@@ -362,7 +365,7 @@ mod tests {
     #[test]
     fn arg_list_to_binary_op_tree_4_args() -> Result<()> {
         let expr =
-            arg_list_to_binary_op_tree(Operator::Or, vec![n(1), n(2), n(3), n(4)])?;
+            arg_list_to_binary_op_tree(Operator::Or, int64_literals(&[1, 2, 3, 4]))?;
         assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2) OR Int64(3) OR Int64(4)");
         Ok(())
     }
