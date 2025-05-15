@@ -172,6 +172,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///   fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
     ///     Ok(DataType::Int32)
     ///   }
+    ///   fn get_schema(&self) -> Option<&DFSchema> {
+    ///     None
+    ///   }
     /// }
     ///
     /// // Create the simplifier
@@ -228,9 +231,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ) -> Result<(Transformed<Expr>, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
 
+        let empty_schema = DFSchema::empty();
         let mut const_evaluator = ConstEvaluator::try_new(
             self.info.execution_props(),
-            self.info.get_schema().unwrap_or(&DFSchema::empty()),
+            self.info.get_schema().unwrap_or(&empty_schema),
         )?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
