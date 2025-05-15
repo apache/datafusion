@@ -96,7 +96,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(());
         }
         let diagnostic = Diagnostic::new_error(
-            format!("{} queries have different number of columns", op),
+            format!("{op} queries have different number of columns"),
             set_expr_span,
         )
         .with_note(

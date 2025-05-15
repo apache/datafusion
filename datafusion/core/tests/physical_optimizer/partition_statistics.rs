@@ -177,8 +177,7 @@ mod test {
         for i in 0..actual_stats.len() {
             assert_eq!(
                 actual_stats[i], expected_stats[i],
-                "Partition {} data doesn't match statistics",
-                i
+                "Partition {i} data doesn't match statistics"
             );
         }
 

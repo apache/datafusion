@@ -413,7 +413,7 @@ impl Optimizer {
                 previous_plans.insert(LogicalPlanSignature::new(&new_plan));
             if !plan_is_fresh {
                 // plan did not change, so no need to continue trying to optimize
-                debug!("optimizer pass {} did not make changes", i);
+                debug!("optimizer pass {i} did not make changes");
                 break;
             }
             i += 1;

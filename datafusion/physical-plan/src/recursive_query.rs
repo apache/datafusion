@@ -184,8 +184,7 @@ impl ExecutionPlan for RecursiveQueryExec {
         // TODO: we might be able to handle multiple partitions in the future.
         if partition != 0 {
             return Err(DataFusionError::Internal(format!(
-                "RecursiveQueryExec got an invalid partition {} (expected 0)",
-                partition
+                "RecursiveQueryExec got an invalid partition {partition} (expected 0)"
             )));
         }
 
