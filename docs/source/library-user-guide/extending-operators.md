@@ -54,19 +54,19 @@ The same answer can be produced more efficiently by simply keeping track of the 
 The following example illustrates the implementation of a `TopK` node:
 
 ```rust
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::task::{Context, Poll};
-use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
+# use std::fmt::Debug;
+# use std::hash::Hash;
+# use std::task::{Context, Poll};
+# use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
-use arrow::{
+# use arrow::{
     array::{Int64Array, StringArray},
     datatypes::SchemaRef,
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::{
+# use datafusion::execution::session_state::SessionStateBuilder;
+# use datafusion::{
     common::cast::{as_int64_array, as_string_array},
     common::{arrow_datafusion_err, internal_err, DFSchemaRef},
     error::{DataFusionError, Result},
@@ -87,16 +87,16 @@ use datafusion::{
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
 };
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::ScalarValue;
-use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
-use datafusion_optimizer::optimizer::ApplyOrder;
-use datafusion_optimizer::AnalyzerRule;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+# use datafusion_common::config::ConfigOptions;
+# use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+# use datafusion_common::ScalarValue;
+# use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
+# use datafusion_optimizer::optimizer::ApplyOrder;
+# use datafusion_optimizer::AnalyzerRule;
+# use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
-use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+# use async_trait::async_trait;
+# use futures::{Stream, StreamExt};
 
 #[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TopKPlanNode {
