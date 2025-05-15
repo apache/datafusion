@@ -578,10 +578,15 @@ pub fn coerce_int96_to_resolution(
 
     type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
     type StackContext<'a> = (
-        Vec<&'a str>,         // The path to the field referenced below
-        &'a FieldRef,         // The field currently being processed
-        NestedFields, // The parent's fields that this field will be possibly coerced and inserted into
-        Option<NestedFields>, // Nested types need to create their own vector of fields for their children
+        Vec<&'a str>, // The pull parquet path to the field currently being processed.
+        &'a FieldRef, // The field currently being processed.
+        NestedFields, // The parent's fields that this field will be (possibly) type-coerced and
+        // inserted into. All fields have a parent, so this is not an Option type.
+        Option<NestedFields>, // Nested types need to create their own vector of fields for their
+                              // children. For primitive types this will remain None. For nested types it is None the
+                              // first time they are processed. Then, we instantiate a vector for its children, push the
+                              // field back onto the stack to be processed again, and DFS into its children. The next time
+                              // we process the field, we know we have DFS'd into the children because this field is Some.
     );
 
     let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
