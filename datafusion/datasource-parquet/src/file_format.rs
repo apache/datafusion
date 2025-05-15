@@ -616,7 +616,7 @@ pub fn coerce_int96_to_resolution(
                     // This is the first time popping off this struct. We don't yet know the
                     // correct types of its children (i.e., if they need coercing) so we create
                     // a vector for child_fields, push the struct node back onto the stack to be
-                    // processed again (see below) after all of its children.
+                    // processed again (see below) after processing all its children.
                     let child_fields = Rc::new(RefCell::new(Vec::with_capacity(
                         unprocessed_children.len(),
                     )));
@@ -654,17 +654,17 @@ pub fn coerce_int96_to_resolution(
                     );
                     parent_fields.borrow_mut().push(Arc::new(processed_struct));
                 }
-                (DataType::List(ff), None) => {
+                (DataType::List(unprocessed_child), None) => {
                     // This is the first time popping off this list. We don't yet know the
                     // correct types of its child (i.e., if they need coercing) so we create
                     // a vector for child_fields, push the list node back onto the stack to be
-                    // processed again (see below) after its child.
+                    // processed again (see below) after processing its child.
                     let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
-                    let mut parquet_path = parquet_path.clone();
+                    let mut list_path = parquet_path.clone();
                     // Spark uses a 3-tier definition for arrays/lists that result in a group
                     // named "list" that is not maintained when parsing to Arrow. We just push
                     // this name into the path.
-                    parquet_path.push(".list");
+                    list_path.push(".list");
                     // Note that here we push the list back onto the stack with its
                     // parent_fields in the same position, now with Some(child_fields).
                     stack.push((
@@ -675,29 +675,30 @@ pub fn coerce_int96_to_resolution(
                     ));
                     // Build up a normalized path that we'll use as a key into the original
                     // int96_fields set above to test if this originated as int96.
-                    let mut parquet_path = parquet_path.clone();
-                    parquet_path.push(".");
-                    parquet_path.push(ff.name());
+                    let mut child_path = list_path.clone();
+                    child_path.push(".");
+                    child_path.push(unprocessed_child.name());
                     // Note that here we push the field onto the stack using the list's
                     // new child_fields vector as the field's parent_fields.
                     stack.push((
-                        parquet_path.clone(),
-                        ff,
+                        child_path.clone(),
+                        unprocessed_child,
                         Rc::clone(&child_fields),
                         None,
                     ));
                 }
-                (DataType::List(_), Some(child_fields)) => {
+                (DataType::List(_), Some(processed_children)) => {
                     // This is the second time popping off this list. The child_fields vector
                     // now contains one field that has been DFS'd into, and we can construct
                     // the resulting list with correct child type.
-                    assert_eq!(child_fields.borrow().len(), 1);
-                    let updated_field = Field::new_list(
+                    let processed_children = processed_children.borrow();
+                    assert_eq!(processed_children.len(), 1);
+                    let processed_list = Field::new_list(
                         current_field.name(),
-                        Arc::clone(&child_fields.borrow()[0]),
+                        Arc::clone(&processed_children[0]),
                         current_field.is_nullable(),
                     );
-                    parent_fields.borrow_mut().push(Arc::new(updated_field));
+                    parent_fields.borrow_mut().push(Arc::new(processed_list));
                 }
                 (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
                     if int96_fields.contains(parquet_path.concat().as_str()) =>
@@ -710,7 +711,7 @@ pub fn coerce_int96_to_resolution(
                     ));
                 }
                 // Other types can be cloned as they are.
-                // TODO: Other nested types like map.
+                // TODO: Other nested types like Map.
                 _ => parent_fields.borrow_mut().push(Arc::clone(current_field)),
             }
         }
