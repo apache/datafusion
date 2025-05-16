@@ -216,10 +216,10 @@ impl SchemaAdapter for NestedStructSchemaAdapter {
         let mut field_mappings = vec![None; self.projected_table_schema.fields().len()];
 
         for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
-            if let Some((table_idx, table_field)) = 
+            if let Some((table_idx, table_field)) =
                 self.projected_table_schema.fields().find(file_field.name())
             {
-                // Special handling for struct fields - always include them even if the 
+                // Special handling for struct fields - always include them even if the
                 // internal structure differs, as we'll adapt them later
                 match (file_field.data_type(), table_field.data_type()) {
                     (Struct(_), Struct(_)) => {
@@ -228,14 +228,17 @@ impl SchemaAdapter for NestedStructSchemaAdapter {
                     }
                     _ => {
                         // For non-struct fields, follow the default adapter's behavior
-                        if arrow::compute::can_cast_types(file_field.data_type(), table_field.data_type()) {
+                        if arrow::compute::can_cast_types(
+                            file_field.data_type(),
+                            table_field.data_type(),
+                        ) {
                             field_mappings[table_idx] = Some(projection.len());
                             projection.push(file_idx);
                         } else {
                             return datafusion_common::plan_err!(
                                 "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
                                 file_field.name(),
-                                file_field.data_type(), 
+                                file_field.data_type(),
                                 table_field.data_type()
                             );
                         }
