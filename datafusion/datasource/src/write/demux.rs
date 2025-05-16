@@ -225,7 +225,7 @@ fn generate_file_path(
     if !single_file_output {
         base_output_path
             .prefix()
-            .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
+            .child(format!("{write_id}_{part_idx}.{file_extension}"))
     } else {
         base_output_path.prefix().to_owned()
     }
@@ -556,5 +556,5 @@ fn compute_hive_style_file_path(
         file_path = file_path.child(format!("{}={}", partition_by[j].0, part_key[j]));
     }
 
-    file_path.child(format!("{}.{}", write_id, file_extension))
+    file_path.child(format!("{write_id}.{file_extension}"))
 }

@@ -71,6 +71,9 @@ pub struct PullUpCorrelatedExpr {
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
+    /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
+    /// lateral joins, we need to produce a left outer join in such cases.
+    pub pulled_up_scalar_agg: bool,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -91,6 +94,7 @@ impl PullUpCorrelatedExpr {
             need_handle_count_bug: false,
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
+            pulled_up_scalar_agg: false,
         }
     }
 
@@ -312,6 +316,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         // add the unmatched rows indicator to the Aggregation's group expressions
                         missing_exprs.push(un_matched_row);
                     }
+                }
+                if aggregate.group_expr.is_empty() {
+                    // TODO: how do we handle the case where we have pulled multiple aggregations? For example,
+                    // a group agg with a scalar agg as child.
+                    self.pulled_up_scalar_agg = true;
                 }
                 let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
                     .aggregate(missing_exprs, aggregate.aggr_expr.to_vec())?
