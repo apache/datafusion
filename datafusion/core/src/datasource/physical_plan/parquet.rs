@@ -1246,7 +1246,7 @@ mod tests {
             &state,
             &ParquetFormat::default().with_coerce_int96(Some("us".to_string())),
             None,
-            &testdata,
+            testdata,
             filename,
             None,
             None,
