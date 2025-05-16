@@ -707,7 +707,7 @@ pub fn coerce_int96_to_resolution(
                     ));
                 }
                 (DataType::Map(_, sorted), Some(processed_children)) => {
-                    // This is the second time popping off this map.  See struct docs above.
+                    // This is the second time popping off this map. See struct docs above.
                     let processed_children = processed_children.borrow();
                     assert_eq!(processed_children.len(), 1);
                     let processed_map = Field::new(
