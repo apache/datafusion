@@ -97,9 +97,9 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
 
     let paths_str = vec![
         path4.to_string(),
-        path3.to_string(),
-        path2.to_string(),
         path1.to_string(),
+        path2.to_string(),
+        path3.to_string(),
     ];
     println!("==> Creating ListingTableConfig for paths: {paths_str:?}");
     println!("==> Using schema4 for files with different schemas");
@@ -149,6 +149,8 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
 
     println!("==> Collecting results");
     let results = df.clone().collect().await?;
+    println!("==> Query results:");
+    df.show().await?;
     println!("==> Successfully collected results");
 
     assert_eq!(results[0].num_rows(), 4); // Now we have 4 rows, one from each schema
