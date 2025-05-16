@@ -27,6 +27,7 @@ use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
 use datafusion_common::config::ConfigOptions;
+use datafusion_datasource::file_expr_rewriter::FileExpressionRewriter;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
@@ -273,6 +274,8 @@ pub struct ParquetSource {
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Optional user defined schema adapter
     pub(crate) schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// Optional user defined filter expression rewriter factory
+    pub(crate) filter_expression_rewriter: Option<Arc<dyn FileExpressionRewriter>>,
     /// Batch size configuration
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
@@ -359,6 +362,26 @@ impl ParquetSource {
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Self {
         self.schema_adapter_factory = Some(schema_adapter_factory);
+        self
+    }
+
+    /// Return the optional filter expression rewriter factory
+    pub fn filter_expression_rewriter_factory(
+        &self,
+    ) -> Option<&Arc<dyn FileExpressionRewriter>> {
+        self.filter_expression_rewriter.as_ref()
+    }
+
+    /// Set optional filter expression rewriter.
+    ///
+    /// [`FileExpressionRewriter`] allows specifying how filter
+    /// expressions should be rewritten based on table schema and file schema.
+    /// This enables more sophisticated filter pushdown to the file level that can vary on a per-file basis.
+    pub fn with_filter_expression_rewriter(
+        mut self,
+        rewriter: Arc<dyn FileExpressionRewriter>,
+    ) -> Self {
+        self.filter_expression_rewriter = Some(rewriter);
         self
     }
 
@@ -481,7 +504,8 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
-            table_schema: Arc::clone(&base_config.file_schema),
+            filter_expression_rewriter: self.filter_expression_rewriter.clone(),
+            logical_file_schema: Arc::clone(&base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,

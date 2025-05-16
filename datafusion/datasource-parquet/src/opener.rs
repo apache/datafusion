@@ -25,13 +25,15 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
+use datafusion_datasource::file_expr_rewriter::FileExpressionRewriter;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow::datatypes::{SchemaRef, TimeUnit};
+use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
+use datafusion_physical_expr::utils::reassign_predicate_columns;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -55,8 +57,8 @@ pub(super) struct ParquetOpener {
     pub limit: Option<usize>,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
-    /// Schema of the output table
-    pub table_schema: SchemaRef,
+    /// Schema of the file as far as the rest of the system is concerned.
+    pub logical_file_schema: SchemaRef,
     /// Optional hint for how large the initial request to read parquet metadata
     /// should be
     pub metadata_size_hint: Option<usize>,
@@ -81,6 +83,8 @@ pub(super) struct ParquetOpener {
     pub enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
+    /// Filter expression rewriter factory
+    pub filter_expression_rewriter: Option<Arc<dyn FileExpressionRewriter>>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -104,13 +108,14 @@ impl FileOpener for ParquetOpener {
         let batch_size = self.batch_size;
 
         let projected_schema =
-            SchemaRef::from(self.table_schema.project(&self.projection)?);
+            SchemaRef::from(self.logical_file_schema.project(&self.projection)?);
         let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
-        let schema_adapter = self
-            .schema_adapter_factory
-            .create(projected_schema, Arc::clone(&self.table_schema));
-        let predicate = self.predicate.clone();
-        let table_schema = Arc::clone(&self.table_schema);
+        let schema_adapter = schema_adapter_factory.create(
+            Arc::clone(&projected_schema),
+            Arc::clone(&self.logical_file_schema),
+        );
+        let mut predicate = self.predicate.clone();
+        let logical_file_schema = Arc::clone(&self.logical_file_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let coerce_int96 = self.coerce_int96;
@@ -122,6 +127,8 @@ impl FileOpener for ParquetOpener {
             .global_counter("num_predicate_creation_errors");
 
         let enable_page_index = self.enable_page_index;
+
+        let filter_expression_rewriter = self.filter_expression_rewriter.clone();
 
         Ok(Box::pin(async move {
             // Don't load the page index yet. Since it is not stored inline in
@@ -141,17 +148,46 @@ impl FileOpener for ParquetOpener {
                     .await?;
 
             // Note about schemas: we are actually dealing with **3 different schemas** here:
-            // - The table schema as defined by the TableProvider. This is what the user sees, what they get when they `SELECT * FROM table`, etc.
-            // - The "virtual" file schema: this is the table schema minus any hive partition columns and projections. This is what the file schema is coerced to.
-            // - The physical file schema: this is the schema as defined by the parquet file. This is what the parquet file actually contains.
+            // - `table_schema` as defined by the TableProvider.
+            //   This is what the user sees, what they get when they `SELECT * FROM table`, etc.
+            //   We don't actually have this schema here, but we do have `logical_file_schema` which is the same as the table schema minus any partition columns and projections.
+            // - `logical_file_schema`: this is the table schema minus any hive partition columns and projections.
+            // - `physical_file_schema`: this is the schema as defined by the parquet file.
+            // - `filter_schema`: this is the schema that we use to evaluate the filter predicates.
+            //   It is currently the union of the `table_schema` and the `physical_file_schema` in that order.
+            //   That is: it is all of the columns in the `table_schema` and any columns that are in the `physical_file_schema` but not in the `table_schema`.
+            //   In the future we may flip this, which mainly matters if there's a discrepancy in the type of a column in the `table_schema` and the `physical_file_schema`.
+            //   Currently we have to cast to the table schema, and will always have to do so for any data we return,
+            //   but for pruning that happens inside of `ParquetOpener` we should be able to cast the `predicate` to the `physical_file_schema` and use that for pruning,
+            //   which would be much cheaper than casting the actual data.
             let mut physical_file_schema = Arc::clone(reader_metadata.schema());
+            let filter_schema =
+                merge_schemas(&logical_file_schema, &physical_file_schema);
+
+            // Try to rewrite the predicate using our filter expression rewriter
+            // This must happen before build_row_filter and other subsequent steps
+            // so that they all use the rewritten predicate if it was rewritten.
+            if let Some(original_predicate) = predicate.clone() {
+                if let Some(filter_rewriter) = filter_expression_rewriter.as_ref() {
+                    if let Ok(mut rewritten) = filter_rewriter
+                        .rewrite(Arc::clone(&filter_schema), original_predicate)
+                    {
+                        // Rewrite the filter columns to match the column indexes
+                        rewritten =
+                            reassign_predicate_columns(rewritten, &filter_schema, false)?;
+                        // Update the predicate to the rewritten version
+                        predicate = Some(rewritten);
+                    }
+                }
+            }
 
             // The schema loaded from the file may not be the same as the
             // desired schema (for example if we want to instruct the parquet
             // reader to read strings using Utf8View instead). Update if necessary
-            if let Some(merged) =
-                apply_file_schema_type_coercions(&table_schema, &physical_file_schema)
-            {
+            if let Some(merged) = apply_file_schema_type_coercions(
+                &logical_file_schema,
+                &physical_file_schema,
+            ) {
                 physical_file_schema = Arc::new(merged);
                 options = options.with_schema(Arc::clone(&physical_file_schema));
                 reader_metadata = ArrowReaderMetadata::try_new(
@@ -178,14 +214,19 @@ impl FileOpener for ParquetOpener {
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 predicate.as_ref(),
-                &physical_file_schema,
+                &filter_schema,
                 &predicate_creation_errors,
             );
 
             // The page index is not stored inline in the parquet footer so the
             // code above may not have read the page index structures yet. If we
             // need them for reading and they aren't yet loaded, we need to load them now.
-            if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
+            if should_enable_page_index(
+                enable_page_index,
+                predicate.as_ref(),
+                page_pruning_predicate.as_ref(),
+                filter_expression_rewriter.as_ref(),
+            ) {
                 reader_metadata = load_page_index(
                     reader_metadata,
                     &mut async_file_reader,
@@ -215,7 +256,7 @@ impl FileOpener for ParquetOpener {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
                     &physical_file_schema,
-                    &table_schema,
+                    &filter_schema,
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
@@ -439,14 +480,42 @@ async fn load_page_index<T: AsyncFileReader>(
     }
 }
 
+/// Decide if we should enable the page index based on the provided parameters.
+/// If disabled we avoid loading the page index which may save significant IO downloading the data and CPU decoding it.
+/// If enabled we load the page index, even if we may end up not using it.
 fn should_enable_page_index(
     enable_page_index: bool,
-    page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
+    predicate: Option<&Arc<dyn PhysicalExpr>>,
+    page_pruning_predicate: Option<&Arc<PagePruningAccessPlanFilter>>,
+    file_filter_expr_rewriter: Option<&Arc<dyn FileExpressionRewriter>>,
 ) -> bool {
-    enable_page_index
-        && page_pruning_predicate.is_some()
+    // If the user explicly disabled page indexes don't load them even if we could use them.
+    if !enable_page_index {
+        return false;
+    }
+    // Now we try to decide if we can use the page index or if it would be pointless to load it.
+    if predicate.is_some() && file_filter_expr_rewriter.is_some() {
+        // If we have a predicate and a filter rewriter we need to load the page index in case the filter rewriter
+        // rewrites the predicate to one that can be pushed down to the page index, even if the original predicate can't.
+        return true;
+    }
+    // Only load the page index if we have a pruning predicate that can be pushed down to the page index.
+    page_pruning_predicate.is_some()
         && page_pruning_predicate
             .as_ref()
             .map(|p| p.filter_number() > 0)
             .unwrap_or(false)
+}
+
+/// Merges two schemas, ensuring that fields from the secondary schema
+/// are added to the primary schema only if they do not already exist
+/// in the primary schema.
+fn merge_schemas(primary: &SchemaRef, secondary: &SchemaRef) -> SchemaRef {
+    let mut merged_fields = primary.fields().to_vec();
+    for field in secondary.fields() {
+        if !merged_fields.iter().any(|f| f.name() == field.name()) {
+            merged_fields.push(Arc::clone(field));
+        }
+    }
+    Arc::new(Schema::new(merged_fields))
 }
