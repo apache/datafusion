@@ -690,6 +690,31 @@ SELECT c2, var_samp(c12) FILTER (WHERE c12 > 0.95) FROM aggregate_test_100 GROUP
 4 NULL
 5 NULL
 
+statement ok
+CREATE TABLE t (
+  a DOUBLE,
+  b BIGINT,
+  c INT
+) AS VALUES
+(1.0, 10, -5),
+(2.0, 20, -5),
+(3.0, 20, 4);
+
+# https://github.com/apache/datafusion/issues/15291
+query III
+WITH s AS (
+    SELECT
+        COUNT(a) FILTER (WHERE (b * b) - 3600 <= b),
+	COUNT(a) FILTER (WHERE (b * b) - 3000 <= b AND (c >= 0)),
+	COUNT(a) FILTER (WHERE (b * b) - 3000 <= b AND (c >= 0) AND (c >= 0))
+    FROM t
+) SELECT * FROM s
+----
+3 1 1
+
+statement ok
+DROP TABLE t
+
 # Restore the default dialect
 statement ok
 set datafusion.sql_parser.dialect = 'Generic';
