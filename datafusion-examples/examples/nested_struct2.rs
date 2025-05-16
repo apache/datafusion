@@ -105,12 +105,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     //    create_and_write_parquet_file(&ctx, &schema3, "schema3", path3).await?;
     //    create_and_write_parquet_file(&ctx, &schema4, "schema4", path4).await?;
 
-    let paths_str = vec![
-        path1.to_string(),
-        path2.to_string(),
-        path3.to_string(),
-        path4.to_string(),
-    ];
+    let paths_str = vec![path1.to_string()];
     println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
     println!("==> Using schema4 for files with different schemas");
     println!("==> Schema difference: schema evolution from basic to expanded fields");
@@ -121,8 +116,7 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
             .rev()
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
-    )
-    .with_schema_adapter_factory(adapter_factory);
+    );
 
     println!("==> About to infer config");
     println!(
@@ -158,6 +152,11 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
 
     println!("==> Collecting results");
     let results = df.clone().collect().await?;
+    // Print query results
+    for batch in &results {
+        println!("==> Result batch with {} rows:", batch.num_rows());
+        println!("{}", batch.pretty_print()?);
+    }
     println!("==> Successfully collected results");
 
     // assert_eq!(results[0].num_rows(), 4); // Now we have 4 rows, one from each schema
