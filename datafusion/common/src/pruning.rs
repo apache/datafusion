@@ -163,7 +163,7 @@ impl PartitionPruningStatistics {
     ///   The outer vector represents the containers while the inner
     ///   vector represents the partition values for each column.
     ///   Note that this is the **opposite** of the order of the
-    ///   partition columns in [`PartitionPruningStatistics::partition_schema`].
+    ///   partition columns in `PartitionPruningStatistics::partition_schema`.
     /// * `partition_schema`: The schema of the partition columns.
     ///   This must **not** be the schema of the entire file or table:
     ///   instead it must only be the schema of the partition columns,
