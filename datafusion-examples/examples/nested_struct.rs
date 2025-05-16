@@ -96,10 +96,10 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     create_and_write_parquet_file(&ctx, &schema4, "schema4", path4).await?;
 
     let paths_str = vec![
-        path1.to_string(),
-        path2.to_string(),
-        path3.to_string(),
         path4.to_string(),
+        path3.to_string(),
+        path2.to_string(),
+        path1.to_string(),
     ];
     println!("==> Creating ListingTableConfig for paths: {paths_str:?}");
     println!("==> Using schema4 for files with different schemas");
@@ -110,11 +110,10 @@ async fn test_datafusion_schema_evolution() -> Result<(), Box<dyn Error>> {
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
             .into_iter()
-            .rev()
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
     )
-    .with_schema(schema4.as_ref().clone().into())
+    // .with_schema(schema4.as_ref().clone().into())
     .with_schema_adapter_factory(adapter_factory);
 
     println!("==> About to infer config");
@@ -281,12 +280,13 @@ fn create_schema3() -> Arc<Schema> {
 /// Creates a schema with HTTP request fields, expanded query_params struct with additional fields, and an error field
 fn create_schema4() -> Arc<Schema> {
     // Get the base schema from create_schema1 (we can't use schema3 directly since we need to modify query_params)
-    let schema1 = create_schema1();
+    let schema3 = create_schema3();
 
     // Convert to a vector of fields
-    let mut fields = schema1
+    let mut fields = schema3
         .fields()
         .iter()
+        .filter(|f| f.name() != "query_params")
         .map(|f| f.as_ref().clone())
         .collect::<Vec<Field>>();
 
@@ -304,9 +304,6 @@ fn create_schema4() -> Arc<Schema> {
         ),
         true,
     ));
-
-    // Add the error field
-    fields.push(Field::new("error", DataType::Utf8, true));
 
     // Create a new schema with the extended fields
     Arc::new(Schema::new(fields))
