@@ -221,15 +221,14 @@ impl OrderingEquivalenceClass {
         ];
 
         for ordering in self.iter() {
-            if let Some(leading_ordering) = ordering.first() {
-                if leading_ordering.expr.eq(expr) {
-                    let opt = (
-                        leading_ordering.options.descending,
-                        leading_ordering.options.nulls_first,
-                    );
-                    constantness_defining_pairs[0].remove(&opt);
-                    constantness_defining_pairs[1].remove(&opt);
-                }
+            let leading_ordering = ordering.first();
+            if leading_ordering.expr.eq(expr) {
+                let opt = (
+                    leading_ordering.options.descending,
+                    leading_ordering.options.nulls_first,
+                );
+                constantness_defining_pairs[0].remove(&opt);
+                constantness_defining_pairs[1].remove(&opt);
             }
         }
 

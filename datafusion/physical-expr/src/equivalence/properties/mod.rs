@@ -994,7 +994,7 @@ impl EquivalenceProperties {
                 // Append current ordering on top its dependencies:
                 for ordering in prefixes.iter_mut() {
                     if let Some(target) = &node.target {
-                        ordering.push(target.clone())
+                        ordering.push(target.clone());
                     }
                 }
             }

@@ -31,7 +31,6 @@ use datafusion_common::{HashMap, JoinType, Result, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
-use itertools::Itertools;
 
 /// Represents whether a constant expression's value is uniform or varies across
 /// partitions. Has two variants:
@@ -529,7 +528,6 @@ impl EquivalenceGroup {
     /// - Replacing sections that belong to some equivalence class in the
     ///   with the first entry in the matching equivalence class.
     /// - Removing expressions that have a constant value.
-    /// - Removing duplicate sort expressions.
     ///
     /// If columns `a` and `b` are known to be equal, `d` is known to be a
     /// constant, and `sort_exprs` is `[b ASC, d DESC, c ASC, a ASC]`, this
@@ -542,7 +540,6 @@ impl EquivalenceGroup {
             .into_iter()
             .map(|sort_expr| self.normalize_sort_expr(sort_expr))
             .filter(|sort_expr| self.is_expr_constant(&sort_expr.expr).is_none())
-            .unique_by(|sort_expr| Arc::clone(&sort_expr.expr))
     }
 
     /// Normalizes the given sort requirement according to this group. The
@@ -562,7 +559,6 @@ impl EquivalenceGroup {
     /// - Replacing sections that belong to some equivalence class in the
     ///   with the first entry in the matching equivalence class.
     /// - Removing expressions that have a constant value.
-    /// - Removing duplicate sort expressions.
     ///
     /// If columns `a` and `b` are known to be equal, `d` is known to be a
     /// constant, and `sort_reqs` is `[b ASC, d DESC, c ASC, a ASC]`, this
@@ -575,7 +571,6 @@ impl EquivalenceGroup {
             .into_iter()
             .map(|req| self.normalize_sort_requirement(req))
             .filter(|req| self.is_expr_constant(&req.expr).is_none())
-            .unique_by(|req| Arc::clone(&req.expr))
     }
 
     /// Perform an indirect projection of `expr` by consulting the equivalence

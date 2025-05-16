@@ -16,7 +16,6 @@
 // under the License.
 
 use std::iter::Peekable;
-use std::slice::Iter;
 use std::sync::Arc;
 
 use super::EquivalenceProperties;
@@ -279,9 +278,9 @@ impl UnionEquivalentOrderingBuilder {
 
 /// Advances two iterators in parallel if the next expressions are equal.
 /// Otherwise, the iterators are left unchanged and returns `None`.
-fn advance_if_match(
-    iter1: &mut Peekable<Iter<PhysicalSortExpr>>,
-    iter2: &mut Peekable<Iter<PhysicalSortExpr>>,
+fn advance_if_match<'a>(
+    iter1: &mut Peekable<impl Iterator<Item = &'a PhysicalSortExpr>>,
+    iter2: &mut Peekable<impl Iterator<Item = &'a PhysicalSortExpr>>,
 ) -> Option<PhysicalSortExpr> {
     let (expr1, expr2) = (iter1.peek()?, iter2.peek()?);
     if expr1.eq(expr2) {
@@ -294,8 +293,8 @@ fn advance_if_match(
 
 /// Advances the iterator with a constant if the next expression matches one of
 /// the constants. Otherwise, the iterator is left unchanged and returns `None`.
-fn advance_if_matches_constant(
-    iter: &mut Peekable<Iter<PhysicalSortExpr>>,
+fn advance_if_matches_constant<'a>(
+    iter: &mut Peekable<impl Iterator<Item = &'a PhysicalSortExpr>>,
     constants: &[ConstExpr],
 ) -> Option<PhysicalSortExpr> {
     let expr = iter.peek()?;

@@ -147,7 +147,7 @@ impl<'a> DependencyEnumerator<'a> {
                 };
 
                 for ordering in orderings.iter_mut() {
-                    ordering.push(target.clone())
+                    ordering.push(target.clone());
                 }
                 orderings
             })
@@ -652,7 +652,7 @@ mod tests {
             let leading_orderings = eq_properties
                 .oeq_class()
                 .iter()
-                .flat_map(|ordering| ordering.first().cloned())
+                .map(|ordering| ordering.first().clone())
                 .collect::<Vec<_>>();
             let expr_props = eq_properties.get_expr_properties(Arc::clone(&expr));
             let err_msg = format!(
@@ -1347,7 +1347,7 @@ mod tests {
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_e))],
         ]);
 
-        // Initial ordering: [b ASC, c ASC]
+        // New ordering: [b ASC, c ASC]
         let new_order = vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_b)),
             PhysicalSortExpr::new_default(Arc::clone(&col_c)),
