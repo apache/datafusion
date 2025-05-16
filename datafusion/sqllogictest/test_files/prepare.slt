@@ -264,16 +264,19 @@ WHERE run_id = 'foo'
 ORDER BY random()
 LIMIT $1
 
-query I
+query error
 EXECUTE get_N_rand_ints_from_last_run(1);
 ----
-1
+DataFusion error: Internal error: PhysicalOptimizer rule 'LimitPushdown' failed. Schema mismatch. Expected original schema: Schema { fields: [Field { name: "id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, got new schema: Schema { fields: [Field { name: "id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "run_id", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
-query I
+
+query error
 EXECUTE get_N_rand_ints_from_last_run(2);
 ----
-1
-1
+DataFusion error: Internal error: PhysicalOptimizer rule 'LimitPushdown' failed. Schema mismatch. Expected original schema: Schema { fields: [Field { name: "id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, got new schema: Schema { fields: [Field { name: "id", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "run_id", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 statement ok
 DEALLOCATE get_N_rand_ints_from_last_run;
