@@ -17,7 +17,6 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::page_filter::PagePruningAccessPlanFilter;
@@ -26,15 +25,16 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_datasource::file_expr_rewriter::FileExpressionRewriter;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow::datatypes::{Field, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{Schema, SchemaBuilder, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, Column, Result, SchemaError};
+use datafusion_common::{exec_err, Result};
+use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -58,8 +58,8 @@ pub(super) struct ParquetOpener {
     pub limit: Option<usize>,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
-    /// Schema of the output table
-    pub table_schema: SchemaRef,
+    /// Schema of the file as far as the rest of the system is concerned.
+    pub logical_file_schema: SchemaRef,
     /// Optional hint for how large the initial request to read parquet metadata
     /// should be
     pub metadata_size_hint: Option<usize>,
@@ -109,10 +109,10 @@ impl FileOpener for ParquetOpener {
         let batch_size = self.batch_size;
 
         let projected_schema =
-            SchemaRef::from(self.table_schema.project(&self.projection)?);
+            SchemaRef::from(self.logical_file_schema.project(&self.projection)?);
         let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
         let mut predicate = self.predicate.clone();
-        let table_schema = Arc::clone(&self.table_schema);
+        let logical_file_schema = Arc::clone(&self.logical_file_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let coerce_int96 = self.coerce_int96;
@@ -145,24 +145,31 @@ impl FileOpener for ParquetOpener {
                     .await?;
 
             // Note about schemas: we are actually dealing with **3 different schemas** here:
-            // - The table schema as defined by the TableProvider. This is what the user sees, what they get when they `SELECT * FROM table`, etc.
-            // - The "virtual" file schema: this is the table schema minus any hive partition columns and projections. This is what the file schema is coerced to.
-            // - The physical file schema: this is the schema as defined by the parquet file. This is what the parquet file actually contains.
+            // - `table_schema` as defined by the TableProvider.
+            //   This is what the user sees, what they get when they `SELECT * FROM table`, etc.
+            //   We don't actually have this schema here, but we do have `logical_file_schema` which is the same as the table schema minus any partition columns and projections.
+            // - `logical_file_schema`: this is the table schema minus any hive partition columns and projections.
+            // - `physical_file_schema`: this is the schema as defined by the parquet file.
+            // - `filter_schema`: this is the schema that we use to evaluate the filter predicates.
+            //   It is currently the union of the `table_schema` and the `physical_file_schema` in that order.
+            //   That is: it is all of the columns in the `table_schema` and any columns that are in the `physical_file_schema` but not in the `table_schema`.
+            //   In the future we may flip this, which mainly matters if there's a discrepancy in the type of a column in the `table_schema` and the `physical_file_schema`.
+            //   Currently we have to cast to the table schema, and will always have to do so for any data we return,
+            //   but for pruning that happens inside of `ParquetOpener` we should be able to cast the `predicate` to the `physical_file_schema` and use that for pruning,
+            //   which would be much cheaper than casting the actual data.
             let mut physical_file_schema = Arc::clone(reader_metadata.schema());
-            let mut filter_schema = Arc::clone(&physical_file_schema);
+            let mut filter_schema = merge_schemas(&logical_file_schema, &physical_file_schema);
 
             // Try to rewrite the predicate using our filter expression rewriter
             // This must happen before build_row_filter and other subsequent steps
             // so that they all use the rewritten predicate if it was rewritten.
             if let Some(original_predicate) = predicate.clone() {
                 if let Some(filter_rewriter) = filter_expression_rewriter.as_ref() {
-                    if let Ok(rewritten) = filter_rewriter
+                    if let Ok(mut rewritten) = filter_rewriter
                         .rewrite(Arc::clone(&filter_schema), original_predicate)
                     {
-                        let mut filter_schema_builder =
-                            FilterSchemaBuilder::new(&filter_schema, &table_schema);
-                        rewritten.visit(&mut filter_schema_builder)?;
-                        filter_schema = filter_schema_builder.build();
+                        // Rewrite the filter columns to match the column indexes
+                        rewritten = reassign_predicate_columns(rewritten, &filter_schema, false)?;
                         // Update the predicate to the rewritten version
                         predicate = Some(rewritten);
                     }
@@ -178,7 +185,7 @@ impl FileOpener for ParquetOpener {
             // desired schema (for example if we want to instruct the parquet
             // reader to read strings using Utf8View instead). Update if necessary
             if let Some(merged) =
-                apply_file_schema_type_coercions(&table_schema, &physical_file_schema)
+                apply_file_schema_type_coercions(&logical_file_schema, &physical_file_schema)
             {
                 physical_file_schema = Arc::new(merged);
                 options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -188,7 +195,7 @@ impl FileOpener for ParquetOpener {
                 )?;
             }
             if let Some(merged) =
-                apply_file_schema_type_coercions(&table_schema, &filter_schema)
+                apply_file_schema_type_coercions(&logical_file_schema, &filter_schema)
             {
                 filter_schema = Arc::new(merged);
             }
@@ -259,8 +266,8 @@ impl FileOpener for ParquetOpener {
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
+                    &physical_file_schema,
                     &filter_schema,
-                    &table_schema,
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
@@ -511,89 +518,18 @@ fn should_enable_page_index(
             .unwrap_or(false)
 }
 
-/// A vistor for a PhysicalExpr that collects all column references to determine what columns the expression needs to be evaluated.
-struct FilterSchemaBuilder<'schema> {
-    filter_schema_fields: BTreeSet<Arc<Field>>,
-    file_schema: &'schema Schema,
-    table_schema: &'schema Schema,
-}
-
-impl<'schema> FilterSchemaBuilder<'schema> {
-    fn new(file_schema: &'schema Schema, table_schema: &'schema Schema) -> Self {
-        Self {
-            filter_schema_fields: BTreeSet::new(),
-            file_schema,
-            table_schema,
+/// Merges two schemas, ensuring that fields from the secondary schema
+/// are added to the primary schema only if they do not already exist
+/// in the primary schema.
+fn merge_schemas(
+    primary: &SchemaRef,
+    secondary: &SchemaRef,
+) -> SchemaRef {
+    let mut merged_fields = primary.fields().to_vec();
+    for field in secondary.fields() {
+        if !merged_fields.iter().any(|f| f.name() == field.name()) {
+            merged_fields.push(field.clone());
         }
     }
-
-    fn sort_fields(
-        fields: &mut Vec<Arc<Field>>,
-        table_schema: &Schema,
-        file_schema: &Schema,
-    ) {
-        fields.sort_by_key(|f| f.name().to_string());
-        fields.dedup_by_key(|f| f.name().to_string());
-        fields.sort_by_key(|f| {
-            let table_schema_index =
-                table_schema.index_of(f.name()).unwrap_or(usize::MAX);
-            let file_schema_index = file_schema.index_of(f.name()).unwrap_or(usize::MAX);
-            (table_schema_index, file_schema_index)
-        });
-    }
-
-    fn build(self) -> SchemaRef {
-        let mut fields = self.filter_schema_fields.into_iter().collect::<Vec<_>>();
-        FilterSchemaBuilder::sort_fields(
-            &mut fields,
-            self.table_schema,
-            self.file_schema,
-        );
-        Arc::new(Schema::new(fields))
-    }
-}
-
-impl<'node> TreeNodeVisitor<'node> for FilterSchemaBuilder<'_> {
-    type Node = Arc<dyn PhysicalExpr>;
-
-    fn f_down(
-        &mut self,
-        node: &'node Arc<dyn PhysicalExpr>,
-    ) -> Result<TreeNodeRecursion> {
-        if let Some(column) = node.as_any().downcast_ref::<Column>() {
-            if let Ok(field) = self.table_schema.field_with_name(column.name()) {
-                self.filter_schema_fields.insert(Arc::new(field.clone()));
-            } else if let Ok(field) = self.file_schema.field_with_name(column.name()) {
-                self.filter_schema_fields.insert(Arc::new(field.clone()));
-            } else {
-                // valid fields are the table schema's fields + the file schema's fields, preferring the table schema's fields when there is a conflict
-                let mut valid_fields = self
-                    .table_schema
-                    .fields()
-                    .iter()
-                    .chain(self.file_schema.fields().iter())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                FilterSchemaBuilder::sort_fields(
-                    &mut valid_fields,
-                    self.table_schema,
-                    self.file_schema,
-                );
-                let valid_fields = valid_fields
-                    .into_iter()
-                    .map(|f| Column::new_unqualified(f.name()))
-                    .collect();
-                let field = Column::new_unqualified(column.name());
-                return Err(datafusion_common::DataFusionError::SchemaError(
-                    SchemaError::FieldNotFound {
-                        field: Box::new(field),
-                        valid_fields,
-                    },
-                    Box::new(None),
-                ));
-            }
-        }
-
-        Ok(TreeNodeRecursion::Continue)
-    }
+    Arc::new(Schema::new(merged_fields))
 }

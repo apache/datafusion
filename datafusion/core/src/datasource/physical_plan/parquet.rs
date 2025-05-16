@@ -2111,6 +2111,9 @@ mod tests {
     #[tokio::test]
     async fn test_filter_pushdown_rewrite_into_shredded_struct_column() {
         // Create a schema with a struct column
+        // Structs may already be columnar in Parquet, but imagine this is JSON, a dense union, etc.
+        // where it would be much more expensive to read a single key / member than for a struct.
+        // Structs are just easier to work with in this example.
         let user_info_fields = Fields::from(vec![
             Field::new("name", DataType::Utf8, false),
             Field::new("age", DataType::Int32, false),

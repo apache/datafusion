@@ -505,7 +505,7 @@ impl FileSource for ParquetSource {
             limit: base_config.limit,
             predicate: self.predicate.clone(),
             filter_expression_rewriter: self.filter_expression_rewriter.clone(),
-            table_schema: Arc::clone(&base_config.file_schema),
+            logical_file_schema: Arc::clone(&base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,

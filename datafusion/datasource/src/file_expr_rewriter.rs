@@ -22,7 +22,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_physical_plan::PhysicalExpr;
 
-/// Rewrite an expressions to take into account this file's particular schema.
+/// Rewrite an expressions to take into account the physical schema of a file.
 /// This can be used to evaluate expressions against shredded variant columns or columns that pre-compute expressions (e.g. `day(timestamp)`).
 pub trait FileExpressionRewriter: Debug + Send + Sync {
     /// Rewrite an an expression in the context of a file schema.
