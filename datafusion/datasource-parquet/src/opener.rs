@@ -514,7 +514,7 @@ fn merge_schemas(primary: &SchemaRef, secondary: &SchemaRef) -> SchemaRef {
     let mut merged_fields = primary.fields().to_vec();
     for field in secondary.fields() {
         if !merged_fields.iter().any(|f| f.name() == field.name()) {
-            merged_fields.push(field.clone());
+            merged_fields.push(Arc::clone(field));
         }
     }
     Arc::new(Schema::new(merged_fields))
