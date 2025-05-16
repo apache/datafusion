@@ -156,10 +156,14 @@ impl TSVFileFactory {
 
 impl FileFormatFactory for TSVFileFactory {
     fn options(&self) -> (Option<FormatOptions>, ConfigFileType) {
-        todo!()
+        unimplemented!(
+            "Use FileFormatFactory::create() directly to create the FileFormat"
+        )
     }
     fn default_from_options(&self, _options: FormatOptions) -> Arc<dyn FileFormat> {
-        todo!()
+        unimplemented!(
+            "Use FileFormatFactory::create() directly to create the FileFormat"
+        )
     }
 
     fn create(

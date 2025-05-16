@@ -23,13 +23,13 @@ use datafusion::common::config::{
     ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Visit,
 };
 use datafusion::common::{config_err, exec_datafusion_err, exec_err};
+use datafusion::config::Extensions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_credential_types::provider::ProvideCredentials;
-use datafusion::config::Extensions;
 use object_store::aws::{AmazonS3Builder, AwsCredential};
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::http::HttpBuilder;

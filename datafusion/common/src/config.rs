@@ -1444,14 +1444,11 @@ impl TableOptions {
     /// # Parameters
     ///
     /// * `format`: The file format to use (e.g., CSV, Parquet).
-    pub fn set_config_format(
-        &mut self,
-        format: ConfigFileType,
-    ) -> FileSpecificTableOptions {
+    pub fn get_table_format_options(&self, format: ConfigFileType) -> TableFormatOptions {
         match format {
             ConfigFileType::CSV => {
                 let options = self.csv.clone();
-                FileSpecificTableOptions::Csv {
+                TableFormatOptions::Csv {
                     options,
                     extensions: self.extensions.clone(),
                 }
@@ -1459,14 +1456,14 @@ impl TableOptions {
             #[cfg(feature = "parquet")]
             ConfigFileType::PARQUET => {
                 let options = self.parquet.clone();
-                FileSpecificTableOptions::Parquet {
+                TableFormatOptions::Parquet {
                     options,
                     extensions: self.extensions.clone(),
                 }
             }
             ConfigFileType::JSON => {
                 let options = self.json.clone();
-                FileSpecificTableOptions::Json {
+                TableFormatOptions::Json {
                     options,
                     extensions: self.extensions.clone(),
                 }
@@ -1557,7 +1554,7 @@ impl TableOptions {
 
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
-pub enum FileSpecificTableOptions {
+pub enum TableFormatOptions {
     Csv {
         options: CsvOptions,
         extensions: Extensions,
@@ -1573,7 +1570,7 @@ pub enum FileSpecificTableOptions {
     },
 }
 
-impl ConfigField for FileSpecificTableOptions {
+impl ConfigField for TableFormatOptions {
     /// Visits configuration settings for the current file format, or all formats if none is selected.
     ///
     /// This method adapts the behavior based on whether a file format is currently selected in `current_format`.
@@ -1582,13 +1579,13 @@ impl ConfigField for FileSpecificTableOptions {
     fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
         match self {
             #[cfg(feature = "parquet")]
-            FileSpecificTableOptions::Parquet { options, .. } => {
+            TableFormatOptions::Parquet { options, .. } => {
                 options.visit(v, "format", "");
             }
-            FileSpecificTableOptions::Csv { options, .. } => {
+            TableFormatOptions::Csv { options, .. } => {
                 options.visit(v, "format", "");
             }
-            FileSpecificTableOptions::Json { options, .. } => {
+            TableFormatOptions::Json { options, .. } => {
                 options.visit(v, "format", "");
             }
         }
@@ -1624,7 +1621,7 @@ impl ConfigField for FileSpecificTableOptions {
     }
 }
 
-impl FileSpecificTableOptions {
+impl TableFormatOptions {
     /// Constructs a new instance of `TableOptions` with JSON file type and default settings.
     ///
     /// # Returns
@@ -1664,7 +1661,7 @@ impl FileSpecificTableOptions {
 
     pub fn csv_options_or_default(&self) -> CsvOptions {
         match self {
-            FileSpecificTableOptions::Csv { options, .. } => options.clone(),
+            TableFormatOptions::Csv { options, .. } => options.clone(),
             _ => CsvOptions::default(),
         }
     }
@@ -1672,28 +1669,28 @@ impl FileSpecificTableOptions {
     #[cfg(feature = "parquet")]
     pub fn parquet_options_or_default(&self) -> TableParquetOptions {
         match self {
-            FileSpecificTableOptions::Parquet { options, .. } => options.clone(),
+            TableFormatOptions::Parquet { options, .. } => options.clone(),
             _ => TableParquetOptions::default(),
         }
     }
 
     pub fn json_options_or_default(&self) -> JsonOptions {
         match self {
-            FileSpecificTableOptions::Json { options, .. } => options.clone(),
+            TableFormatOptions::Json { options, .. } => options.clone(),
             _ => JsonOptions::default(),
         }
     }
 
     pub fn format_options(&self) -> FormatOptions {
         match self {
-            FileSpecificTableOptions::Json { options, .. } => {
+            TableFormatOptions::Json { options, .. } => {
                 FormatOptions::JSON(options.clone())
             }
-            FileSpecificTableOptions::Csv { options, .. } => {
+            TableFormatOptions::Csv { options, .. } => {
                 FormatOptions::CSV(options.clone())
             }
             #[cfg(feature = "parquet")]
-            FileSpecificTableOptions::Parquet { options, .. } => {
+            TableFormatOptions::Parquet { options, .. } => {
                 FormatOptions::PARQUET(options.clone())
             }
         }
@@ -1701,16 +1698,16 @@ impl FileSpecificTableOptions {
 
     pub fn from_format_options(options: FormatOptions) -> Self {
         match options {
-            FormatOptions::JSON(options) => FileSpecificTableOptions::Json {
+            FormatOptions::JSON(options) => TableFormatOptions::Json {
                 options,
                 extensions: Default::default(),
             },
-            FormatOptions::CSV(options) => FileSpecificTableOptions::Csv {
+            FormatOptions::CSV(options) => TableFormatOptions::Csv {
                 options,
                 extensions: Default::default(),
             },
             #[cfg(feature = "parquet")]
-            FormatOptions::PARQUET(options) => FileSpecificTableOptions::Parquet {
+            FormatOptions::PARQUET(options) => TableFormatOptions::Parquet {
                 options,
                 extensions: Default::default(),
             },
@@ -1722,10 +1719,10 @@ impl FileSpecificTableOptions {
 
     pub fn extensions(&self) -> &Extensions {
         match self {
-            FileSpecificTableOptions::Csv { extensions, .. } => extensions,
+            TableFormatOptions::Csv { extensions, .. } => extensions,
             #[cfg(feature = "parquet")]
-            FileSpecificTableOptions::Parquet { extensions, .. } => extensions,
-            FileSpecificTableOptions::Json { extensions, .. } => extensions,
+            TableFormatOptions::Parquet { extensions, .. } => extensions,
+            TableFormatOptions::Json { extensions, .. } => extensions,
         }
     }
 
@@ -1748,7 +1745,7 @@ impl FileSpecificTableOptions {
             "format" => ConfigField::set(self, key, value),
             "execution" => Ok(()),
             _ => match self {
-                FileSpecificTableOptions::Csv { extensions, .. } => {
+                TableFormatOptions::Csv { extensions, .. } => {
                     let Some(e) = extensions.0.get_mut(prefix) else {
                         return _config_err!(
                             "Could not find config namespace \"{prefix}\""
@@ -1757,7 +1754,7 @@ impl FileSpecificTableOptions {
                     e.0.set(key, value)
                 }
                 #[cfg(feature = "parquet")]
-                FileSpecificTableOptions::Parquet { extensions, .. } => {
+                TableFormatOptions::Parquet { extensions, .. } => {
                     let Some(e) = extensions.0.get_mut(prefix) else {
                         return _config_err!(
                             "Could not find config namespace \"{prefix}\""
@@ -1765,7 +1762,7 @@ impl FileSpecificTableOptions {
                     };
                     e.0.set(key, value)
                 }
-                FileSpecificTableOptions::Json { extensions, .. } => {
+                TableFormatOptions::Json { extensions, .. } => {
                     let Some(e) = extensions.0.get_mut(prefix) else {
                         return _config_err!(
                             "Could not find config namespace \"{prefix}\""
@@ -1779,14 +1776,14 @@ impl FileSpecificTableOptions {
 
     fn visit_format(&self, visitor: &mut impl Visit) {
         match self {
-            FileSpecificTableOptions::Csv { options, .. } => {
+            TableFormatOptions::Csv { options, .. } => {
                 options.visit(visitor, "format", "")
             }
             #[cfg(feature = "parquet")]
-            FileSpecificTableOptions::Parquet { options, .. } => {
+            TableFormatOptions::Parquet { options, .. } => {
                 options.visit(visitor, "format", "")
             }
-            FileSpecificTableOptions::Json { options, .. } => {
+            TableFormatOptions::Json { options, .. } => {
                 options.visit(visitor, "format", "")
             }
         }
@@ -2261,7 +2258,7 @@ mod tests {
 
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, CsvOptions, ExtensionOptions,
-        Extensions, FileSpecificTableOptions, TableOptions,
+        Extensions, TableFormatOptions, TableOptions,
     };
 
     #[derive(Default, Debug, Clone)]
@@ -2319,13 +2316,13 @@ mod tests {
     fn alter_test_extension_config() {
         let mut extension = Extensions::new();
         extension.insert(TestExtensionConfig::default());
-        let mut table_config = FileSpecificTableOptions::Csv {
+        let mut table_config = TableFormatOptions::Csv {
             options: CsvOptions::default(),
             extensions: extension,
         };
         table_config.set("format.delimiter", ";").unwrap();
         table_config.set("test.bootstrap.servers", "asd").unwrap();
-        let FileSpecificTableOptions::Csv {
+        let TableFormatOptions::Csv {
             options,
             extensions,
         } = table_config
@@ -2342,7 +2339,7 @@ mod tests {
 
     #[test]
     fn csv_u8_table_options() {
-        let mut table_config = FileSpecificTableOptions::new_csv();
+        let mut table_config = TableFormatOptions::new_csv();
         table_config.set("format.delimiter", ";").unwrap();
         table_config.set("format.escape", "\"").unwrap();
         let options = table_config.csv_options_or_default();
@@ -2387,7 +2384,7 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options() {
-        let mut table_config = FileSpecificTableOptions::new_parquet();
+        let mut table_config = TableFormatOptions::new_parquet();
         table_config
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
@@ -2401,7 +2398,7 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options_config_entry() {
-        let mut table_config = FileSpecificTableOptions::new_parquet();
+        let mut table_config = TableFormatOptions::new_parquet();
         table_config
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
@@ -2414,7 +2411,7 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options_config_metadata_entry() {
-        let mut table_config = FileSpecificTableOptions::new_parquet();
+        let mut table_config = TableFormatOptions::new_parquet();
         table_config.set("format.metadata::key1", "").unwrap();
         table_config.set("format.metadata::key2", "value2").unwrap();
         table_config
