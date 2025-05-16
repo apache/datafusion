@@ -7144,3 +7144,160 @@ SELECT max(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOW
 [4, 5]
 [4, 5]
 [2, 3]
+
+statement ok
+CREATE TABLE LARGEVALUES
+AS SELECT
+  arrow_cast(column1, 'LargeList(Int64)') AS column1,
+  arrow_cast(column1, 'LargeList(Int64)') AS column1,
+  arrow_cast(column1, 'LargeList(Int64)') AS column1,
+FROM VALUES
+;
+
+# Min/Max with list over integers
+query ??
+SELECT MIN(column1), MAX(column1) FROM LARGEVALUES
+([1, 2, 3]),
+([1, 2]);
+----
+[1, 2] [1, 2, 3]
+
+# Min/Max with lists over strings
+query ??
+SELECT MIN(column1), MAX(column1) FROM LARGEVALUES
+(['a', 'b', 'c']),
+(['a', 'b']);
+----
+[a, b] [a, b, c]
+
+# Min/Max with list over booleans
+query ??
+SELECT MIN(column1), MAX(column1) FROM LARGEVALUES
+([true, true, false]),
+([false, true]);
+----
+[false, true] [true, true, false]
+
+# Min/Max with list over nullable integers
+query ??
+SELECT MIN(column1), MAX(column1) FROM LARGEVALUES
+([NULL, 1, 2]),
+([1, 2]);
+----
+[1, 2] [NULL, 1, 2]
+
+# Min/Max list with different lengths and nulls
+query ??
+SELECT MIN(column1), MAX(column1) FROM LARGEVALUES
+([1, NULL, 3]),
+([1, 2, 3, 4]),
+([1, 2]);
+----
+[1, 2] [1, NULL, 3]
+
+# Min/Max list with only NULLs
+query ??
+SELECT MIN(column1), MAX(column1) FROM LARGEVALUES
+([NULL, NULL]),
+([NULL]);
+----
+[NULL] [NULL, NULL]
+
+# Min/Max list with empty lists
+query ??
+SELECT MIN(column1), MAX(column1) FROM LARGEVALUES
+([]),
+([1]),
+([]);
+----
+[] [1]
+
+# Min/Max list of varying types (integers and NULLs)
+query ??
+SELECT MIN(column1), MAX(column1) FROM LARGEVALUES
+([1, 2, 3]),
+([NULL, 2, 3]),
+([1, 2, NULL]);
+----
+[1, 2, 3] [NULL, 2, 3]
+
+# Min/Max list grouped by key with NULLs and differing lengths
+query I?? rowsort
+SELECT column1, MIN(column2), MAX(column2) FROM LARGEVALUES
+(0, [1, NULL, 3]),
+(0, [1, 2, 3, 4]),
+(1, [1, 2]),
+(1, [NULL, 5]),
+(1, [])
+GROUP BY column1;
+----
+0 [1, 2, 3, 4] [1, NULL, 3]
+1 [] [NULL, 5]
+
+# Min/Max list grouped by key with NULLs and differing lengths
+query I?? rowsort
+SELECT column1, MIN(column2), MAX(column2) FROM LARGEVALUES
+(0, [NULL]),
+(0, [NULL, NULL]),
+(1, [NULL])
+GROUP BY column1;
+----
+0 [NULL] [NULL, NULL]
+1 [NULL] [NULL]
+
+# Min/Max grouped list with empty and non-empty
+query I?? rowsort
+SELECT column1, MIN(column2), MAX(column2) FROM LARGEVALUES
+(0, []),
+(0, [1]),
+(0, []),
+(1, [5, 6]),
+(1, [])
+GROUP BY column1;
+----
+0 [] [1]
+1 [] [5, 6]
+
+# Min/Max over lists with a window function
+query ?
+SELECT min(column1) OVER (ORDER BY column1) FROM LARGEVALUES
+([1, 2, 3]),
+([1, 2, 3]),
+([2, 3])
+----
+[1, 2, 3]
+[1, 2, 3]
+[1, 2, 3]
+
+# Min/Max over lists with a window function and nulls
+query ?
+SELECT min(column1) OVER (ORDER BY column1) FROM LARGEVALUES
+(NULL),
+([4, 5]),
+([2, 3])
+----
+[2, 3]
+[2, 3]
+[2, 3]
+
+# Min/Max over lists with a window function, nulls and ROWS BETWEEN statement
+query ?
+SELECT min(column1) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM LARGEVALUES
+(NULL),
+([4, 5]),
+([2, 3])
+----
+[2, 3]
+[2, 3]
+[4, 5]
+
+# Min/Max over lists with a window function using a different column
+query ?
+SELECT max(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM LARGEVALUES
+([1, 2, 3], [4, 5]),
+([2, 3], [2, 3]),
+([1, 2, 3], NULL)
+----
+[4, 5]
+[4, 5]
+[2, 3]

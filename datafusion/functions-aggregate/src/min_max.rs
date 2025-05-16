@@ -618,6 +618,10 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         }
         DataType::Struct(_) => min_max_batch_generic(values, Ordering::Greater)?,
         DataType::List(_) => min_max_batch_generic(values, Ordering::Greater)?,
+        DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Greater)?,
+        DataType::FixedSizeList(_, _) => {
+            min_max_batch_generic(values, Ordering::Greater)?
+        }
         DataType::Dictionary(_, _) => {
             let values = values.as_any_dictionary().values();
             min_batch(values)?
@@ -716,6 +720,8 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         }
         DataType::Struct(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
+        DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Less)?,
+        DataType::FixedSizeList(_, _) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::Dictionary(_, _) => {
             let values = values.as_any_dictionary().values();
             max_batch(values)?
@@ -1004,6 +1010,23 @@ macro_rules! min_max {
             ) => {
                 min_max_generic!(lhs, rhs, $OP)
             }
+
+
+            (
+                lhs @ ScalarValue::LargeList(_),
+                rhs @ ScalarValue::LargeList(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
+
+            (
+                lhs @ ScalarValue::FixedSizeList(_),
+                rhs @ ScalarValue::FixedSizeList(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
             e => {
                 return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
