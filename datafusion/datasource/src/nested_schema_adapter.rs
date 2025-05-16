@@ -212,21 +212,45 @@ impl SchemaAdapter for NestedStructSchemaAdapter {
         &self,
         file_schema: &Schema,
     ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        // Adapt the file schema to match the target schema structure
-        let adapted_schema = self.adapt_schema(Arc::new(file_schema.clone()))?;
+        let mut projection = Vec::with_capacity(file_schema.fields().len());
+        let mut field_mappings = vec![None; self.projected_table_schema.fields().len()];
 
-        // Create a mapper that can transform data from file schema to the adapted schema
-        let mapper = self.create_schema_mapping(file_schema, &adapted_schema)?;
-
-        // Collect column indices to project from the file
-        let mut projection = Vec::new();
-        for field_name in file_schema.fields().iter().map(|f| f.name()) {
-            if let Ok(idx) = file_schema.index_of(field_name) {
-                projection.push(idx);
+        for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
+            if let Some((table_idx, table_field)) = 
+                self.projected_table_schema.fields().find(file_field.name())
+            {
+                // Special handling for struct fields - always include them even if the 
+                // internal structure differs, as we'll adapt them later
+                match (file_field.data_type(), table_field.data_type()) {
+                    (Struct(_), Struct(_)) => {
+                        field_mappings[table_idx] = Some(projection.len());
+                        projection.push(file_idx);
+                    }
+                    _ => {
+                        // For non-struct fields, follow the default adapter's behavior
+                        if arrow::compute::can_cast_types(file_field.data_type(), table_field.data_type()) {
+                            field_mappings[table_idx] = Some(projection.len());
+                            projection.push(file_idx);
+                        } else {
+                            return datafusion_common::plan_err!(
+                                "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                                file_field.name(),
+                                file_field.data_type(), 
+                                table_field.data_type()
+                            );
+                        }
+                    }
+                }
             }
         }
 
-        Ok((mapper, projection))
+        Ok((
+            Arc::new(NestedStructSchemaMapping::new(
+                Arc::clone(&self.projected_table_schema),
+                field_mappings,
+            )),
+            projection,
+        ))
     }
 }
 
