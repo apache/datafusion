@@ -25,16 +25,15 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
-use datafusion_common::tree_node::TreeNode;
 use datafusion_datasource::file_expr_rewriter::FileExpressionRewriter;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow::datatypes::{Schema, SchemaBuilder, SchemaRef, TimeUnit};
+use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
-use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
+use datafusion_physical_expr::utils::reassign_predicate_columns;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -111,6 +110,10 @@ impl FileOpener for ParquetOpener {
         let projected_schema =
             SchemaRef::from(self.logical_file_schema.project(&self.projection)?);
         let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
+        let schema_adapter = schema_adapter_factory.create(
+            Arc::clone(&projected_schema),
+            Arc::clone(&self.logical_file_schema),
+        );
         let mut predicate = self.predicate.clone();
         let logical_file_schema = Arc::clone(&self.logical_file_schema);
         let reorder_predicates = self.reorder_filters;
@@ -158,7 +161,8 @@ impl FileOpener for ParquetOpener {
             //   but for pruning that happens inside of `ParquetOpener` we should be able to cast the `predicate` to the `physical_file_schema` and use that for pruning,
             //   which would be much cheaper than casting the actual data.
             let mut physical_file_schema = Arc::clone(reader_metadata.schema());
-            let mut filter_schema = merge_schemas(&logical_file_schema, &physical_file_schema);
+            let filter_schema =
+                merge_schemas(&logical_file_schema, &physical_file_schema);
 
             // Try to rewrite the predicate using our filter expression rewriter
             // This must happen before build_row_filter and other subsequent steps
@@ -169,35 +173,27 @@ impl FileOpener for ParquetOpener {
                         .rewrite(Arc::clone(&filter_schema), original_predicate)
                     {
                         // Rewrite the filter columns to match the column indexes
-                        rewritten = reassign_predicate_columns(rewritten, &filter_schema, false)?;
+                        rewritten =
+                            reassign_predicate_columns(rewritten, &filter_schema, false)?;
                         // Update the predicate to the rewritten version
                         predicate = Some(rewritten);
                     }
                 }
             }
 
-            let schema_adapter = schema_adapter_factory.create(
-                Arc::clone(&projected_schema),
-                Arc::clone(&physical_file_schema),
-            );
-
             // The schema loaded from the file may not be the same as the
             // desired schema (for example if we want to instruct the parquet
             // reader to read strings using Utf8View instead). Update if necessary
-            if let Some(merged) =
-                apply_file_schema_type_coercions(&logical_file_schema, &physical_file_schema)
-            {
+            if let Some(merged) = apply_file_schema_type_coercions(
+                &logical_file_schema,
+                &physical_file_schema,
+            ) {
                 physical_file_schema = Arc::new(merged);
                 options = options.with_schema(Arc::clone(&physical_file_schema));
                 reader_metadata = ArrowReaderMetadata::try_new(
                     Arc::clone(reader_metadata.metadata()),
                     options.clone(),
                 )?;
-            }
-            if let Some(merged) =
-                apply_file_schema_type_coercions(&logical_file_schema, &filter_schema)
-            {
-                filter_schema = Arc::new(merged);
             }
 
             if coerce_int96.is_some() {
@@ -212,13 +208,6 @@ impl FileOpener for ParquetOpener {
                         Arc::clone(reader_metadata.metadata()),
                         options.clone(),
                     )?;
-                }
-                if let Some(merged) = coerce_int96_to_resolution(
-                    reader_metadata.parquet_schema(),
-                    &filter_schema,
-                    &(coerce_int96.unwrap()),
-                ) {
-                    filter_schema = Arc::new(merged);
                 }
             }
 
@@ -304,7 +293,7 @@ impl FileOpener for ParquetOpener {
             if let Some(predicate) = predicate.as_ref() {
                 if enable_row_group_stats_pruning {
                     row_groups.prune_by_statistics(
-                        &filter_schema,
+                        &physical_file_schema,
                         builder.parquet_schema(),
                         rg_metadata,
                         predicate,
@@ -315,7 +304,7 @@ impl FileOpener for ParquetOpener {
                 if enable_bloom_filter && !row_groups.is_empty() {
                     row_groups
                         .prune_by_bloom_filters(
-                            &filter_schema,
+                            &physical_file_schema,
                             &mut builder,
                             predicate,
                             &file_metrics,
@@ -333,7 +322,7 @@ impl FileOpener for ParquetOpener {
                 if let Some(p) = page_pruning_predicate {
                     access_plan = p.prune_plan_with_page_index(
                         access_plan,
-                        &filter_schema,
+                        &physical_file_schema,
                         builder.parquet_schema(),
                         file_metadata.as_ref(),
                         &file_metrics,
@@ -521,10 +510,7 @@ fn should_enable_page_index(
 /// Merges two schemas, ensuring that fields from the secondary schema
 /// are added to the primary schema only if they do not already exist
 /// in the primary schema.
-fn merge_schemas(
-    primary: &SchemaRef,
-    secondary: &SchemaRef,
-) -> SchemaRef {
+fn merge_schemas(primary: &SchemaRef, secondary: &SchemaRef) -> SchemaRef {
     let mut merged_fields = primary.fields().to_vec();
     for field in secondary.fields() {
         if !merged_fields.iter().any(|f| f.name() == field.name()) {

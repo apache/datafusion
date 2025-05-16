@@ -423,10 +423,19 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 /// For example, if the expression is `a = 1 AND b = 2 AND c = 3` and `b = 2`
 /// can not be evaluated for some reason, the returned `RowFilter` will contain
 /// `a = 1` and `c = 3`.
+///
+/// # Arguments
+/// * `expr`: The expression to build the filter from.
+/// * `physical_file_schema`: The *physical* schema of the parquet file being read.
+/// * `filter_schema`: The *logical* schema to apply the filter against. Currently this is the logical file schema + any columns from the physical file schema not present in the logical file schema.
+/// * `metadata`: The metadata of the parquet file being read.
+/// * `reorder_predicates`: Whether to reorder the predicates based on their estimated cost.
+/// * `file_metrics`: Metrics to update with the number of rows pruned and matched, and the time spent evaluating the filter.
+/// * `schema_adapter_factory`: used to map the `physical_file_schema` to the `filter_schema`.
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     physical_file_schema: &SchemaRef,
-    table_schema: &SchemaRef,
+    filter_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
@@ -447,7 +456,7 @@ pub fn build_row_filter(
             FilterCandidateBuilder::new(
                 Arc::clone(expr),
                 Arc::clone(physical_file_schema),
-                Arc::clone(table_schema),
+                Arc::clone(filter_schema),
                 Arc::clone(schema_adapter_factory),
             )
             .build(metadata)

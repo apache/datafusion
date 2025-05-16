@@ -861,7 +861,7 @@ mod tests {
 
         let filter = col("c3").eq(lit(0_i8));
 
-        // read/write them files:
+        // read/write the files:
         let read = RoundTrip::new()
             .with_predicate(filter)
             .round_trip_to_batches(vec![batch1, batch2])
