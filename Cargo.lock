@@ -2292,6 +2292,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "half",
+ "hashbrown 0.14.5",
  "log",
  "paste",
  "rand 0.8.5",
