@@ -259,12 +259,7 @@ impl TableProvider for ExampleTableProvider {
 
         let file_group = files
             .iter()
-            .map(|file| {
-                PartitionedFile::new(
-                    file.location.clone(),
-                    file.size,
-                )
-            })
+            .map(|file| PartitionedFile::new(file.location.clone(), file.size))
             .collect();
 
         let file_scan_config = FileScanConfigBuilder::new(
