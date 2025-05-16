@@ -149,7 +149,7 @@ hashbrown = { version = "0.14.5", features = ["raw"] }
 indexmap = "2.9.0"
 itertools = "0.14"
 log = "^0.4"
-object_store = { version = "0.12.0", default-features = false }
+object_store = { version = "0.12.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "55.0.0", default-features = false, features = [
     "arrow",
@@ -218,3 +218,9 @@ uninlined_format_args = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+
+# Temporary patch to use a specific commit of object_store
+
+[patch.crates-io]
+object_store = {  git = "https://github.com/apache/arrow-rs-object-store.git", rev="ed9329f28eba5b1e0f6bbd10c79738ec42a9f568" }
