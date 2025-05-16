@@ -2071,7 +2071,7 @@ mod tests {
                                 let source_field =
                                     self.file_schema.field_with_name(column_name)?;
                                 let expected_flattened_column_name =
-                                    format!("_{}.{}", column_name, field_name);
+                                    format!("_{column_name}.{field_name}");
                                 if let DataType::Struct(struct_fields) =
                                     source_field.data_type()
                                 {
@@ -2196,7 +2196,7 @@ mod tests {
     impl PreComputedExpressionRewriter {
         fn expr_to_column_name(expr: &Arc<dyn PhysicalExpr>) -> String {
             // In a real system you'd want to use a hash that's stable across platforms, etc.
-            let expr_sql = format!("{:?}", expr);
+            let expr_sql = format!("{expr:?}");
             let mut hasher = DefaultHasher::new();
             hasher.write(expr_sql.as_bytes());
             let hash = hasher.finish();

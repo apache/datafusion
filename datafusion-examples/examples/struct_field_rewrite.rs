@@ -262,7 +262,7 @@ impl TableProvider for ExampleTableProvider {
             .map(|file| {
                 PartitionedFile::new(
                     file.location.clone(),
-                    u64::try_from(file.size).expect("fits in a u64"),
+                    file.size,
                 )
             })
             .collect();
@@ -326,7 +326,7 @@ impl TreeNodeRewriter for StructFieldRewriterImpl {
                             let source_field =
                                 self.file_schema.field_with_name(column_name)?;
                             let expected_flattened_column_name =
-                                format!("_{}.{}", column_name, field_name);
+                                format!("_{column_name}.{field_name}");
                             if let DataType::Struct(struct_fields) =
                                 source_field.data_type()
                             {
