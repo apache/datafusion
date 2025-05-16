@@ -712,6 +712,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?;
 
                 if data_types.is_empty() {
+                     let map_types = plan.get_parameter_types()?;
+                     let param_types: Vec<_> = (1..=map_types.len())
+                        .filter_map(|i| {
+                             let key = format!("${i}");
+                             map_types
+                                .get(&key)
+                                .and_then(|opt| opt.clone())
+                        })
+                        .collect();
+                     data_types.extend(param_types.iter().cloned());
+                     planner_context.with_prepare_param_data_types(param_types);
+                  }
                     let map_types = plan.get_parameter_types()?;
                     for i in 1..=map_types.len() {
                         let id = format!("${i}");
