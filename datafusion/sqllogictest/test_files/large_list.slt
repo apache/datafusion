@@ -1,5 +1,4 @@
-
-# Min/Max with largelist over integers
+# Min/Max with LargeList over integers
 query ??
 SELECT MIN(column1), MAX(column1) FROM VALUES
 (arrow_cast(make_array(1, 2, 3, 4), 'LargeList(Int64)')),
@@ -7,7 +6,7 @@ SELECT MIN(column1), MAX(column1) FROM VALUES
 ----
 [1, 2] [1, 2, 3, 4]
 
-# Min/Max with lists over strings
+# Min/Max with LargeList over strings
 query ??
 SELECT MIN(column1), MAX(column1) FROM VALUES
 (arrow_cast(make_array('a', 'b', 'c'), 'LargeList(Utf8)')),
@@ -15,7 +14,7 @@ SELECT MIN(column1), MAX(column1) FROM VALUES
 ----
 [a, b] [a, b, c]
 
-# Min/Max with list over booleans
+# Min/Max with LargeList over booleans
 query ??
 SELECT MIN(column1), MAX(column1) FROM VALUES
 (arrow_cast(make_array(true, false, true), 'LargeList(Boolean)')),
@@ -23,7 +22,7 @@ SELECT MIN(column1), MAX(column1) FROM VALUES
 ----
 [true, false] [true, false, true]
 
-# Min/Max with list over nullable integers
+# Min/Max with LargeList over nullable integers
 query ??
 SELECT MIN(column1), MAX(column1) FROM VALUES
 (arrow_cast(make_array(NULL, 1, 2), 'LargeList(Int64)')),
@@ -31,7 +30,7 @@ SELECT MIN(column1), MAX(column1) FROM VALUES
 ----
 [1, 2] [NULL, 1, 2]
 
-# Min/Max list with different lengths and nulls
+# Min/Max LargeList with different lengths and nulls
 query ??
 SELECT MIN(column1), MAX(column1) FROM VALUES
 (arrow_cast(make_array(1, 2, 3, 4), 'LargeList(Int64)')),
@@ -40,7 +39,7 @@ SELECT MIN(column1), MAX(column1) FROM VALUES
 ----
 [1, 2] [1, NULL, 3]
 
-# Min/Max list with only NULLs
+# Min/Max LargeList with only NULLs
 query ??
 SELECT MIN(column1), MAX(column1) FROM VALUES
 (arrow_cast(make_array(NULL, NULL), 'LargeList(Int64)')),
@@ -48,7 +47,7 @@ SELECT MIN(column1), MAX(column1) FROM VALUES
 ----
 [NULL] [NULL, NULL]
 
-# Min/Max list with empty lists
+# Min/Max LargeList with empty LargeLists
 query ??
 SELECT MIN(column1), MAX(column1) FROM VALUES
 (arrow_cast(make_array(), 'LargeList(Int64)')),
@@ -57,7 +56,7 @@ SELECT MIN(column1), MAX(column1) FROM VALUES
 ----
 [] [1]
 
-# Min/Max list of varying types (integers and NULLs)
+# Min/Max LargeList of varying types (integers and NULLs)
 query ??
 SELECT MIN(column1), MAX(column1) FROM VALUES
 (arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')),
@@ -66,7 +65,7 @@ SELECT MIN(column1), MAX(column1) FROM VALUES
 ----
 [1, 2, 3] [NULL, 2, 3]
 
-# Min/Max list grouped by key with NULLs and differing lengths
+# Min/Max LargeList grouped by key with NULLs and differing lengths
 query I?? rowsort
 SELECT column1, MIN(column2), MAX(column2) FROM VALUES
 (0, arrow_cast(make_array(1, NULL, 3), 'LargeList(Int64)')),
@@ -79,7 +78,7 @@ GROUP BY column1;
 0 [1, 2, 3, 4] [1, NULL, 3]
 1 [] [NULL, 5]
 
-# Min/Max list grouped by key with NULLs and differing lengths
+# Min/Max LargeList grouped by key with NULLs and differing lengths
 query I?? rowsort
 SELECT column1, MIN(column2), MAX(column2) FROM VALUES
 (0, arrow_cast(make_array(NULL), 'LargeList(Int64)')),
@@ -90,7 +89,7 @@ GROUP BY column1;
 0 [NULL] [NULL, NULL]
 1 [NULL] [NULL]
 
-# Min/Max grouped list with empty and non-empty
+# Min/Max grouped LargeList with empty and non-empty
 query I?? rowsort
 SELECT column1, MIN(column2), MAX(column2) FROM VALUES
 (0, arrow_cast(make_array(), 'LargeList(Int64)')),
@@ -103,7 +102,7 @@ GROUP BY column1;
 0 [] [1]
 1 [] [5, 6]
 
-# Min/Max over lists with a window function
+# Min/Max over LargeLists with a window function
 query ?
 SELECT min(column1) OVER (ORDER BY column1) FROM VALUES
 (arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')),
@@ -114,7 +113,7 @@ SELECT min(column1) OVER (ORDER BY column1) FROM VALUES
 [1, 2, 3]
 [1, 2, 3]
 
-# Min/Max over lists with a window function and nulls
+# Min/Max over LargeLists with a window function and nulls
 query ?
 SELECT min(column1) OVER (ORDER BY column1) FROM VALUES
 (arrow_cast(make_array(NULL), 'LargeList(Int64)')),
@@ -125,7 +124,7 @@ SELECT min(column1) OVER (ORDER BY column1) FROM VALUES
 [2, 3]
 [2, 3]
 
-# Min/Max over lists with a window function, nulls and ROWS BETWEEN statement
+# Min/Max over LargeLists with a window function, nulls and ROWS BETWEEN statement
 query ?
 SELECT min(column1) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM VALUES
 (arrow_cast(make_array(NULL), 'LargeList(Int64)')),
@@ -136,7 +135,7 @@ SELECT min(column1) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOW
 [2, 3]
 [4, 5]
 
-# Min/Max over lists with a window function using a different column
+# Min/Max over LargeLists with a window function using a different column
 query ?
 SELECT max(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM VALUES
 (arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), arrow_cast(make_array(4, 5), 'LargeList(Int64)')),
@@ -146,3 +145,4 @@ SELECT max(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOW
 [4, 5]
 [4, 5]
 [2, 3]
+
