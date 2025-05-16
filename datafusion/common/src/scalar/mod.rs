@@ -4941,6 +4941,40 @@ mod tests {
                 ])]),
             ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a = ScalarValue::LargeList(Arc::new(LargeListArray::from_iter_primitive::<
+            Int64Type,
+            _,
+            _,
+        >(vec![Some(vec![
+            None,
+            Some(2),
+            Some(3),
+        ])])));
+        let b = ScalarValue::LargeList(Arc::new(LargeListArray::from_iter_primitive::<
+            Int64Type,
+            _,
+            _,
+        >(vec![Some(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+        ])])));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a = ScalarValue::FixedSizeList(Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+                vec![Some(vec![None, Some(2), Some(3)])],
+                3,
+            ),
+        ));
+        let b = ScalarValue::FixedSizeList(Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+                vec![Some(vec![Some(1), Some(2), Some(3)])],
+                3,
+            ),
+        ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
     }
 
     #[test]
