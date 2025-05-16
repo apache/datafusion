@@ -25,6 +25,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::datasource::nested_schema_adapter::NestedStructSchemaAdapterFactory;
 use datafusion::datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion::prelude::*;
 use std::error::Error;
