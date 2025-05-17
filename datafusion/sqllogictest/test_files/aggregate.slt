@@ -6950,7 +6950,7 @@ SELECT MIN(c), MAX(c) FROM (SELECT * FROM (SELECT STRUCT(1 as 'a', 2 as 'b') AS 
 ----
 NULL NULL
 
-# Min/Max group struct 
+# Min/Max group struct
 query I?? rowsort
 WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
 SELECT key, MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c, (c1 % 2) AS key FROM t) GROUP BY key
@@ -7144,4 +7144,3 @@ SELECT max(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOW
 [4, 5]
 [4, 5]
 [2, 3]
-
