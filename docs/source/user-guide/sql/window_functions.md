@@ -192,7 +192,9 @@ Returns the rank of the current row without gaps. This function ranks rows in a 
 ```sql
 dense_rank()
 ```
+
 #### Example
+
 ```sql
     --Example usage of the dense_rank window function:
     SELECT department,
@@ -200,6 +202,7 @@ dense_rank()
            dense_rank() OVER (PARTITION BY department ORDER BY salary DESC) AS dense_rank
     FROM employees;
 ```
+
 ```sql
 +-------------+--------+------------+
 | department  | salary | dense_rank |
@@ -226,6 +229,7 @@ ntile(expression)
 - **expression**: An integer describing the number groups the partition should be split into
 
 #### Exmaple
+
 ```sql
     --Example usage of the ntile window function:
     SELECT employee_id,
@@ -233,6 +237,7 @@ ntile(expression)
            ntile(4) OVER (ORDER BY salary DESC) AS quartile
     FROM employees;
 ```
+
 ```sql
 +-------------+--------+----------+
 | employee_id | salary | quartile |
@@ -255,7 +260,9 @@ Returns the percentage rank of the current row within its partition. The value r
 ```sql
 percent_rank()
 ```
+
 #### Example
+
 ```sql
     --Example usage of the percent_rank window function:
     SELECT employee_id,
@@ -263,6 +270,7 @@ percent_rank()
            percent_rank() OVER (ORDER BY salary) AS percent_rank
     FROM employees;
 ```
+
 ```sql
 +-------------+--------+---------------+
 | employee_id | salary | percent_rank  |
@@ -280,7 +288,9 @@ Returns the rank of the current row within its partition, allowing gaps between 
 ```sql
 rank()
 ```
+
 #### Example
+
 ```sql
     --Example usage of the rank window function:
     SELECT department,
@@ -288,6 +298,7 @@ rank()
            rank() OVER (PARTITION BY department ORDER BY salary DESC) AS rank
     FROM employees;
 ```
+
 ```sql
 +-------------+--------+------+
 | department  | salary | rank |
@@ -301,7 +312,6 @@ rank()
 +-------------+--------+------+
 ```
 
-
 ### `row_number`
 
 Number of the current row within its partition, counting from 1.
@@ -309,7 +319,9 @@ Number of the current row within its partition, counting from 1.
 ```sql
 row_number()
 ```
+
 #### Example
+
 ```sql
     --Example usage of the row_number window function:
     SELECT department,
@@ -317,6 +329,7 @@ row_number()
            row_number() OVER (PARTITION BY department ORDER BY salary DESC) AS row_num
     FROM employees;
 ```
+
 ```sql
 +-------------+--------+---------+
 | department  | salary | row_num |
@@ -349,7 +362,9 @@ first_value(expression)
 #### Arguments
 
 - **expression**: Expression to operate on
+
 #### Example
+
 ```sql
     --Example usage of the first_value window function:
     SELECT department,
@@ -358,6 +373,7 @@ first_value(expression)
            first_value(salary) OVER (PARTITION BY department ORDER BY salary DESC) AS top_salary
     FROM employees;
 ```
+
 ```sql
 +-------------+-------------+--------+------------+
 | department  | employee_id | salary | top_salary |
@@ -385,6 +401,7 @@ lag(expression, offset, default)
 - **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
 
 #### Example
+
 ```sql
     --Example usage of the lag window function:
     SELECT employee_id,
@@ -392,6 +409,7 @@ lag(expression, offset, default)
            lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
     FROM employees;
 ```
+
 ```sql
 +-------------+--------+-------------+
 | employee_id | salary | prev_salary |
@@ -402,6 +420,7 @@ lag(expression, offset, default)
 | 4           | 60000  | 70000       |
 +-------------+--------+-------------+
 ```
+
 ### `last_value`
 
 Returns value evaluated at the row that is the last row of the window frame.
