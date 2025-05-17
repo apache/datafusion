@@ -232,7 +232,7 @@ impl ExecutionPlan for OutputRequirementExec {
         }
 
         let dist_req = match &self.required_input_distribution()[0] {
-            Distribution::HashPartitioned(exprs) => {
+            Distribution::HashPartitioned(exprs, mode) => {
                 let mut updated_exprs = vec![];
                 for expr in exprs {
                     let Some(new_expr) = update_expr(expr, projection.expr(), false)?
@@ -241,7 +241,7 @@ impl ExecutionPlan for OutputRequirementExec {
                     };
                     updated_exprs.push(new_expr);
                 }
-                Distribution::HashPartitioned(updated_exprs)
+                Distribution::HashPartitioned(updated_exprs, *mode)
             }
             dist => dist.clone(),
         };
