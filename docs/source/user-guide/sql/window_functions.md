@@ -433,6 +433,27 @@ last_value(expression)
 
 - **expression**: Expression to operate on
 
+```sql
+-- SQL example of last_value:
+SELECT department,
+       employee_id,
+       salary,
+       last_value(salary) OVER (PARTITION BY department ORDER BY salary) AS running_last_salary
+FROM employees;
+```
+
+```sql
++-------------+-------------+--------+---------------------+
+| department  | employee_id | salary | running_last_salary |
++-------------+-------------+--------+---------------------+
+| Sales       | 1           | 30000  | 30000               |
+| Sales       | 2           | 50000  | 50000               |
+| Sales       | 3           | 70000  | 70000               |
+| Engineering | 4           | 40000  | 40000               |
+| Engineering | 5           | 60000  | 60000               |
++-------------+-------------+--------+---------------------+
+```
+
 ### `lead`
 
 Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
@@ -446,6 +467,28 @@ lead(expression, offset, default)
 - **expression**: Expression to operate on
 - **offset**: Integer. Specifies how many rows forward the value of expression should be retrieved. Defaults to 1.
 - **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
+
+```sql
+-- Example usage of lead() :
+SELECT
+    employee_id,
+    department,
+    salary,
+    lead(salary, 1, 0) OVER (PARTITION BY department ORDER BY salary) AS next_salary
+FROM employees;
+```
+
+```sql
++-------------+-------------+--------+--------------+
+| employee_id | department  | salary | next_salary  |
++-------------+-------------+--------+--------------+
+| 1           | Sales       | 30000  | 50000        |
+| 2           | Sales       | 50000  | 70000        |
+| 3           | Sales       | 70000  | 0            |
+| 4           | Engineering | 40000  | 60000        |
+| 5           | Engineering | 60000  | 0            |
++-------------+-------------+--------+--------------+
+```
 
 ### `nth_value`
 
