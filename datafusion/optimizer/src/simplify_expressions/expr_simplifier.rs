@@ -4351,16 +4351,23 @@ mod tests {
     #[derive(Debug, Clone)]
     struct SimplifyMockUdaf {
         simplify: bool,
+        signature: Signature,
     }
 
     impl SimplifyMockUdaf {
         /// make simplify method return new expression
         fn new_with_simplify() -> Self {
-            Self { simplify: true }
+            Self {
+                simplify: true,
+                signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
+            }
         }
         /// make simplify method return no change
         fn new_without_simplify() -> Self {
-            Self { simplify: false }
+            Self {
+                simplify: false,
+                signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
+            }
         }
     }
 
@@ -4374,7 +4381,7 @@ mod tests {
         }
 
         fn signature(&self) -> &Signature {
-            unimplemented!()
+            &self.signature
         }
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -4434,16 +4441,24 @@ mod tests {
     #[derive(Debug, Clone)]
     struct SimplifyMockUdwf {
         simplify: bool,
+        signature: Signature,
     }
 
     impl SimplifyMockUdwf {
         /// make simplify method return new expression
         fn new_with_simplify() -> Self {
-            Self { simplify: true }
+            Self {
+                simplify: true,
+                signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
+            }
         }
+
         /// make simplify method return no change
         fn new_without_simplify() -> Self {
-            Self { simplify: false }
+            Self {
+                simplify: false,
+                signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
+            }
         }
     }
 
@@ -4457,7 +4472,7 @@ mod tests {
         }
 
         fn signature(&self) -> &Signature {
-            unimplemented!()
+            &self.signature
         }
 
         fn simplify(&self) -> Option<WindowFunctionSimplification> {
