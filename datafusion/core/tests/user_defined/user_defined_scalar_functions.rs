@@ -1542,7 +1542,11 @@ async fn test_metadata_based_udf_with_literal() -> Result<()> {
         lit(5u64).alias("lit_no_doubling"),
     ])?;
 
-    let custom_udf = ScalarUDF::from(MetadataBasedUdf::new(HashMap::new()));
+    let output_metadata: HashMap<String, String> =
+        [("output_metatype".to_string(), "custom_value".to_string())]
+            .into_iter()
+            .collect();
+    let custom_udf = ScalarUDF::from(MetadataBasedUdf::new(output_metadata.clone()));
 
     let plan = LogicalPlanBuilder::from(df.into_optimized_plan()?)
         .project(vec![
@@ -1558,8 +1562,10 @@ async fn test_metadata_based_udf_with_literal() -> Result<()> {
     let actual = DataFrame::new(ctx.state(), plan).collect().await?;
 
     let schema = Arc::new(Schema::new(vec![
-        Field::new("doubled_output", DataType::UInt64, true),
-        Field::new("not_doubled_output", DataType::UInt64, false),
+        Field::new("doubled_output", DataType::UInt64, true)
+            .with_metadata(output_metadata.clone()),
+        Field::new("not_doubled_output", DataType::UInt64, false)
+            .with_metadata(output_metadata.clone()),
     ]));
 
     let expected = RecordBatch::try_new(
