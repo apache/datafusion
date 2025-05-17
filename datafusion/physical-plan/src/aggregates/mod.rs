@@ -346,6 +346,7 @@ impl PartialEq for PhysicalGroupBy {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHash(GroupedHashAggregateStream),

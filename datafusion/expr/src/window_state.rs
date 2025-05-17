@@ -193,11 +193,7 @@ impl WindowFrameContext {
             // UNBOUNDED PRECEDING
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => 0,
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
-                if idx >= n as usize {
-                    idx - n as usize
-                } else {
-                    0
-                }
+                idx.saturating_sub(n as usize)
             }
             WindowFrameBound::CurrentRow => idx,
             // UNBOUNDED FOLLOWING
@@ -602,11 +598,7 @@ impl WindowFrameStateGroups {
 
         // Find the group index of the frame boundary:
         let group_idx = if SEARCH_SIDE {
-            if self.current_group_idx > delta {
-                self.current_group_idx - delta
-            } else {
-                0
-            }
+            self.current_group_idx.saturating_sub(delta)
         } else {
             self.current_group_idx + delta
         };
