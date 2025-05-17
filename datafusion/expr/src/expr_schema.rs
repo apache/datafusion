@@ -22,7 +22,7 @@ use crate::expr::{
     WindowFunctionParams,
 };
 use crate::type_coercion::functions::{
-    data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
+    data_types_with_scalar_udf, fields_with_aggregate_udf, fields_with_window_udf,
 };
 use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
@@ -158,12 +158,16 @@ impl ExprSchemable for Expr {
                 func,
                 params: AggregateFunctionParams { args, .. },
             }) => {
-                let data_types = args
+                let fields = args
                     .iter()
-                    .map(|e| e.get_type(schema))
+                    .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
                     .collect::<Result<Vec<_>>>()?;
-                let new_types = data_types_with_aggregate_udf(&data_types, func)
-                    .map_err(|err| {
+                let new_fields =
+                    fields_with_aggregate_udf(&fields, func).map_err(|err| {
+                        let data_types = fields
+                            .iter()
+                            .map(|f| f.data_type().clone())
+                            .collect::<Vec<_>>();
                         plan_datafusion_err!(
                             "{} {}",
                             match err {
@@ -177,7 +181,7 @@ impl ExprSchemable for Expr {
                             )
                         )
                     })?;
-                Ok(func.return_type(&new_types)?)
+                Ok(func.return_field(&new_fields)?.data_type().clone())
             }
             Expr::Not(_)
             | Expr::IsNull(_)
@@ -452,6 +456,41 @@ impl ExprSchemable for Expr {
                 )?;
                 Ok(Field::new(&schema_name, dt, nullable))
             }
+            Expr::AggregateFunction(aggregate_function) => {
+                let AggregateFunction {
+                    func,
+                    params: AggregateFunctionParams { args, .. },
+                    ..
+                } = aggregate_function;
+
+                let fields = args
+                    .iter()
+                    .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
+                    .collect::<Result<Vec<_>>>()?;
+                // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
+                let new_fields =
+                    fields_with_aggregate_udf(&fields, func).map_err(|err| {
+                        let arg_types = fields
+                            .iter()
+                            .map(|f| f.data_type())
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        plan_datafusion_err!(
+                            "{} {}",
+                            match err {
+                                DataFusionError::Plan(msg) => msg,
+                                err => err.to_string(),
+                            },
+                            utils::generate_signature_error_msg(
+                                func.name(),
+                                func.signature().clone(),
+                                &arg_types,
+                            )
+                        )
+                    })?;
+
+                func.return_field(&new_fields)
+            }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let (arg_types, fields): (Vec<DataType>, Vec<Arc<Field>>) = args
                     .iter()
@@ -506,7 +545,6 @@ impl ExprSchemable for Expr {
             | Expr::Between(_)
             | Expr::Case(_)
             | Expr::TryCast(_)
-            | Expr::AggregateFunction(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::Wildcard { .. }
@@ -572,14 +610,19 @@ impl Expr {
             ..
         } = window_function;
 
-        let data_types = args
+        let fields = args
             .iter()
-            .map(|e| e.get_type(schema))
+            .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
             .collect::<Result<Vec<_>>>()?;
         match fun {
             WindowFunctionDefinition::AggregateUDF(udaf) => {
-                let new_types = data_types_with_aggregate_udf(&data_types, udaf)
-                    .map_err(|err| {
+                let data_types = fields
+                    .iter()
+                    .map(|f| f.data_type())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let new_fields =
+                    fields_with_aggregate_udf(&fields, udaf).map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
                             match err {
@@ -594,14 +637,18 @@ impl Expr {
                         )
                     })?;
 
-                let return_type = udaf.return_type(&new_types)?;
-                let nullable = udaf.is_nullable();
+                let return_field = udaf.return_field(&new_fields)?;
 
-                Ok((return_type, nullable))
+                Ok((return_field.data_type().clone(), return_field.is_nullable()))
             }
             WindowFunctionDefinition::WindowUDF(udwf) => {
-                let new_types =
-                    data_types_with_window_udf(&data_types, udwf).map_err(|err| {
+                let data_types = fields
+                    .iter()
+                    .map(|f| f.data_type())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let new_fields =
+                    fields_with_window_udf(&fields, udwf).map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
                             match err {
@@ -616,7 +663,7 @@ impl Expr {
                         )
                     })?;
                 let (_, function_name) = self.qualified_name();
-                let field_args = WindowUDFFieldArgs::new(&new_types, &function_name);
+                let field_args = WindowUDFFieldArgs::new(&new_fields, &function_name);
 
                 udwf.field(field_args)
                     .map(|field| (field.data_type().clone(), field.is_nullable()))
