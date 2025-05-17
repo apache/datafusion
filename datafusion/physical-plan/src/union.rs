@@ -540,7 +540,10 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
 
     let fields = (0..first_schema.fields().len())
         .map(|i| {
-            inputs
+            let base_field = first_schema.field(i).clone();
+
+            // Coerce metadata and nullability across all inputs
+            let merged_field = inputs
                 .iter()
                 .enumerate()
                 .map(|(input_idx, input)| {
@@ -559,9 +562,10 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
                     field.with_metadata(metadata)
                 })
                 .find_or_first(Field::is_nullable)
-                // We can unwrap this because if inputs was empty, this would've already panic'ed when we
-                // indexed into inputs[0].
                 .unwrap()
+                .with_name(base_field.name());
+
+            merged_field
         })
         .collect::<Vec<_>>();
 
