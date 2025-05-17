@@ -29,10 +29,11 @@ use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
+use arrow::datatypes::{FieldRef, Schema, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::pruning::{
     CompositePruningStatistics, PartitionPruningStatistics, PrunableStatistics,
+    PruningStatistics,
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_datasource::PartitionedFile;
@@ -41,6 +42,7 @@ use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
 
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
@@ -134,45 +136,60 @@ impl FileOpener for ParquetOpener {
             // Prune this file using the file level statistics.
             // Since dynamic filters may have been updated since planning it is possible that we are able
             // to prune files now that we couldn't prune at planning time.
-            {
-                if let (Some(stats), Some(predicate)) = (&file.statistics, &predicate) {
-                    let pruning_predicate = build_pruning_predicate(
-                        Arc::clone(predicate),
-                        &table_schema,
-                        &predicate_creation_errors,
-                    );
-                    if let Some(pruning_predicate) = pruning_predicate {
+            if let Some(predicate) = &predicate {
+                // Build a pruning schema that combines the file fields and partition fields.
+                // Partition fileds are always at the end.
+                let pruning_schema = Arc::new(
+                    Schema::new(
+                        table_schema
+                            .fields()
+                            .iter()
+                            .cloned()
+                            .chain(partition_fields.iter().cloned())
+                            .collect_vec(),
+                    )
+                    .with_metadata(table_schema.metadata().clone()),
+                );
+                println!("pruning schema: {pruning_schema:?}");
+                let pruning_predicate = build_pruning_predicate(
+                    Arc::clone(predicate),
+                    &pruning_schema,
+                    &predicate_creation_errors,
+                );
+                if let Some(pruning_predicate) = pruning_predicate {
+                    // The partition column schema is the schema of the table - the schema of the file
+                    let mut pruning = Box::new(PartitionPruningStatistics::new(
+                        vec![file.partition_values],
+                        partition_fields.clone(),
+                    ))
+                        as Box<dyn PruningStatistics>;
+                    if let Some(stats) = file.statistics {
                         let stats_pruning = Box::new(PrunableStatistics::new(
-                            vec![stats.clone()],
-                            Arc::clone(&table_schema),
+                            vec![stats],
+                            Arc::clone(&pruning_schema),
                         ));
-                        // The partition column schema is the schema of the table - the schema of the file
-                        let partition_pruning = Box::new(PartitionPruningStatistics::new(
-                            vec![file.partition_values],
-                            partition_fields.clone(),
-                        ));
-                        let combined_pruning = CompositePruningStatistics::new(vec![
-                            partition_pruning,
+                        pruning = Box::new(CompositePruningStatistics::new(vec![
+                            pruning,
                             stats_pruning,
-                        ]);
-                        match pruning_predicate.prune(&combined_pruning) {
-                            Ok(values) => {
-                                assert!(values.len() == 1);
-                                // We expect a single container -> if all containers are false skip this file
-                                if values.into_iter().all(|v| !v) {
-                                    // Return an empty stream
-                                    file_metrics.files_pruned_statistics.add(1);
-                                    return Ok(futures::stream::empty().boxed());
-                                }
+                        ]));
+                    }
+                    match pruning_predicate.prune(pruning.as_ref()) {
+                        Ok(values) => {
+                            assert!(values.len() == 1);
+                            // We expect a single container -> if all containers are false skip this file
+                            if values.into_iter().all(|v| !v) {
+                                // Return an empty stream
+                                file_metrics.files_pruned_statistics.add(1);
+                                return Ok(futures::stream::empty().boxed());
                             }
-                            // Stats filter array could not be built, so we can't prune
-                            Err(e) => {
-                                debug!(
-                                    "Ignoring error building pruning predicate for file '{}': {e}",
-                                    file_meta.location(),
-                                );
-                                predicate_creation_errors.add(1);
-                            }
+                        }
+                        // Stats filter array could not be built, so we can't prune
+                        Err(e) => {
+                            debug!(
+                                "Ignoring error building pruning predicate for file '{}': {e}",
+                                file_meta.location(),
+                            );
+                            predicate_creation_errors.add(1);
                         }
                     }
                 }
@@ -508,6 +525,7 @@ fn should_enable_page_index(
 mod test {
     use std::sync::Arc;
 
+    use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, BytesMut};
     use chrono::Utc;
     use datafusion_common::{
@@ -547,15 +565,11 @@ mod test {
         (num_batches, num_rows)
     }
 
-    #[tokio::test]
-    async fn test_prune_based_on_statistics() {
-        let batch = record_batch!(
-            ("a", Int32, vec![Some(1), Some(2), Some(2)]),
-            ("b", Float32, vec![Some(1.0), Some(2.0), None])
-        )
-        .unwrap();
-
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    async fn write_parquet(
+        store: Arc<dyn ObjectStore>,
+        filename: &str,
+        batch: arrow::record_batch::RecordBatch,
+    ) -> usize {
         let mut out = BytesMut::new().writer();
         {
             let mut writer =
@@ -564,11 +578,23 @@ mod test {
             writer.finish().unwrap();
         }
         let data = out.into_inner().freeze();
-        let data_size = data.len();
-        store
-            .put(&Path::from("test.parquet"), data.into())
-            .await
-            .unwrap();
+        let data_len = data.len();
+        store.put(&Path::from(filename), data.into()).await.unwrap();
+        data_len
+    }
+
+    #[tokio::test]
+    async fn test_prune_based_on_statistics() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(2), Some(2)]),
+            ("b", Float32, vec![Some(1.0), Some(2.0), None])
+        )
+        .unwrap();
+
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
 
         let schema = batch.schema();
         let file = PartitionedFile::new(
@@ -639,6 +665,211 @@ mod test {
         // A filter on `b = 5.0` should exclude all rows
         let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
         let predicate = logical2physical(&expr, &schema);
+        let opener = make_opener(predicate);
+        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 0);
+        assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_prune_based_on_partition_statistics() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "part=1/file.parquet", batch.clone()).await;
+
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "part=1/file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        file.partition_values = vec![ScalarValue::Int32(Some(1))];
+
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("part", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        let make_opener = |predicate| {
+            ParquetOpener {
+                partition_index: 0,
+                projection: Arc::new([0]),
+                batch_size: 1024,
+                limit: None,
+                predicate: Some(predicate),
+                table_schema: file_schema.clone(),
+                metadata_size_hint: None,
+                metrics: ExecutionPlanMetricsSet::new(),
+                parquet_file_reader_factory: Arc::new(
+                    DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
+                ),
+                partition_fields: vec![Arc::new(Field::new(
+                    "part",
+                    DataType::Int32,
+                    false,
+                ))],
+                pushdown_filters: false, // note that this is false!
+                reorder_filters: false,
+                enable_page_index: false,
+                enable_bloom_filter: false,
+                schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+                enable_row_group_stats_pruning: true,
+                coerce_int96: None,
+            }
+        };
+
+        let make_meta = || FileMeta {
+            object_meta: ObjectMeta {
+                location: Path::from("part=1/file.parquet"),
+                last_modified: Utc::now(),
+                size: u64::try_from(data_size).unwrap(),
+                e_tag: None,
+                version: None,
+            },
+            range: None,
+            extensions: None,
+            metadata_size_hint: None,
+        };
+
+        // Filter should match the partition value
+        let expr = col("part").eq(lit(1));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate);
+        let stream = opener
+            .open(make_meta(), file.clone())
+            .unwrap()
+            .await
+            .unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 1);
+        assert_eq!(num_rows, 3);
+
+        // Filter should not match the partition value
+        let expr = col("part").eq(lit(2));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate);
+        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 0);
+        assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_based_on_partition_values_and_file_statistics() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(2), Some(3)]),
+            ("b", Float64, vec![Some(1.0), Some(2.0), None])
+        )
+        .unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "part=1/file.parquet", batch.clone()).await;
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "part=1/file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        file.partition_values = vec![ScalarValue::Int32(Some(1))];
+        file.statistics = Some(Arc::new(
+            Statistics::new_unknown(&file_schema)
+                .add_column_statistics(ColumnStatistics::new_unknown())
+                .add_column_statistics(
+                    ColumnStatistics::new_unknown()
+                        .with_min_value(Precision::Exact(ScalarValue::Float64(Some(1.0))))
+                        .with_max_value(Precision::Exact(ScalarValue::Float64(Some(2.0))))
+                        .with_null_count(Precision::Exact(1)),
+                ),
+        ));
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("part", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float32, true),
+        ]));
+        let make_opener = |predicate| {
+            ParquetOpener {
+                partition_index: 0,
+                projection: Arc::new([0]),
+                batch_size: 1024,
+                limit: None,
+                predicate: Some(predicate),
+                table_schema: file_schema.clone(),
+                metadata_size_hint: None,
+                metrics: ExecutionPlanMetricsSet::new(),
+                parquet_file_reader_factory: Arc::new(
+                    DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
+                ),
+                partition_fields: vec![Arc::new(Field::new(
+                    "part",
+                    DataType::Int32,
+                    false,
+                ))],
+                pushdown_filters: false, // note that this is false!
+                reorder_filters: false,
+                enable_page_index: false,
+                enable_bloom_filter: false,
+                schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+                enable_row_group_stats_pruning: true,
+                coerce_int96: None,
+            }
+        };
+        let make_meta = || FileMeta {
+            object_meta: ObjectMeta {
+                location: Path::from("part=1/file.parquet"),
+                last_modified: Utc::now(),
+                size: u64::try_from(data_size).unwrap(),
+                e_tag: None,
+                version: None,
+            },
+            range: None,
+            extensions: None,
+            metadata_size_hint: None,
+        };
+
+        // Filter should match the partition value and file statistics
+        let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate);
+        let stream = opener
+            .open(make_meta(), file.clone())
+            .unwrap()
+            .await
+            .unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 1);
+        assert_eq!(num_rows, 3);
+
+        // Should prune based on partition value but not file statistics
+        let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate);
+        let stream = opener
+            .open(make_meta(), file.clone())
+            .unwrap()
+            .await
+            .unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 0);
+        assert_eq!(num_rows, 0);
+
+        // Should prune based on file statistics but not partition value
+        let expr = col("part").eq(lit(1)).and(col("b").eq(lit(7.0)));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate);
+        let stream = opener
+            .open(make_meta(), file.clone())
+            .unwrap()
+            .await
+            .unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 0);
+        assert_eq!(num_rows, 0);
+
+        // Should prune based on both partition value and file statistics
+        let expr = col("part").eq(lit(2)).and(col("b").eq(lit(7.0)));
+        let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;

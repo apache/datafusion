@@ -58,6 +58,9 @@ tokio = { workspace = true }
 [dev-dependencies]
 chrono = { workspace = true }
 
+[features]
+backtrace = ["datafusion-common/backtrace"]
+
 [lints]
 workspace = true
 

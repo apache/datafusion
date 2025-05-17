@@ -193,9 +193,7 @@ impl PruningStatistics for PartitionPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
         let partition_values = self.partition_values.get(index)?;
-        match ScalarValue::iter_to_array(
-            partition_values.iter().map(|v| v.clone()),
-        ) {
+        match ScalarValue::iter_to_array(partition_values.iter().map(|v| v.clone())) {
             Ok(array) => Some(array),
             Err(_) => {
                 log::warn!(
@@ -260,7 +258,10 @@ impl PrunableStatistics {
     /// Each [`Statistics`] represents a container (e.g. a file or a partition of files).
     /// The `schema` is the schema of the data in the containers and should apply to all files.
     pub fn new(statistics: Vec<Arc<Statistics>>, schema: SchemaRef) -> Self {
-        Self { statistics: statistics, schema }
+        Self {
+            statistics: statistics,
+            schema,
+        }
     }
 }
 
@@ -268,13 +269,14 @@ impl PruningStatistics for PrunableStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.schema.index_of(column.name()).ok()?;
         if self.statistics.iter().any(|s| {
-            s.column_statistics.get(index).map_or(false, |stat| {
-                stat.min_value.is_exact().unwrap_or(false)
-            })
+            s.column_statistics
+                .get(index)
+                .map_or(false, |stat| stat.min_value.is_exact().unwrap_or(false))
         }) {
-            match ScalarValue::iter_to_array(
-                self.statistics.iter().map(|s| {
-                    s.column_statistics.get(index).and_then(|stat| {
+            match ScalarValue::iter_to_array(self.statistics.iter().map(|s| {
+                s.column_statistics
+                    .get(index)
+                    .and_then(|stat| {
                         if let Precision::Exact(min) = &stat.min_value {
                             Some(min.clone())
                         } else {
@@ -282,8 +284,7 @@ impl PruningStatistics for PrunableStatistics {
                         }
                     })
                     .unwrap_or(ScalarValue::Null)
-                }),
-            ) {
+            })) {
                 Ok(array) => Some(array),
                 Err(_) => {
                     log::warn!(
@@ -301,13 +302,14 @@ impl PruningStatistics for PrunableStatistics {
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.schema.index_of(column.name()).ok()?;
         if self.statistics.iter().any(|s| {
-            s.column_statistics.get(index).map_or(false, |stat| {
-                stat.max_value.is_exact().unwrap_or(false)
-            })
+            s.column_statistics
+                .get(index)
+                .map_or(false, |stat| stat.max_value.is_exact().unwrap_or(false))
         }) {
-            match ScalarValue::iter_to_array(
-                self.statistics.iter().map(|s| {
-                    s.column_statistics.get(index).and_then(|stat| {
+            match ScalarValue::iter_to_array(self.statistics.iter().map(|s| {
+                s.column_statistics
+                    .get(index)
+                    .and_then(|stat| {
                         if let Precision::Exact(max) = &stat.max_value {
                             Some(max.clone())
                         } else {
@@ -315,8 +317,7 @@ impl PruningStatistics for PrunableStatistics {
                         }
                     })
                     .unwrap_or(ScalarValue::Null)
-                }),
-            ) {
+            })) {
                 Ok(array) => Some(array),
                 Err(_) => {
                     log::warn!(
@@ -337,18 +338,24 @@ impl PruningStatistics for PrunableStatistics {
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.schema.index_of(column.name()).ok()?;
-        if self.statistics.iter().any(|s| s.column_statistics.get(index).map_or(false, |stat| stat.null_count.is_exact().unwrap_or(false))) {
+        if self.statistics.iter().any(|s| {
+            s.column_statistics
+                .get(index)
+                .map_or(false, |stat| stat.null_count.is_exact().unwrap_or(false))
+        }) {
             Some(Arc::new(
-                self.statistics.iter().map(|s| {
-                    s.column_statistics.get(index).and_then(|stat| {
-                        if let Precision::Exact(null_count) = &stat.null_count {
-                            u64::try_from(*null_count).ok()
-                        } else {
-                            None
-                        }
+                self.statistics
+                    .iter()
+                    .map(|s| {
+                        s.column_statistics.get(index).and_then(|stat| {
+                            if let Precision::Exact(null_count) = &stat.null_count {
+                                u64::try_from(*null_count).ok()
+                            } else {
+                                None
+                            }
+                        })
                     })
-                })
-                .collect::<UInt64Array>()
+                    .collect::<UInt64Array>(),
             ))
         } else {
             None
@@ -356,16 +363,22 @@ impl PruningStatistics for PrunableStatistics {
     }
 
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-        if self.statistics.iter().any(|s| s.num_rows.is_exact().unwrap_or(false)) {
+        if self
+            .statistics
+            .iter()
+            .any(|s| s.num_rows.is_exact().unwrap_or(false))
+        {
             Some(Arc::new(
-                self.statistics.iter().map(|s| {
-                    if let Precision::Exact(row_count) = &s.num_rows {
-                        u64::try_from(*row_count).ok()
-                    } else {
-                        None
-                    }
-                })
-                .collect::<UInt64Array>()
+                self.statistics
+                    .iter()
+                    .map(|s| {
+                        if let Precision::Exact(row_count) = &s.num_rows {
+                            u64::try_from(*row_count).ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<UInt64Array>(),
             ))
         } else {
             None
