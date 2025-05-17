@@ -669,6 +669,44 @@ mod test {
         )
         .await?;
 
+        // no group by key
+        let agg_partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            aggr_expr.clone(),
+            vec![None],
+            empty_table.clone(),
+            scan_schema.clone(),
+        )?);
+
+        let coalesce = Arc::new(CoalescePartitionsExec::new(agg_partial.clone()));
+
+        let agg_final = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            aggr_expr.clone(),
+            vec![None],
+            coalesce.clone(),
+            coalesce.schema(),
+        )?);
+
+        let expect_stat = Statistics {
+            num_rows: Precision::Exact(1),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+
+        assert_eq!(&expect_stat, &agg_final.partition_statistics(Some(0))?);
+
+        // Verify that the aggregate final result has exactly one partition with one row
+        let mut partitions = execute_stream_partitioned(
+            agg_final.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(1, partitions.len());
+        let result: Vec<RecordBatch> = partitions.remove(0).try_collect().await?;
+        assert_eq!(1, result[0].num_rows());
+
         Ok(())
     }
 }
