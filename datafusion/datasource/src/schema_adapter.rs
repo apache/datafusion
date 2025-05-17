@@ -248,29 +248,22 @@ impl SchemaAdapter for DefaultSchemaAdapter {
         &self,
         file_schema: &Schema,
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        let mut projection = Vec::with_capacity(file_schema.fields().len());
-        let mut field_mappings = vec![None; self.projected_table_schema.fields().len()];
-
-        for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
-            if let Some((table_idx, table_field)) =
-                self.projected_table_schema.fields().find(file_field.name())
-            {
-                match can_cast_types(file_field.data_type(), table_field.data_type()) {
-                    true => {
-                        field_mappings[table_idx] = Some(projection.len());
-                        projection.push(file_idx);
-                    }
-                    false => {
-                        return plan_err!(
-                            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
-                            file_field.name(),
-                            file_field.data_type(),
-                            table_field.data_type()
-                        )
-                    }
+        let (field_mappings, projection) = create_field_mapping(
+            file_schema,
+            &self.projected_table_schema,
+            |file_field, table_field| {
+                if can_cast_types(file_field.data_type(), table_field.data_type()) {
+                    Ok(true)
+                } else {
+                    plan_err!(
+                        "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                        file_field.name(),
+                        file_field.data_type(),
+                        table_field.data_type()
+                    )
                 }
-            }
-        }
+            },
+        )?;
 
         Ok((
             Arc::new(SchemaMapping {
@@ -280,6 +273,43 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             projection,
         ))
     }
+}
+
+/// Helper function that creates field mappings between file schema and table schema
+///
+/// # Arguments
+///
+/// * `file_schema` - The schema of the source file
+/// * `projected_table_schema` - The schema that we're mapping to
+/// * `can_map_field` - A closure that determines whether a field from file schema can be mapped to table schema
+///
+/// # Returns
+/// A tuple containing:
+/// * Field mappings from table schema indices to file schema projection indices
+/// * A projection of indices from the file schema
+pub(crate) fn create_field_mapping<F>(
+    file_schema: &Schema,
+    projected_table_schema: &SchemaRef,
+    can_map_field: F,
+) -> datafusion_common::Result<(Vec<Option<usize>>, Vec<usize>)>
+where
+    F: Fn(&Field, &Field) -> datafusion_common::Result<bool>,
+{
+    let mut projection = Vec::with_capacity(file_schema.fields().len());
+    let mut field_mappings = vec![None; projected_table_schema.fields().len()];
+
+    for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
+        if let Some((table_idx, table_field)) =
+            projected_table_schema.fields().find(file_field.name())
+        {
+            if can_map_field(file_field, table_field)? {
+                field_mappings[table_idx] = Some(projection.len());
+                projection.push(file_idx);
+            }
+        }
+    }
+
+    Ok((field_mappings, projection))
 }
 
 /// The SchemaMapping struct holds a mapping from the file schema to the table

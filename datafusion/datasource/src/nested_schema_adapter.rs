@@ -27,7 +27,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::schema_adapter::{
-    DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+    create_field_mapping, DefaultSchemaAdapterFactory, SchemaAdapter,
+    SchemaAdapterFactory, SchemaMapper,
 };
 use arrow::array::{Array, ArrayRef, StructArray};
 use arrow::compute::cast;
@@ -212,40 +213,33 @@ impl SchemaAdapter for NestedStructSchemaAdapter {
         &self,
         file_schema: &Schema,
     ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        let mut projection = Vec::with_capacity(file_schema.fields().len());
-        let mut field_mappings = vec![None; self.projected_table_schema.fields().len()];
-
-        for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
-            if let Some((table_idx, table_field)) =
-                self.projected_table_schema.fields().find(file_field.name())
-            {
+        let (field_mappings, projection) = create_field_mapping(
+            file_schema,
+            &self.projected_table_schema,
+            |file_field, table_field| {
                 // Special handling for struct fields - always include them even if the
                 // internal structure differs, as we'll adapt them later
                 match (file_field.data_type(), table_field.data_type()) {
-                    (Struct(_), Struct(_)) => {
-                        field_mappings[table_idx] = Some(projection.len());
-                        projection.push(file_idx);
-                    }
+                    (Struct(_), Struct(_)) => Ok(true),
                     _ => {
                         // For non-struct fields, follow the default adapter's behavior
                         if arrow::compute::can_cast_types(
                             file_field.data_type(),
                             table_field.data_type(),
                         ) {
-                            field_mappings[table_idx] = Some(projection.len());
-                            projection.push(file_idx);
+                            Ok(true)
                         } else {
-                            return datafusion_common::plan_err!(
+                            datafusion_common::plan_err!(
                                 "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
                                 file_field.name(),
                                 file_field.data_type(),
                                 table_field.data_type()
-                            );
+                            )
                         }
                     }
                 }
-            }
-        }
+            },
+        )?;
 
         Ok((
             Arc::new(NestedStructSchemaMapping::new(
