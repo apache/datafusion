@@ -467,7 +467,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if let Some(filter) = filter {
@@ -512,7 +512,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if let Some(filter) = filter {
@@ -556,7 +556,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if !partition_by.is_empty() {
@@ -603,7 +603,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(nt) = null_treatment {
-            display_name.write_fmt(format_args!(" {}", nt))?;
+            display_name.write_fmt(format_args!(" {nt}"))?;
         }
         if let Some(fe) = filter {
             display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
@@ -650,7 +650,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            display_name.write_fmt(format_args!(" {}", null_treatment))?;
+            display_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if !partition_by.is_empty() {

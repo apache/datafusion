@@ -354,6 +354,7 @@ impl CoalesceBatchesStream {
                     }
                 }
                 CoalesceBatchesStreamState::ReturnBuffer => {
+                    let _timer = cloned_time.timer();
                     // Combine buffered batches into one batch and return it.
                     let batch = self.coalescer.finish_batch()?;
                     // Set to pull state for the next iteration.
@@ -366,6 +367,7 @@ impl CoalesceBatchesStream {
                         // If buffer is empty, return None indicating the stream is fully consumed.
                         Poll::Ready(None)
                     } else {
+                        let _timer = cloned_time.timer();
                         // If the buffer still contains batches, prepare to return them.
                         let batch = self.coalescer.finish_batch()?;
                         Poll::Ready(Some(Ok(batch)))

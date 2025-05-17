@@ -126,7 +126,7 @@ fn roundtrip_expr_test_with_codec(
     codec: &dyn LogicalExtensionCodec,
 ) {
     let proto: protobuf::LogicalExprNode = serialize_expr(&initial_struct, codec)
-        .unwrap_or_else(|e| panic!("Error serializing expression: {:?}", e));
+        .unwrap_or_else(|e| panic!("Error serializing expression: {e:?}"));
     let round_trip: Expr = from_proto::parse_expr(&proto, &ctx, codec).unwrap();
 
     assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));

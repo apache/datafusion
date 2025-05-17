@@ -718,6 +718,7 @@ fn coerce_frame_bound(
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
         || is_utf8_or_utf8view_or_large_utf8(col_type)
+        || matches!(col_type, DataType::List(_))
         || matches!(col_type, DataType::Null)
         || matches!(col_type, DataType::Boolean)
     {
@@ -1146,17 +1147,14 @@ mod test {
         match analyzer.execute_and_check(plan, &options, |_, _| {}) {
             Ok(succeeded_plan) => {
                 panic!(
-                    "Expected a type coercion error, but analysis succeeded: \n{:#?}",
-                    succeeded_plan
+                    "Expected a type coercion error, but analysis succeeded: \n{succeeded_plan:#?}"
                 );
             }
             Err(e) => {
                 let msg = e.to_string();
                 assert!(
                     msg.contains(expected_substr),
-                    "Error did not contain expected substring.\n  expected to find: `{}`\n  actual error: `{}`",
-                    expected_substr,
-                    msg
+                    "Error did not contain expected substring.\n  expected to find: `{expected_substr}`\n  actual error: `{msg}`"
                 );
             }
         }

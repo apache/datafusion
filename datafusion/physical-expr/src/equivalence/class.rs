@@ -166,7 +166,7 @@ impl ConstExpr {
                     } else {
                         write!(f, ",")?;
                     }
-                    write!(f, "{}", const_expr)?;
+                    write!(f, "{const_expr}")?;
                 }
                 Ok(())
             }
@@ -184,7 +184,7 @@ impl Display for ConstExpr {
             }
             AcrossPartitions::Uniform(value) => {
                 if let Some(val) = value {
-                    write!(f, "(uniform: {})", val)?;
+                    write!(f, "(uniform: {val})")?;
                 } else {
                     write!(f, "(uniform: unknown)")?;
                 }
@@ -747,10 +747,10 @@ impl Display for EquivalenceGroup {
         write!(f, "[")?;
         let mut iter = self.iter();
         if let Some(cls) = iter.next() {
-            write!(f, "{}", cls)?;
+            write!(f, "{cls}")?;
         }
         for cls in iter {
-            write!(f, ", {}", cls)?;
+            write!(f, ", {cls}")?;
         }
         write!(f, "]")
     }
@@ -798,12 +798,11 @@ mod tests {
             eq_groups.bridge_classes();
             let eq_groups = eq_groups.classes;
             let err_msg = format!(
-                "error in test entries: {:?}, expected: {:?}, actual:{:?}",
-                entries, expected, eq_groups
+                "error in test entries: {entries:?}, expected: {expected:?}, actual:{eq_groups:?}"
             );
-            assert_eq!(eq_groups.len(), expected.len(), "{}", err_msg);
+            assert_eq!(eq_groups.len(), expected.len(), "{err_msg}");
             for idx in 0..eq_groups.len() {
-                assert_eq!(&eq_groups[idx], &expected[idx], "{}", err_msg);
+                assert_eq!(&eq_groups[idx], &expected[idx], "{err_msg}");
             }
         }
         Ok(())
@@ -1040,8 +1039,7 @@ mod tests {
             let actual = eq_group.exprs_equal(&left, &right);
             assert_eq!(
                 actual, expected,
-                "{}: Failed comparing {:?} and {:?}, expected {}, got {}",
-                description, left, right, expected, actual
+                "{description}: Failed comparing {left:?} and {right:?}, expected {expected}, got {actual}"
             );
         }
 

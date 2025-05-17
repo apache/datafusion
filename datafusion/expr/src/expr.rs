@@ -312,27 +312,7 @@ pub enum Expr {
     Negative(Box<Expr>),
     /// Whether an expression is between a given range.
     Between(Between),
-    /// The CASE expression is similar to a series of nested if/else and there are two forms that
-    /// can be used. The first form consists of a series of boolean "when" expressions with
-    /// corresponding "then" expressions, and an optional "else" expression.
-    ///
-    /// ```text
-    /// CASE WHEN condition THEN result
-    ///      [WHEN ...]
-    ///      [ELSE result]
-    /// END
-    /// ```
-    ///
-    /// The second form uses a base expression and then a series of "when" clauses that match on a
-    /// literal value.
-    ///
-    /// ```text
-    /// CASE expression
-    ///     WHEN value THEN result
-    ///     [WHEN ...]
-    ///     [ELSE result]
-    /// END
-    /// ```
+    /// A CASE expression (see docs on [`Case`])
     Case(Case),
     /// Casts the expression to a given type and will return a runtime error if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
@@ -340,7 +320,7 @@ pub enum Expr {
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
-    /// Represents the call of a scalar function with a set of arguments.
+    /// Call a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Calls an aggregate function with arguments, and optional
     /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
@@ -349,7 +329,7 @@ pub enum Expr {
     ///
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     AggregateFunction(AggregateFunction),
-    /// Represents the call of a window function with arguments.
+    /// Call a window function with a set of arguments.
     WindowFunction(WindowFunction),
     /// Returns whether the list contains the expr value.
     InList(InList),
@@ -378,7 +358,7 @@ pub enum Expr {
     /// A place holder for parameters in a prepared statement
     /// (e.g. `$foo` or `$1`)
     Placeholder(Placeholder),
-    /// A place holder which hold a reference to a qualified field
+    /// A placeholder which holds a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
     /// Unnest expression
@@ -551,6 +531,28 @@ impl Display for BinaryExpr {
 }
 
 /// CASE expression
+///
+/// The CASE expression is similar to a series of nested if/else and there are two forms that
+/// can be used. The first form consists of a series of boolean "when" expressions with
+/// corresponding "then" expressions, and an optional "else" expression.
+///
+/// ```text
+/// CASE WHEN condition THEN result
+///      [WHEN ...]
+///      [ELSE result]
+/// END
+/// ```
+///
+/// The second form uses a base expression and then a series of "when" clauses that match on a
+/// literal value.
+///
+/// ```text
+/// CASE expression
+///     WHEN value THEN result
+///     [WHEN ...]
+///     [ELSE result]
+/// END
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Case {
     /// Optional base expression that can be compared to literal values in the "when" expressions
@@ -631,7 +633,9 @@ impl Between {
     }
 }
 
-/// ScalarFunction expression invokes a built-in scalar function
+/// Invoke a [`ScalarUDF`] with a set of arguments
+///
+/// [`ScalarUDF`]: crate::ScalarUDF
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
@@ -648,7 +652,9 @@ impl ScalarFunction {
 }
 
 impl ScalarFunction {
-    /// Create a new ScalarFunction expression with a user-defined function (UDF)
+    /// Create a new `ScalarFunction` from a [`ScalarUDF`]
+    ///
+    /// [`ScalarUDF`]: crate::ScalarUDF
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
         Self { func: udf, args }
     }
@@ -2458,7 +2464,7 @@ impl Display for SchemaDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -2609,7 +2615,7 @@ impl Display for SchemaDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -2647,7 +2653,7 @@ impl Display for SchemaDisplay<'_> {
                             write!(f, "{name}")
                         }
                         Err(e) => {
-                            write!(f, "got error from window_function_schema_name {}", e)
+                            write!(f, "got error from window_function_schema_name {e}")
                         }
                     }
                 }
@@ -2668,7 +2674,7 @@ impl Display for SchemaDisplay<'_> {
                     )?;
 
                     if let Some(null_treatment) = null_treatment {
-                        write!(f, " {}", null_treatment)?;
+                        write!(f, " {null_treatment}")?;
                     }
 
                     if !partition_by.is_empty() {
@@ -2862,7 +2868,7 @@ impl Display for SqlDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -3024,10 +3030,10 @@ impl Display for Expr {
                 WindowFunctionDefinition::AggregateUDF(fun) => {
                     match fun.window_function_display_name(params) {
                         Ok(name) => {
-                            write!(f, "{}", name)
+                            write!(f, "{name}")
                         }
                         Err(e) => {
-                            write!(f, "got error from window_function_display_name {}", e)
+                            write!(f, "got error from window_function_display_name {e}")
                         }
                     }
                 }
@@ -3043,7 +3049,7 @@ impl Display for Expr {
                     fmt_function(f, &fun.to_string(), false, args, true)?;
 
                     if let Some(nt) = null_treatment {
-                        write!(f, "{}", nt)?;
+                        write!(f, "{nt}")?;
                     }
 
                     if !partition_by.is_empty() {
@@ -3064,10 +3070,10 @@ impl Display for Expr {
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.display_name(params) {
                     Ok(name) => {
-                        write!(f, "{}", name)
+                        write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from display_name {}", e)
+                        write!(f, "got error from display_name {e}")
                     }
                 }
             }
