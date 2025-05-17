@@ -23,7 +23,7 @@
 
 use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, ColumnStatistics};
 use std::fmt::Debug;
 use std::sync::Arc;
