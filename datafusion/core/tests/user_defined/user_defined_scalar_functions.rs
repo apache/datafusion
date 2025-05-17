@@ -1564,16 +1564,13 @@ async fn test_metadata_based_udf_with_literal() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("doubled_output", DataType::UInt64, true)
             .with_metadata(output_metadata.clone()),
-        Field::new("not_doubled_output", DataType::UInt64, false)
+        Field::new("not_doubled_output", DataType::UInt64, true)
             .with_metadata(output_metadata.clone()),
     ]));
 
     let expected = RecordBatch::try_new(
         schema,
-        vec![
-            create_array!(UInt64, [Some(10)]) as ArrayRef,
-            create_array!(UInt64, [5]),
-        ],
+        vec![create_array!(UInt64, [10]), create_array!(UInt64, [5])],
     )?;
 
     assert_eq!(expected, actual[0]);

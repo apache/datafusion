@@ -33,8 +33,8 @@ use datafusion_common::{
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
-    Operator, Volatility, WindowFunctionDefinition,
+    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr,
+    ExprSchemable, Like, Operator, Volatility, WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
@@ -551,7 +551,7 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
         // stack as not ok (as all parents have at least one child or
         // descendant that can not be evaluated
 
-        if !Self::can_evaluate(&expr) {
+        if !self.can_evaluate(&expr) {
             // walk back up stack, marking first parent that is not mutable
             let parent_iter = self.can_evaluate.iter_mut().rev();
             for p in parent_iter {
@@ -631,7 +631,17 @@ impl<'a> ConstEvaluator<'a> {
 
     /// Can the expression be evaluated at plan time, (assuming all of
     /// its children can also be evaluated)?
-    fn can_evaluate(expr: &Expr) -> bool {
+    fn can_evaluate(&self, expr: &Expr) -> bool {
+        // Any time we have metadata on the return value we cannot
+        // simplify to a literal because we will lose it.
+        let false = expr
+            .metadata(&self.input_schema)
+            .map(|metadata| !metadata.is_empty())
+            .unwrap_or(false)
+        else {
+            return false;
+        };
+
         // check for reasons we can't evaluate this node
         //
         // NOTE all expr types are listed here so when new ones are
@@ -654,11 +664,9 @@ impl<'a> ConstEvaluator<'a> {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
-            Expr::Alias(datafusion_expr::expr::Alias { metadata, .. }) => {
-                metadata.as_ref().map(|h| h.is_empty()).unwrap_or(true)
-            }
             Expr::Literal(_)
             | Expr::Unnest(_)
+            | Expr::Alias(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
             | Expr::IsNotNull(_)
