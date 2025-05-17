@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use arrow::datatypes::Field;
 use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
@@ -98,8 +99,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+        planner_context.extend_outer_query_schema(&Arc::new(input_schema.clone()))?;
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
             for item in &select.projection {
@@ -112,7 +112,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.set_outer_query_schema(old_outer_query_schema);
 
         self.validate_single_column(
             &sub_plan,
