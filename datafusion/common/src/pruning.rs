@@ -176,9 +176,9 @@ impl PartitionPruningStatistics {
         let partition_schema = Arc::new(Schema::new(partition_fields));
         let mut partition_valeus_by_column =
             vec![vec![]; partition_schema.fields().len()];
-        for partition_value in partition_values.iter() {
-            for (i, value) in partition_value.iter().enumerate() {
-                partition_valeus_by_column[i].push(value.clone());
+        for partition_value in partition_values {
+            for (i, value) in partition_value.into_iter().enumerate() {
+                partition_valeus_by_column[i].push(value);
             }
         }
         Self {
@@ -193,14 +193,9 @@ impl PruningStatistics for PartitionPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
         let partition_values = self.partition_values.get(index)?;
-        let mut values = Vec::with_capacity(self.partition_values.len());
-        for partition_value in partition_values {
-            match partition_value {
-                ScalarValue::Null => values.push(ScalarValue::Null),
-                _ => values.push(partition_value.clone()),
-            }
-        }
-        match ScalarValue::iter_to_array(values) {
+        match ScalarValue::iter_to_array(
+            partition_values.iter().map(|v| v.clone()),
+        ) {
             Ok(array) => Some(array),
             Err(_) => {
                 log::warn!(
@@ -253,6 +248,8 @@ impl PruningStatistics for PartitionPruningStatistics {
 /// Each [`Statistics`] represents a container (e.g. a file or a partition of files).
 pub struct PrunableStatistics {
     /// Statistics for each container.
+    /// These are taken as a reference since they may be rather large / expensive to clone
+    /// and we often won't return all of them as ArrayRefs (we only return the columns the predicate requests).
     statistics: Vec<Arc<Statistics>>,
     /// The schema of the file these statistics are for.
     schema: SchemaRef,
@@ -263,56 +260,74 @@ impl PrunableStatistics {
     /// Each [`Statistics`] represents a container (e.g. a file or a partition of files).
     /// The `schema` is the schema of the data in the containers and should apply to all files.
     pub fn new(statistics: Vec<Arc<Statistics>>, schema: SchemaRef) -> Self {
-        Self { statistics, schema }
+        Self { statistics: statistics, schema }
     }
 }
 
 impl PruningStatistics for PrunableStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.schema.index_of(column.name()).ok()?;
-        let mut values = Vec::with_capacity(self.statistics.len());
-        for stats in &self.statistics {
-            let stat = stats.column_statistics.get(index)?;
-            match &stat.min_value {
-                Precision::Exact(min) => {
-                    values.push(min.clone());
+        if self.statistics.iter().any(|s| {
+            s.column_statistics.get(index).map_or(false, |stat| {
+                stat.min_value.is_exact().unwrap_or(false)
+            })
+        }) {
+            match ScalarValue::iter_to_array(
+                self.statistics.iter().map(|s| {
+                    s.column_statistics.get(index).and_then(|stat| {
+                        if let Precision::Exact(min) = &stat.min_value {
+                            Some(min.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(ScalarValue::Null)
+                }),
+            ) {
+                Ok(array) => Some(array),
+                Err(_) => {
+                    log::warn!(
+                        "Failed to convert min values to array for column {}",
+                        column.name()
+                    );
+                    None
                 }
-                _ => values.push(ScalarValue::Null),
             }
-        }
-        match ScalarValue::iter_to_array(values) {
-            Ok(array) => Some(array),
-            Err(_) => {
-                log::warn!(
-                    "Failed to convert min values to array for column {}",
-                    column.name()
-                );
-                None
-            }
+        } else {
+            None
         }
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.schema.index_of(column.name()).ok()?;
-        let mut values = Vec::with_capacity(self.statistics.len());
-        for stats in &self.statistics {
-            let stat = stats.column_statistics.get(index)?;
-            match &stat.max_value {
-                Precision::Exact(max) => {
-                    values.push(max.clone());
+        if self.statistics.iter().any(|s| {
+            s.column_statistics.get(index).map_or(false, |stat| {
+                stat.max_value.is_exact().unwrap_or(false)
+            })
+        }) {
+            match ScalarValue::iter_to_array(
+                self.statistics.iter().map(|s| {
+                    s.column_statistics.get(index).and_then(|stat| {
+                        if let Precision::Exact(max) = &stat.max_value {
+                            Some(max.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(ScalarValue::Null)
+                }),
+            ) {
+                Ok(array) => Some(array),
+                Err(_) => {
+                    log::warn!(
+                        "Failed to convert max values to array for column {}",
+                        column.name()
+                    );
+                    None
                 }
-                _ => values.push(ScalarValue::Null),
             }
-        }
-        match ScalarValue::iter_to_array(values) {
-            Ok(array) => Some(array),
-            Err(_) => {
-                log::warn!(
-                    "Failed to convert max values to array for column {}",
-                    column.name()
-                );
-                None
-            }
+        } else {
+            None
         }
     }
 
@@ -322,49 +337,36 @@ impl PruningStatistics for PrunableStatistics {
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.schema.index_of(column.name()).ok()?;
-        let mut values = Vec::with_capacity(self.statistics.len());
-        let mut has_null_count = false;
-        for stats in &self.statistics {
-            let stat = stats.column_statistics.get(index)?;
-            match &stat.null_count {
-                Precision::Exact(null_count) => match u64::try_from(*null_count) {
-                    Ok(null_count) => {
-                        has_null_count = true;
-                        values.push(Some(null_count));
-                    }
-                    Err(_) => {
-                        values.push(None);
-                    }
-                },
-                _ => values.push(None),
-            }
-        }
-        if has_null_count {
-            Some(Arc::new(UInt64Array::from(values)))
+        if self.statistics.iter().any(|s| s.column_statistics.get(index).map_or(false, |stat| stat.null_count.is_exact().unwrap_or(false))) {
+            Some(Arc::new(
+                self.statistics.iter().map(|s| {
+                    s.column_statistics.get(index).and_then(|stat| {
+                        if let Precision::Exact(null_count) = &stat.null_count {
+                            u64::try_from(*null_count).ok()
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect::<UInt64Array>()
+            ))
         } else {
             None
         }
     }
 
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-        let mut values = Vec::with_capacity(self.statistics.len());
-        let mut has_row_count = false;
-        for stats in &self.statistics {
-            match &stats.num_rows {
-                Precision::Exact(row_count) => match u64::try_from(*row_count) {
-                    Ok(row_count) => {
-                        has_row_count = true;
-                        values.push(Some(row_count));
+        if self.statistics.iter().any(|s| s.num_rows.is_exact().unwrap_or(false)) {
+            Some(Arc::new(
+                self.statistics.iter().map(|s| {
+                    if let Precision::Exact(row_count) = &s.num_rows {
+                        u64::try_from(*row_count).ok()
+                    } else {
+                        None
                     }
-                    Err(_) => {
-                        values.push(None);
-                    }
-                },
-                _ => values.push(None),
-            }
-        }
-        if has_row_count {
-            Some(Arc::new(UInt64Array::from(values)))
+                })
+                .collect::<UInt64Array>()
+            ))
         } else {
             None
         }
@@ -385,6 +387,12 @@ impl PruningStatistics for PrunableStatistics {
 /// for example partition values and file statistics.
 /// This allows pruning with filters that depend on multiple sources of statistics,
 /// such as `WHERE partition_col = data_col`.
+/// This is done by iterating over the statistics and returning the first
+/// one that has information for the requested column.
+/// If multiple statistics have information for the same column,
+/// the first one is returned without any regard for completeness or accuracy.
+/// That is: if the first statistics has information for a column, even if it is incomplete,
+/// that is returned even if a later statistics has more complete information.
 pub struct CompositePruningStatistics {
     pub statistics: Vec<Box<dyn PruningStatistics>>,
 }

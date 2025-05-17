@@ -134,43 +134,45 @@ impl FileOpener for ParquetOpener {
             // Prune this file using the file level statistics.
             // Since dynamic filters may have been updated since planning it is possible that we are able
             // to prune files now that we couldn't prune at planning time.
-            if let (Some(stats), Some(predicate)) = (&file.statistics, &predicate) {
-                let pruning_predicate = build_pruning_predicate(
-                    Arc::clone(predicate),
-                    &table_schema,
-                    &predicate_creation_errors,
-                );
-                if let Some(pruning_predicate) = pruning_predicate {
-                    let stats_pruning = Box::new(PrunableStatistics::new(
-                        vec![Arc::clone(stats)],
-                        Arc::clone(&table_schema),
-                    ));
-                    // The partition column schema is the schema of the table - the schema of the file
-                    let partition_pruning = Box::new(PartitionPruningStatistics::new(
-                        vec![file.partition_values],
-                        partition_fields.clone(),
-                    ));
-                    let combined_pruning = CompositePruningStatistics::new(vec![
-                        partition_pruning,
-                        stats_pruning,
-                    ]);
-                    match pruning_predicate.prune(&combined_pruning) {
-                        Ok(values) => {
-                            assert!(values.len() == 1);
-                            // We expect a single container -> if all containers are false skip this file
-                            if values.into_iter().all(|v| !v) {
-                                // Return an empty stream
-                                file_metrics.files_pruned_statistics.add(1);
-                                return Ok(futures::stream::empty().boxed());
+            {
+                if let (Some(stats), Some(predicate)) = (&file.statistics, &predicate) {
+                    let pruning_predicate = build_pruning_predicate(
+                        Arc::clone(predicate),
+                        &table_schema,
+                        &predicate_creation_errors,
+                    );
+                    if let Some(pruning_predicate) = pruning_predicate {
+                        let stats_pruning = Box::new(PrunableStatistics::new(
+                            vec![stats.clone()],
+                            Arc::clone(&table_schema),
+                        ));
+                        // The partition column schema is the schema of the table - the schema of the file
+                        let partition_pruning = Box::new(PartitionPruningStatistics::new(
+                            vec![file.partition_values],
+                            partition_fields.clone(),
+                        ));
+                        let combined_pruning = CompositePruningStatistics::new(vec![
+                            partition_pruning,
+                            stats_pruning,
+                        ]);
+                        match pruning_predicate.prune(&combined_pruning) {
+                            Ok(values) => {
+                                assert!(values.len() == 1);
+                                // We expect a single container -> if all containers are false skip this file
+                                if values.into_iter().all(|v| !v) {
+                                    // Return an empty stream
+                                    file_metrics.files_pruned_statistics.add(1);
+                                    return Ok(futures::stream::empty().boxed());
+                                }
                             }
-                        }
-                        // Stats filter array could not be built, so we can't prune
-                        Err(e) => {
-                            debug!(
-                                "Ignoring error building pruning predicate for file '{}': {e}",
-                                file_meta.location(),
-                            );
-                            predicate_creation_errors.add(1);
+                            // Stats filter array could not be built, so we can't prune
+                            Err(e) => {
+                                debug!(
+                                    "Ignoring error building pruning predicate for file '{}': {e}",
+                                    file_meta.location(),
+                                );
+                                predicate_creation_errors.add(1);
+                            }
                         }
                     }
                 }
