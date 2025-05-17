@@ -1,0 +1,107 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: API Changes
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+on:
+  push:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
+
+jobs:
+  semver-checks:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install semver-checks
+        run: cargo install cargo-semver-checks --locked
+      - name: Run semver-check datasource
+        run: cargo semver-checks check-release -p datafusion-datasource -p datafusion-datasource-avro -p datafusion-datasource-csv -p datafusion-datasource-json -p datafusion-datasource-parquet
+        continue-on-error: true
+      - name: Run semver-check common
+        run: cargo semver-checks check-release -p datafusion-common -p datafusion-common-runtime
+        continue-on-error: true
+      - name: Run semver-check catalog
+        run: cargo semver-checks check-release -p datafusion-catalog -p datafusion-catalog-listing
+        continue-on-error: true
+      - name: Run semver-check execution
+        run: cargo semver-checks check-release -p datafusion-execution -p datafusion-session
+        continue-on-error: true
+      - name: Run semver-check expr
+        run: cargo semver-checks check-release  -p datafusion-expr -p datafusion-expr-common -p datafusion-physical-expr
+        continue-on-error: true
+      - name : Run semver-check functions
+        run: cargo semver-checks check-release -p datafusion-functions -p datafusion-functions-aggregate -p datafusion-functions-aggregate-common -p datafusion-functions-nested -p datafusion-functions-table -p datafusion-functions-window -p datafusion-functions-window-common
+        continue-on-error: true
+      - name: Run semver-check macros
+        run: cargo semver-checks check-release -p datafusion-macros
+        continue-on-error: true
+      - name: Run semver-check optimizer
+        run: cargo semver-checks check-release -p datafusion-optimizer -p datafusion-physicl-optimizer
+        continue-on-error: true
+      
+  semver-checks-2:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install semver-checks
+        run: cargo install cargo-semver-checks --locked
+      - name: Run semver-check physical-plan
+        run: cargo semver-checks check-release -p datafusion-physical-plan
+        continue-on-error: true
+      - name: Run semver-check proto
+        run: cargo semver-checks check-release -p datafusion-proto -p datafusion-proto-common
+        continue-on-error: true
+      - name: Run semver-check substrait
+        run: cargo semver-checks check-release -p datafusion-substrait
+        continue-on-error: true
+      - name: Run semver-check sql
+        run: cargo semver-checks check-release -p datafusion-sql
+        continue-on-error: true
+      - name: Run semver-check spark
+        run: cargo semver-checks check-release -p datafusion-spark
+        continue-on-error: true
+      - name: Run semver-check sqllogictest
+        run: cargo semver-checks check-release -p datafusion-sqllogictest
+        continue-on-error: true
+      - name: Run semver-check datafusion-cli
+        run: cargo semver-checks check-release -p datafusion-cli
+        continue-on-error: true
+      - name: Run semver-check datafusion
+        run: cargo semver-checks check-release -p datafusion
+        continue-on-error: true
