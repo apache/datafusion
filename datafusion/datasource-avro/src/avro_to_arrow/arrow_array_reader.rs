@@ -21,7 +21,7 @@ use apache_avro::schema::RecordSchema;
 use apache_avro::{
     schema::{Schema as AvroSchema, SchemaKind},
     types::Value,
-    AvroResult, Error as AvroError, Reader as AvroReader,
+    Error as AvroError, Reader as AvroReader,
 };
 use arrow::array::{
     make_array, Array, ArrayBuilder, ArrayData, ArrayDataBuilder, ArrayRef,
@@ -938,40 +938,31 @@ fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
     .map_err(|e| SchemaError(format!("expected resolvable string : {e:?}")))
 }
 
-fn resolve_u8(v: &Value) -> AvroResult<u8> {
-    let int = match v {
-        Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Long(n) => Ok(Value::Int(*n as i32)),
-        other => Err(AvroError::GetU8(other.into())),
-    }?;
-    if let Value::Int(n) = int {
-        if n >= 0 && n <= From::from(u8::MAX) {
-            return Ok(n as u8);
-        }
-    }
+fn resolve_u8(v: &Value) -> Option<u8> {
+    let v = match v {
+        Value::Union(_, inner) => inner.as_ref(),
+        _ => v,
+    };
 
-    Err(AvroError::GetU8(int.into()))
+    match v {
+        Value::Int(n) => u8::try_from(*n).ok(),
+        Value::Long(n) => u8::try_from(*n).ok(),
+        _ => None,
+    }
 }
 
 fn resolve_bytes(v: &Value) -> Option<Vec<u8>> {
-    let v = if let Value::Union(_, b) = v { b } else { v };
+    let v = match v {
+        Value::Union(_, inner) => inner.as_ref(),
+        _ => v,
+    };
+
     match v {
-        Value::Bytes(_) => Ok(v.clone()),
-        Value::String(s) => Ok(Value::Bytes(s.clone().into_bytes())),
-        Value::Array(items) => Ok(Value::Bytes(
-            items
-                .iter()
-                .map(resolve_u8)
-                .collect::<Result<Vec<_>, _>>()
-                .ok()?,
-        )),
-        other => Err(AvroError::GetBytes(other.into())),
-    }
-    .ok()
-    .and_then(|v| match v {
-        Value::Bytes(s) => Some(s),
+        Value::Bytes(bytes) => Some(bytes.clone()),
+        Value::String(s) => Some(s.as_bytes().to_vec()),
+        Value::Array(items) => items.iter().map(resolve_u8).collect::<Option<Vec<u8>>>(),
         _ => None,
-    })
+    }
 }
 
 fn resolve_fixed(v: &Value, size: usize) -> Option<Vec<u8>> {
