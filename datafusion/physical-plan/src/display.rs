@@ -394,8 +394,8 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = plan.statistics().map_err(|_e| fmt::Error)?;
-            write!(self.f, ", statistics=[{}]", stats)?;
+            let stats = plan.partition_statistics(None).map_err(|_e| fmt::Error)?;
+            write!(self.f, ", statistics=[{stats}]")?;
         }
         if self.show_schema {
             write!(
@@ -479,8 +479,8 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = plan.statistics().map_err(|_e| fmt::Error)?;
-            format!("statistics=[{}]", stats)
+            let stats = plan.partition_statistics(None).map_err(|_e| fmt::Error)?;
+            format!("statistics=[{stats}]")
         } else {
             "".to_string()
         };
@@ -495,7 +495,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             self.f,
             id,
             &label,
-            Some(&format!("{}{}{}", metrics, delimiter, statistics)),
+            Some(&format!("{metrics}{delimiter}{statistics}")),
         )?;
 
         if let Some(parent_node_id) = self.parents.last() {
@@ -686,7 +686,7 @@ impl TreeRenderVisitor<'_, '_> {
                         &render_text,
                         Self::NODE_RENDER_WIDTH - 2,
                     );
-                    write!(self.f, "{}", render_text)?;
+                    write!(self.f, "{render_text}")?;
 
                     if render_y == halfway_point && node.child_positions.len() > 1 {
                         write!(self.f, "{}", Self::LMIDDLE)?;
@@ -856,10 +856,10 @@ impl TreeRenderVisitor<'_, '_> {
             if str.is_empty() {
                 str = key.to_string();
             } else if !is_multiline && total_size < available_width {
-                str = format!("{}: {}", key, str);
+                str = format!("{key}: {str}");
                 is_inlined = true;
             } else {
-                str = format!("{}:\n{}", key, str);
+                str = format!("{key}:\n{str}");
             }
 
             if is_inlined && was_inlined {
@@ -902,7 +902,7 @@ impl TreeRenderVisitor<'_, '_> {
         let render_width = source.chars().count();
         if render_width > max_render_width {
             let truncated = &source[..max_render_width - 3];
-            format!("{}...", truncated)
+            format!("{truncated}...")
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
@@ -1041,17 +1041,17 @@ pub fn display_orderings(f: &mut Formatter, orderings: &[LexOrdering]) -> fmt::R
             } else {
                 ", output_orderings=["
             };
-            write!(f, "{}", start)?;
+            write!(f, "{start}")?;
             for (idx, ordering) in
                 orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
             {
                 match idx {
-                    0 => write!(f, "[{}]", ordering)?,
-                    _ => write!(f, ", [{}]", ordering)?,
+                    0 => write!(f, "[{ordering}]")?,
+                    _ => write!(f, ", [{ordering}]")?,
                 }
             }
             let end = if orderings.len() == 1 { "" } else { "]" };
-            write!(f, "{}", end)?;
+            write!(f, "{end}")?;
         }
     }
 
@@ -1120,6 +1120,13 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
+            self.partition_statistics(None)
+        }
+
+        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+            if partition.is_some() {
+                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+            }
             match self {
                 Self::Panic => panic!("expected panic"),
                 Self::Error => {

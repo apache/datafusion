@@ -33,7 +33,7 @@ use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNumericType, ArrowPrimitiveType, DataType, Date32Type,
     Date64Type, Field, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
@@ -56,23 +56,17 @@ type RecordSlice<'a> = &'a [&'a Vec<(String, Value)>];
 pub struct AvroArrowArrayReader<'a, R: Read> {
     reader: AvroReader<'a, R>,
     schema: SchemaRef,
-    projection: Option<Vec<String>>,
     schema_lookup: BTreeMap<String, usize>,
 }
 
 impl<R: Read> AvroArrowArrayReader<'_, R> {
-    pub fn try_new(
-        reader: R,
-        schema: SchemaRef,
-        projection: Option<Vec<String>>,
-    ) -> Result<Self> {
+    pub fn try_new(reader: R, schema: SchemaRef) -> Result<Self> {
         let reader = AvroReader::new(reader)?;
         let writer_schema = reader.writer_schema().clone();
         let schema_lookup = Self::schema_lookup(writer_schema)?;
         Ok(Self {
             reader,
             schema,
-            projection,
             schema_lookup,
         })
     }
@@ -123,7 +117,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             AvroSchema::Record(RecordSchema { fields, lookup, .. }) => {
                 lookup.iter().for_each(|(field_name, pos)| {
                     schema_lookup
-                        .insert(format!("{}.{}", parent_field_name, field_name), *pos);
+                        .insert(format!("{parent_field_name}.{field_name}"), *pos);
                 });
 
                 for field in fields {
@@ -137,7 +131,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 }
             }
             AvroSchema::Array(schema) => {
-                let sub_parent_field_name = format!("{}.element", parent_field_name);
+                let sub_parent_field_name = format!("{parent_field_name}.element");
                 Self::child_schema_lookup(
                     &sub_parent_field_name,
                     &schema.items,
@@ -175,20 +169,9 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
         };
 
         let rows = rows.iter().collect::<Vec<&Vec<(String, Value)>>>();
-        let projection = self.projection.clone().unwrap_or_default();
-        let arrays =
-            self.build_struct_array(&rows, "", self.schema.fields(), &projection);
-        let projected_fields = if projection.is_empty() {
-            self.schema.fields().clone()
-        } else {
-            projection
-                .iter()
-                .filter_map(|name| self.schema.column_with_name(name))
-                .map(|(_, field)| field.clone())
-                .collect()
-        };
-        let projected_schema = Arc::new(Schema::new(projected_fields));
-        Some(arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr)))
+        let arrays = self.build_struct_array(&rows, "", self.schema.fields());
+
+        Some(arrays.and_then(|arr| RecordBatch::try_new(Arc::clone(&self.schema), arr)))
     }
 
     fn build_boolean_array(&self, rows: RecordSlice, col_name: &str) -> ArrayRef {
@@ -615,7 +598,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 let sub_parent_field_name =
                     format!("{}.{}", parent_field_name, list_field.name());
                 let arrays =
-                    self.build_struct_array(&rows, &sub_parent_field_name, fields, &[])?;
+                    self.build_struct_array(&rows, &sub_parent_field_name, fields)?;
                 let data_type = DataType::Struct(fields.clone());
                 ArrayDataBuilder::new(data_type)
                     .len(rows.len())
@@ -645,20 +628,14 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
     /// The function does not construct the StructArray as some callers would want the child arrays.
     ///
     /// *Note*: The function is recursive, and will read nested structs.
-    ///
-    /// If `projection` is not empty, then all values are returned. The first level of projection
-    /// occurs at the `RecordBatch` level. No further projection currently occurs, but would be
-    /// useful if plucking values from a struct, e.g. getting `a.b.c.e` from `a.b.c.{d, e}`.
     fn build_struct_array(
         &self,
         rows: RecordSlice,
         parent_field_name: &str,
         struct_fields: &Fields,
-        projection: &[String],
     ) -> ArrowResult<Vec<ArrayRef>> {
         let arrays: ArrowResult<Vec<ArrayRef>> = struct_fields
             .iter()
-            .filter(|field| projection.is_empty() || projection.contains(field.name()))
             .map(|field| {
                 let field_path = if parent_field_name.is_empty() {
                     field.name().to_string()
@@ -840,12 +817,8 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                                 }
                             })
                             .collect::<Vec<&Vec<(String, Value)>>>();
-                        let arrays = self.build_struct_array(
-                            &struct_rows,
-                            &field_path,
-                            fields,
-                            &[],
-                        )?;
+                        let arrays =
+                            self.build_struct_array(&struct_rows, &field_path, fields)?;
                         // construct a struct array's data in order to set null buffer
                         let data_type = DataType::Struct(fields.clone());
                         let data = ArrayDataBuilder::new(data_type)

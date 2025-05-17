@@ -315,6 +315,16 @@ impl AggregateUDF {
         self.inner.default_value(data_type)
     }
 
+    /// See [`AggregateUDFImpl::supports_null_handling_clause`] for more details.
+    pub fn supports_null_handling_clause(&self) -> bool {
+        self.inner.supports_null_handling_clause()
+    }
+
+    /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
+    pub fn is_ordered_set_aggregate(&self) -> bool {
+        self.inner.is_ordered_set_aggregate()
+    }
+
     /// Returns the documentation for this Aggregate UDF.
     ///
     /// Documentation can be accessed programmatically as well as
@@ -432,6 +442,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             null_treatment,
         } = params;
 
+        // exclude the first function argument(= column) in ordered set aggregate function,
+        // because it is duplicated with the WITHIN GROUP clause in schema name.
+        let args = if self.is_ordered_set_aggregate() {
+            &args[1..]
+        } else {
+            &args[..]
+        };
+
         let mut schema_name = String::new();
 
         schema_name.write_fmt(format_args!(
@@ -442,7 +460,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if let Some(filter) = filter {
@@ -450,8 +468,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         };
 
         if let Some(order_by) = order_by {
+            let clause = match self.is_ordered_set_aggregate() {
+                true => "WITHIN GROUP",
+                false => "ORDER BY",
+            };
+
             schema_name.write_fmt(format_args!(
-                " ORDER BY [{}]",
+                " {} [{}]",
+                clause,
                 schema_name_from_sorts(order_by)?
             ))?;
         };
@@ -481,7 +505,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if let Some(filter) = filter {
@@ -525,7 +549,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if !partition_by.is_empty() {
@@ -572,7 +596,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(nt) = null_treatment {
-            display_name.write_fmt(format_args!(" {}", nt))?;
+            display_name.write_fmt(format_args!(" {nt}"))?;
         }
         if let Some(fe) = filter {
             display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
@@ -619,7 +643,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            display_name.write_fmt(format_args!(" {}", null_treatment))?;
+            display_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if !partition_by.is_empty() {
@@ -889,6 +913,18 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// while `count` returns 0 if input is Null
     fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         ScalarValue::try_from(data_type)
+    }
+
+    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
+    /// If the function does not, return false
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    /// If this function is ordered-set aggregate function, return true
+    /// If the function is not, return false
+    fn is_ordered_set_aggregate(&self) -> bool {
+        false
     }
 
     /// Returns the documentation for this Aggregate UDF.

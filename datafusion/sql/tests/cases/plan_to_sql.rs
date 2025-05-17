@@ -170,6 +170,13 @@ fn roundtrip_statement() -> Result<()> {
                 UNION ALL
                 SELECT j3_string AS col1, j3_id AS id FROM j3
             ) AS subquery GROUP BY col1, id ORDER BY col1 ASC, id ASC"#,
+            r#"SELECT col1, id FROM (
+                SELECT j1_string AS col1, j1_id AS id FROM j1
+                UNION
+                SELECT j2_string AS col1, j2_id AS id FROM j2
+                UNION
+                SELECT j3_string AS col1, j3_id AS id FROM j3
+            ) AS subquery ORDER BY col1 ASC, id ASC"#,
             "SELECT id, count(*) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             last_name, sum(id) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             first_name from person",
@@ -691,7 +698,7 @@ fn roundtrip_statement_with_dialect_27() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3])",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
+        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS derived_projection ("UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
     );
     Ok(())
 }
@@ -713,7 +720,7 @@ fn roundtrip_statement_with_dialect_29() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]), j1",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
+        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS derived_projection ("UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
     );
     Ok(())
 }
@@ -2424,4 +2431,88 @@ fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
         @r#"SELECT "t1"."v" FROM "test" AS "t1" WHERE EXISTS (SELECT 1 FROM "test" AS "t2" WHERE ("t1"."v" = "t2"."v"))"#
     );
     Ok(())
+}
+
+#[test]
+fn test_like_filter() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name LIKE '%John%'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name LIKE '%John%'"
+    );
+}
+
+#[test]
+fn test_ilike_filter() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name ILIKE '%john%'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name ILIKE '%john%'"
+    );
+}
+
+#[test]
+fn test_not_like_filter() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT LIKE 'A%'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT LIKE 'A%'"
+    );
+}
+
+#[test]
+fn test_not_ilike_filter() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT ILIKE 'a%'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT ILIKE 'a%'"
+    );
+}
+
+#[test]
+fn test_like_filter_with_escape() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name LIKE 'A!_%' ESCAPE '!'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name LIKE 'A!_%' ESCAPE '!'"
+    );
+}
+
+#[test]
+fn test_not_like_filter_with_escape() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT LIKE 'A!_%' ESCAPE '!'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT LIKE 'A!_%' ESCAPE '!'"
+    );
+}
+
+#[test]
+fn test_not_ilike_filter_with_escape() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT ILIKE 'A!_%' ESCAPE '!'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT ILIKE 'A!_%' ESCAPE '!'"
+    );
 }

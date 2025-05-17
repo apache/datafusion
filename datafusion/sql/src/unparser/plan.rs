@@ -50,7 +50,7 @@ use datafusion_expr::{
     UserDefinedLogicalNode,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
-use std::sync::Arc;
+use std::{sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
 ///
@@ -309,12 +309,13 @@ impl Unparser<'_> {
         plan: &LogicalPlan,
         relation: &mut RelationBuilder,
         lateral: bool,
+        columns: Vec<Ident>,
     ) -> Result<()> {
-        if self.dialect.requires_derived_table_alias() {
+        if self.dialect.requires_derived_table_alias() || !columns.is_empty() {
             self.derive(
                 plan,
                 relation,
-                Some(self.new_table_alias(alias.to_string(), vec![])),
+                Some(self.new_table_alias(alias.to_string(), columns)),
                 lateral,
             )
         } else {
@@ -392,6 +393,18 @@ impl Unparser<'_> {
                     }
                 }
 
+                // If it's a unnest projection, we should provide the table column alias
+                // to provide a column name for the unnest relation.
+                let columns = if unnest_input_type.is_some() {
+                    p.expr
+                        .iter()
+                        .map(|e| {
+                            self.new_ident_quoted_if_needs(e.schema_name().to_string())
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
                 // Projection can be top-level plan for derived table
                 if select.already_projected() {
                     return self.derive_with_dialect_alias(
@@ -401,6 +414,7 @@ impl Unparser<'_> {
                         unnest_input_type
                             .filter(|t| matches!(t, UnnestInputType::OuterReference))
                             .is_some(),
+                        columns,
                     );
                 }
                 self.reconstruct_select_statement(plan, p, select)?;
@@ -434,6 +448,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
                 if let Some(fetch) = &limit.fetch {
@@ -472,6 +487,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
                 let Some(query_ref) = query else {
@@ -543,8 +559,26 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
+
+                // If this distinct is the parent of a Union and we're in a query context,
+                // then we need to unparse as a `UNION` rather than a `UNION ALL`.
+                if let Distinct::All(input) = distinct {
+                    if matches!(input.as_ref(), LogicalPlan::Union(_)) {
+                        if let Some(query_mut) = query.as_mut() {
+                            query_mut.distinct_union();
+                            return self.select_to_sql_recursively(
+                                input.as_ref(),
+                                query,
+                                select,
+                                relation,
+                            );
+                        }
+                    }
+                }
+
                 let (select_distinct, input) = match distinct {
                     Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
                     Distinct::On(on) => {
@@ -816,6 +850,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
 
@@ -829,6 +864,15 @@ impl Unparser<'_> {
                     return internal_err!("UNION operator requires at least 2 inputs");
                 }
 
+                let set_quantifier =
+                    if query.as_ref().is_some_and(|q| q.is_distinct_union()) {
+                        // Setting the SetQuantifier to None will unparse as a `UNION`
+                        // rather than a `UNION ALL`.
+                        ast::SetQuantifier::None
+                    } else {
+                        ast::SetQuantifier::All
+                    };
+
                 // Build the union expression tree bottom-up by reversing the order
                 // note that we are also swapping left and right inputs because of the rev
                 let union_expr = input_exprs
@@ -836,7 +880,7 @@ impl Unparser<'_> {
                     .rev()
                     .reduce(|a, b| SetExpr::SetOperation {
                         op: ast::SetOperator::Union,
-                        set_quantifier: ast::SetQuantifier::All,
+                        set_quantifier,
                         left: Box::new(b),
                         right: Box::new(a),
                     })
@@ -924,6 +968,7 @@ impl Unparser<'_> {
                         subquery.subquery.as_ref(),
                         relation,
                         true,
+                        vec![],
                     )
                 }
             }
@@ -946,8 +991,7 @@ impl Unparser<'_> {
         if let Expr::Alias(Alias { expr, .. }) = expr {
             if let Expr::Column(Column { name, .. }) = expr.as_ref() {
                 if let Some(prefix) = name.strip_prefix(UNNEST_PLACEHOLDER) {
-                    if prefix.starts_with(&format!("({}(", OUTER_REFERENCE_COLUMN_PREFIX))
-                    {
+                    if prefix.starts_with(&format!("({OUTER_REFERENCE_COLUMN_PREFIX}(")) {
                         return Some(UnnestInputType::OuterReference);
                     }
                     return Some(UnnestInputType::Scalar);

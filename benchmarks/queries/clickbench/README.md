@@ -112,7 +112,7 @@ Results look like
 Note this query is somewhat synthetic as "WatchID" is almost unique (there are a few duplicates)
 
 ```sql
-SELECT "ClientIP", "WatchID",  COUNT(*) c, MIN("ResponseStartTiming") tmin, APPROX_PERCENTILE_CONT("ResponseStartTiming", 0.95) tp95, MAX("ResponseStartTiming") tmax
+SELECT "ClientIP", "WatchID",  COUNT(*) c, MIN("ResponseStartTiming") tmin, APPROX_PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY "ResponseStartTiming") tp95, MAX("ResponseStartTiming") tmax
 FROM 'hits.parquet'
 WHERE "JavaEnable" = 0 -- filters to 32M of 100M rows
 GROUP BY  "ClientIP", "WatchID"
@@ -132,6 +132,7 @@ Results look like
 ```
 
 ### Q6: How many social shares meet complex multi-stage filtering criteria?
+
 **Question**: What is the count of sharing actions from iPhone mobile users on specific social networks, within common timezones, participating in seasonal campaigns, with high screen resolutions and closely matched UTM parameters?
 **Important Query Properties**: Simple filter with high-selectivity, Costly string matching, A large number of filters with high overhead are positioned relatively later in the process
 
@@ -155,10 +156,41 @@ WHERE
         THEN split_part(split_part("URL", 'resolution=', 2), '&', 1)::INT 
         ELSE 0 
     END > 1920 -- Extract and validate resolution parameter
-    AND levenshtein("UTMSource", "UTMCampaign") < 3 -- Verify UTM parameter similarity
+    AND levenshtein(CAST("UTMSource" AS STRING), CAST("UTMCampaign" AS STRING)) < 3 -- Verify UTM parameter similarity
 ```
 Result is empty,Since it has already been filtered by `"SocialAction" = 'share'`.
 
+### Q7: Device Resolution and Refresh Behavior Analysis
+
+**Question**: Identify the top 10 WatchIDs with the highest resolution range (min/max "ResolutionWidth") and total refresh count ("IsRefresh") in descending WatchID order
+
+**Important Query Properties**: Primitive aggregation functions, group by single primitive column, high cardinality grouping
+
+```sql
+SELECT "WatchID", MIN("ResolutionWidth") as wmin, MAX("ResolutionWidth") as wmax, SUM("IsRefresh") as srefresh
+FROM hits
+GROUP BY "WatchID"
+ORDER BY "WatchID" DESC
+LIMIT 10;
+```
+
+Results look like
+```
++---------------------+------+------+----------+
+| WatchID             | wmin | wmax | srefresh |
++---------------------+------+------+----------+
+| 9223372033328793741 | 1368 | 1368 | 0        |
+| 9223371941779979288 | 1479 | 1479 | 0        |
+| 9223371906781104763 | 1638 | 1638 | 0        |
+| 9223371803397398692 | 1990 | 1990 | 0        |
+| 9223371799215233959 | 1638 | 1638 | 0        |
+| 9223371785975219972 | 0    | 0    | 0        |
+| 9223371776706839366 | 1368 | 1368 | 0        |
+| 9223371740707848038 | 1750 | 1750 | 0        |
+| 9223371715190479830 | 1368 | 1368 | 0        |
+| 9223371620124912624 | 1828 | 1828 | 0        |
++---------------------+------+------+----------+
+```
 
 ## Data Notes
 

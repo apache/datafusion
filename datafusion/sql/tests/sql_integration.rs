@@ -4642,6 +4642,28 @@ fn test_infer_types_from_join() {
 }
 
 #[test]
+fn test_prepare_statement_infer_types_from_join() {
+    let sql =
+        "PREPARE my_plan AS SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1";
+
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [] 
+      Projection: person.id, orders.order_id
+        Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
+          TableScan: person
+          TableScan: orders
+    "#
+    );
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
+    assert_eq!(actual_types, expected_types);
+}
+
+#[test]
 fn test_infer_types_from_predicate() {
     let sql = "SELECT id, age FROM person WHERE age = $1";
     let plan = logical_plan(sql).unwrap();
@@ -4670,6 +4692,25 @@ fn test_infer_types_from_predicate() {
         TableScan: person
     "
     );
+}
+
+#[test]
+fn test_prepare_statement_infer_types_from_predicate() {
+    let sql = "PREPARE my_plan AS SELECT id, age FROM person WHERE age = $1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [] 
+      Projection: person.id, person.age
+        Filter: person.age = $1
+          TableScan: person
+    "#
+    );
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
+    assert_eq!(actual_types, expected_types);
 }
 
 #[test]
@@ -4705,6 +4746,29 @@ fn test_infer_types_from_between_predicate() {
         TableScan: person
     "
     );
+}
+
+#[test]
+fn test_prepare_statement_infer_types_from_between_predicate() {
+    let sql = "PREPARE my_plan AS SELECT id, age FROM person WHERE age BETWEEN $1 AND $2";
+
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [] 
+      Projection: person.id, person.age
+        Filter: person.age BETWEEN $1 AND $2
+          TableScan: person
+    "#
+    );
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::Int32)),
+        ("$2".to_string(), Some(DataType::Int32)),
+    ]);
+    assert_eq!(actual_types, expected_types);
 }
 
 #[test]
@@ -4750,6 +4814,31 @@ fn test_infer_types_subquery() {
 }
 
 #[test]
+fn test_prepare_statement_infer_types_subquery() {
+    let sql = "PREPARE my_plan AS SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)";
+
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [] 
+      Projection: person.id, person.age
+        Filter: person.age = (<subquery>)
+          Subquery:
+            Projection: max(person.age)
+              Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
+                Filter: person.id = $1
+                  TableScan: person
+          TableScan: person
+    "#
+    );
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::UInt32))]);
+    assert_eq!(actual_types, expected_types);
+}
+
+#[test]
 fn test_update_infer() {
     let sql = "update person set age=$1 where id=$2";
 
@@ -4784,6 +4873,30 @@ fn test_update_infer() {
           TableScan: person
         "
     );
+}
+
+#[test]
+fn test_prepare_statement_update_infer() {
+    let sql = "PREPARE my_plan AS update person set age=$1 where id=$2";
+
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [] 
+      Dml: op=[Update] table=[person]
+        Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+          Filter: person.id = $2
+            TableScan: person
+    "#
+    );
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::Int32)),
+        ("$2".to_string(), Some(DataType::UInt32)),
+    ]);
+    assert_eq!(actual_types, expected_types);
 }
 
 #[test]
@@ -4822,6 +4935,29 @@ fn test_insert_infer() {
         Values: (UInt32(1) AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
     "#
     );
+}
+
+#[test]
+fn test_prepare_statement_insert_infer() {
+    let sql = "PREPARE my_plan AS insert into person (id, first_name, last_name) values ($1, $2, $3)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [] 
+      Dml: op=[Insert Into] table=[person]
+        Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
+          Values: ($1, $2, $3)
+    "#
+    );
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::UInt32)),
+        ("$2".to_string(), Some(DataType::Utf8)),
+        ("$3".to_string(), Some(DataType::Utf8)),
+    ]);
+    assert_eq!(actual_types, expected_types);
 }
 
 #[test]
