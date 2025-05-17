@@ -1162,36 +1162,7 @@ impl PartitionColumnProjector {
         let expected_cols =
             self.projected_schema.fields().len() - self.projected_partition_indexes.len();
 
-        // Add debug statement to log column counts
-        println!(
-            "==> file_batch.columns().len(): {}, expected_cols: {}",
-            file_batch.columns().len(),
-            expected_cols
-        );
         if file_batch.columns().len() != expected_cols {
-            // Print detailed column information to help debug the mismatch
-            println!(
-                "File batch columns: {:?}",
-                file_batch
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| f.name())
-                    .collect::<Vec<_>>()
-            );
-            println!(
-                "Expected schema fields: {:?}",
-                self.projected_schema
-                    .fields()
-                    .iter()
-                    .filter(|f| !self
-                        .projected_partition_indexes
-                        .iter()
-                        .any(|(_, sidx)| *sidx
-                            == self.projected_schema.index_of(f.name()).unwrap()))
-                    .map(|f| f.name())
-                    .collect::<Vec<_>>()
-            );
             return exec_err!(
                 "Unexpected batch schema from file, expected {} cols but got {}",
                 expected_cols,
