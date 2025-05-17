@@ -4661,7 +4661,7 @@ fn test_prepare_statement_infer_types_from_join() {
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
     assert_eq!(actual_types, expected_types);
-  
+
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
     let plan_with_params = plan.with_param_values(param_values).unwrap();
