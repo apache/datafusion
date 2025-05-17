@@ -26,7 +26,8 @@ use arrow::datatypes::DataType;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
-use super::accumulate::NullState;
+use crate::aggregate::groups_accumulator::accumulate::NullStateAdapter;
+use crate::aggregate::groups_accumulator::blocks::{Blocks, GeneralBlocks};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -43,8 +44,8 @@ where
     T: ArrowPrimitiveType + Send,
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
-    /// values per group, stored as the native type
-    values: Vec<T::Native>,
+    /// Values per group, stored as the native type
+    values: GeneralBlocks<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -53,7 +54,7 @@ where
     starting_value: T::Native,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: NullStateAdapter,
 
     /// Function that computes the primitive result
     prim_fn: F,
@@ -66,9 +67,9 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values: vec![],
+            values: Blocks::new(None),
             data_type: data_type.clone(),
-            null_state: NullState::new(),
+            null_state: NullStateAdapter::new(None),
             starting_value: T::default_value(),
             prim_fn,
         }
@@ -96,8 +97,8 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // update values
-        self.values.resize(total_num_groups, self.starting_value);
+        // Expand to ensure values are large enough
+        self.values.expand(total_num_groups, self.starting_value);
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(
@@ -105,8 +106,8 @@ where
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
-                let value = &mut self.values[group_index];
+            |block_id, block_offset, new_value| {
+                let value = self.values.get_mut(block_id, block_offset);
                 (self.prim_fn)(value, new_value);
             },
         );
@@ -115,7 +116,9 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = emit_to.take_needed(&mut self.values);
+        let values = self.values.emit(emit_to).ok_or_else(|| {
+            internal_datafusion_err!("try to evaluate empty accumulator")
+        })?;
         let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
@@ -196,6 +199,24 @@ where
     }
 
     fn size(&self) -> usize {
-        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
+        let values_cap = self.values.iter().map(|b| b.capacity()).sum::<usize>();
+        let values_size = values_cap * size_of::<T::Native>();
+        values_size + self.null_state.size()
+    }
+
+    fn supports_blocked_groups(&self) -> bool {
+        true
+    }
+
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        block_size
+            .as_ref()
+            .map(|blk_size| assert!(blk_size.is_power_of_two()));
+
+        self.values.clear();
+        self.values = Blocks::new(block_size);
+        self.null_state = NullStateAdapter::new(block_size);
+
+        Ok(())
     }
 }

@@ -103,6 +103,7 @@ impl SessionContextGenerator {
             target_partitions,
             skip_partial_params,
             sort_hint: false,
+            enable_aggregation_blocked_groups: false,
             table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
         };
@@ -146,11 +147,14 @@ impl SessionContextGenerator {
                 (provider, false)
             };
 
+        let enable_aggregation_blocked_groups = rng.gen_bool(0.5);
+
         let builder = GeneratedSessionContextBuilder {
             batch_size,
             target_partitions,
             sort_hint,
             skip_partial_params,
+            enable_aggregation_blocked_groups,
             table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
         };
@@ -174,6 +178,7 @@ struct GeneratedSessionContextBuilder {
     target_partitions: usize,
     sort_hint: bool,
     skip_partial_params: SkipPartialParams,
+    enable_aggregation_blocked_groups: bool,
     table_name: String,
     table_provider: Arc<dyn TableProvider>,
 }
@@ -198,6 +203,10 @@ impl GeneratedSessionContextBuilder {
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
             &ScalarValue::Float64(Some(self.skip_partial_params.ratio_threshold)),
         );
+        session_config = session_config.set(
+            "datafusion.execution.enable_aggregation_blocked_groups",
+            &ScalarValue::Boolean(Some(self.enable_aggregation_blocked_groups)),
+        );
 
         let ctx = SessionContext::new_with_config(session_config);
         ctx.register_table(self.table_name, self.table_provider)?;
@@ -207,6 +216,7 @@ impl GeneratedSessionContextBuilder {
             target_partitions: self.target_partitions,
             sort_hint: self.sort_hint,
             skip_partial_params: self.skip_partial_params,
+            enable_aggregation_blocked_groups: self.enable_aggregation_blocked_groups,
         };
 
         Ok(SessionContextWithParams { ctx, params })
@@ -221,6 +231,7 @@ pub struct SessionContextParams {
     target_partitions: usize,
     sort_hint: bool,
     skip_partial_params: SkipPartialParams,
+    enable_aggregation_blocked_groups: bool,
 }
 
 /// Partial skipping parameters
