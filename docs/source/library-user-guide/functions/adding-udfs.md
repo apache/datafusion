@@ -23,12 +23,13 @@ User Defined Functions (UDFs) are functions that can be used in the context of D
 
 This page covers how to add UDFs to DataFusion. In particular, it covers how to add Scalar, Window, and Aggregate UDFs.
 
-| UDF Type  | Description                                                                                                | Example             |
-| --------- | ---------------------------------------------------------------------------------------------------------- | ------------------- |
-| Scalar    | A function that takes a row of data and returns a single value.                                            | [simple_udf.rs][1]  |
-| Window    | A function that takes a row of data and returns a single value, but also has access to the rows around it. | [simple_udwf.rs][2] |
-| Aggregate | A function that takes a group of rows and returns a single value.                                          | [simple_udaf.rs][3] |
-| Table     | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                | [simple_udtf.rs][4] |
+| UDF Type     | Description                                                                                                | Example             |
+| ------------ | ---------------------------------------------------------------------------------------------------------- | ------------------- |
+| Scalar       | A function that takes a row of data and returns a single value.                                            | [simple_udf.rs][1]  |
+| Window       | A function that takes a row of data and returns a single value, but also has access to the rows around it. | [simple_udwf.rs][2] |
+| Aggregate    | A function that takes a group of rows and returns a single value.                                          | [simple_udaf.rs][3] |
+| Table        | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                | [simple_udtf.rs][4] |
+| Async Scalar | A scalar function that natively supports asynchronous execution, allowing you to perform async operations (such as network or I/O calls) within the UDF. | [async_udf.rs][5]   |
 
 First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about the differences between the different
 types of UDFs.
@@ -343,6 +344,122 @@ async fn main() {
     let df = ctx.sql(&query).await.unwrap();
 }
 ```
+
+## Adding a Scalar Async UDF
+
+A Scalar Async UDF allows you to implement user-defined functions that support asynchronous execution, such as performing network or I/O operations within the UDF.
+
+To add a Scalar Async UDF, you need to:
+
+1. Implement the `AsyncScalarUDFImpl` trait to define your async function logic, signature, and types.
+2. Wrap your implementation with `AsyncScalarUDF::new` and register it with the `SessionContext`.
+
+### Adding by `impl AsyncScalarUDFImpl`
+
+```rust
+use arrow::array::{ArrayIter, ArrayRef, AsArray, StringArray};
+use arrow_schema::DataType;
+use async_trait::async_trait;
+use datafusion::common::error::Result;
+use datafusion::common::internal_err;
+use datafusion::common::types::logical_string;
+use datafusion::config::ConfigOptions;
+use datafusion::logical_expr::async_udf::{
+    AsyncScalarFunctionArgs, AsyncScalarUDFImpl,
+};
+use datafusion::logical_expr::{
+    ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility,
+};
+use datafusion::logical_expr_common::signature::Coercion;
+use log::trace;
+use std::any::Any;
+use std::sync::Arc;
+
+#[derive(Debug)]
+pub struct AsyncUpper {
+    signature: Signature,
+}
+
+impl Default for AsyncUpper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsyncUpper {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::new(
+                TypeSignature::Coercible(vec![Coercion::Exact {
+                    desired_type: TypeSignatureClass::Native(logical_string()),
+                }]),
+                Volatility::Volatile,
+            ),
+        }
+    }
+}
+
+#[async_trait]
+impl AsyncScalarUDFImpl for AsyncUpper {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "async_upper"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn ideal_batch_size(&self) -> Option<usize> {
+        Some(10)
+    }
+
+    async fn invoke_async_with_args(
+        &self,
+        args: AsyncScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ArrayRef> {
+        trace!("Invoking async_upper with args: {:?}", args);
+        let value = &args.args[0];
+        let result = match value {
+            ColumnarValue::Array(array) => {
+                let string_array = array.as_string::<i32>();
+                let iter = ArrayIter::new(string_array);
+                let result = iter
+                    .map(|string| string.map(|s| s.to_uppercase()))
+                    .collect::<StringArray>();
+                Arc::new(result) as ArrayRef
+            }
+            _ => return internal_err!("Expected a string argument, got {:?}", value),
+        };
+        Ok(result)
+    }
+}
+```
+
+We can now transfer the async UDF into the normal scalar using `into_scalar_udf` to register the function with DataFusion so that it can be used in the context of a query.
+
+```rust
+let async_upper = AsyncUpper::new();
+let udf = AsyncScalarUDF::new(Arc::new(async_upper));
+ctx.register_udf(udf.into_scalar_udf());
+```
+
+After registration, you can use these async UDFs directly in SQL queries, for example:
+
+```sql
+SELECT async_upper('datafusion');
+```
+
+For async UDF implementation details, see [`async_udf.rs`](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs).
+
 
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
@@ -1244,8 +1361,3 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
-
-[1]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-[2]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-[3]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-[4]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
