@@ -150,7 +150,6 @@ impl FileOpener for ParquetOpener {
                     )
                     .with_metadata(table_schema.metadata().clone()),
                 );
-                println!("pruning schema: {pruning_schema:?}");
                 let pruning_predicate = build_pruning_predicate(
                     Arc::clone(predicate),
                     &pruning_schema,

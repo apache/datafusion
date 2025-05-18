@@ -588,6 +588,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
+            .with_collect_stat(config.collect_statistics())
     }
 
     async fn get_resolved_schema(

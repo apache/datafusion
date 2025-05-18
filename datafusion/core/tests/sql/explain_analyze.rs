@@ -561,7 +561,8 @@ async fn csv_explain_verbose_plans() {
 async fn explain_analyze_runs_optimizers(#[values("*", "1")] count_expr: &str) {
     // repro for https://github.com/apache/datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optimizer
-    let ctx = SessionContext::new();
+    let cfg = SessionConfig::new().with_collect_statistics(true);
+    let ctx = SessionContext::new_with_config(cfg);
     register_alltypes_parquet(&ctx).await;
 
     // This happens as an optimization pass where count(*)/count(1) can be
