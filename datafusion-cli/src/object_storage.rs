@@ -493,7 +493,10 @@ mod tests {
         );
 
         let ctx = SessionContext::new();
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let mut plan = ctx
+            .state()
+            .create_logical_plan(&sql, &mut PlannerContext::new())
+            .await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
@@ -538,7 +541,10 @@ mod tests {
         );
 
         let ctx = SessionContext::new();
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let mut plan = ctx
+            .state()
+            .create_logical_plan(&sql, &mut PlannerContext::new())
+            .await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
@@ -564,7 +570,10 @@ mod tests {
             ) LOCATION '{location}'"
         );
 
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let mut plan = ctx
+            .state()
+            .create_logical_plan(&sql, &mut PlannerContext::new())
+            .await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
@@ -592,7 +601,10 @@ mod tests {
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.oss.endpoint' '{endpoint}') LOCATION '{location}'");
 
         let ctx = SessionContext::new();
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let mut plan = ctx
+            .state()
+            .create_logical_plan(&sql, &mut PlannerContext::new())
+            .await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
@@ -629,7 +641,10 @@ mod tests {
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_path' '{service_account_path}', 'gcp.service_account_key' '{service_account_key}', 'gcp.application_credentials_path' '{application_credentials_path}') LOCATION '{location}'");
 
         let ctx = SessionContext::new();
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let mut plan = ctx
+            .state()
+            .create_logical_plan(&sql, &mut PlannerContext::new())
+            .await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);

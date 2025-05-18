@@ -177,26 +177,37 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an DataFusion SQL statement
-    pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
+    pub fn statement_to_plan(
+        &self,
+        statement: DFStatement,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
-            DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
+            DFStatement::Statement(s) => self.sql_statement_to_plan(*s, planner_context),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
             DFStatement::Explain(ExplainStatement {
                 verbose,
                 analyze,
                 format,
                 statement,
-            }) => self.explain_to_plan(verbose, analyze, format, *statement),
+            }) => self.explain_to_plan(
+                verbose,
+                analyze,
+                format,
+                *statement,
+                planner_context,
+            ),
         }
     }
 
     /// Generate a logical plan from an SQL statement
-    pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
-        self.sql_statement_to_plan_with_context_impl(
-            statement,
-            &mut PlannerContext::new(),
-        )
+    pub fn sql_statement_to_plan(
+        &self,
+        statement: Statement,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        self.sql_statement_to_plan_with_context_impl(statement, planner_context)
     }
 
     /// Generate a logical plan from an SQL statement
@@ -229,7 +240,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 let format = format.map(|format| format.to_string());
                 let statement = DFStatement::Statement(statement);
-                self.explain_to_plan(verbose, analyze, format, statement)
+                self.explain_to_plan(verbose, analyze, format, statement, planner_context)
             }
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
@@ -1295,7 +1306,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let query = "SELECT * FROM information_schema.tables;";
             let mut rewrite = DFParser::parse_sql(query)?;
             assert_eq!(rewrite.len(), 1);
-            self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+            self.statement_to_plan(
+                rewrite.pop_front().unwrap(),
+                &mut PlannerContext::new(),
+            ) // length of rewrite is 1
         } else {
             plan_err!("SHOW TABLES is not supported unless information_schema is enabled")
         }
@@ -1629,8 +1643,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         analyze: bool,
         format: Option<String>,
         statement: DFStatement,
+        planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let plan = self.statement_to_plan(statement)?;
+        let plan = self.statement_to_plan(statement, planner_context)?;
         if matches!(plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
@@ -1723,7 +1738,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
 
-        self.statement_to_plan(rewrite.pop_front().unwrap())
+        self.statement_to_plan(rewrite.pop_front().unwrap(), &mut PlannerContext::new())
     }
 
     fn set_variable_to_plan(
@@ -2109,7 +2124,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+        self.statement_to_plan(rewrite.pop_front().unwrap(), &mut PlannerContext::new())
+        // length of rewrite is 1
     }
 
     /// Rewrite `SHOW FUNCTIONS` to another SQL query
@@ -2193,7 +2209,8 @@ ON p.function_name = r.routine_name
         );
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+        self.statement_to_plan(rewrite.pop_front().unwrap(), &mut PlannerContext::new())
+        // length of rewrite is 1
     }
 
     fn show_create_table_to_plan(
@@ -2221,7 +2238,8 @@ ON p.function_name = r.routine_name
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+        self.statement_to_plan(rewrite.pop_front().unwrap(), &mut PlannerContext::new())
+        // length of rewrite is 1
     }
 
     /// Return true if there is a table provider available for "schema.table"

@@ -461,6 +461,7 @@ impl SessionState {
     pub async fn statement_to_plan(
         &self,
         statement: Statement,
+        planner_context: &mut PlannerContext,
     ) -> datafusion_common::Result<LogicalPlan> {
         let references = self.resolve_table_references(&statement)?;
 
@@ -482,7 +483,7 @@ impl SessionState {
         }
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-        query.statement_to_plan(statement)
+        query.statement_to_plan(statement, planner_context)
     }
 
     fn get_parser_options(&self) -> ParserOptions {
@@ -514,10 +515,11 @@ impl SessionState {
     pub async fn create_logical_plan(
         &self,
         sql: &str,
+        planner_context: &mut PlannerContext,
     ) -> datafusion_common::Result<LogicalPlan> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
         let statement = self.sql_to_statement(sql, dialect)?;
-        let plan = self.statement_to_plan(statement).await?;
+        let plan = self.statement_to_plan(statement, planner_context).await?;
         Ok(plan)
     }
 

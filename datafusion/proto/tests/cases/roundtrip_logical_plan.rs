@@ -288,7 +288,10 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
             LOCATION '../core/tests/data/window_2.csv'
             OPTIONS ('format.has_header' 'true')";
 
-    let plan = ctx.state().create_logical_plan(query).await?;
+    let plan = ctx
+        .state()
+        .create_logical_plan(query, &mut PlannerContext::new())
+        .await?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;

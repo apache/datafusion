@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use arrow::datatypes::Field;
 use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
@@ -112,6 +111,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
+        dbg!(&outer_ref_columns);
 
         self.validate_single_column(
             &sub_plan,

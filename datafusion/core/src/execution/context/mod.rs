@@ -87,6 +87,7 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_sql::planner::PlannerContext;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -620,7 +621,10 @@ impl SessionContext {
         sql: &str,
         options: SQLOptions,
     ) -> Result<DataFrame> {
-        let plan = self.state().create_logical_plan(sql).await?;
+        let plan = self
+            .state()
+            .create_logical_plan(sql, &mut PlannerContext::new())
+            .await?;
         options.verify_plan(&plan)?;
 
         self.execute_logical_plan(plan).await

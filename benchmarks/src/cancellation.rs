@@ -33,6 +33,7 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+use datafusion::sql::planner::PlannerContext;
 use datafusion_common::instant::Instant;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
@@ -185,7 +186,10 @@ async fn datafusion(store: Arc<dyn ObjectStore>) -> Result<()> {
     .await?;
 
     println!("Creating logical plan...");
-    let logical_plan = ctx.state().create_logical_plan(query).await?;
+    let logical_plan = ctx
+        .state()
+        .create_logical_plan(query, &mut PlannerContext::new())
+        .await?;
 
     println!("Creating physical plan...");
     let physical_plan = Arc::new(CoalescePartitionsExec::new(

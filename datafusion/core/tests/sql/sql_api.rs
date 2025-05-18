@@ -162,7 +162,9 @@ async fn empty_statement_returns_error() {
     let state = ctx.state();
 
     // Give it an empty string which contains no statements
-    let plan_res = state.create_logical_plan("").await;
+    let plan_res = state
+        .create_logical_plan("", &mut PlannerContext::new())
+        .await;
     assert_eq!(
         plan_res.unwrap_err().strip_backtrace(),
         "Error during planning: No SQL statements were provided in the query string"
@@ -180,6 +182,7 @@ async fn multiple_statements_returns_error() {
     let plan_res = state
         .create_logical_plan(
             "INSERT INTO test (x) VALUES (1); INSERT INTO test (x) VALUES (2)",
+            &mut PlannerContext::new(),
         )
         .await;
     assert_eq!(
@@ -199,7 +202,10 @@ async fn ddl_can_not_be_planned_by_session_state() {
 
     // can not create a logical plan for catalog DDL
     let sql = "DROP TABLE test";
-    let plan = state.create_logical_plan(sql).await.unwrap();
+    let plan = state
+        .create_logical_plan(sql, &mut PlannerContext::new())
+        .await
+        .unwrap();
     let physical_plan = state.create_physical_plan(&plan).await;
     assert_eq!(
         physical_plan.unwrap_err().strip_backtrace(),

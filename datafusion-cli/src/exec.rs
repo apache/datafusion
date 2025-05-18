@@ -26,6 +26,7 @@ use crate::{
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
+use datafusion::sql::planner::PlannerContext;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::fs::File;
@@ -231,7 +232,8 @@ pub(super) async fn exec_and_print(
         let adjusted =
             AdjustedPrintOptions::new(print_options.clone()).with_statement(&statement);
 
-        let plan = create_plan(ctx, statement).await?;
+        let mut planner_context = PlannerContext::new();
+        let plan = create_plan(ctx, statement, &mut planner_context).await?;
         let adjusted = adjusted.with_plan(&plan);
 
         let df = ctx.execute_logical_plan(plan).await?;
@@ -348,8 +350,12 @@ fn config_file_type_from_str(ext: &str) -> Option<ConfigFileType> {
 async fn create_plan(
     ctx: &dyn CliSessionContext,
     statement: Statement,
+    planner_context: &mut PlannerContext,
 ) -> Result<LogicalPlan, DataFusionError> {
-    let mut plan = ctx.session_state().statement_to_plan(statement).await?;
+    let mut plan = ctx
+        .session_state()
+        .statement_to_plan(statement, planner_context)
+        .await?;
 
     // Note that cmd is a mutable reference so that create_external_table function can remove all
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
@@ -453,7 +459,10 @@ mod tests {
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
-        let plan = ctx.state().create_logical_plan(sql).await?;
+        let plan = ctx
+            .state()
+            .create_logical_plan(sql, &mut PlannerContext::new())
+            .await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
             let format = config_file_type_from_str(&cmd.file_type);
@@ -479,7 +488,10 @@ mod tests {
         let ctx = SessionContext::new();
         // AWS CONFIG register.
 
-        let plan = ctx.state().create_logical_plan(sql).await?;
+        let plan = ctx
+            .state()
+            .create_logical_plan(sql, &mut PlannerContext::new())
+            .await?;
 
         if let LogicalPlan::Copy(cmd) = &plan {
             let format = config_file_type_from_str(&cmd.file_type.get_ext());
