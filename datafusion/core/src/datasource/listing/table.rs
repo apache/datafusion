@@ -195,7 +195,8 @@ impl ListingTableConfig {
 
         let listing_options = ListingOptions::new(file_format)
             .with_file_extension(listing_file_extension)
-            .with_target_partitions(state.config().target_partitions());
+            .with_target_partitions(state.config().target_partitions())
+            .with_collect_stat(state.config().collect_statistics());
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -1282,7 +1283,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_collect_statistics(true),
+        );
 
         let table = load_table(&ctx, "alltypes_plain.parquet").await?;
         let projection = None;
