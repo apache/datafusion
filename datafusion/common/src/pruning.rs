@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{ArrayRef, BooleanArray};
 use std::collections::HashSet;
-use arrow::{
-    array::{ArrayRef, BooleanArray},
-};
 
 use crate::Column;
 use crate::ScalarValue;
@@ -124,4 +122,3 @@ pub trait PruningStatistics {
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray>;
 }
-
