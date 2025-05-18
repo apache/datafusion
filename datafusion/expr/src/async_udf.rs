@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+use crate::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Field, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
@@ -47,6 +47,21 @@ pub trait AsyncScalarUDFImpl: Debug + Send + Sync {
 
     /// The return type of the function
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType>;
+
+    /// What type will be returned by this function, given the arguments?
+    ///
+    /// By default, this function calls [`Self::return_type`] with the
+    /// types of each argument.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type())
+            .cloned()
+            .collect::<Vec<_>>();
+        let return_type = self.return_type(&data_types)?;
+        Ok(Field::new(self.name(), return_type, true))
+    }
 
     /// The ideal batch size for this function.
     ///
@@ -114,6 +129,10 @@ impl ScalarUDFImpl for AsyncScalarUDF {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         self.inner.return_type(arg_types)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+        self.inner.return_field_from_args(args)
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
