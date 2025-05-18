@@ -24,7 +24,6 @@ use datafusion::common::internal_err;
 use datafusion::common::types::{logical_int64, logical_string};
 use datafusion::common::utils::take_function_args;
 use datafusion::config::ConfigOptions;
-use datafusion::execution::{FunctionRegistry, SessionStateBuilder};
 use datafusion::logical_expr::async_udf::{
     AsyncScalarFunctionArgs, AsyncScalarUDF, AsyncScalarUDFImpl,
 };
@@ -40,15 +39,14 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut state = SessionStateBuilder::new().build();
+    let ctx: SessionContext = SessionContext::new();
 
     let async_upper = AsyncUpper::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_upper));
-    state.register_udf(udf.into_scalar_udf())?;
+    ctx.register_udf(udf.into_scalar_udf());
     let async_equal = AsyncEqual::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_equal));
-    state.register_udf(udf.into_scalar_udf())?;
-    let ctx = SessionContext::new_with_state(state);
+    ctx.register_udf(udf.into_scalar_udf());
     ctx.register_batch("animal", animal()?)?;
 
     // use Async UDF in the projection

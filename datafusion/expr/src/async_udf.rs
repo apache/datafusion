@@ -100,8 +100,8 @@ impl AsyncScalarUDF {
 
     /// Turn this AsyncUDF into a ScalarUDF, suitable for
     /// registering in the context
-    pub fn into_scalar_udf(self) -> Arc<ScalarUDF> {
-        Arc::new(ScalarUDF::new_from_impl(self))
+    pub fn into_scalar_udf(self) -> ScalarUDF {
+        ScalarUDF::new_from_impl(self)
     }
 
     /// Invoke the function asynchronously with the async arguments

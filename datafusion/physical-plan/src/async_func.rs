@@ -116,11 +116,11 @@ impl DisplayAs for AsyncFuncExec {
         let exprs = expr.join(", ");
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "AsyncFuncExec: async_expr=[{}]", exprs)
+                write!(f, "AsyncFuncExec: async_expr=[{exprs}]")
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format=async_expr")?;
-                writeln!(f, "async_expr={}", exprs)?;
+                writeln!(f, "async_expr={exprs}")?;
                 Ok(())
             }
         }
