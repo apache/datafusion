@@ -65,7 +65,6 @@ impl<'a> ParameterTest<'a> {
     pub fn run(&self) -> String {
         let plan = logical_plan(self.sql).unwrap();
 
-        // check parameter types
         let actual_types = plan.get_parameter_types().unwrap();
         let expected_types: HashMap<String, Option<DataType>> = self
             .expected_types
@@ -75,7 +74,6 @@ impl<'a> ParameterTest<'a> {
 
         assert_eq!(actual_types, expected_types);
 
-        // replace params with values
         let plan_with_params = plan
             .clone()
             .with_param_values(self.param_values.clone())
