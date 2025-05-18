@@ -193,7 +193,7 @@ impl PruningStatistics for PartitionPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
         let partition_values = self.partition_values.get(index)?;
-        match ScalarValue::iter_to_array(partition_values.iter().map(|v| v.clone())) {
+        match ScalarValue::iter_to_array(partition_values.iter().cloned()) {
             Ok(array) => Some(array),
             Err(_) => {
                 log::warn!(
@@ -259,7 +259,7 @@ impl PrunableStatistics {
     /// The `schema` is the schema of the data in the containers and should apply to all files.
     pub fn new(statistics: Vec<Arc<Statistics>>, schema: SchemaRef) -> Self {
         Self {
-            statistics: statistics,
+            statistics,
             schema,
         }
     }
@@ -271,7 +271,7 @@ impl PruningStatistics for PrunableStatistics {
         if self.statistics.iter().any(|s| {
             s.column_statistics
                 .get(index)
-                .map_or(false, |stat| stat.min_value.is_exact().unwrap_or(false))
+                .is_some_and(|stat| stat.min_value.is_exact().unwrap_or(false))
         }) {
             match ScalarValue::iter_to_array(self.statistics.iter().map(|s| {
                 s.column_statistics
@@ -304,7 +304,7 @@ impl PruningStatistics for PrunableStatistics {
         if self.statistics.iter().any(|s| {
             s.column_statistics
                 .get(index)
-                .map_or(false, |stat| stat.max_value.is_exact().unwrap_or(false))
+                .is_some_and(|stat| stat.max_value.is_exact().unwrap_or(false))
         }) {
             match ScalarValue::iter_to_array(self.statistics.iter().map(|s| {
                 s.column_statistics
@@ -341,7 +341,7 @@ impl PruningStatistics for PrunableStatistics {
         if self.statistics.iter().any(|s| {
             s.column_statistics
                 .get(index)
-                .map_or(false, |stat| stat.null_count.is_exact().unwrap_or(false))
+                .is_some_and(|stat| stat.null_count.is_exact().unwrap_or(false))
         }) {
             Some(Arc::new(
                 self.statistics
