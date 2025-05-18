@@ -447,8 +447,97 @@ impl AsyncScalarUDFImpl for AsyncUpper {
 We can now transfer the async UDF into the normal scalar using `into_scalar_udf` to register the function with DataFusion so that it can be used in the context of a query.
 
 ```rust
+# use arrow::array::{ArrayIter, ArrayRef, AsArray, StringArray};
+# use arrow_schema::DataType;
+# use async_trait::async_trait;
+# use datafusion::common::error::Result;
+# use datafusion::common::internal_err;
+# use datafusion::common::types::logical_string;
+# use datafusion::config::ConfigOptions;
+# use datafusion::logical_expr::async_udf::{
+#     AsyncScalarFunctionArgs, AsyncScalarUDFImpl,
+# };
+# use datafusion::logical_expr::{
+#     ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility,
+# };
+# use datafusion::logical_expr_common::signature::Coercion;
+# use log::trace;
+# use std::any::Any;
+# use std::sync::Arc;
+#
+# #[derive(Debug)]
+# pub struct AsyncUpper {
+#     signature: Signature,
+# }
+#
+# impl Default for AsyncUpper {
+#     fn default() -> Self {
+#         Self::new()
+#     }
+# }
+#
+# impl AsyncUpper {
+#     pub fn new() -> Self {
+#         Self {
+#             signature: Signature::new(
+#                 TypeSignature::Coercible(vec![Coercion::Exact {
+#                     desired_type: TypeSignatureClass::Native(logical_string()),
+#                 }]),
+#                 Volatility::Volatile,
+#             ),
+#         }
+#     }
+# }
+#
+# #[async_trait]
+# impl AsyncScalarUDFImpl for AsyncUpper {
+#     fn as_any(&self) -> &dyn Any {
+#         self
+#     }
+#
+#     fn name(&self) -> &str {
+#         "async_upper"
+#     }
+#
+#     fn signature(&self) -> &Signature {
+#         &self.signature
+#     }
+#
+#     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+#         Ok(DataType::Utf8)
+#     }
+#
+#     fn ideal_batch_size(&self) -> Option<usize> {
+#         Some(10)
+#     }
+#
+#     async fn invoke_async_with_args(
+#         &self,
+#         args: AsyncScalarFunctionArgs,
+#         _option: &ConfigOptions,
+#     ) -> Result<ArrayRef> {
+#         trace!("Invoking async_upper with args: {:?}", args);
+#         let value = &args.args[0];
+#         let result = match value {
+#             ColumnarValue::Array(array) => {
+#                 let string_array = array.as_string::<i32>();
+#                 let iter = ArrayIter::new(string_array);
+#                 let result = iter
+#                     .map(|string| string.map(|s| s.to_uppercase()))
+#                     .collect::<StringArray>();
+#                 Arc::new(result) as ArrayRef
+#             }
+#             _ => return internal_err!("Expected a string argument, got {:?}", value),
+#         };
+#         Ok(result)
+#     }
+# }
+use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::async_udf::AsyncScalarUDF;
+
 let async_upper = AsyncUpper::new();
 let udf = AsyncScalarUDF::new(Arc::new(async_upper));
+let mut ctx = SessionContext::new();
 ctx.register_udf(udf.into_scalar_udf());
 ```
 
