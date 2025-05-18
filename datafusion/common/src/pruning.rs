@@ -163,7 +163,7 @@ impl PartitionPruningStatistics {
     ///   The outer vector represents the containers while the inner
     ///   vector represents the partition values for each column.
     ///   Note that this is the **opposite** of the order of the
-    ///   partition columns in [`PartitionPruningStatistics::partition_schema`].
+    ///   partition columns in `PartitionPruningStatistics::partition_schema`.
     /// * `partition_schema`: The schema of the partition columns.
     ///   This must **not** be the schema of the entire file or table:
     ///   instead it must only be the schema of the partition columns,
@@ -258,10 +258,7 @@ impl PrunableStatistics {
     /// Each [`Statistics`] represents a container (e.g. a file or a partition of files).
     /// The `schema` is the schema of the data in the containers and should apply to all files.
     pub fn new(statistics: Vec<Arc<Statistics>>, schema: SchemaRef) -> Self {
-        Self {
-            statistics,
-            schema,
-        }
+        Self { statistics, schema }
     }
 }
 
