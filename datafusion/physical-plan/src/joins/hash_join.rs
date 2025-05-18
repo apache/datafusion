@@ -475,6 +475,7 @@ impl HashJoinExec {
                     | JoinType::Right
                     | JoinType::RightAnti
                     | JoinType::RightSemi
+                    | JoinType::RightMark
             ),
         ]
     }
@@ -556,7 +557,8 @@ impl HashJoinExec {
                 | JoinType::LeftSemi
                 | JoinType::RightSemi
                 | JoinType::Right
-                | JoinType::RightAnti => EmissionType::Incremental,
+                | JoinType::RightAnti
+                | JoinType::RightMark => EmissionType::Incremental,
                 // If we need to generate unmatched rows from the *build side*,
                 // we need to emit them at the end.
                 JoinType::Left
@@ -1561,15 +1563,18 @@ impl HashJoinStream {
             self.right_side_ordered,
         )?;
 
-        let result = build_batch_from_indices(
-            &self.schema,
-            build_side.left_data.batch(),
-            &state.batch,
-            &left_indices,
-            &right_indices,
-            &self.column_indices,
-            JoinSide::Left,
-        )?;
+        let result = if self.join_type == JoinType::RightMark {
+            build_batch_from_indices(
+                &self.schema,
+                &state.batch,
+                build_side.left_data.batch(),
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Right,
+            )?
+        } else {
+            build_batch_from_indices(
 
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(result.num_rows());
@@ -3407,7 +3412,7 @@ mod tests {
 
         let expected = [
             "+----+----+----+-------+",
-            "| a2 | b2 | c2 | mark  |",
+            "| a2 | b1 | c2 | mark  |",
             "+----+----+----+-------+",
             "| 10 | 4  | 60 | true  |",
             "| 20 | 4  | 70 | true  |",

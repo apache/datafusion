@@ -714,7 +714,8 @@ impl Unparser<'_> {
                     | JoinType::LeftAnti
                     | JoinType::LeftMark
                     | JoinType::RightSemi
-                    | JoinType::RightAnti => {
+                    | JoinType::RightAnti
+                    | JoinType::RightMark => {
                         let mut query_builder = QueryBuilder::default();
                         let mut from = TableWithJoinsBuilder::default();
                         let mut exists_select: SelectBuilder = SelectBuilder::default();

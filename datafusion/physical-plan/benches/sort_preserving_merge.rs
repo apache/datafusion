@@ -173,7 +173,7 @@ fn bench_merge_sorted_preserving(c: &mut Criterion) {
             sort_order,
         } = data;
         c.bench_function(
-            &format!("bench_merge_sorted_preserving/{}", bench_name),
+            &format!("bench_merge_sorted_preserving/{bench_name}"),
             |b| {
                 b.iter_batched(
                     || {

@@ -242,10 +242,7 @@ impl SortMergeJoinExec {
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::LeftMark => vec![true, false],
-            JoinType::Right
-            | JoinType::RightSemi
-            | JoinType::RightAnti
-            | JoinType::RightMark => {
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
                 vec![false, true]
             }
             _ => vec![false, false],
@@ -999,7 +996,7 @@ fn get_corrected_filter_mask(
             corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
-        JoinType::LeftMark | JoinType::RightMark => {
+        JoinType::LeftMark => {
             for i in 0..row_indices_length {
                 let last_index =
                     last_index_for_row(i, row_indices, batch_ids, row_indices_length);
@@ -2101,7 +2098,7 @@ impl SortMergeJoinStream {
 
         if matches!(
             self.join_type,
-            JoinType::Left | JoinType::LeftMark | JoinType::Right | JoinType::RightMark
+            JoinType::Left | JoinType::LeftMark | JoinType::Right
         ) {
             let null_mask = compute::not(corrected_mask)?;
             let null_joined_batch = filter_record_batch(&record_batch, &null_mask)?;
@@ -2222,7 +2219,7 @@ fn create_unmatched_columns(
     schema: &SchemaRef,
     size: usize,
 ) -> Vec<ArrayRef> {
-    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
+    if matches!(join_type, JoinType::LeftMark) {
         vec![Arc::new(BooleanArray::from(vec![false; size])) as ArrayRef]
     } else {
         schema

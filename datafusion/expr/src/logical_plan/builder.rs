@@ -1614,16 +1614,16 @@ pub fn build_join_schema(
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
             .chain(once(mark_field(right)))
             .collect(),
+        JoinType::RightMark => right_fields
+            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+            .chain(once(mark_field(left)))
+            .collect(),
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
             right_fields
                 .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect()
         }
-        JoinType::RightMark => right_fields
-            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-            .chain(once(mark_field(left)))
-            .collect(),
     };
     let func_dependencies = left.functional_dependencies().join(
         right.functional_dependencies(),

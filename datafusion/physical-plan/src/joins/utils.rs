@@ -34,6 +34,7 @@ pub use super::join_filter::JoinFilter;
 pub use super::join_hash_map::{JoinHashMap, JoinHashMapType};
 pub use crate::joins::{JoinOn, JoinOnRef};
 
+use arrow::array::PrimitiveBuilder;
 use arrow::array::{
     builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
     BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
@@ -302,6 +303,7 @@ pub fn build_join_schema(
             left_fields().chain(right_fields()).unzip()
         }
         JoinType::LeftSemi | JoinType::LeftAnti => left_fields().unzip(),
+        JoinType::RightSemi | JoinType::RightAnti => right_fields().unzip(),
         JoinType::LeftMark => {
             let right_field = once((
                 Field::new("mark", arrow::datatypes::DataType::Boolean, false),
@@ -312,12 +314,11 @@ pub fn build_join_schema(
             ));
             left_fields().chain(right_field).unzip()
         }
-        JoinType::RightSemi | JoinType::RightAnti => right_fields().unzip(),
         JoinType::RightMark => {
             let left_field = once((
                 Field::new("mark", arrow_schema::DataType::Boolean, false),
                 ColumnIndex {
-                    index: 0, // 'mark' is not associated with either side
+                    index: 0,
                     side: JoinSide::None,
                 },
             ));
@@ -970,7 +971,7 @@ pub(crate) fn adjust_indices_by_join_type(
             Ok((left_indices, right_indices))
             // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
         }
-        JoinType::Right | JoinType::RightMark => {
+        JoinType::Right => {
             // combine the matched and unmatched right result together
             append_right_indices(
                 left_indices,
@@ -993,6 +994,12 @@ pub(crate) fn adjust_indices_by_join_type(
             // get the anti index for the right side
             let right_indices = get_anti_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right anti` join
+            Ok((left_indices, right_indices))
+        }
+        JoinType::RightMark => {
+            let right_indices = get_mark_indices(&adjust_range, &right_indices);
+            let left_indices =
+                UInt64Array::from_iter_values(adjust_range.map(|i| i as u64));
             Ok((left_indices, right_indices))
         }
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -1144,6 +1151,30 @@ where
             (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
         })
         .collect()
+}
+
+pub(crate) fn get_mark_indices<T: ArrowPrimitiveType>(
+    range: &Range<usize>,
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<UInt32Type>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut builder = PrimitiveBuilder::<UInt32Type>::new();
+
+    for idx in range.clone() {
+        let matched = input_indices.iter().flatten().any(|v| v.as_usize() == idx);
+
+        if matched {
+            // push a dummy non‑null (0 is fine)
+            builder.append_value(0);
+        } else {
+            // push a null
+            builder.append_null();
+        }
+    }
+
+    builder.finish()
 }
 
 /// Appends probe indices in order by considering the given build indices.

@@ -280,6 +280,7 @@ impl NestedLoopJoinExec {
                 JoinType::Left
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
+                | JoinType::RightMark
                 | JoinType::Full => EmissionType::Both,
             }
         } else {
@@ -1009,15 +1010,27 @@ fn join_left_and_right_batch(
         right_side_ordered,
     )?;
 
-    build_batch_from_indices(
-        schema,
-        left_batch,
-        right_batch,
-        &left_side,
-        &right_side,
-        column_indices,
-        JoinSide::Left,
-    )
+    if join_type == JoinType::RightMark {
+        build_batch_from_indices(
+            schema,
+            right_batch,
+            left_batch,
+            &left_side,
+            &right_side,
+            column_indices,
+            JoinSide::Right,
+        )
+    } else {
+        build_batch_from_indices(
+            schema,
+            left_batch,
+            right_batch,
+            &left_side,
+            &right_side,
+            column_indices,
+            JoinSide::Left,
+        )
+    }
 }
 
 impl<T: BatchTransformer + Unpin + Send> Stream for NestedLoopJoinStream<T> {
@@ -1480,16 +1493,17 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2", "mark"]);
-        let expected = vec![
-            "+----+----+-----+-------+",
-            "| a2 | b2 | c2  | mark  |",
-            "+----+----+-----+-------+",
-            "| 12 | 10 | 40  | false |",
-            "| 2  | 2  | 80  | false |",
-            "+----+----+-----+-------+",
-        ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+-------+
+            | a2 | b2 | c2  | mark  |
+            +----+----+-----+-------+
+            | 10 | 10 | 100 | false |
+            | 12 | 10 | 40  | false |
+            | 2  | 2  | 80  | true  |
+            +----+----+-----+-------+
+
+            "#);
 
         Ok(())
     }

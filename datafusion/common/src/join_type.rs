@@ -92,9 +92,8 @@ impl JoinType {
             JoinType::RightSemi => JoinType::LeftSemi,
             JoinType::LeftAnti => JoinType::RightAnti,
             JoinType::RightAnti => JoinType::LeftAnti,
-            JoinType::LeftMark => {
-                unreachable!("LeftMark join type does not support swapping")
-            }
+            JoinType::LeftMark => JoinType::RightMark,
+            JoinType::RightMark => JoinType::LeftMark,
         }
     }
 
