@@ -1575,6 +1575,15 @@ impl HashJoinStream {
             )?
         } else {
             build_batch_from_indices(
+                &self.schema,
+                build_side.left_data.batch(),
+                &state.batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Left,
+            )?
+        };
 
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(result.num_rows());
