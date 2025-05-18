@@ -55,6 +55,35 @@ use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 mod cases;
 mod common;
 
+pub struct ParameterTest<'a> {
+    pub sql: &'a str,
+    pub expected_types: Vec<(&'a str, Option<DataType>)>,
+    pub param_values: Vec<ScalarValue>,
+}
+
+impl<'a> ParameterTest<'a> {
+    pub fn run(&self) -> String {
+        let plan = logical_plan(self.sql).unwrap();
+
+        // check parameter types
+        let actual_types = plan.get_parameter_types().unwrap();
+        let expected_types: HashMap<String, Option<DataType>> = self
+            .expected_types
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+
+        assert_eq!(actual_types, expected_types);
+
+        // replace params with values
+        let plan_with_params = plan.clone().with_param_values(self.param_values.clone()).unwrap();
+
+        format!(
+            "** Initial Plan:\n{plan}\n** Final Plan:\n{plan_with_params}"
+        )
+    }
+}
+
 #[test]
 fn parse_decimals_1() {
     let sql = "SELECT 1";
@@ -4665,33 +4694,22 @@ fn test_prepare_statement_infer_types_from_join() {
 
 #[test]
 fn test_infer_types_from_predicate() {
-    let sql = "SELECT id, age FROM person WHERE age = $1";
-    let plan = logical_plan(sql).unwrap();
-    assert_snapshot!(
-        plan,
-        @r#"
-    Projection: person.id, person.age
-      Filter: person.age = $1
-        TableScan: person
-    "#
-    );
+    let test = ParameterTest {
+        sql: "SELECT id, age FROM person WHERE age = $1",
+        expected_types: vec![("$1", Some(DataType::Int32))],
+        param_values: vec![ScalarValue::Int32(Some(10))],
+    };
 
-    let actual_types = plan.get_parameter_types().unwrap();
-    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
-    assert_eq!(actual_types, expected_types);
-
-    // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))];
-    let plan_with_params = plan.with_param_values(param_values).unwrap();
-
-    assert_snapshot!(
-        plan_with_params,
-        @r"
-    Projection: person.id, person.age
-      Filter: person.age = Int32(10)
-        TableScan: person
-    "
-    );
+    assert_snapshot!(test.run(), @r###"
+** Initial Plan:
+Projection: person.id, person.age
+  Filter: person.age = $1
+    TableScan: person
+** Final Plan:
+Projection: person.id, person.age
+  Filter: person.age = Int32(10)
+    TableScan: person
+"###);
 }
 
 #[test]
