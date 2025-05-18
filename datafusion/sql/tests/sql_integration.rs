@@ -76,11 +76,12 @@ impl<'a> ParameterTest<'a> {
         assert_eq!(actual_types, expected_types);
 
         // replace params with values
-        let plan_with_params = plan.clone().with_param_values(self.param_values.clone()).unwrap();
+        let plan_with_params = plan
+            .clone()
+            .with_param_values(self.param_values.clone())
+            .unwrap();
 
-        format!(
-            "** Initial Plan:\n{plan}\n** Final Plan:\n{plan_with_params}"
-        )
+        format!("** Initial Plan:\n{plan}\n** Final Plan:\n{plan_with_params}")
     }
 }
 
