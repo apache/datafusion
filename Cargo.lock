@@ -2606,6 +2606,7 @@ dependencies = [
  "clap 4.5.38",
  "datafusion",
  "datafusion-spark",
+ "datafusion-substrait",
  "env_logger",
  "futures",
  "half",
