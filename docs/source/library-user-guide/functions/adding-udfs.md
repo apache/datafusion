@@ -23,12 +23,12 @@ User Defined Functions (UDFs) are functions that can be used in the context of D
 
 This page covers how to add UDFs to DataFusion. In particular, it covers how to add Scalar, Window, and Aggregate UDFs.
 
-| UDF Type     | Description                                                                                                | Example             |
-| ------------ | ---------------------------------------------------------------------------------------------------------- | ------------------- |
-| Scalar       | A function that takes a row of data and returns a single value.                                            | [simple_udf.rs][1]  |
-| Window       | A function that takes a row of data and returns a single value, but also has access to the rows around it. | [simple_udwf.rs][2] |
-| Aggregate    | A function that takes a group of rows and returns a single value.                                          | [simple_udaf.rs][3] |
-| Table        | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                | [simple_udtf.rs][4] |
+| UDF Type     | Description                                                                                                                                              | Example             |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| Scalar       | A function that takes a row of data and returns a single value.                                                                                          | [simple_udf.rs][1]  |
+| Window       | A function that takes a row of data and returns a single value, but also has access to the rows around it.                                               | [simple_udwf.rs][2] |
+| Aggregate    | A function that takes a group of rows and returns a single value.                                                                                        | [simple_udaf.rs][3] |
+| Table        | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                                                              | [simple_udtf.rs][4] |
 | Async Scalar | A scalar function that natively supports asynchronous execution, allowing you to perform async operations (such as network or I/O calls) within the UDF. | [async_udf.rs][5]   |
 
 First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about the differences between the different
@@ -459,7 +459,6 @@ SELECT async_upper('datafusion');
 ```
 
 For async UDF implementation details, see [`async_udf.rs`](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs).
-
 
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
