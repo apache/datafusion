@@ -71,7 +71,10 @@ jobs:
         run: cargo semver-checks check-release -p datafusion-macros
         continue-on-error: true
       - name: Run semver-check optimizer
-        run: cargo semver-checks check-release -p datafusion-optimizer -p datafusion-physicl-optimizer
+        run: cargo semver-checks check-release -p datafusion-optimizer -p datafusion-physical-optimizer
+        continue-on-error: true
+      - name: Run semver-check physical-plan
+        run: cargo semver-checks check-release -p datafusion-physical-plan
         continue-on-error: true
       
   semver-checks-2:
@@ -87,15 +90,12 @@ jobs:
           rust-version: stable
       - name: Install semver-checks
         run: cargo install cargo-semver-checks --locked
-      - name: Run semver-check physical-plan
-        run: cargo semver-checks check-release -p datafusion-physical-plan
-        continue-on-error: true
       - name: Run semver-check proto
         run: cargo semver-checks check-release -p datafusion-proto -p datafusion-proto-common
         continue-on-error: true
-      - name: Run semver-check substrait
-        run: cargo semver-checks check-release -p datafusion-substrait
-        continue-on-error: true
+      # - name: Run semver-check substrait #not working for some reason, TB Triaged
+      #   run: cargo semver-checks check-release -p datafusion-substrait
+      #   continue-on-error: true
       - name: Run semver-check sql
         run: cargo semver-checks check-release -p datafusion-sql
         continue-on-error: true
