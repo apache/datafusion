@@ -1091,6 +1091,7 @@ fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
         JoinType::LeftAnti => join_rel::JoinType::LeftAnti,
         JoinType::LeftSemi => join_rel::JoinType::LeftSemi,
         JoinType::LeftMark => join_rel::JoinType::LeftMark,
+        JoinType::RightMark => join_rel::JoinType::RightMark,
         JoinType::RightAnti | JoinType::RightSemi => {
             unimplemented!()
         }
