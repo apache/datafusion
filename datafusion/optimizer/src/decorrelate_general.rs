@@ -953,10 +953,9 @@ impl DependentJoinTracker {
         post_join_predicates: Option<Expr>,
     ) -> Result<Node> {
         let mut new_node = self.new_empty_node(new_plan);
+        let parent = current_top_node.parent.clone();
+        let previous_node_id = new_node.id;
 
-        if let Some(parent) = current_top_node.parent {
-            unimplemented!()
-        }
         subquery_input_node.parent = Some(new_node.id);
         new_node.children = vec![current_top_node.id, subquery_input_node.id];
         let mut node_id = new_node.id;
@@ -968,6 +967,15 @@ impl DependentJoinTracker {
             new_node.parent = Some(node_id);
             new_node.children = vec![node_id];
             node_id = new_node.id;
+        }
+        if let Some(parent) = parent {
+            let parent_node = self.nodes.get_mut(&parent).unwrap();
+            for child_id in parent_node.children.iter_mut() {
+                if *child_id == previous_node_id {
+                    *child_id = node_id;
+                }
+            }
+            current_top_node.parent = Some(parent);
         }
 
         self.root = Some(node_id);
@@ -1040,7 +1048,8 @@ impl DependentJoinTracker {
         mut dependent_join_node: Node,
         outer_relations: &[String],
         ret: &mut SimpleDecorrelationResult,
-    ) -> Result<()> {
+        mut filter: Filter,
+    ) -> Result<(Node)> {
         let still_correlated_sq_ids: Vec<usize> = dependent_join_node
             .access_tracker
             .iter()
@@ -1051,9 +1060,13 @@ impl DependentJoinTracker {
         let decorrelated_sq_ids = self
             .get_children_subquery_ids(&dependent_join_node)
             .into_iter()
-            .filter(|n| still_correlated_sq_ids.contains(n));
+            .filter(|n| !still_correlated_sq_ids.contains(n));
         let subquery_node_alias_map: IndexMap<String, Node> = decorrelated_sq_ids
             .map(|id| {
+                dependent_join_node
+                    .children
+                    .retain(|current_children| *current_children != id);
+
                 let subquery_node = self.nodes.swap_remove(&id).unwrap();
                 let subquery_alias = self
                     .alias_generator
@@ -1081,12 +1094,6 @@ impl DependentJoinTracker {
                     .push(e.expr.clone());
                 acc
             });
-        let mut filter =
-            if let LogicalPlan::Filter(filter) = dependent_join_node.plan.clone() {
-                filter
-            } else {
-                return internal_err!("dependent join node is not a filter");
-            };
 
         let dependent_join_node_id = dependent_join_node.id;
         let mut top_node = dependent_join_node;
@@ -1188,13 +1195,18 @@ impl DependentJoinTracker {
             top_node = new_top_node;
         }
         self.nodes.insert(top_node.id, top_node);
-        self.nodes.get_mut(&dependent_join_node_id).unwrap().plan =
-            LogicalPlan::Filter((filter));
+        let mut dependent_join_node =
+            self.nodes.swap_remove(&dependent_join_node_id).unwrap();
+        dependent_join_node.plan = LogicalPlan::Filter((filter));
 
-        Ok(())
+        Ok(dependent_join_node)
     }
+
     fn rewrite_node(&mut self, node_id: usize) -> Result<LogicalPlan> {
         let mut node = self.nodes.swap_remove(&node_id).unwrap();
+        if node.is_subquery_node {
+            println!("{} {}", node.id, node.plan);
+        }
         assert!(
             !node.is_subquery_node,
             "calling on rewrite_node while still exists subquery in the tree"
@@ -1219,7 +1231,7 @@ impl DependentJoinTracker {
         &mut self,
         mut dependent_join_node: Node,
         ret: &mut SimpleDecorrelationResult,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Node> {
         let outer_relations: Vec<String> = dependent_join_node
             .correlated_relations
             .iter()
@@ -1227,14 +1239,13 @@ impl DependentJoinTracker {
             .collect();
 
         match dependent_join_node.plan.clone() {
-            LogicalPlan::Filter(filter) => {
-                self.build_join_from_simple_decorrelation_result_filter(
+            LogicalPlan::Filter(filter) => self
+                .build_join_from_simple_decorrelation_result_filter(
                     dependent_join_node,
                     &outer_relations,
                     ret,
-                )?;
-                self.rewrite_from_root()
-            }
+                    filter,
+                ),
             _ => {
                 unimplemented!()
             }
@@ -1294,6 +1305,8 @@ impl DependentJoinTracker {
                 )?;
                 return Ok(dependent_join_node.plan.clone());
             }
+            self.nodes
+                .insert(dependent_join_node.id, dependent_join_node);
             return self.rewrite_from_root();
         } else {
             // TODO: some of the expr was removed and expect to be pulled up in a best effort fashion
@@ -1569,9 +1582,7 @@ impl DependentJoinTracker {
             // TODO: find a nicer way to do in-place update
             self.nodes.insert(col_access.node_id, descendent);
         }
-        self.build_join_from_simple_decorrelation_result(node, simple_unnesting)?;
-
-        Ok(self.nodes.swap_remove(&node_id).unwrap())
+        self.build_join_from_simple_decorrelation_result(node, simple_unnesting)
     }
 }
 
@@ -1857,9 +1868,7 @@ impl TreeNodeVisitor<'_> for DependentJoinTracker {
                 if contains_subquery(&f.predicate) {
                     is_dependent_join_node = true;
                 }
-                println!("debug predicate {}", f.predicate);
                 f.predicate.outer_column_refs().into_iter().for_each(|f| {
-                    println!("outer column ref {}", f);
                     self.mark_column_access(self.current_id, f);
                 });
             }
@@ -2039,12 +2048,16 @@ mod tests {
         let new_plan = index.root_dependent_join_elimination()?;
         println!("{}", new_plan);
         let expected = "\
-        Filter: outer_table.a > Int32(1) AND __exists_sq_1.mark\
-        \n  LeftMark Join:  Filter: __exists_sq_1.a = outer_table.a AND outer_table.a > __exists_sq_1.c AND outer_table.b = __exists_sq_1.b\
-        \n    TableScan: outer_table\
-        \n    SubqueryAlias: __exists_sq_1\
-        \n      Filter: inner_table_lv1.b = Int32(1)\
-        \n        TableScan: inner_table_lv1";
+        LeftSemi Join:  Filter: outer_table.b = __in_sq_2.a\
+        \n  Filter: __exists_sq_1.mark\
+        \n    LeftMark Join:  Filter: Boolean(true)\
+        \n      Filter: outer_table.a > Int32(1)\
+        \n        TableScan: outer_table\
+        \n      Filter: inner_table_lv1.a AND inner_table_lv1.b = Int32(1)\
+        \n        TableScan: inner_table_lv1\
+        \n  Projection: inner_table_lv1.a\
+        \n    Filter: inner_table_lv1.c = Int32(2)\
+        \n      TableScan: inner_table_lv1";
         assert_eq!(expected, format!("{new_plan}"));
         Ok(())
     }
