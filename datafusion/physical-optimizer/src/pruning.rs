@@ -610,9 +610,6 @@ impl PruningPredicate {
         let statistics_batch =
             build_statistics_record_batch(statistics, &self.required_columns)?;
 
-        println!("statistics_batch: {statistics_batch:?}");
-        println!("predicate_expr: {:?}", self.predicate_expr);
-
         // Evaluate the pruning predicate on that record batch and append any results to the builder
         builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
 
