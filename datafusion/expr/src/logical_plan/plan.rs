@@ -942,6 +942,7 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns,
                 spans,
+                depth,
                 ..
             }) => {
                 self.assert_no_expressions(expr)?;
@@ -950,6 +951,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Subquery(Subquery {
                     subquery: Arc::new(subquery),
                     outer_ref_columns: outer_ref_columns.clone(),
+                    depth: *depth,
                     spans: spans.clone(),
                 }))
             }
@@ -3833,6 +3835,7 @@ pub struct Subquery {
     pub subquery: Arc<LogicalPlan>,
     /// The outer references used in the subquery
     pub outer_ref_columns: Vec<Expr>,
+    pub depth: usize,
     /// Span information for subquery projection columns
     pub spans: Spans,
 }
@@ -3869,6 +3872,7 @@ impl Subquery {
         Subquery {
             subquery: plan,
             outer_ref_columns: self.outer_ref_columns.clone(),
+            depth: self.depth,
             spans: Spans::new(),
         }
     }

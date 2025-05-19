@@ -271,7 +271,9 @@ impl PlannerContext {
 
     /// Returns an iterator over the outer query schemas from back to front,
     /// along with their indices.
-    pub fn iter_outer_query_schemas_rev(&self) -> impl Iterator<Item = (usize, Option<&DFSchema>)> {
+    pub fn iter_outer_query_schemas_rev(
+        &self,
+    ) -> impl Iterator<Item = (usize, Option<&DFSchema>)> {
         self.outer_query_schemas
             .iter()
             .enumerate()
@@ -291,6 +293,10 @@ impl PlannerContext {
 
     pub fn decrease_depth(&mut self) {
         self.cur_depth -= 1;
+    }
+
+    pub fn cur_depth(&self) -> usize {
+        self.cur_depth
     }
 
     pub fn set_table_schema(

@@ -207,12 +207,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(plan);
         }
 
+        // TODO: handle depth
         match plan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 subquery_alias(
                     LogicalPlan::Subquery(Subquery {
                         subquery: input,
                         outer_ref_columns,
+                        depth: 1,
                         spans: Spans::new(),
                     }),
                     alias,
@@ -221,6 +223,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan => Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(plan),
                 outer_ref_columns,
+                depth: 1,
                 spans: Spans::new(),
             })),
         }

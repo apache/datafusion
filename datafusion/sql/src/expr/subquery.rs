@@ -34,6 +34,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // TODO
         planner_context.push_outer_query_schema(Some(input_schema.clone().into()));
         planner_context.increase_depth();
+        let depth = planner_context.cur_depth();
 
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
@@ -44,6 +45,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             subquery: Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
+                depth,
                 spans: Spans::new(),
             },
             negated,
@@ -61,6 +63,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // TODO
         planner_context.push_outer_query_schema(Some(input_schema.clone().into()));
         planner_context.increase_depth();
+        let depth = planner_context.cur_depth();
 
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
@@ -92,6 +95,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
+                depth,
                 spans,
             },
             negated,
@@ -106,6 +110,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         planner_context.push_outer_query_schema(Some(input_schema.clone().into()));
         planner_context.increase_depth();
+        let depth = planner_context.cur_depth();
+
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
             for item in &select.projection {
@@ -132,6 +138,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok(Expr::ScalarSubquery(Subquery {
             subquery: Arc::new(sub_plan),
             outer_ref_columns,
+            depth,
             spans,
         }))
     }
