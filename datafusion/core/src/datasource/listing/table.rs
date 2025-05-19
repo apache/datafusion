@@ -1324,7 +1324,7 @@ mod tests {
 
     #[cfg(feature = "parquet")]
     #[tokio::test]
-    async fn load_table_stats_by_default() -> Result<()> {
+    async fn do_not_load_table_stats_by_default() -> Result<()> {
         use crate::datasource::file_format::parquet::ParquetFormat;
 
         let testdata = crate::test_util::parquet_test_data();
@@ -1335,6 +1335,22 @@ mod tests {
         let state = ctx.state();
 
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema = opt.infer_schema(&state, &table_path).await?;
+        let config = ListingTableConfig::new(table_path.clone())
+            .with_listing_options(opt)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config)?;
+
+        let exec = table.scan(&state, None, &[], None).await?;
+        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
+
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_collect_stat(true);
         let schema = opt.infer_schema(&state, &table_path).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
