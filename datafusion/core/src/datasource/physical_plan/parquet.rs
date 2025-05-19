@@ -39,7 +39,7 @@ mod tests {
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
         ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
-        StructArray,
+        StringViewArray, StructArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
@@ -817,7 +817,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evolved_schema_filter() {
+    async fn evolved_schema_column_order_filter() {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
 
@@ -846,6 +846,66 @@ mod tests {
 
         // Predicate should prune all row groups
         assert_eq!(read.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_column_type_filter_strings() {
+        // The table and filter have a common data type, but the file schema differs
+        let c1: ArrayRef =
+            Arc::new(StringViewArray::from(vec![Some("foo"), Some("bar")]));
+        let batch = create_batch(vec![("c1", c1.clone())]);
+
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
+
+        // Predicate should prune all row groups
+        let filter = col("c1").eq(lit(ScalarValue::Utf8(Some("aaa".to_string()))));
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .with_schema(schema.clone())
+            .round_trip_to_batches(vec![batch.clone()])
+            .await
+            .unwrap();
+        assert_eq!(read.len(), 0);
+
+        // Predicate should prune no row groups
+        let filter = col("c1").eq(lit(ScalarValue::Utf8(Some("foo".to_string()))));
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .with_schema(schema)
+            .round_trip_to_batches(vec![batch])
+            .await
+            .unwrap();
+        assert_eq!(read.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_column_type_filter_ints() {
+        // The table and filter have a common data type, but the file schema differs
+        let c1: ArrayRef = Arc::new(Int8Array::from(vec![Some(1), Some(2)]));
+        let batch = create_batch(vec![("c1", c1.clone())]);
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt64, false)]));
+
+        // Predicate should prune all row groups
+        let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(5))));
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .with_schema(schema.clone())
+            .round_trip_to_batches(vec![batch.clone()])
+            .await
+            .unwrap();
+        assert_eq!(read.len(), 0);
+
+        // Predicate should prune no row groups
+        let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(1))));
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .with_schema(schema)
+            .round_trip_to_batches(vec![batch])
+            .await
+            .unwrap();
+        assert_eq!(read.len(), 1);
     }
 
     #[tokio::test]
