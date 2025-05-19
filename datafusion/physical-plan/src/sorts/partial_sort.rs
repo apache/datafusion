@@ -296,10 +296,7 @@ impl ExecutionPlan for PartialSortExec {
 
         let input = self.input.execute(partition, Arc::clone(&context))?;
 
-        trace!(
-            "End PartialSortExec's input.execute for partition: {}",
-            partition
-        );
+        trace!("End PartialSortExec's input.execute for partition: {partition}");
 
         // Make sure common prefix length is larger than 0
         // Otherwise, we should use SortExec.
@@ -321,7 +318,11 @@ impl ExecutionPlan for PartialSortExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)
     }
 }
 

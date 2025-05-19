@@ -55,7 +55,7 @@ pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
             group.bench_with_input(
                 BenchmarkId::new(
                     "original",
-                    format!("files={},overlap={:.1}", num_files, overlap),
+                    format!("files={num_files},overlap={overlap:.1}"),
                 ),
                 &(
                     file_groups.clone(),
@@ -77,8 +77,8 @@ pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
             for &tp in &target_partitions {
                 group.bench_with_input(
                     BenchmarkId::new(
-                        format!("v2_partitions={}", tp),
-                        format!("files={},overlap={:.1}", num_files, overlap),
+                        format!("v2_partitions={tp}"),
+                        format!("files={num_files},overlap={overlap:.1}"),
                     ),
                     &(
                         file_groups.clone(),

@@ -72,11 +72,11 @@ impl CommonOpt {
     /// Modify the existing config appropriately
     pub fn update_config(&self, mut config: SessionConfig) -> SessionConfig {
         if let Some(batch_size) = self.batch_size {
-            config = config.with_batch_size(batch_size)
+            config = config.with_batch_size(batch_size);
         }
 
         if let Some(partitions) = self.partitions {
-            config = config.with_target_partitions(partitions)
+            config = config.with_target_partitions(partitions);
         }
 
         if let Some(sort_spill_reservation_bytes) = self.sort_spill_reservation_bytes {
@@ -122,15 +122,14 @@ fn parse_memory_limit(limit: &str) -> Result<usize, String> {
     let (number, unit) = limit.split_at(limit.len() - 1);
     let number: f64 = number
         .parse()
-        .map_err(|_| format!("Failed to parse number from memory limit '{}'", limit))?;
+        .map_err(|_| format!("Failed to parse number from memory limit '{limit}'"))?;
 
     match unit {
         "K" => Ok((number * 1024.0) as usize),
         "M" => Ok((number * 1024.0 * 1024.0) as usize),
         "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
         _ => Err(format!(
-            "Unsupported unit '{}' in memory limit '{}'",
-            unit, limit
+            "Unsupported unit '{unit}' in memory limit '{limit}'"
         )),
     }
 }

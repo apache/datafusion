@@ -27,7 +27,6 @@ use crate::aggregates::{
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::projection::get_field_metadata;
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
@@ -285,9 +284,7 @@ impl PhysicalGroupBy {
                     expr.data_type(input_schema)?,
                     group_expr_nullable || expr.nullable(input_schema)?,
                 )
-                .with_metadata(
-                    get_field_metadata(expr, input_schema).unwrap_or_default(),
-                ),
+                .with_metadata(expr.return_field(input_schema)?.metadata().clone()),
             );
         }
         if !self.is_single() {
@@ -349,6 +346,7 @@ impl PartialEq for PhysicalGroupBy {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHash(GroupedHashAggregateStream),
@@ -735,6 +733,59 @@ impl AggregateExec {
     pub fn input_order_mode(&self) -> &InputOrderMode {
         &self.input_order_mode
     }
+
+    fn statistics_inner(&self) -> Result<Statistics> {
+        // TODO stats: group expressions:
+        // - once expressions will be able to compute their own stats, use it here
+        // - case where we group by on a column for which with have the `distinct` stat
+        // TODO stats: aggr expression:
+        // - aggregations sometimes also preserve invariants such as min, max...
+        let column_statistics = Statistics::unknown_column(&self.schema());
+        match self.mode {
+            AggregateMode::Final | AggregateMode::FinalPartitioned
+                if self.group_by.expr.is_empty() =>
+            {
+                Ok(Statistics {
+                    num_rows: Precision::Exact(1),
+                    column_statistics,
+                    total_byte_size: Precision::Absent,
+                })
+            }
+            _ => {
+                // When the input row count is 0 or 1, we can adopt that statistic keeping its reliability.
+                // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
+                let num_rows = if let Some(value) = self
+                    .input()
+                    .partition_statistics(None)?
+                    .num_rows
+                    .get_value()
+                {
+                    if *value > 1 {
+                        self.input()
+                            .partition_statistics(None)?
+                            .num_rows
+                            .to_inexact()
+                    } else if *value == 0 {
+                        // Aggregation on an empty table creates a null row.
+                        self.input()
+                            .partition_statistics(None)?
+                            .num_rows
+                            .add(&Precision::Exact(1))
+                    } else {
+                        // num_rows = 1 case
+                        self.input().partition_statistics(None)?.num_rows
+                    }
+                } else {
+                    Precision::Absent
+                };
+                Ok(Statistics {
+                    num_rows,
+                    column_statistics,
+                    total_byte_size: Precision::Absent,
+                })
+            }
+        }
+    }
 }
 
 impl DisplayAs for AggregateExec {
@@ -941,49 +992,15 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        // TODO stats: group expressions:
-        // - once expressions will be able to compute their own stats, use it here
-        // - case where we group by on a column for which with have the `distinct` stat
-        // TODO stats: aggr expression:
-        // - aggregations sometimes also preserve invariants such as min, max...
-        let column_statistics = Statistics::unknown_column(&self.schema());
-        match self.mode {
-            AggregateMode::Final | AggregateMode::FinalPartitioned
-                if self.group_by.expr.is_empty() =>
-            {
-                Ok(Statistics {
-                    num_rows: Precision::Exact(1),
-                    column_statistics,
-                    total_byte_size: Precision::Absent,
-                })
-            }
-            _ => {
-                // When the input row count is 0 or 1, we can adopt that statistic keeping its reliability.
-                // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
-                let num_rows = if let Some(value) =
-                    self.input().statistics()?.num_rows.get_value()
-                {
-                    if *value > 1 {
-                        self.input().statistics()?.num_rows.to_inexact()
-                    } else if *value == 0 {
-                        // Aggregation on an empty table creates a null row.
-                        self.input()
-                            .statistics()?
-                            .num_rows
-                            .add(&Precision::Exact(1))
-                    } else {
-                        // num_rows = 1 case
-                        self.input().statistics()?.num_rows
-                    }
-                } else {
-                    Precision::Absent
-                };
-                Ok(Statistics {
-                    num_rows,
-                    column_statistics,
-                    total_byte_size: Precision::Absent,
-                })
-            }
+        self.statistics_inner()
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_none() {
+            // If the partition is not specified, we can use the statistics of the input plan
+            self.statistics_inner()
+        } else {
+            Ok(Statistics::new_unknown(&self.schema()))
         }
     }
 
@@ -1924,6 +1941,13 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
+            self.partition_statistics(None)
+        }
+
+        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+            if partition.is_some() {
+                return Ok(Statistics::new_unknown(self.schema().as_ref()));
+            }
             let (_, batches) = some_data();
             Ok(common::compute_record_batch_statistics(
                 &[batches],

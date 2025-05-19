@@ -75,8 +75,11 @@ mod tests {
         assert_eq!(tt_batches, 6 /* 12/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
+        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
 
         Ok(())
     }
@@ -275,7 +278,7 @@ mod tests {
         for _ in 0..3 {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?
         }
@@ -315,7 +318,7 @@ mod tests {
         for _ in 0..2 {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?
         }
