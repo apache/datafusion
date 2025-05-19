@@ -32,6 +32,7 @@ use arrow::datatypes::{
 };
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
+use datafusion::{assert_batches_eq, df};
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
@@ -6015,5 +6016,64 @@ async fn test_insert_into_casting_support() -> Result<()> {
     +------+
     "###
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_df_from_columns() -> Result<()> {
+    let a = Box::new([1, 2, 3]);
+    let b = Box::new([true, true, false]);
+    let c = Box::new([Some("foo"), Some("bar"), None]);
+    let df = DataFrame::from_columns(vec![("a", a), ("b", b), ("c", c)])?;
+
+    assert_eq!(df.schema().fields().len(), 3);
+    assert_eq!(df.clone().count().await?, 3);
+
+    let rows = df.sort(vec![col("a").sort(true, true)])?;
+    assert_batches_eq!(
+        &[
+            "+---+-------+-----+",
+            "| a | b     | c   |",
+            "+---+-------+-----+",
+            "| 1 | true  | foo |",
+            "| 2 | true  | bar |",
+            "| 3 | false |     |",
+            "+---+-------+-----+",
+        ],
+        &rows.collect().await?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_df_macro() -> Result<()> {
+    let df = df!(
+        "a" => [1, 2, 3],
+        "b" => [true, true, false],
+        "c" => [Some("foo"), Some("bar"), None]
+    )?;
+
+    assert_eq!(df.schema().fields().len(), 3);
+    assert_eq!(df.clone().count().await?, 3);
+
+    let rows = df.sort(vec![col("a").sort(true, true)])?;
+    assert_batches_eq!(
+        &[
+            "+---+-------+-----+",
+            "| a | b     | c   |",
+            "+---+-------+-----+",
+            "| 1 | true  | foo |",
+            "| 2 | true  | bar |",
+            "| 3 | false |     |",
+            "+---+-------+-----+",
+        ],
+        &rows.collect().await?
+    );
+
+    let df_empty = df!()?;
+    assert_eq!(df_empty.schema().fields().len(), 0);
+    assert_eq!(df_empty.count().await?, 0);
+
     Ok(())
 }
