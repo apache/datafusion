@@ -303,7 +303,7 @@ impl RunOpt {
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let mut config = self
             .common
-            .config()
+            .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
         let rt_builder = self.common.runtime_env_builder()?;
@@ -471,7 +471,7 @@ impl RunOpt {
     fn partitions(&self) -> usize {
         self.common
             .partitions
-            .unwrap_or(get_available_parallelism())
+            .unwrap_or_else(get_available_parallelism)
     }
 }
 
@@ -514,7 +514,7 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),
             memory_limit: None,
             sort_spill_reservation_bytes: None,
@@ -550,7 +550,7 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),
             memory_limit: None,
             sort_spill_reservation_bytes: None,

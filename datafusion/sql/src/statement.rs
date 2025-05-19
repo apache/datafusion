@@ -1034,7 +1034,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         TransactionMode::AccessMode(_) => None,
                         TransactionMode::IsolationLevel(level) => Some(level),
                     })
-                    .last()
+                    .next_back()
                     .copied()
                     .unwrap_or(ast::TransactionIsolationLevel::Serializable);
                 let access_mode: ast::TransactionAccessMode = modes
@@ -1043,7 +1043,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         TransactionMode::AccessMode(mode) => Some(mode),
                         TransactionMode::IsolationLevel(_) => None,
                     })
-                    .last()
+                    .next_back()
                     .copied()
                     .unwrap_or(ast::TransactionAccessMode::ReadWrite);
                 let isolation_level = match isolation_level {
@@ -1340,11 +1340,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let options_map = self.parse_options_map(statement.options, true)?;
 
         let maybe_file_type = if let Some(stored_as) = &statement.stored_as {
-            if let Ok(ext_file_type) = self.context_provider.get_file_type(stored_as) {
-                Some(ext_file_type)
-            } else {
-                None
-            }
+            self.context_provider.get_file_type(stored_as).ok()
         } else {
             None
         };
@@ -1547,7 +1543,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Convert each [TableConstraint] to corresponding [Constraint]
-    fn new_constraint_from_table_constraints(
+    pub fn new_constraint_from_table_constraints(
         &self,
         constraints: &[TableConstraint],
         df_schema: &DFSchemaRef,
@@ -1613,7 +1609,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
-                let renamed_key = format!("format.{}", key);
+                let renamed_key = format!("format.{key}");
                 options_map.insert(renamed_key.to_lowercase(), value_string);
             } else {
                 options_map.insert(key.to_lowercase(), value_string);

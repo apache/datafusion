@@ -44,7 +44,7 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
         ctx.state().create_physical_plan(&plan).await?;
-        Ok(format!("{}", plan))
+        Ok(format!("{plan}"))
     }
 
     #[tokio::test]
@@ -501,7 +501,7 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
         ctx.state().create_physical_plan(&plan).await?;
-        Ok(format!("{}", plan))
+        Ok(format!("{plan}"))
     }
 
     #[tokio::test]

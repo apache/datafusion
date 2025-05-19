@@ -28,8 +28,8 @@ use datafusion_common::error::Result;
 use datafusion_physical_plan::SendableRecordBatchStream;
 
 use arrow::array::{
-    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, RecordBatch,
-    StringArray, StructArray,
+    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, ArrayAccessor,
+    RecordBatch, StringArray, StructArray,
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::{
@@ -225,7 +225,7 @@ fn generate_file_path(
     if !single_file_output {
         base_output_path
             .prefix()
-            .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
+            .child(format!("{write_id}_{part_idx}.{file_extension}"))
     } else {
         base_output_path.prefix().to_owned()
     }
@@ -482,10 +482,8 @@ fn compute_partition_keys_by_row<'a>(
                             .ok_or(exec_datafusion_err!("it is not yet supported to write to hive partitions with datatype {}",
                             dtype))?;
 
-                        for val in array.values() {
-                            partition_values.push(
-                                Cow::from(val.ok_or(exec_datafusion_err!("Cannot partition by null value for column {}", col))?),
-                            );
+                        for i in 0..rb.num_rows() {
+                            partition_values.push(Cow::from(array.value(i)));
                         }
                     },
                     _ => unreachable!(),
@@ -515,7 +513,7 @@ fn compute_take_arrays(
         for vals in all_partition_values.iter() {
             part_key.push(vals[i].clone().into());
         }
-        let builder = take_map.entry(part_key).or_insert(UInt64Builder::new());
+        let builder = take_map.entry(part_key).or_insert_with(UInt64Builder::new);
         builder.append_value(i as u64);
     }
     take_map
@@ -558,5 +556,5 @@ fn compute_hive_style_file_path(
         file_path = file_path.child(format!("{}={}", partition_by[j].0, part_key[j]));
     }
 
-    file_path.child(format!("{}.{}", write_id, file_extension))
+    file_path.child(format!("{write_id}.{file_extension}"))
 }

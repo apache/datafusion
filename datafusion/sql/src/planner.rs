@@ -331,7 +331,7 @@ impl PlannerContext {
 ///
 /// Key interfaces are:
 /// * [`Self::sql_statement_to_plan`]: Convert a statement
-///     (e.g. `SELECT ...`) into a [`LogicalPlan`]
+///   (e.g. `SELECT ...`) into a [`LogicalPlan`]
 /// * [`Self::sql_to_expr`]: Convert an expression (e.g. `1 + 2`) into an [`Expr`]
 pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
@@ -816,7 +816,7 @@ impl std::fmt::Display for IdentTaker {
             if !first {
                 write!(f, ".")?;
             }
-            write!(f, "{}", ident)?;
+            write!(f, "{ident}")?;
             first = false;
         }
 

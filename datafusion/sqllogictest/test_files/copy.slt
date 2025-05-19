@@ -637,7 +637,7 @@ query error DataFusion error: SQL error: ParserError\("Expected: \), found: EOF"
 COPY (select col2, sum(col1) from source_table
 
 # Copy from table with non literal
-query error DataFusion error: SQL error: ParserError\("Unexpected token \("\)
+query error DataFusion error: SQL error: ParserError\("Expected: end of statement or ;, found: \( at Line: 1, Column: 44"\)
 COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
 
 # Copy using execution.keep_partition_by_columns with an invalid value

@@ -131,10 +131,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Check if the placeholder is in the parameter list
         let param_type = param_data_types.get(idx);
         // Data type of the parameter
-        debug!(
-            "type of param {} param_data_types[idx]: {:?}",
-            param, param_type
-        );
+        debug!("type of param {param} param_data_types[idx]: {param_type:?}");
 
         Ok(Expr::Placeholder(Placeholder::new(
             param,
@@ -301,7 +298,7 @@ fn interval_literal(interval_value: SQLExpr, negative: bool) -> Result<String> {
 fn try_decode_hex_literal(s: &str) -> Option<Vec<u8>> {
     let hex_bytes = s.as_bytes();
 
-    let mut decoded_bytes = Vec::with_capacity((hex_bytes.len() + 1) / 2);
+    let mut decoded_bytes = Vec::with_capacity(hex_bytes.len().div_ceil(2));
 
     let start_idx = hex_bytes.len() % 2;
     if start_idx > 0 {

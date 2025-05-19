@@ -633,7 +633,7 @@ fn odd_count(arr: &Int64Array) -> i64 {
 
 /// returns an array of num_rows that has the number of odd values in `arr`
 fn odd_count_arr(arr: &Int64Array, num_rows: usize) -> ArrayRef {
-    let array: Int64Array = std::iter::repeat(odd_count(arr)).take(num_rows).collect();
+    let array: Int64Array = std::iter::repeat_n(odd_count(arr), num_rows).collect();
     Arc::new(array)
 }
 
@@ -735,9 +735,7 @@ fn test_default_expressions() -> Result<()> {
         assert_eq!(
             input_exprs.len(),
             ret_exprs.len(),
-            "\nInput expressions: {:?}\nReturned expressions: {:?}",
-            input_exprs,
-            ret_exprs
+            "\nInput expressions: {input_exprs:?}\nReturned expressions: {ret_exprs:?}"
         );
 
         // Compares each returned expression with original input expressions

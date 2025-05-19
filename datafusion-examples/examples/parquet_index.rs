@@ -242,8 +242,7 @@ impl TableProvider for IndexTableProvider {
         let files = self.index.get_files(predicate.clone())?;
 
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let source =
-            Arc::new(ParquetSource::default().with_predicate(self.schema(), predicate));
+        let source = Arc::new(ParquetSource::default().with_predicate(predicate));
         let mut file_scan_config_builder =
             FileScanConfigBuilder::new(object_store_url, self.schema(), source)
                 .with_projection(projection.cloned())
@@ -685,7 +684,7 @@ fn make_demo_file(path: impl AsRef<Path>, value_range: Range<i32>) -> Result<()>
 
     let num_values = value_range.len();
     let file_names =
-        StringArray::from_iter_values(std::iter::repeat(&filename).take(num_values));
+        StringArray::from_iter_values(std::iter::repeat_n(&filename, num_values));
     let values = Int32Array::from_iter_values(value_range);
     let batch = RecordBatch::try_from_iter(vec![
         ("file_name", Arc::new(file_names) as ArrayRef),

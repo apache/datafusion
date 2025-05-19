@@ -72,7 +72,7 @@ mod tests {
     #[derive(Debug)]
     struct VariableStream {
         bytes_to_repeat: Bytes,
-        max_iterations: usize,
+        max_iterations: u64,
         iterations_detected: Arc<Mutex<usize>>,
     }
 
@@ -103,14 +103,15 @@ mod tests {
 
         async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
-            let range = 0..bytes.len() * self.max_iterations;
+            let len = bytes.len() as u64;
+            let range = 0..len * self.max_iterations;
             let arc = self.iterations_detected.clone();
             let stream = futures::stream::repeat_with(move || {
                 let arc_inner = arc.clone();
                 *arc_inner.lock().unwrap() += 1;
                 Ok(bytes.clone())
             })
-            .take(self.max_iterations)
+            .take(self.max_iterations as usize)
             .boxed();
 
             Ok(GetResult {
@@ -138,7 +139,7 @@ mod tests {
         async fn get_ranges(
             &self,
             _location: &Path,
-            _ranges: &[Range<usize>],
+            _ranges: &[Range<u64>],
         ) -> object_store::Result<Vec<Bytes>> {
             unimplemented!()
         }
@@ -154,7 +155,7 @@ mod tests {
         fn list(
             &self,
             _prefix: Option<&Path>,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             unimplemented!()
         }
 
@@ -179,7 +180,7 @@ mod tests {
     }
 
     impl VariableStream {
-        pub fn new(bytes_to_repeat: Bytes, max_iterations: usize) -> Self {
+        pub fn new(bytes_to_repeat: Bytes, max_iterations: u64) -> Self {
             Self {
                 bytes_to_repeat,
                 max_iterations,
@@ -216,8 +217,11 @@ mod tests {
         assert_eq!(tt_batches, 50 /* 100/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
+        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
 
         Ok(())
     }
@@ -249,6 +253,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -299,6 +304,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -371,7 +377,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -429,7 +435,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -581,7 +587,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", arrow_test_data());
         let format = CsvFormat::default().with_has_header(has_header);
-        scan_format(state, &format, &root, file_name, projection, limit).await
+        scan_format(state, &format, None, &root, file_name, projection, limit).await
     }
 
     #[tokio::test]
@@ -1020,7 +1026,7 @@ mod tests {
         for _ in 0..batch_count {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?;
         }
@@ -1058,7 +1064,7 @@ mod tests {
         for _ in 0..batch_count {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?;
         }
@@ -1139,18 +1145,14 @@ mod tests {
 
     fn csv_line(line_number: usize) -> Bytes {
         let (int_value, float_value, bool_value, char_value) = csv_values(line_number);
-        format!(
-            "{},{},{},{}\n",
-            int_value, float_value, bool_value, char_value
-        )
-        .into()
+        format!("{int_value},{float_value},{bool_value},{char_value}\n").into()
     }
 
     fn csv_values(line_number: usize) -> (i32, f64, bool, String) {
         let int_value = line_number as i32;
         let float_value = line_number as f64;
         let bool_value = line_number % 2 == 0;
-        let char_value = format!("{}-string", line_number);
+        let char_value = format!("{line_number}-string");
         (int_value, float_value, bool_value, char_value)
     }
 

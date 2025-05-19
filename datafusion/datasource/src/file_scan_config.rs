@@ -23,31 +23,6 @@ use std::{
     fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
 };
 
-use arrow::{
-    array::{
-        ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch,
-        RecordBatchOptions,
-    },
-    buffer::Buffer,
-    datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
-};
-use datafusion_common::{exec_err, ColumnStatistics, Constraints, Result, Statistics};
-use datafusion_common::{DataFusionError, ScalarValue};
-use datafusion_execution::{
-    object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
-};
-use datafusion_physical_expr::{
-    expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
-    PhysicalSortExpr,
-};
-use datafusion_physical_plan::{
-    display::{display_orderings, ProjectSchemaDisplay},
-    metrics::ExecutionPlanMetricsSet,
-    projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
-    DisplayAs, DisplayFormatType, ExecutionPlan,
-};
-use log::{debug, warn};
-
 use crate::file_groups::FileGroup;
 use crate::{
     display::FileGroupsDisplay,
@@ -58,6 +33,34 @@ use crate::{
     statistics::MinMaxStatistics,
     PartitionedFile,
 };
+use arrow::{
+    array::{
+        ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch,
+        RecordBatchOptions,
+    },
+    buffer::Buffer,
+    datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
+};
+use datafusion_common::{
+    config::ConfigOptions, exec_err, ColumnStatistics, Constraints, Result, Statistics,
+};
+use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_execution::{
+    object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
+};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{
+    expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
+    PhysicalSortExpr,
+};
+use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
+use datafusion_physical_plan::{
+    display::{display_orderings, ProjectSchemaDisplay},
+    metrics::ExecutionPlanMetricsSet,
+    projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
+    DisplayAs, DisplayFormatType, ExecutionPlan,
+};
+use log::{debug, warn};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -87,6 +90,7 @@ use crate::{
 /// #  Field::new("c4", DataType::Int32, false),
 /// # ]));
 /// # // Note: crate mock ParquetSource, as ParquetSource is not in the datasource crate
+/// #[derive(Clone)]
 /// # struct ParquetSource {
 /// #    projected_statistics: Option<Statistics>
 /// # };
@@ -94,7 +98,7 @@ use crate::{
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
 /// #  fn as_any(&self) -> &dyn Any { self  }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
-/// #  fn with_schema(&self, _: SchemaRef) -> Arc<dyn FileSource> { unimplemented!() }
+/// #  fn with_schema(&self, _: SchemaRef) -> Arc<dyn FileSource> { Arc::new(self.clone()) as Arc<dyn FileSource> }
 /// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: Some(statistics)} ) }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
@@ -138,6 +142,9 @@ pub struct FileScanConfig {
     /// Schema before `projection` is applied. It contains the all columns that may
     /// appear in the files. It does not include table partition columns
     /// that may be added.
+    /// Note that this is **not** the schema of the physical files.
+    /// This is the schema that the physical file schema will be
+    /// mapped onto, and the schema that the [`DataSourceExec`] will return.
     pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
     ///
@@ -224,6 +231,10 @@ pub struct FileScanConfig {
 #[derive(Clone)]
 pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
+    /// Table schema before any projections or partition columns are applied.
+    /// This schema is used to read the files, but is **not** necessarily the schema of the physical files.
+    /// Rather this is the schema that the physical file schema will be mapped onto, and the schema that the
+    /// [`DataSourceExec`] will return.
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
 
@@ -395,7 +406,9 @@ impl FileScanConfigBuilder {
         let statistics =
             statistics.unwrap_or_else(|| Statistics::new_unknown(&file_schema));
 
-        let file_source = file_source.with_statistics(statistics.clone());
+        let file_source = file_source
+            .with_statistics(statistics.clone())
+            .with_schema(Arc::clone(&file_schema));
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
@@ -451,7 +464,6 @@ impl DataSource for FileScanConfig {
         let source = self
             .file_source
             .with_batch_size(batch_size)
-            .with_schema(Arc::clone(&self.file_schema))
             .with_projection(self);
 
         let opener = source.create_file_opener(object_store, self, partition);
@@ -467,7 +479,8 @@ impl DataSource for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let (schema, _, _, orderings) = self.project();
+                let schema = self.projected_schema();
+                let orderings = get_projected_output_ordering(self, &schema);
 
                 write!(f, "file_groups=")?;
                 FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -569,7 +582,7 @@ impl DataSource for FileScanConfig {
                 &file_scan
                     .projection
                     .clone()
-                    .unwrap_or((0..self.file_schema.fields().len()).collect()),
+                    .unwrap_or_else(|| (0..self.file_schema.fields().len()).collect()),
             );
             DataSourceExec::from_data_source(
                 FileScanConfigBuilder::from(file_scan)
@@ -579,6 +592,32 @@ impl DataSource for FileScanConfig {
                     .build(),
             ) as _
         }))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        let result = self.file_source.try_pushdown_filters(filters, config)?;
+        match result.updated_node {
+            Some(new_file_source) => {
+                let file_scan_config = FileScanConfigBuilder::from(self.clone())
+                    .with_source(new_file_source)
+                    .build();
+                Ok(FilterPushdownPropagation {
+                    filters: result.filters,
+                    updated_node: Some(Arc::new(file_scan_config) as _),
+                })
+            }
+            None => {
+                // If the file source does not support filter pushdown, return the original config
+                Ok(FilterPushdownPropagation {
+                    filters: result.filters,
+                    updated_node: None,
+                })
+            }
+        }
     }
 }
 
@@ -600,7 +639,9 @@ impl FileScanConfig {
         file_source: Arc<dyn FileSource>,
     ) -> Self {
         let statistics = Statistics::new_unknown(&file_schema);
-        let file_source = file_source.with_statistics(statistics.clone());
+        let file_source = file_source
+            .with_statistics(statistics.clone())
+            .with_schema(Arc::clone(&file_schema));
         Self {
             object_store_url,
             file_schema,
@@ -648,7 +689,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_stats(&self) -> Statistics {
+    pub fn projected_stats(&self) -> Statistics {
         let statistics = self.file_source.statistics().unwrap();
 
         let table_cols_stats = self
@@ -672,7 +713,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_schema(&self) -> Arc<Schema> {
+    pub fn projected_schema(&self) -> Arc<Schema> {
         let table_fields: Vec<_> = self
             .projection_indices()
             .into_iter()
@@ -692,7 +733,7 @@ impl FileScanConfig {
         ))
     }
 
-    fn projected_constraints(&self) -> Constraints {
+    pub fn projected_constraints(&self) -> Constraints {
         let indexes = self.projection_indices();
 
         self.constraints
@@ -850,6 +891,96 @@ impl FileScanConfig {
         })
     }
 
+    /// Splits file groups into new groups based on statistics to enable efficient parallel processing.
+    ///
+    /// The method distributes files across a target number of partitions while ensuring
+    /// files within each partition maintain sort order based on their min/max statistics.
+    ///
+    /// The algorithm works by:
+    /// 1. Takes files sorted by minimum values
+    /// 2. For each file:
+    ///   - Finds eligible groups (empty or where file's min > group's last max)
+    ///   - Selects the smallest eligible group
+    ///   - Creates a new group if needed
+    ///
+    /// # Parameters
+    /// * `table_schema`: Schema containing information about the columns
+    /// * `file_groups`: The original file groups to split
+    /// * `sort_order`: The lexicographical ordering to maintain within each group
+    /// * `target_partitions`: The desired number of output partitions
+    ///
+    /// # Returns
+    /// A new set of file groups, where files within each group are non-overlapping with respect to
+    /// their min/max statistics and maintain the specified sort order.
+    pub fn split_groups_by_statistics_with_target_partitions(
+        table_schema: &SchemaRef,
+        file_groups: &[FileGroup],
+        sort_order: &LexOrdering,
+        target_partitions: usize,
+    ) -> Result<Vec<FileGroup>> {
+        if target_partitions == 0 {
+            return Err(DataFusionError::Internal(
+                "target_partitions must be greater than 0".to_string(),
+            ));
+        }
+
+        let flattened_files = file_groups
+            .iter()
+            .flat_map(FileGroup::iter)
+            .collect::<Vec<_>>();
+
+        if flattened_files.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let statistics = MinMaxStatistics::new_from_files(
+            sort_order,
+            table_schema,
+            None,
+            flattened_files.iter().copied(),
+        )?;
+
+        let indices_sorted_by_min = statistics.min_values_sorted();
+
+        // Initialize with target_partitions empty groups
+        let mut file_groups_indices: Vec<Vec<usize>> = vec![vec![]; target_partitions];
+
+        for (idx, min) in indices_sorted_by_min {
+            if let Some((_, group)) = file_groups_indices
+                .iter_mut()
+                .enumerate()
+                .filter(|(_, group)| {
+                    group.is_empty()
+                        || min
+                            > statistics
+                                .max(*group.last().expect("groups should not be empty"))
+                })
+                .min_by_key(|(_, group)| group.len())
+            {
+                group.push(idx);
+            } else {
+                // Create a new group if no existing group fits
+                file_groups_indices.push(vec![idx]);
+            }
+        }
+
+        // Remove any empty groups
+        file_groups_indices.retain(|group| !group.is_empty());
+
+        // Assemble indices back into groups of PartitionedFiles
+        Ok(file_groups_indices
+            .into_iter()
+            .map(|file_group_indices| {
+                FileGroup::new(
+                    file_group_indices
+                        .into_iter()
+                        .map(|idx| flattened_files[idx].clone())
+                        .collect(),
+                )
+            })
+            .collect())
+    }
+
     /// Attempts to do a bin-packing on files into file groups, such that any two files
     /// in a file group are ordered and non-overlapping with respect to their statistics.
     /// It will produce the smallest number of file groups possible.
@@ -954,7 +1085,8 @@ impl Debug for FileScanConfig {
 
 impl DisplayAs for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let (schema, _, _, orderings) = self.project();
+        let schema = self.projected_schema();
+        let orderings = get_projected_output_ordering(self, &schema);
 
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -1373,7 +1505,10 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 
 #[cfg(test)]
 mod tests {
-    use crate::{test_util::MockSource, tests::aggr_test_schema};
+    use crate::{
+        generate_test_files, test_util::MockSource, tests::aggr_test_schema,
+        verify_sort_integrity,
+    };
 
     use super::*;
     use arrow::{
@@ -1464,7 +1599,7 @@ mod tests {
         );
 
         // verify the proj_schema includes the last column and exactly the same the field it is defined
-        let (proj_schema, _, _, _) = conf.project();
+        let proj_schema = conf.projected_schema();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             *proj_schema.field(file_schema.fields().len()),
@@ -1570,7 +1705,7 @@ mod tests {
         assert_eq!(source_statistics, statistics);
         assert_eq!(source_statistics.column_statistics.len(), 3);
 
-        let (proj_schema, ..) = conf.project();
+        let proj_schema = conf.projected_schema();
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(
             proj_schema,
@@ -2228,5 +2363,161 @@ mod tests {
         );
         assert_eq!(new_config.constraints, Constraints::default());
         assert!(new_config.new_lines_in_values);
+    }
+
+    #[test]
+    fn test_split_groups_by_statistics_with_target_partitions() -> Result<()> {
+        use datafusion_common::DFSchema;
+        use datafusion_expr::{col, execution_props::ExecutionProps};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+
+        // Setup sort expression
+        let exec_props = ExecutionProps::new();
+        let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
+        let sort_expr = vec![col("value").sort(true, false)];
+
+        let physical_sort_exprs: Vec<_> = sort_expr
+            .iter()
+            .map(|expr| create_physical_sort_expr(expr, &df_schema, &exec_props).unwrap())
+            .collect();
+
+        let sort_ordering = LexOrdering::from(physical_sort_exprs);
+
+        // Test case parameters
+        struct TestCase {
+            name: String,
+            file_count: usize,
+            overlap_factor: f64,
+            target_partitions: usize,
+            expected_partition_count: usize,
+        }
+
+        let test_cases = vec![
+            // Basic cases
+            TestCase {
+                name: "no_overlap_10_files_4_partitions".to_string(),
+                file_count: 10,
+                overlap_factor: 0.0,
+                target_partitions: 4,
+                expected_partition_count: 4,
+            },
+            TestCase {
+                name: "medium_overlap_20_files_5_partitions".to_string(),
+                file_count: 20,
+                overlap_factor: 0.5,
+                target_partitions: 5,
+                expected_partition_count: 5,
+            },
+            TestCase {
+                name: "high_overlap_30_files_3_partitions".to_string(),
+                file_count: 30,
+                overlap_factor: 0.8,
+                target_partitions: 3,
+                expected_partition_count: 7,
+            },
+            // Edge cases
+            TestCase {
+                name: "fewer_files_than_partitions".to_string(),
+                file_count: 3,
+                overlap_factor: 0.0,
+                target_partitions: 10,
+                expected_partition_count: 3, // Should only create as many partitions as files
+            },
+            TestCase {
+                name: "single_file".to_string(),
+                file_count: 1,
+                overlap_factor: 0.0,
+                target_partitions: 5,
+                expected_partition_count: 1, // Should create only one partition
+            },
+            TestCase {
+                name: "empty_files".to_string(),
+                file_count: 0,
+                overlap_factor: 0.0,
+                target_partitions: 3,
+                expected_partition_count: 0, // Empty result for empty input
+            },
+        ];
+
+        for case in test_cases {
+            println!("Running test case: {}", case.name);
+
+            // Generate files using bench utility function
+            let file_groups = generate_test_files(case.file_count, case.overlap_factor);
+
+            // Call the function under test
+            let result =
+                FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                    &schema,
+                    &file_groups,
+                    &sort_ordering,
+                    case.target_partitions,
+                )?;
+
+            // Verify results
+            println!(
+                "Created {} partitions (target was {})",
+                result.len(),
+                case.target_partitions
+            );
+
+            // Check partition count
+            assert_eq!(
+                result.len(),
+                case.expected_partition_count,
+                "Case '{}': Unexpected partition count",
+                case.name
+            );
+
+            // Verify sort integrity
+            assert!(
+                verify_sort_integrity(&result),
+                "Case '{}': Files within partitions are not properly ordered",
+                case.name
+            );
+
+            // Distribution check for partitions
+            if case.file_count > 1 && case.expected_partition_count > 1 {
+                let group_sizes: Vec<usize> = result.iter().map(FileGroup::len).collect();
+                let max_size = *group_sizes.iter().max().unwrap();
+                let min_size = *group_sizes.iter().min().unwrap();
+
+                // Check partition balancing - difference shouldn't be extreme
+                let avg_files_per_partition =
+                    case.file_count as f64 / case.expected_partition_count as f64;
+                assert!(
+                    (max_size as f64) < 2.0 * avg_files_per_partition,
+                    "Case '{}': Unbalanced distribution. Max partition size {} exceeds twice the average {}",
+                    case.name,
+                    max_size,
+                    avg_files_per_partition
+                );
+
+                println!("Distribution - min files: {min_size}, max files: {max_size}");
+            }
+        }
+
+        // Test error case: zero target partitions
+        let empty_groups: Vec<FileGroup> = vec![];
+        let err = FileScanConfig::split_groups_by_statistics_with_target_partitions(
+            &schema,
+            &empty_groups,
+            &sort_ordering,
+            0,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("target_partitions must be greater than 0"),
+            "Expected error for zero target partitions"
+        );
+
+        Ok(())
     }
 }

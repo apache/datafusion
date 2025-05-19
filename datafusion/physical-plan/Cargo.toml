@@ -36,6 +36,7 @@ workspace = true
 
 [features]
 force_hash_collisions = []
+bench = []
 
 [lib]
 name = "datafusion_physical_plan"
@@ -72,6 +73,7 @@ insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
+tempfile = "3.19.1"
 tokio = { workspace = true, features = [
     "rt-multi-thread",
     "fs",
@@ -81,3 +83,12 @@ tokio = { workspace = true, features = [
 [[bench]]
 harness = false
 name = "partial_ordering"
+
+[[bench]]
+harness = false
+name = "spill_io"
+
+[[bench]]
+harness = false
+name = "sort_preserving_merge"
+required-features = ["bench"]

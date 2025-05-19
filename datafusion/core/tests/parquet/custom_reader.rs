@@ -44,6 +44,7 @@ use insta::assert_snapshot;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
@@ -186,7 +187,7 @@ async fn store_parquet_in_memory(
                 location: Path::parse(format!("file-{offset}.parquet"))
                     .expect("creating path"),
                 last_modified: chrono::DateTime::from(SystemTime::now()),
-                size: buf.len(),
+                size: buf.len() as u64,
                 e_tag: None,
                 version: None,
             };
@@ -218,9 +219,10 @@ struct ParquetFileReader {
 impl AsyncFileReader for ParquetFileReader {
     fn get_bytes(
         &mut self,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        self.metrics.bytes_scanned.add(range.end - range.start);
+        let bytes_scanned = range.end - range.start;
+        self.metrics.bytes_scanned.add(bytes_scanned as usize);
 
         self.store
             .get_range(&self.meta.location, range)
@@ -232,6 +234,7 @@ impl AsyncFileReader for ParquetFileReader {
 
     fn get_metadata(
         &mut self,
+        _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
             let metadata = fetch_parquet_metadata(

@@ -67,13 +67,13 @@ pub(crate) mod test_util {
             .into_iter()
             .zip(tmp_files.into_iter())
             .map(|(batch, mut output)| {
-                let builder = parquet::file::properties::WriterProperties::builder();
-                let props = if multi_page {
-                    builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
-                } else {
-                    builder
+                let mut builder = parquet::file::properties::WriterProperties::builder();
+                if multi_page {
+                    builder = builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
                 }
-                .build();
+                builder = builder.set_bloom_filter_enabled(true);
+
+                let props = builder.build();
 
                 let mut writer = parquet::arrow::ArrowWriter::try_new(
                     &mut output,
@@ -331,7 +331,7 @@ mod tests {
         fn list(
             &self,
             _prefix: Option<&Path>,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             Box::pin(futures::stream::once(async {
                 Err(object_store::Error::NotImplemented)
             }))
@@ -408,7 +408,7 @@ mod tests {
         )));
 
         // Use the file size as the hint so we can get the full metadata from the first fetch
-        let size_hint = meta[0].size;
+        let size_hint = meta[0].size as usize;
 
         fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
             .await
@@ -443,7 +443,7 @@ mod tests {
         )));
 
         // Use the a size hint larger than the file size to make sure we don't panic
-        let size_hint = meta[0].size + 100;
+        let size_hint = (meta[0].size + 100) as usize;
 
         fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
             .await
@@ -616,9 +616,15 @@ mod tests {
         assert_eq!(tt_batches, 4 /* 8/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
         Ok(())
     }
@@ -659,9 +665,15 @@ mod tests {
             get_exec(&state, "alltypes_plain.parquet", projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());
@@ -1073,9 +1085,12 @@ mod tests {
         let format = state
             .get_file_format_factory("parquet")
             .map(|factory| factory.create(state, &Default::default()).unwrap())
-            .unwrap_or(Arc::new(ParquetFormat::new()));
+            .unwrap_or_else(|| Arc::new(ParquetFormat::new()));
 
-        scan_format(state, &*format, &testdata, file_name, projection, limit).await
+        scan_format(
+            state, &*format, None, &testdata, file_name, projection, limit,
+        )
+        .await
     }
 
     /// Test that 0-byte files don't break while reading
@@ -1305,7 +1320,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_sink_write_with_extension() -> Result<()> {
         let filename = "test_file.custom_ext";
-        let file_path = format!("file:///path/to/{}", filename);
+        let file_path = format!("file:///path/to/{filename}");
         let parquet_sink = create_written_parquet_sink(file_path.as_str()).await?;
 
         // assert written to proper path
@@ -1520,8 +1535,7 @@ mod tests {
             let prefix = path_parts[0].as_ref();
             assert!(
                 expected_partitions.contains(prefix),
-                "expected path prefix to match partition, instead found {:?}",
-                prefix
+                "expected path prefix to match partition, instead found {prefix:?}"
             );
             expected_partitions.remove(prefix);
 

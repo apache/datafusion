@@ -52,6 +52,7 @@ use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 create_func!(FirstValue, first_value_udaf);
+create_func!(LastValue, last_value_udaf);
 
 /// Returns the first value in a group of values.
 pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
@@ -64,6 +65,20 @@ pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
             .unwrap()
     } else {
         first_value_udaf().call(vec![expression])
+    }
+}
+
+/// Returns the last value in a group of values.
+pub fn last_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
+    if let Some(order_by) = order_by {
+        last_value_udaf()
+            .call(vec![expression])
+            .order_by(order_by)
+            .build()
+            // guaranteed to be `Expr::AggregateFunction`
+            .unwrap()
+    } else {
+        last_value_udaf().call(vec![expression])
     }
 }
 
@@ -166,6 +181,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        // TODO: extract to function
         use DataType::*;
         matches!(
             args.return_type,
@@ -193,6 +209,7 @@ impl AggregateUDFImpl for FirstValue {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        // TODO: extract to function
         fn create_accumulator<T>(
             args: AccumulatorArgs,
         ) -> Result<Box<dyn GroupsAccumulator>>
@@ -210,6 +227,7 @@ impl AggregateUDFImpl for FirstValue {
                 args.ignore_nulls,
                 args.return_type,
                 &ordering_dtypes,
+                true,
             )?))
         }
 
@@ -258,10 +276,12 @@ impl AggregateUDFImpl for FirstValue {
                 create_accumulator::<Time64NanosecondType>(args)
             }
 
-            _ => internal_err!(
-                "GroupsAccumulator not supported for first({})",
-                args.return_type
-            ),
+            _ => {
+                internal_err!(
+                    "GroupsAccumulator not supported for first_value({})",
+                    args.return_type
+                )
+            }
         }
     }
 
@@ -291,6 +311,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 }
 
+// TODO: rename to PrimitiveGroupsAccumulator
 struct FirstPrimitiveGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
@@ -316,12 +337,16 @@ where
     // buffer for `get_filtered_min_of_each_group`
     // filter_min_of_each_group_buf.0[group_idx] -> idx_in_val
     // only valid if filter_min_of_each_group_buf.1[group_idx] == true
+    // TODO: rename to extreme_of_each_group_buf
     min_of_each_group_buf: (Vec<usize>, BooleanBufferBuilder),
 
     // =========== option ============
 
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // true: take first element in an aggregation group according to the requested ordering.
+    // false: take last element in an aggregation group according to the requested ordering.
+    pick_first_in_group: bool,
     // derived from `ordering_req`.
     sort_options: Vec<SortOptions>,
     // Stores whether incoming data already satisfies the ordering requirement.
@@ -342,6 +367,7 @@ where
         ignore_nulls: bool,
         data_type: &DataType,
         ordering_dtypes: &[DataType],
+        pick_first_in_group: bool,
     ) -> Result<Self> {
         let requirement_satisfied = ordering_req.is_empty();
 
@@ -365,6 +391,7 @@ where
             is_sets: BooleanBufferBuilder::new(0),
             size_of_orderings: 0,
             min_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
+            pick_first_in_group,
         })
     }
 
@@ -391,8 +418,13 @@ where
 
         assert!(new_ordering_values.len() == self.ordering_req.len());
         let current_ordering = &self.orderings[group_idx];
-        compare_rows(current_ordering, new_ordering_values, &self.sort_options)
-            .map(|x| x.is_gt())
+        compare_rows(current_ordering, new_ordering_values, &self.sort_options).map(|x| {
+            if self.pick_first_in_group {
+                x.is_gt()
+            } else {
+                x.is_lt()
+            }
+        })
     }
 
     fn take_orderings(&mut self, emit_to: EmitTo) -> Vec<Vec<ScalarValue>> {
@@ -501,10 +533,10 @@ where
             .map(ScalarValue::size_of_vec)
             .sum::<usize>()
     }
-
     /// Returns a vector of tuples `(group_idx, idx_in_val)` representing the index of the
     /// minimum value in `orderings` for each group, using lexicographical comparison.
     /// Values are filtered using `opt_filter` and `is_set_arr` if provided.
+    /// TODO: rename to get_filtered_extreme_of_each_group
     fn get_filtered_min_of_each_group(
         &mut self,
         orderings: &[ArrayRef],
@@ -556,15 +588,19 @@ where
             }
 
             let is_valid = self.min_of_each_group_buf.1.get_bit(group_idx);
-            if is_valid
-                && comparator
-                    .compare(self.min_of_each_group_buf.0[group_idx], idx_in_val)
-                    .is_gt()
-            {
-                self.min_of_each_group_buf.0[group_idx] = idx_in_val;
-            } else if !is_valid {
+
+            if !is_valid {
                 self.min_of_each_group_buf.1.set_bit(group_idx, true);
                 self.min_of_each_group_buf.0[group_idx] = idx_in_val;
+            } else {
+                let ordering = comparator
+                    .compare(self.min_of_each_group_buf.0[group_idx], idx_in_val);
+
+                if (ordering.is_gt() && self.pick_first_in_group)
+                    || (ordering.is_lt() && !self.pick_first_in_group)
+                {
+                    self.min_of_each_group_buf.0[group_idx] = idx_in_val;
+                }
             }
         }
 
@@ -716,7 +752,7 @@ where
 
     fn size(&self) -> usize {
         self.vals.capacity() * size_of::<T::Native>()
-            + self.null_builder.capacity() / 8 // capacity is in bits, so convert to bytes 
+            + self.null_builder.capacity() / 8 // capacity is in bits, so convert to bytes
             + self.is_sets.capacity() / 8
             + self.size_of_orderings
             + self.min_of_each_group_buf.0.capacity() * size_of::<usize>()
@@ -791,9 +827,14 @@ impl FirstValueAccumulator {
     }
 
     // Updates state with the values in the given row.
-    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
-        self.first = row[0].clone();
-        self.orderings = row[1..].to_vec();
+    fn update_with_new_row(&mut self, mut row: Vec<ScalarValue>) {
+        // Ensure any Array based scalars hold have a single value to reduce memory pressure
+        row.iter_mut().for_each(|s| {
+            s.compact();
+        });
+
+        self.first = row.remove(0);
+        self.orderings = row;
         self.is_set = true;
     }
 
@@ -852,7 +893,7 @@ impl Accumulator for FirstValueAccumulator {
         if !self.is_set {
             if let Some(first_idx) = self.get_first_idx(values)? {
                 let row = get_row_at_idx(values, first_idx)?;
-                self.update_with_new_row(&row);
+                self.update_with_new_row(row);
             }
         } else if !self.requirement_satisfied {
             if let Some(first_idx) = self.get_first_idx(values)? {
@@ -865,7 +906,7 @@ impl Accumulator for FirstValueAccumulator {
                 )?
                 .is_gt()
                 {
-                    self.update_with_new_row(&row);
+                    self.update_with_new_row(row);
                 }
             }
         }
@@ -889,7 +930,7 @@ impl Accumulator for FirstValueAccumulator {
         let min = (0..filtered_states[0].len()).min_by(|&a, &b| comparator.compare(a, b));
 
         if let Some(first_idx) = min {
-            let first_row = get_row_at_idx(&filtered_states, first_idx)?;
+            let mut first_row = get_row_at_idx(&filtered_states, first_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let first_ordering = &first_row[1..is_set_idx];
             let sort_options = get_sort_options(self.ordering_req.as_ref());
@@ -900,7 +941,9 @@ impl Accumulator for FirstValueAccumulator {
                 // Update with first value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
                 // containing two is_set flags.
-                self.update_with_new_row(&first_row[0..is_set_idx]);
+                assert!(is_set_idx <= first_row.len());
+                first_row.resize(is_set_idx, ScalarValue::Null);
+                self.update_with_new_row(first_row);
             }
         }
         Ok(())
@@ -917,13 +960,6 @@ impl Accumulator for FirstValueAccumulator {
             - size_of_val(&self.orderings)
     }
 }
-
-make_udaf_expr_and_func!(
-    LastValue,
-    last_value,
-    "Returns the last value in a group of values.",
-    last_value_udaf
-);
 
 #[user_doc(
     doc_section(label = "General Functions"),
@@ -1052,6 +1088,109 @@ impl AggregateUDFImpl for LastValue {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        use DataType::*;
+        matches!(
+            args.return_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float16
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Decimal256(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
+        )
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        fn create_accumulator<T>(
+            args: AccumulatorArgs,
+        ) -> Result<Box<dyn GroupsAccumulator>>
+        where
+            T: ArrowPrimitiveType + Send,
+        {
+            let ordering_dtypes = args
+                .ordering_req
+                .iter()
+                .map(|e| e.expr.data_type(args.schema))
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(Box::new(FirstPrimitiveGroupsAccumulator::<T>::try_new(
+                args.ordering_req.clone(),
+                args.ignore_nulls,
+                args.return_type,
+                &ordering_dtypes,
+                false,
+            )?))
+        }
+
+        match args.return_type {
+            DataType::Int8 => create_accumulator::<Int8Type>(args),
+            DataType::Int16 => create_accumulator::<Int16Type>(args),
+            DataType::Int32 => create_accumulator::<Int32Type>(args),
+            DataType::Int64 => create_accumulator::<Int64Type>(args),
+            DataType::UInt8 => create_accumulator::<UInt8Type>(args),
+            DataType::UInt16 => create_accumulator::<UInt16Type>(args),
+            DataType::UInt32 => create_accumulator::<UInt32Type>(args),
+            DataType::UInt64 => create_accumulator::<UInt64Type>(args),
+            DataType::Float16 => create_accumulator::<Float16Type>(args),
+            DataType::Float32 => create_accumulator::<Float32Type>(args),
+            DataType::Float64 => create_accumulator::<Float64Type>(args),
+
+            DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
+            DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
+
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                create_accumulator::<TimestampSecondType>(args)
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                create_accumulator::<TimestampMillisecondType>(args)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                create_accumulator::<TimestampMicrosecondType>(args)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                create_accumulator::<TimestampNanosecondType>(args)
+            }
+
+            DataType::Date32 => create_accumulator::<Date32Type>(args),
+            DataType::Date64 => create_accumulator::<Date64Type>(args),
+            DataType::Time32(TimeUnit::Second) => {
+                create_accumulator::<Time32SecondType>(args)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                create_accumulator::<Time32MillisecondType>(args)
+            }
+
+            DataType::Time64(TimeUnit::Microsecond) => {
+                create_accumulator::<Time64MicrosecondType>(args)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                create_accumulator::<Time64NanosecondType>(args)
+            }
+
+            _ => {
+                internal_err!(
+                    "GroupsAccumulator not supported for last_value({})",
+                    args.return_type
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1094,9 +1233,14 @@ impl LastValueAccumulator {
     }
 
     // Updates state with the values in the given row.
-    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
-        self.last = row[0].clone();
-        self.orderings = row[1..].to_vec();
+    fn update_with_new_row(&mut self, mut row: Vec<ScalarValue>) {
+        // Ensure any Array based scalars hold have a single value to reduce memory pressure
+        row.iter_mut().for_each(|s| {
+            s.compact();
+        });
+
+        self.last = row.remove(0);
+        self.orderings = row;
         self.is_set = true;
     }
 
@@ -1157,7 +1301,7 @@ impl Accumulator for LastValueAccumulator {
         if !self.is_set || self.requirement_satisfied {
             if let Some(last_idx) = self.get_last_idx(values)? {
                 let row = get_row_at_idx(values, last_idx)?;
-                self.update_with_new_row(&row);
+                self.update_with_new_row(row);
             }
         } else if let Some(last_idx) = self.get_last_idx(values)? {
             let row = get_row_at_idx(values, last_idx)?;
@@ -1170,7 +1314,7 @@ impl Accumulator for LastValueAccumulator {
             )?
             .is_lt()
             {
-                self.update_with_new_row(&row);
+                self.update_with_new_row(row);
             }
         }
 
@@ -1194,7 +1338,7 @@ impl Accumulator for LastValueAccumulator {
         let max = (0..filtered_states[0].len()).max_by(|&a, &b| comparator.compare(a, b));
 
         if let Some(last_idx) = max {
-            let last_row = get_row_at_idx(&filtered_states, last_idx)?;
+            let mut last_row = get_row_at_idx(&filtered_states, last_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let last_ordering = &last_row[1..is_set_idx];
             let sort_options = get_sort_options(self.ordering_req.as_ref());
@@ -1207,7 +1351,9 @@ impl Accumulator for LastValueAccumulator {
                 // Update with last value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
                 // containing two is_set flags.
-                self.update_with_new_row(&last_row[0..is_set_idx]);
+                assert!(is_set_idx <= last_row.len());
+                last_row.resize(is_set_idx, ScalarValue::Null);
+                self.update_with_new_row(last_row);
             }
         }
         Ok(())
@@ -1250,7 +1396,13 @@ fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<Sort
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::Int64Array, compute::SortOptions, datatypes::Schema};
+    use std::iter::repeat_with;
+
+    use arrow::{
+        array::{Int64Array, ListArray},
+        compute::SortOptions,
+        datatypes::Schema,
+    };
     use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 
     use super::*;
@@ -1411,6 +1563,7 @@ mod tests {
             true,
             &DataType::Int64,
             &[DataType::Int64],
+            true,
         )?;
 
         let mut val_with_orderings = {
@@ -1485,7 +1638,7 @@ mod tests {
     }
 
     #[test]
-    fn test_frist_group_acc_size_of_ordering() -> Result<()> {
+    fn test_group_acc_size_of_ordering() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
             Field::new("b", DataType::Int64, true),
@@ -1504,6 +1657,7 @@ mod tests {
             true,
             &DataType::Int64,
             &[DataType::Int64],
+            true,
         )?;
 
         let val_with_orderings = {
@@ -1560,6 +1714,137 @@ mod tests {
                 group_acc.compute_size_of_orderings()
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_last_group_acc() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+            Field::new("d", DataType::Int32, true),
+            Field::new("e", DataType::Boolean, true),
+        ]));
+
+        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }]);
+
+        let mut group_acc = FirstPrimitiveGroupsAccumulator::<Int64Type>::try_new(
+            sort_key,
+            true,
+            &DataType::Int64,
+            &[DataType::Int64],
+            false,
+        )?;
+
+        let mut val_with_orderings = {
+            let mut val_with_orderings = Vec::<ArrayRef>::new();
+
+            let vals = Arc::new(Int64Array::from(vec![Some(1), None, Some(3), Some(-6)]));
+            let orderings = Arc::new(Int64Array::from(vec![1, -9, 3, -6]));
+
+            val_with_orderings.push(vals);
+            val_with_orderings.push(orderings);
+
+            val_with_orderings
+        };
+
+        group_acc.update_batch(
+            &val_with_orderings,
+            &[0, 1, 2, 1],
+            Some(&BooleanArray::from(vec![true, true, false, true])),
+            3,
+        )?;
+
+        let state = group_acc.state(EmitTo::All)?;
+
+        let expected_state: Vec<Arc<dyn Array>> = vec![
+            Arc::new(Int64Array::from(vec![Some(1), Some(-6), None])),
+            Arc::new(Int64Array::from(vec![Some(1), Some(-6), None])),
+            Arc::new(BooleanArray::from(vec![true, true, false])),
+        ];
+        assert_eq!(state, expected_state);
+
+        group_acc.merge_batch(
+            &state,
+            &[0, 1, 2],
+            Some(&BooleanArray::from(vec![true, false, false])),
+            3,
+        )?;
+
+        val_with_orderings.clear();
+        val_with_orderings.push(Arc::new(Int64Array::from(vec![66, 6])));
+        val_with_orderings.push(Arc::new(Int64Array::from(vec![66, 6])));
+
+        group_acc.update_batch(&val_with_orderings, &[1, 2], None, 4)?;
+
+        let binding = group_acc.evaluate(EmitTo::All)?;
+        let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        let expect: PrimitiveArray<Int64Type> =
+            Int64Array::from(vec![Some(1), Some(66), Some(6), None]);
+
+        assert_eq!(eval_result, &expect);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_list_acc_size() -> Result<()> {
+        fn size_after_batch(values: &[ArrayRef]) -> Result<usize> {
+            let mut first_accumulator = FirstValueAccumulator::try_new(
+                &DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
+                &[],
+                LexOrdering::default(),
+                false,
+            )?;
+
+            first_accumulator.update_batch(values)?;
+
+            Ok(first_accumulator.size())
+        }
+
+        let batch1 = ListArray::from_iter_primitive::<Int32Type, _, _>(
+            repeat_with(|| Some(vec![Some(1)])).take(10000),
+        );
+        let batch2 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![Some(1)])]);
+
+        let size1 = size_after_batch(&[Arc::new(batch1)])?;
+        let size2 = size_after_batch(&[Arc::new(batch2)])?;
+        assert_eq!(size1, size2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_last_list_acc_size() -> Result<()> {
+        fn size_after_batch(values: &[ArrayRef]) -> Result<usize> {
+            let mut last_accumulator = LastValueAccumulator::try_new(
+                &DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
+                &[],
+                LexOrdering::default(),
+                false,
+            )?;
+
+            last_accumulator.update_batch(values)?;
+
+            Ok(last_accumulator.size())
+        }
+
+        let batch1 = ListArray::from_iter_primitive::<Int32Type, _, _>(
+            repeat_with(|| Some(vec![Some(1)])).take(10000),
+        );
+        let batch2 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![Some(1)])]);
+
+        let size1 = size_after_batch(&[Arc::new(batch1)])?;
+        let size2 = size_after_batch(&[Arc::new(batch2)])?;
+        assert_eq!(size1, size2);
 
         Ok(())
     }
