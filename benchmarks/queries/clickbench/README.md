@@ -192,6 +192,40 @@ Results look like
 +---------------------+------+------+----------+
 ```
 
+### Q8: Average Latency and Response Time Analysis 
+
+**Question**: Which combinations of operating system, region, and user agent exhibit the highest average latency? For each of these combinations, also report the average response time.
+
+**Important Query Properties**: Multiple average of Duration, high cardinality grouping
+
+```sql
+SELECT "RegionID", "UserAgent", "OS", AVG(to_timestamp("ResponseEndTiming")-to_timestamp("ResponseStartTiming")) as avg_response_time, AVG(to_timestamp("ResponseEndTiming")-to_timestamp("ConnectTiming")) as avg_latency 
+FROM hits 
+GROUP BY "RegionID", "UserAgent", "OS" 
+ORDER BY avg_latency DESC 
+LIMIT 10;
+```
+
+Results look like 
+```
++----------+-----------+-----+------------------------------------------+------------------------------------------+
+| RegionID | UserAgent | OS  | avg_response_time                        | avg_latency                              |
++----------+-----------+-----+------------------------------------------+------------------------------------------+
+| 22934    | 5         | 126 | 0 days 8 hours 20 mins 0.000000000 secs  | 0 days 8 hours 20 mins 0.000000000 secs  |
+| 22735    | 82        | 74  | 0 days 8 hours 20 mins 0.000000000 secs  | 0 days 8 hours 20 mins 0.000000000 secs  |
+| 21687    | 32        | 49  | 0 days 8 hours 20 mins 0.000000000 secs  | 0 days 8 hours 20 mins 0.000000000 secs  |
+| 18518    | 82        | 77  | 0 days 8 hours 20 mins 0.000000000 secs  | 0 days 8 hours 20 mins 0.000000000 secs  |
+| 14006    | 7         | 126 | 0 days 7 hours 58 mins 20.000000000 secs | 0 days 8 hours 20 mins 0.000000000 secs  |
+| 9803     | 82        | 77  | 0 days 8 hours 20 mins 0.000000000 secs  | 0 days 8 hours 20 mins 0.000000000 secs  |
+| 107108   | 82        | 77  | 0 days 8 hours 20 mins 0.000000000 secs  | 0 days 8 hours 20 mins 0.000000000 secs  |
+| 111626   | 7         | 44  | 0 days 7 hours 23 mins 12.500000000 secs | 0 days 8 hours 0 mins 47.000000000 secs  |
+| 17716    | 56        | 44  | 0 days 6 hours 48 mins 44.500000000 secs | 0 days 7 hours 35 mins 47.000000000 secs |
+| 13631    | 82        | 45  | 0 days 7 hours 23 mins 1.000000000 secs  | 0 days 7 hours 23 mins 1.000000000 secs  |
++----------+-----------+-----+------------------------------------------+------------------------------------------+
+10 row(s) fetched. 
+Elapsed 30.195 seconds.
+```
+
 ## Data Notes
 
 Here are some interesting statistics about the data used in the queries
