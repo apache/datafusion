@@ -40,6 +40,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::pruning::ColumnOrdering;
 use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
 use datafusion_physical_plan::filter_pushdown::PredicateSupport;
 use datafusion_physical_plan::filter_pushdown::PredicateSupports;
@@ -572,6 +573,7 @@ impl FileSource for ParquetSource {
                     if let (Some(pruning_predicate), _) = build_pruning_predicates(
                         Some(predicate),
                         file_schema,
+                        vec![ColumnOrdering::Unknown; file_schema.fields().len()],
                         &predicate_creation_errors,
                     ) {
                         let mut guarantees = pruning_predicate
