@@ -77,6 +77,10 @@ proto:
   - changed-files:
       - any-glob-to-any-file: ['datafusion/proto/**/*', 'datafusion/proto-common/**/*']
 
+spark:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/spark/**/*']
+
 substrait:
 - changed-files:
   - any-glob-to-any-file: ['datafusion/substrait/**/*']
