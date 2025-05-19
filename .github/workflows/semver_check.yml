@@ -67,15 +67,7 @@ jobs:
       - name : Run semver-check functions
         run: cargo semver-checks check-release -p datafusion-functions -p datafusion-functions-aggregate -p datafusion-functions-aggregate-common -p datafusion-functions-nested -p datafusion-functions-table -p datafusion-functions-window -p datafusion-functions-window-common
         continue-on-error: true
-      - name: Run semver-check macros
-        run: cargo semver-checks check-release -p datafusion-macros
-        continue-on-error: true
-      - name: Run semver-check optimizer
-        run: cargo semver-checks check-release -p datafusion-optimizer -p datafusion-physical-optimizer
-        continue-on-error: true
-      - name: Run semver-check physical-plan
-        run: cargo semver-checks check-release -p datafusion-physical-plan
-        continue-on-error: true
+      
       
   semver-checks-2:
     runs-on: ubuntu-latest
@@ -105,9 +97,32 @@ jobs:
       - name: Run semver-check sqllogictest
         run: cargo semver-checks check-release -p datafusion-sqllogictest
         continue-on-error: true
+
+  semver-checks-3:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Install semver-checks
+        run: cargo install cargo-semver-checks --locked
       - name: Run semver-check datafusion-cli
         run: cargo semver-checks check-release -p datafusion-cli
         continue-on-error: true
       - name: Run semver-check datafusion
         run: cargo semver-checks check-release -p datafusion
+        continue-on-error: true
+      - name: Run semver-check macros
+        run: cargo semver-checks check-release -p datafusion-macros
+        continue-on-error: true
+      - name: Run semver-check optimizer
+        run: cargo semver-checks check-release -p datafusion-optimizer -p datafusion-physical-optimizer
+        continue-on-error: true
+      - name: Run semver-check physical-plan
+        run: cargo semver-checks check-release -p datafusion-physical-plan
         continue-on-error: true
