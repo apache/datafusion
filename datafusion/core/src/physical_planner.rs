@@ -2729,13 +2729,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_maybe_fix_nested_column_name_with_colon() {
-        let schema =
-            Schema::new(vec![Field::new("column", DataType::Int32, false)]);
+        let schema = Schema::new(vec![Field::new("column", DataType::Int32, false)]);
         let schema_ref: SchemaRef = Arc::new(schema);
 
         // Construct the nested expr
-        let col_expr =
-            Arc::new(Column::new("column:1", 0)) as Arc<dyn PhysicalExpr>;
+        let col_expr = Arc::new(Column::new("column:1", 0)) as Arc<dyn PhysicalExpr>;
         let is_not_null_expr = Arc::new(IsNotNullExpr::new(col_expr.clone()));
 
         // Create a binary expression and put the column inside
