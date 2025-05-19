@@ -55,9 +55,9 @@ async fn test_tracer_injection() {
     let untraced_result = SpawnedTask::spawn(run_query()).join().await;
     if let Err(e) = untraced_result {
         // Check if the error message contains the expected error.
-        assert!(e.is_panic(), "Expected a panic, but got: {:?}", e);
+        assert!(e.is_panic(), "Expected a panic, but got: {e:?}");
         assert_contains!(e.to_string(), "Task ID not found in spawn graph");
-        info!("Caught expected panic: {}", e);
+        info!("Caught expected panic: {e}");
     } else {
         panic!("Expected the task to panic, but it completed successfully");
     };
@@ -94,7 +94,7 @@ async fn run_query() {
     ctx.register_object_store(&url, traceable_store.clone());
 
     // Register a listing table from the test data directory.
-    let table_path = format!("test://{}/", test_data);
+    let table_path = format!("test://{test_data}/");
     ctx.register_listing_table("alltypes", &table_path, listing_options, None, None)
         .await
         .expect("Failed to register table");

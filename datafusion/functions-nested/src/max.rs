@@ -17,12 +17,13 @@
 
 //! [`ScalarUDFImpl`] definitions for array_max function.
 use crate::utils::make_scalar_function;
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::List;
-use datafusion_common::cast::as_list_array;
+use arrow::datatypes::DataType::{LargeList, List};
+use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::Result;
+use datafusion_common::{exec_err, plan_err, ScalarValue};
 use datafusion_doc::Documentation;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -91,17 +92,15 @@ impl ScalarUDFImpl for ArrayMax {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
-        match &arg_types[0] {
-            List(field) => Ok(field.data_type().clone()),
-            _ => exec_err!("Not reachable, data_type should be List"),
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let [array] = take_function_args(self.name(), arg_types)?;
+        match array {
+            List(field) | LargeList(field) => Ok(field.data_type().clone()),
+            arg_type => plan_err!("{} does not support type {arg_type}", self.name()),
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: ScalarFunctionArgs,
-    ) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_max_inner)(&args.args)
     }
 
@@ -121,18 +120,25 @@ impl ScalarUDFImpl for ArrayMax {
 ///
 /// For example:
 /// > array_max(\[1, 3, 2]) -> 3
-pub fn array_max_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef> {
-    let [arg1] = take_function_args("array_max", args)?;
-
-    match arg1.data_type() {
-        List(_) => {
-            let input_list_array = as_list_array(&arg1)?;
-            let result_vec = input_list_array
-                .iter()
-                .flat_map(|arr| min_max::max_batch(&arr.unwrap()))
-                .collect_vec();
-            ScalarValue::iter_to_array(result_vec)
-        }
-        _ => exec_err!("array_max does not support type: {:?}", arg1.data_type()),
+pub fn array_max_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [array] = take_function_args("array_max", args)?;
+    match array.data_type() {
+        List(_) => general_array_max(as_list_array(array)?),
+        LargeList(_) => general_array_max(as_large_list_array(array)?),
+        arg_type => exec_err!("array_max does not support type: {arg_type}"),
     }
+}
+
+fn general_array_max<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+) -> Result<ArrayRef> {
+    let null_value = ScalarValue::try_from(array.value_type())?;
+    let result_vec: Vec<ScalarValue> = array
+        .iter()
+        .map(|arr| {
+            arr.as_ref()
+                .map_or_else(|| Ok(null_value.clone()), min_max::max_batch)
+        })
+        .try_collect()?;
+    ScalarValue::iter_to_array(result_vec)
 }

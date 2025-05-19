@@ -107,35 +107,52 @@ fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::assert_optimized_plan_eq;
+    use crate::assert_optimized_plan_eq_snapshot;
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Column;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{col, lit, JoinType, LogicalPlanBuilder};
 
-    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(Arc::new(FilterNullJoinKeys {}), plan, expected)
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(FilterNullJoinKeys {})];
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[test]
     fn left_nullable() -> Result<()> {
         let (t1, t2) = test_tables()?;
         let plan = build_plan(t1, t2, "t1.optional_id", "t2.id", JoinType::Inner)?;
-        let expected = "Inner Join: t1.optional_id = t2.id\
-        \n  Filter: t1.optional_id IS NOT NULL\
-        \n    TableScan: t1\
-        \n  TableScan: t2";
-        assert_optimized_plan_equal(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Inner Join: t1.optional_id = t2.id
+          Filter: t1.optional_id IS NOT NULL
+            TableScan: t1
+          TableScan: t2
+        ")
     }
 
     #[test]
     fn left_nullable_left_join() -> Result<()> {
         let (t1, t2) = test_tables()?;
         let plan = build_plan(t1, t2, "t1.optional_id", "t2.id", JoinType::Left)?;
-        let expected = "Left Join: t1.optional_id = t2.id\
-        \n  TableScan: t1\
-        \n  TableScan: t2";
-        assert_optimized_plan_equal(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Left Join: t1.optional_id = t2.id
+          TableScan: t1
+          TableScan: t2
+        ")
     }
 
     #[test]
@@ -144,22 +161,26 @@ mod tests {
         // Note: order of tables is reversed
         let plan =
             build_plan(t_right, t_left, "t2.id", "t1.optional_id", JoinType::Left)?;
-        let expected = "Left Join: t2.id = t1.optional_id\
-        \n  TableScan: t2\
-        \n  Filter: t1.optional_id IS NOT NULL\
-        \n    TableScan: t1";
-        assert_optimized_plan_equal(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Left Join: t2.id = t1.optional_id
+          TableScan: t2
+          Filter: t1.optional_id IS NOT NULL
+            TableScan: t1
+        ")
     }
 
     #[test]
     fn left_nullable_on_condition_reversed() -> Result<()> {
         let (t1, t2) = test_tables()?;
         let plan = build_plan(t1, t2, "t2.id", "t1.optional_id", JoinType::Inner)?;
-        let expected = "Inner Join: t1.optional_id = t2.id\
-        \n  Filter: t1.optional_id IS NOT NULL\
-        \n    TableScan: t1\
-        \n  TableScan: t2";
-        assert_optimized_plan_equal(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Inner Join: t1.optional_id = t2.id
+          Filter: t1.optional_id IS NOT NULL
+            TableScan: t1
+          TableScan: t2
+        ")
     }
 
     #[test]
@@ -189,14 +210,16 @@ mod tests {
                 None,
             )?
             .build()?;
-        let expected = "Inner Join: t3.t1_id = t1.id, t3.t2_id = t2.id\
-        \n  Filter: t3.t1_id IS NOT NULL AND t3.t2_id IS NOT NULL\
-        \n    TableScan: t3\
-        \n  Inner Join: t1.optional_id = t2.id\
-        \n    Filter: t1.optional_id IS NOT NULL\
-        \n      TableScan: t1\
-        \n    TableScan: t2";
-        assert_optimized_plan_equal(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Inner Join: t3.t1_id = t1.id, t3.t2_id = t2.id
+          Filter: t3.t1_id IS NOT NULL AND t3.t2_id IS NOT NULL
+            TableScan: t3
+          Inner Join: t1.optional_id = t2.id
+            Filter: t1.optional_id IS NOT NULL
+              TableScan: t1
+            TableScan: t2
+        ")
     }
 
     #[test]
@@ -213,11 +236,13 @@ mod tests {
                 None,
             )?
             .build()?;
-        let expected = "Inner Join: t1.optional_id + UInt32(1) = t2.id + UInt32(1)\
-        \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
-        \n    TableScan: t1\
-        \n  TableScan: t2";
-        assert_optimized_plan_equal(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Inner Join: t1.optional_id + UInt32(1) = t2.id + UInt32(1)
+          Filter: t1.optional_id + UInt32(1) IS NOT NULL
+            TableScan: t1
+          TableScan: t2
+        ")
     }
 
     #[test]
@@ -234,11 +259,13 @@ mod tests {
                 None,
             )?
             .build()?;
-        let expected = "Inner Join: t1.id + UInt32(1) = t2.optional_id + UInt32(1)\
-        \n  TableScan: t1\
-        \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
-        \n    TableScan: t2";
-        assert_optimized_plan_equal(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Inner Join: t1.id + UInt32(1) = t2.optional_id + UInt32(1)
+          TableScan: t1
+          Filter: t2.optional_id + UInt32(1) IS NOT NULL
+            TableScan: t2
+        ")
     }
 
     #[test]
@@ -255,13 +282,14 @@ mod tests {
                 None,
             )?
             .build()?;
-        let expected =
-            "Inner Join: t1.optional_id + UInt32(1) = t2.optional_id + UInt32(1)\
-        \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
-        \n    TableScan: t1\
-        \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
-        \n    TableScan: t2";
-        assert_optimized_plan_equal(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Inner Join: t1.optional_id + UInt32(1) = t2.optional_id + UInt32(1)
+          Filter: t1.optional_id + UInt32(1) IS NOT NULL
+            TableScan: t1
+          Filter: t2.optional_id + UInt32(1) IS NOT NULL
+            TableScan: t2
+        ")
     }
 
     #[test]
@@ -283,13 +311,22 @@ mod tests {
                 None,
             )?
             .build()?;
-        let expected = "Inner Join: t1.optional_id = t2.optional_id\
-        \n  Filter: t1.optional_id IS NOT NULL\
-        \n    TableScan: t1\
-        \n  Filter: t2.optional_id IS NOT NULL\
-        \n    TableScan: t2";
-        assert_optimized_plan_equal(plan_from_cols, expected)?;
-        assert_optimized_plan_equal(plan_from_exprs, expected)
+
+        assert_optimized_plan_equal!(plan_from_cols, @r"
+        Inner Join: t1.optional_id = t2.optional_id
+          Filter: t1.optional_id IS NOT NULL
+            TableScan: t1
+          Filter: t2.optional_id IS NOT NULL
+            TableScan: t2
+        ")?;
+
+        assert_optimized_plan_equal!(plan_from_exprs, @r"
+        Inner Join: t1.optional_id = t2.optional_id
+          Filter: t1.optional_id IS NOT NULL
+            TableScan: t1
+          Filter: t2.optional_id IS NOT NULL
+            TableScan: t2
+        ")
     }
 
     fn build_plan(

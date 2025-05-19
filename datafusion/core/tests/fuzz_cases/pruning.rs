@@ -90,42 +90,42 @@ async fn test_utf8_not_like() {
 
 #[tokio::test]
 async fn test_utf8_like_prefix() {
-    Utf8Test::new(|value| col("a").like(lit(format!("%{}", value))))
+    Utf8Test::new(|value| col("a").like(lit(format!("%{value}"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_like_suffix() {
-    Utf8Test::new(|value| col("a").like(lit(format!("{}%", value))))
+    Utf8Test::new(|value| col("a").like(lit(format!("{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_prefix() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("%{}", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("%{value}"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_ecsape() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{}%", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_suffix() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("{}%", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_suffix_one() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("{}_", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{value}_"))))
         .run()
         .await;
 }
@@ -276,7 +276,7 @@ async fn execute_with_predicate(
     ctx: &SessionContext,
 ) -> Vec<String> {
     let parquet_source = if prune_stats {
-        ParquetSource::default().with_predicate(Arc::clone(&schema), predicate.clone())
+        ParquetSource::default().with_predicate(predicate.clone())
     } else {
         ParquetSource::default()
     };

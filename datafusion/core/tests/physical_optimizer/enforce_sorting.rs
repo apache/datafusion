@@ -3440,3 +3440,37 @@ fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_parallelize_sort_preserves_fetch() -> Result<()> {
+    // Create a schema
+    let schema = create_test_schema3()?;
+    let parquet_exec = parquet_exec(&schema);
+    let coalesced = Arc::new(CoalescePartitionsExec::new(parquet_exec.clone()));
+    let top_coalesced =
+        Arc::new(CoalescePartitionsExec::new(coalesced.clone()).with_fetch(Some(10)));
+
+    let requirements = PlanWithCorrespondingCoalescePartitions::new(
+        top_coalesced.clone(),
+        true,
+        vec![PlanWithCorrespondingCoalescePartitions::new(
+            coalesced,
+            true,
+            vec![PlanWithCorrespondingCoalescePartitions::new(
+                parquet_exec,
+                false,
+                vec![],
+            )],
+        )],
+    );
+
+    let res = parallelize_sorts(requirements)?;
+
+    // Verify fetch was preserved
+    assert_eq!(
+        res.data.plan.fetch(),
+        Some(10),
+        "Fetch value was not preserved after transformation"
+    );
+    Ok(())
+}

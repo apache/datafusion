@@ -116,7 +116,8 @@ mod tests {
     use super::*;
     use crate::analyzer::type_coercion::TypeCoercion;
     use crate::analyzer::Analyzer;
-    use crate::test::*;
+    use crate::assert_optimized_plan_eq_snapshot;
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{col, logical_plan::table_scan};
@@ -129,15 +130,23 @@ mod tests {
         ])
     }
 
-    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
-        let options = ConfigOptions::default();
-        let analyzed_plan = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
-            .execute_and_check(plan, &options, |_, _| {})?;
-        assert_optimized_plan_eq(
-            Arc::new(EliminateNestedUnion::new()),
-            analyzed_plan,
-            expected,
-        )
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let options = ConfigOptions::default();
+            let analyzed_plan = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+                .execute_and_check($plan, &options, |_, _| {})?;
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateNestedUnion::new())];
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                analyzed_plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[test]
@@ -146,11 +155,11 @@ mod tests {
 
         let plan = plan_builder.clone().union(plan_builder.build()?)?.build()?;
 
-        let expected = "\
-        Union\
-        \n  TableScan: table\
-        \n  TableScan: table";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Union
+          TableScan: table
+          TableScan: table
+        ")
     }
 
     #[test]
@@ -162,11 +171,12 @@ mod tests {
             .union_distinct(plan_builder.build()?)?
             .build()?;
 
-        let expected = "Distinct:\
-        \n  Union\
-        \n    TableScan: table\
-        \n    TableScan: table";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Distinct:
+          Union
+            TableScan: table
+            TableScan: table
+        ")
     }
 
     #[test]
@@ -180,13 +190,13 @@ mod tests {
             .union(plan_builder.build()?)?
             .build()?;
 
-        let expected = "\
-        Union\
-        \n  TableScan: table\
-        \n  TableScan: table\
-        \n  TableScan: table\
-        \n  TableScan: table";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Union
+          TableScan: table
+          TableScan: table
+          TableScan: table
+          TableScan: table
+        ")
     }
 
     #[test]
@@ -200,14 +210,15 @@ mod tests {
             .union(plan_builder.build()?)?
             .build()?;
 
-        let expected = "Union\
-        \n  Distinct:\
-        \n    Union\
-        \n      TableScan: table\
-        \n      TableScan: table\
-        \n  TableScan: table\
-        \n  TableScan: table";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Union
+          Distinct:
+            Union
+              TableScan: table
+              TableScan: table
+          TableScan: table
+          TableScan: table
+        ")
     }
 
     #[test]
@@ -222,14 +233,15 @@ mod tests {
             .union_distinct(plan_builder.build()?)?
             .build()?;
 
-        let expected = "Distinct:\
-        \n  Union\
-        \n    TableScan: table\
-        \n    TableScan: table\
-        \n    TableScan: table\
-        \n    TableScan: table\
-        \n    TableScan: table";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Distinct:
+          Union
+            TableScan: table
+            TableScan: table
+            TableScan: table
+            TableScan: table
+            TableScan: table
+        ")
     }
 
     #[test]
@@ -243,13 +255,14 @@ mod tests {
             .union_distinct(plan_builder.build()?)?
             .build()?;
 
-        let expected = "Distinct:\
-        \n  Union\
-        \n    TableScan: table\
-        \n    TableScan: table\
-        \n    TableScan: table\
-        \n    TableScan: table";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Distinct:
+          Union
+            TableScan: table
+            TableScan: table
+            TableScan: table
+            TableScan: table
+        ")
     }
 
     // We don't need to use project_with_column_index in logical optimizer,
@@ -273,13 +286,14 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "Union\
-        \n  TableScan: table\
-        \n  Projection: table.id AS id, table.key, table.value\
-        \n    TableScan: table\
-        \n  Projection: table.id AS id, table.key, table.value\
-        \n    TableScan: table";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Union
+          TableScan: table
+          Projection: table.id AS id, table.key, table.value
+            TableScan: table
+          Projection: table.id AS id, table.key, table.value
+            TableScan: table
+        ")
     }
 
     #[test]
@@ -301,14 +315,15 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "Distinct:\
-        \n  Union\
-        \n    TableScan: table\
-        \n    Projection: table.id AS id, table.key, table.value\
-        \n      TableScan: table\
-        \n    Projection: table.id AS id, table.key, table.value\
-        \n      TableScan: table";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Distinct:
+          Union
+            TableScan: table
+            Projection: table.id AS id, table.key, table.value
+              TableScan: table
+            Projection: table.id AS id, table.key, table.value
+              TableScan: table
+        ")
     }
 
     #[test]
@@ -348,13 +363,14 @@ mod tests {
             .union(table_3.build()?)?
             .build()?;
 
-        let expected = "Union\
-        \n  TableScan: table_1\
-        \n  Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value\
-        \n    TableScan: table_1\
-        \n  Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value\
-        \n    TableScan: table_1";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Union
+          TableScan: table_1
+          Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value
+            TableScan: table_1
+          Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value
+            TableScan: table_1
+        ")
     }
 
     #[test]
@@ -394,13 +410,14 @@ mod tests {
             .union_distinct(table_3.build()?)?
             .build()?;
 
-        let expected = "Distinct:\
-        \n  Union\
-        \n    TableScan: table_1\
-        \n    Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value\
-        \n      TableScan: table_1\
-        \n    Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value\
-        \n      TableScan: table_1";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @r"
+        Distinct:
+          Union
+            TableScan: table_1
+            Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value
+              TableScan: table_1
+            Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value
+              TableScan: table_1
+        ")
     }
 }

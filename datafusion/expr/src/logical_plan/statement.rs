@@ -123,7 +123,7 @@ impl Statement {
                         )
                     }
                     Statement::Deallocate(Deallocate { name }) => {
-                        write!(f, "Deallocate: {}", name)
+                        write!(f, "Deallocate: {name}")
                     }
                 }
             }

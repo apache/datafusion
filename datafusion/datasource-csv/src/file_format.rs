@@ -50,7 +50,6 @@ use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
 use datafusion_datasource::write::BatchSerializer;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
@@ -408,17 +407,16 @@ impl FileFormat for CsvFormat {
         &self,
         state: &dyn Session,
         conf: FileScanConfig,
-        _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Consult configuration options for default values
         let has_header = self
             .options
             .has_header
-            .unwrap_or(state.config_options().catalog.has_header);
+            .unwrap_or_else(|| state.config_options().catalog.has_header);
         let newlines_in_values = self
             .options
             .newlines_in_values
-            .unwrap_or(state.config_options().catalog.newlines_in_values);
+            .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
 
         let conf_builder = FileScanConfigBuilder::from(conf)
             .with_file_compression_type(self.options.compression.into())
@@ -454,11 +452,11 @@ impl FileFormat for CsvFormat {
         let has_header = self
             .options()
             .has_header
-            .unwrap_or(state.config_options().catalog.has_header);
+            .unwrap_or_else(|| state.config_options().catalog.has_header);
         let newlines_in_values = self
             .options()
             .newlines_in_values
-            .unwrap_or(state.config_options().catalog.newlines_in_values);
+            .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
 
         let options = self
             .options()
@@ -504,7 +502,7 @@ impl CsvFormat {
                         && self
                             .options
                             .has_header
-                            .unwrap_or(state.config_options().catalog.has_header),
+                            .unwrap_or_else(|| state.config_options().catalog.has_header),
                 )
                 .with_delimiter(self.options.delimiter)
                 .with_quote(self.options.quote);

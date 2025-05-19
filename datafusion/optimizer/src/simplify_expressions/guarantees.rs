@@ -244,8 +244,7 @@ mod tests {
             let expected = lit(ScalarValue::from(expected_value.clone()));
             assert_eq!(
                 output, expected,
-                "{} simplified to {}, but expected {}",
-                expr, output, expected
+                "{expr} simplified to {output}, but expected {expected}"
             );
         }
     }
@@ -255,8 +254,7 @@ mod tests {
             let output = expr.clone().rewrite(rewriter).data().unwrap();
             assert_eq!(
                 &output, expr,
-                "{} was simplified to {}, but expected it to be unchanged",
-                expr, output
+                "{expr} was simplified to {output}, but expected it to be unchanged"
             );
         }
     }

@@ -40,8 +40,11 @@ use datafusion::{
     prelude::{CsvReadOptions, SessionContext},
 };
 
+use crate::is_spark_path;
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
+use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::SessionStateBuilder;
 use log::info;
 use tempfile::TempDir;
 
@@ -70,8 +73,20 @@ impl TestContext {
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
+        let runtime = Arc::new(RuntimeEnv::default());
+        let mut state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
 
-        let mut test_ctx = TestContext::new(SessionContext::new_with_config(config));
+        if is_spark_path(relative_path) {
+            info!("Registering Spark functions");
+            datafusion_spark::register_all(&mut state)
+                .expect("Can not register Spark functions");
+        }
+
+        let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
@@ -122,6 +137,7 @@ impl TestContext {
                 info!("Using default SessionContext");
             }
         };
+
         Some(test_ctx)
     }
 
@@ -223,12 +239,12 @@ pub async fn register_temp_table(ctx: &SessionContext) {
             self
         }
 
-        fn table_type(&self) -> TableType {
-            self.0
-        }
-
         fn schema(&self) -> SchemaRef {
             unimplemented!()
+        }
+
+        fn table_type(&self) -> TableType {
+            self.0
         }
 
         async fn scan(
@@ -410,10 +426,24 @@ fn create_example_udf() -> ScalarUDF {
 
 fn register_union_table(ctx: &SessionContext) {
     let union = UnionArray::try_new(
-        UnionFields::new(vec![3], vec![Field::new("int", DataType::Int32, false)]),
-        ScalarBuffer::from(vec![3, 3]),
+        UnionFields::new(
+            // typeids: 3 for int, 1 for string
+            vec![3, 1],
+            vec![
+                Field::new("int", DataType::Int32, false),
+                Field::new("string", DataType::Utf8, false),
+            ],
+        ),
+        ScalarBuffer::from(vec![3, 1, 3]),
         None,
-        vec![Arc::new(Int32Array::from(vec![1, 2]))],
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec![
+                Some("foo"),
+                Some("bar"),
+                Some("baz"),
+            ])),
+        ],
     )
     .unwrap();
 

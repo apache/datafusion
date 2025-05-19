@@ -838,7 +838,7 @@ impl ExprFuncBuilder {
                         partition_by: partition_by.unwrap_or_default(),
                         order_by: order_by.unwrap_or_default(),
                         window_frame: window_frame
-                            .unwrap_or(WindowFrame::new(has_order_by)),
+                            .unwrap_or_else(|| WindowFrame::new(has_order_by)),
                         null_treatment,
                     },
                 })

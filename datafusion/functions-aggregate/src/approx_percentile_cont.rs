@@ -34,6 +34,7 @@ use datafusion_common::{
     downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
     Result, ScalarValue,
 };
+use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
@@ -51,29 +52,39 @@ create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 
 /// Computes the approximate percentile continuous of a set of numbers
 pub fn approx_percentile_cont(
-    expression: Expr,
+    order_by: Sort,
     percentile: Expr,
     centroids: Option<Expr>,
 ) -> Expr {
+    let expr = order_by.expr.clone();
+
     let args = if let Some(centroids) = centroids {
-        vec![expression, percentile, centroids]
+        vec![expr, percentile, centroids]
     } else {
-        vec![expression, percentile]
+        vec![expr, percentile]
     };
-    approx_percentile_cont_udaf().call(args)
+
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        approx_percentile_cont_udaf(),
+        args,
+        false,
+        None,
+        Some(vec![order_by]),
+        None,
+    ))
 }
 
 #[user_doc(
     doc_section(label = "Approximate Functions"),
     description = "Returns the approximate percentile of input values using the t-digest algorithm.",
-    syntax_example = "approx_percentile_cont(expression, percentile, centroids)",
+    syntax_example = "approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)",
     sql_example = r#"```sql
-> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
-+-------------------------------------------------+
-| approx_percentile_cont(column_name, 0.75, 100)  |
-+-------------------------------------------------+
-| 65.0                                            |
-+-------------------------------------------------+
+> SELECT approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++-----------------------------------------------------------------------+
+| approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) |
++-----------------------------------------------------------------------+
+| 65.0                                                                  |
++-----------------------------------------------------------------------+
 ```"#,
     standard_argument(name = "expression",),
     argument(
@@ -130,6 +141,19 @@ impl ApproxPercentileCont {
         args: AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
         let percentile = validate_input_percentile_expr(&args.exprs[1])?;
+
+        let is_descending = args
+            .ordering_req
+            .first()
+            .map(|sort_expr| sort_expr.options.descending)
+            .unwrap_or(false);
+
+        let percentile = if is_descending {
+            1.0 - percentile
+        } else {
+            percentile
+        };
+
         let tdigest_max_size = if args.exprs.len() == 3 {
             Some(validate_input_max_size_expr(&args.exprs[2])?)
         } else {
@@ -290,6 +314,14 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             );
         }
         Ok(arg_types[0].clone())
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        false
+    }
+
+    fn is_ordered_set_aggregate(&self) -> bool {
+        true
     }
 
     fn documentation(&self) -> Option<&Documentation> {

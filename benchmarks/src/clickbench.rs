@@ -116,7 +116,7 @@ impl RunOpt {
         };
 
         // configure parquet options
-        let mut config = self.common.config();
+        let mut config = self.common.config()?;
         {
             let parquet_options = &mut config.options_mut().execution.parquet;
             // The hits_partitioned dataset specifies string columns

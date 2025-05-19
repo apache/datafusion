@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::{
-    datatypes::{Float32Type, Float64Type},
+    datatypes::{Field, Float32Type, Float64Type},
     util::bench_util::create_primitive_array,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -33,14 +33,15 @@ fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 4096, 8192] {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
         let f32_args = vec![ColumnarValue::Array(f32_array)];
-        c.bench_function(&format!("trunc f32 array: {}", size), |b| {
+        c.bench_function(&format!("trunc f32 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     trunc
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f32_args.clone(),
+                            arg_fields: vec![&Field::new("a", DataType::Float32, false)],
                             number_rows: size,
-                            return_type: &DataType::Float32,
+                            return_field: &Field::new("f", DataType::Float32, true),
                         })
                         .unwrap(),
                 )
@@ -48,14 +49,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let f64_args = vec![ColumnarValue::Array(f64_array)];
-        c.bench_function(&format!("trunc f64 array: {}", size), |b| {
+        c.bench_function(&format!("trunc f64 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     trunc
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f64_args.clone(),
+                            arg_fields: vec![&Field::new("a", DataType::Float64, false)],
                             number_rows: size,
-                            return_type: &DataType::Float64,
+                            return_field: &Field::new("f", DataType::Float64, true),
                         })
                         .unwrap(),
                 )

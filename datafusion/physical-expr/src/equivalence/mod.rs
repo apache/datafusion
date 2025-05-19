@@ -97,8 +97,7 @@ mod tests {
                 "ASC" => sort_expr.asc(),
                 "DESC" => sort_expr.desc(),
                 _ => panic!(
-                    "unknown sort options. Expected 'ASC' or 'DESC', got {}",
-                    options
+                    "unknown sort options. Expected 'ASC' or 'DESC', got {options}"
                 ),
             }
         }

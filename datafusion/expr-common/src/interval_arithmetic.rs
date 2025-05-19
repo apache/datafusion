@@ -606,7 +606,7 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible data types for logical conjunction"),
+            _ => internal_err!("Incompatible data types for logical disjunction"),
         }
     }
 
@@ -949,6 +949,18 @@ impl Display for Interval {
     }
 }
 
+impl From<ScalarValue> for Interval {
+    fn from(value: ScalarValue) -> Self {
+        Self::new(value.clone(), value)
+    }
+}
+
+impl From<&ScalarValue> for Interval {
+    fn from(value: &ScalarValue) -> Self {
+        Self::new(value.to_owned(), value.to_owned())
+    }
+}
+
 /// Applies the given binary operator the `lhs` and `rhs` arguments.
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     match *op {
@@ -959,6 +971,7 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::Lt => lhs.lt(rhs),
         Operator::LtEq => lhs.lt_eq(rhs),
         Operator::And => lhs.and(rhs),
+        Operator::Or => lhs.or(rhs),
         Operator::Plus => lhs.add(rhs),
         Operator::Minus => lhs.sub(rhs),
         Operator::Multiply => lhs.mul(rhs),
@@ -1683,9 +1696,9 @@ impl Display for NullableInterval {
         match self {
             Self::Null { .. } => write!(f, "NullableInterval: {{NULL}}"),
             Self::MaybeNull { values } => {
-                write!(f, "NullableInterval: {} U {{NULL}}", values)
+                write!(f, "NullableInterval: {values} U {{NULL}}")
             }
-            Self::NotNull { values } => write!(f, "NullableInterval: {}", values),
+            Self::NotNull { values } => write!(f, "NullableInterval: {values}"),
         }
     }
 }
@@ -2706,8 +2719,8 @@ mod tests {
             ),
         ];
         for (first, second, expected) in possible_cases {
-            println!("{}", first);
-            println!("{}", second);
+            println!("{first}");
+            println!("{second}");
             assert_eq!(first.union(second)?, expected)
         }
 
@@ -3704,14 +3717,14 @@ mod tests {
     #[test]
     fn test_interval_display() {
         let interval = Interval::make(Some(0.25_f32), Some(0.50_f32)).unwrap();
-        assert_eq!(format!("{}", interval), "[0.25, 0.5]");
+        assert_eq!(format!("{interval}"), "[0.25, 0.5]");
 
         let interval = Interval::try_new(
             ScalarValue::Float32(Some(f32::NEG_INFINITY)),
             ScalarValue::Float32(Some(f32::INFINITY)),
         )
         .unwrap();
-        assert_eq!(format!("{}", interval), "[NULL, NULL]");
+        assert_eq!(format!("{interval}"), "[NULL, NULL]");
     }
 
     macro_rules! capture_mode_change {

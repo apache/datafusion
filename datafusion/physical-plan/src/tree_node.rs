@@ -94,7 +94,7 @@ impl<T: Default> PlanContext<T> {
 impl<T: Display> Display for PlanContext<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let node_string = displayable(self.plan.as_ref()).one_line();
-        write!(f, "Node plan: {}", node_string)?;
+        write!(f, "Node plan: {node_string}")?;
         write!(f, "Node data: {}", self.data)?;
         write!(f, "")
     }

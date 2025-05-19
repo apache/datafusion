@@ -233,7 +233,7 @@ fn pushdown_requirement_to_children(
                 .properties()
                 .output_ordering()
                 .cloned()
-                .unwrap_or(LexOrdering::default()),
+                .unwrap_or_else(LexOrdering::default),
         );
         if sort_exec
             .properties()
@@ -258,7 +258,7 @@ fn pushdown_requirement_to_children(
             plan.properties()
                 .output_ordering()
                 .cloned()
-                .unwrap_or(LexOrdering::default()),
+                .unwrap_or_else(LexOrdering::default),
         );
         // Push down through operator with fetch when:
         // - requirement is aligned with output ordering

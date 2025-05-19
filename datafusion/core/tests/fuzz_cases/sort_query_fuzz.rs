@@ -211,13 +211,12 @@ impl SortQueryFuzzer {
                     let config_seed = self.runner_rng.gen();
 
                     println!(
-                        "[SortQueryFuzzer] Round {}, Query {} (Config {})",
-                        round, query_i, config_i
+                        "[SortQueryFuzzer] Round {round}, Query {query_i} (Config {config_i})"
                     );
                     println!("  Seeds:");
-                    println!("    init_seed   = {}", init_seed);
-                    println!("    query_seed  = {}", query_seed);
-                    println!("    config_seed = {}", config_seed);
+                    println!("    init_seed   = {init_seed}");
+                    println!("    query_seed  = {query_seed}");
+                    println!("    config_seed = {config_seed}");
 
                     let results = self
                         .test_gen
@@ -435,7 +434,7 @@ impl SortFuzzerTestGenerator {
             let mut clause = col.name.clone();
             if rng.gen_bool(0.5) {
                 let order = if rng.gen_bool(0.5) { "ASC" } else { "DESC" };
-                clause.push_str(&format!(" {}", order));
+                clause.push_str(&format!(" {order}"));
             }
             if rng.gen_bool(0.5) {
                 let nulls = if rng.gen_bool(0.5) {
@@ -443,7 +442,7 @@ impl SortFuzzerTestGenerator {
                 } else {
                     "NULLS LAST"
                 };
-                clause.push_str(&format!(" {}", nulls));
+                clause.push_str(&format!(" {nulls}"));
             }
             order_by_clauses.push(clause);
         }
@@ -463,7 +462,7 @@ impl SortFuzzerTestGenerator {
             None
         };
 
-        let limit_clause = limit.map_or(String::new(), |l| format!(" LIMIT {}", l));
+        let limit_clause = limit.map_or(String::new(), |l| format!(" LIMIT {l}"));
 
         let query = format!(
             "SELECT * FROM {} ORDER BY {}{}",
@@ -522,13 +521,10 @@ impl SortFuzzerTestGenerator {
 
         println!("  Config: ");
         println!("    Dataset size: {}", human_readable_size(dataset_size));
-        println!("    Number of partitions: {}", num_partitions);
+        println!("    Number of partitions: {num_partitions}");
         println!("    Batch size: {}", init_state.approx_batch_num_rows / 2);
-        println!("    Memory limit: {}", memory_limit_str);
-        println!(
-            "    Per partition memory limit: {}",
-            per_partition_limit_str
-        );
+        println!("    Memory limit: {memory_limit_str}");
+        println!("    Per partition memory limit: {per_partition_limit_str}");
         println!(
             "    Sort spill reservation bytes: {}",
             human_readable_size(sort_spill_reservation_bytes)
@@ -575,7 +571,7 @@ impl SortFuzzerTestGenerator {
         self.init_partitioned_staggered_batches(dataset_seed);
         let (query_str, limit) = self.generate_random_query(query_seed);
         println!("  Query:");
-        println!("    {}", query_str);
+        println!("    {query_str}");
 
         // ==== Execute the query ====
 

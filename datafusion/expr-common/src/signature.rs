@@ -843,6 +843,7 @@ impl Signature {
             volatility,
         }
     }
+
     /// Any one of a list of [TypeSignature]s.
     pub fn one_of(type_signatures: Vec<TypeSignature>, volatility: Volatility) -> Self {
         Signature {
@@ -850,7 +851,8 @@ impl Signature {
             volatility,
         }
     }
-    /// Specialized Signature for ArrayAppend and similar functions
+
+    /// Specialized [Signature] for ArrayAppend and similar functions.
     pub fn array_and_element(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
@@ -865,7 +867,41 @@ impl Signature {
             volatility,
         }
     }
-    /// Specialized Signature for Array functions with an optional index
+
+    /// Specialized [Signature] for ArrayPrepend and similar functions.
+    pub fn element_and_array(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Element,
+                        ArrayFunctionArgument::Array,
+                    ],
+                    array_coercion: Some(ListCoercion::FixedSizedListToList),
+                },
+            ),
+            volatility,
+        }
+    }
+
+    /// Specialized [Signature] for functions that take a fixed number of arrays.
+    pub fn arrays(
+        n: usize,
+        coercion: Option<ListCoercion>,
+        volatility: Volatility,
+    ) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::Array {
+                    arguments: vec![ArrayFunctionArgument::Array; n],
+                    array_coercion: coercion,
+                },
+            ),
+            volatility,
+        }
+    }
+
+    /// Specialized [Signature] for Array functions with an optional index.
     pub fn array_and_element_and_optional_index(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::OneOf(vec![
@@ -889,7 +925,7 @@ impl Signature {
         }
     }
 
-    /// Specialized Signature for ArrayElement and similar functions
+    /// Specialized [Signature] for ArrayElement and similar functions.
     pub fn array_and_index(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
@@ -898,23 +934,16 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Index,
                     ],
-                    array_coercion: None,
+                    array_coercion: Some(ListCoercion::FixedSizedListToList),
                 },
             ),
             volatility,
         }
     }
-    /// Specialized Signature for ArrayEmpty and similar functions
+
+    /// Specialized [Signature] for ArrayEmpty and similar functions.
     pub fn array(volatility: Volatility) -> Self {
-        Signature {
-            type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::Array {
-                    arguments: vec![ArrayFunctionArgument::Array],
-                    array_coercion: None,
-                },
-            ),
-            volatility,
-        }
+        Signature::arrays(1, Some(ListCoercion::FixedSizedListToList), volatility)
     }
 }
 
@@ -940,8 +969,7 @@ mod tests {
         for case in positive_cases {
             assert!(
                 case.supports_zero_argument(),
-                "Expected {:?} to support zero arguments",
-                case
+                "Expected {case:?} to support zero arguments"
             );
         }
 
@@ -960,8 +988,7 @@ mod tests {
         for case in negative_cases {
             assert!(
                 !case.supports_zero_argument(),
-                "Expected {:?} not to support zero arguments",
-                case
+                "Expected {case:?} not to support zero arguments"
             );
         }
     }

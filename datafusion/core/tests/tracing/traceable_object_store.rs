@@ -96,7 +96,7 @@ impl ObjectStore for TraceableObjectStore {
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         futures::executor::block_on(assert_traceability());
         self.inner.list(prefix)
     }

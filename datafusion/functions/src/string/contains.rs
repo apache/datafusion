@@ -151,7 +151,7 @@ fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 mod test {
     use super::ContainsFunc;
     use arrow::array::{BooleanArray, StringArray};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -164,11 +164,16 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
+        let arg_fields = vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("a", DataType::Utf8, true),
+        ];
 
         let args = ScalarFunctionArgs {
             args: vec![array, scalar],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 2,
-            return_type: &DataType::Boolean,
+            return_field: &Field::new("f", DataType::Boolean, true),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();

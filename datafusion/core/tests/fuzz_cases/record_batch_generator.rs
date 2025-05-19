@@ -636,8 +636,8 @@ mod tests {
         let batch1 = gen1.generate().unwrap();
         let batch2 = gen2.generate().unwrap();
 
-        let batch1_formatted = format!("{:?}", batch1);
-        let batch2_formatted = format!("{:?}", batch2);
+        let batch1_formatted = format!("{batch1:?}");
+        let batch2_formatted = format!("{batch2:?}");
 
         assert_eq!(batch1_formatted, batch2_formatted);
     }

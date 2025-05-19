@@ -267,10 +267,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!(
-            "Start SortPreservingMergeExec::execute for partition: {}",
-            partition
-        );
+        trace!("Start SortPreservingMergeExec::execute for partition: {partition}");
         if 0 != partition {
             return internal_err!(
                 "SortPreservingMergeExec invalid partition {partition}"
@@ -279,8 +276,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
         let input_partitions = self.input.output_partitioning().partition_count();
         trace!(
-            "Number of input partitions of  SortPreservingMergeExec::execute: {}",
-            input_partitions
+            "Number of input partitions of  SortPreservingMergeExec::execute: {input_partitions}"
         );
         let schema = self.schema();
 
@@ -343,7 +339,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(None)
     }
 
     fn supports_limit_pushdown(&self) -> bool {

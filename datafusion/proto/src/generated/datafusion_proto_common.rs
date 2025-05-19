@@ -804,6 +804,8 @@ pub struct ParquetOptions {
     pub bloom_filter_fpp_opt: ::core::option::Option<parquet_options::BloomFilterFppOpt>,
     #[prost(oneof = "parquet_options::BloomFilterNdvOpt", tags = "22")]
     pub bloom_filter_ndv_opt: ::core::option::Option<parquet_options::BloomFilterNdvOpt>,
+    #[prost(oneof = "parquet_options::CoerceInt96Opt", tags = "32")]
+    pub coerce_int96_opt: ::core::option::Option<parquet_options::CoerceInt96Opt>,
 }
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
@@ -856,6 +858,11 @@ pub mod parquet_options {
     pub enum BloomFilterNdvOpt {
         #[prost(uint64, tag = "22")]
         BloomFilterNdv(u64),
+    }
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum CoerceInt96Opt {
+        #[prost(string, tag = "32")]
+        CoerceInt96(::prost::alloc::string::String),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

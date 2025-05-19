@@ -20,6 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
+use arrow::datatypes::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
@@ -48,13 +49,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         let return_type = udf
             .return_type(&[interval.data_type(), timestamps.data_type()])
             .unwrap();
+        let return_field = Field::new("f", return_type, true);
 
         b.iter(|| {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![interval.clone(), timestamps.clone()],
+                    arg_fields: vec![
+                        &Field::new("a", interval.data_type(), true),
+                        &Field::new("b", timestamps.data_type(), true),
+                    ],
                     number_rows: batch_len,
-                    return_type: &return_type,
+                    return_field: &return_field,
                 })
                 .expect("date_bin should work on valid values"),
             )

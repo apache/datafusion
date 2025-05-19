@@ -149,7 +149,7 @@ impl RunOpt {
                 let config = SessionConfig::new().with_target_partitions(
                     self.common
                         .partitions
-                        .unwrap_or(get_available_parallelism()),
+                        .unwrap_or_else(get_available_parallelism),
                 );
                 let ctx = SessionContext::new_with_config(config);
                 let (rows, elapsed) =

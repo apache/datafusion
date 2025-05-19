@@ -41,13 +41,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// If false, interpret numeric literals as constant values.
     pub(crate) fn order_by_to_sort_expr(
         &self,
-        exprs: Vec<OrderByExpr>,
+        order_by_exprs: Vec<OrderByExpr>,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
         additional_schema: Option<&DFSchema>,
     ) -> Result<Vec<SortExpr>> {
-        if exprs.is_empty() {
+        if order_by_exprs.is_empty() {
             return Ok(vec![]);
         }
 
@@ -61,13 +61,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             None => input_schema,
         };
 
-        let mut expr_vec = vec![];
-        for e in exprs {
+        let mut sort_expr_vec = Vec::with_capacity(order_by_exprs.len());
+
+        let make_sort_expr =
+            |expr: Expr, asc: Option<bool>, nulls_first: Option<bool>| {
+                let asc = asc.unwrap_or(true);
+                // When asc is true, by default nulls last to be consistent with postgres
+                // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
+                let nulls_first = nulls_first.unwrap_or(!asc);
+                Sort::new(expr, asc, nulls_first)
+            };
+
+        for order_by_expr in order_by_exprs {
             let OrderByExpr {
                 expr,
                 options: OrderByOptions { asc, nulls_first },
                 with_fill,
-            } = e;
+            } = order_by_expr;
 
             if let Some(with_fill) = with_fill {
                 return not_impl_err!("ORDER BY WITH FILL is not supported: {with_fill}");
@@ -102,15 +112,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
                 }
             };
-            let asc = asc.unwrap_or(true);
-            expr_vec.push(Sort::new(
-                expr,
-                asc,
-                // When asc is true, by default nulls last to be consistent with postgres
-                // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                nulls_first.unwrap_or(!asc),
-            ))
+            sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
         }
-        Ok(expr_vec)
+
+        Ok(sort_expr_vec)
     }
 }

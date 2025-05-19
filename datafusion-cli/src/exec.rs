@@ -200,7 +200,7 @@ pub async fn exec_from_repl(
                 break;
             }
             Err(err) => {
-                eprintln!("Unknown error happened {:?}", err);
+                eprintln!("Unknown error happened {err:?}");
                 break;
             }
         }
@@ -216,7 +216,8 @@ pub(super) async fn exec_and_print(
 ) -> Result<()> {
     let now = Instant::now();
     let task_ctx = ctx.task_ctx();
-    let dialect = &task_ctx.session_config().options().sql_parser.dialect;
+    let options = task_ctx.session_config().options();
+    let dialect = &options.sql_parser.dialect;
     let dialect = dialect_from_str(dialect).ok_or_else(|| {
         plan_datafusion_err!(
             "Unsupported SQL dialect: {dialect}. Available dialects: \
@@ -250,7 +251,9 @@ pub(super) async fn exec_and_print(
             // As the input stream comes, we can generate results.
             // However, memory safety is not guaranteed.
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
-            print_options.print_stream(stream, now).await?;
+            print_options
+                .print_stream(stream, now, &options.format)
+                .await?;
         } else {
             // Bounded stream; collected results size is limited by the maxrows option
             let schema = physical_plan.schema();
@@ -273,9 +276,13 @@ pub(super) async fn exec_and_print(
                 }
                 row_count += curr_num_rows;
             }
-            adjusted
-                .into_inner()
-                .print_batches(schema, &results, now, row_count)?;
+            adjusted.into_inner().print_batches(
+                schema,
+                &results,
+                now,
+                row_count,
+                &options.format,
+            )?;
             reservation.free();
         }
     }
@@ -523,7 +530,7 @@ mod tests {
             )
         })?;
         for location in locations {
-            let sql = format!("copy (values (1,2)) to '{}' STORED AS PARQUET;", location);
+            let sql = format!("copy (values (1,2)) to '{location}' STORED AS PARQUET;");
             let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
             for statement in statements {
                 //Should not fail

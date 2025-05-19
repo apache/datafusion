@@ -522,7 +522,7 @@ impl DefaultPhysicalPlanner {
                     Some("true") => true,
                     Some("false") => false,
                     Some(value) =>
-                        return Err(DataFusionError::Configuration(format!("provided value for 'execution.keep_partition_by_columns' was not recognized: \"{}\"", value))),
+                        return Err(DataFusionError::Configuration(format!("provided value for 'execution.keep_partition_by_columns' was not recognized: \"{value}\""))),
                 };
 
                 let sink_format = file_type_to_format(file_type)?
@@ -694,7 +694,7 @@ impl DefaultPhysicalPlanner {
                     }
                     return internal_err!("Physical input schema should be the same as the one converted from logical input schema. Differences: {}", differences
                         .iter()
-                        .map(|s| format!("\n\t- {}", s))
+                        .map(|s| format!("\n\t- {s}"))
                         .join(""));
                 }
 
@@ -1952,7 +1952,7 @@ impl DefaultPhysicalPlanner {
             "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent(false)
         );
-        trace!("Detailed optimized physical plan:\n{:?}", new_plan);
+        trace!("Detailed optimized physical plan:\n{new_plan:?}");
         Ok(new_plan)
     }
 

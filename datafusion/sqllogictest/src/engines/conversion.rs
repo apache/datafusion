@@ -49,7 +49,7 @@ pub(crate) fn f16_to_str(value: f16) -> String {
     } else if value == f16::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
     }
 }
 
@@ -63,7 +63,7 @@ pub(crate) fn f32_to_str(value: f32) -> String {
     } else if value == f32::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
     }
 }
 
@@ -77,7 +77,21 @@ pub(crate) fn f64_to_str(value: f64) -> String {
     } else if value == f64::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
+    }
+}
+
+pub(crate) fn spark_f64_to_str(value: f64) -> String {
+    if value.is_nan() {
+        // The sign of NaN can be different depending on platform.
+        // So the string representation of NaN ignores the sign.
+        "NaN".to_string()
+    } else if value == f64::INFINITY {
+        "Infinity".to_string()
+    } else if value == f64::NEG_INFINITY {
+        "-Infinity".to_string()
+    } else {
+        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), Some(15))
     }
 }
 
@@ -86,6 +100,7 @@ pub(crate) fn decimal_128_to_str(value: i128, scale: i8) -> String {
     big_decimal_to_str(
         BigDecimal::from_str(&Decimal128Type::format_decimal(value, precision, scale))
             .unwrap(),
+        None,
     )
 }
 
@@ -94,17 +109,21 @@ pub(crate) fn decimal_256_to_str(value: i256, scale: i8) -> String {
     big_decimal_to_str(
         BigDecimal::from_str(&Decimal256Type::format_decimal(value, precision, scale))
             .unwrap(),
+        None,
     )
 }
 
 #[cfg(feature = "postgres")]
 pub(crate) fn decimal_to_str(value: Decimal) -> String {
-    big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+    big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
 }
 
-pub(crate) fn big_decimal_to_str(value: BigDecimal) -> String {
+/// Converts a `BigDecimal` to its plain string representation, optionally rounding to a specified number of decimal places.
+///
+/// If `round_digits` is `None`, the value is rounded to 12 decimal places by default.
+pub(crate) fn big_decimal_to_str(value: BigDecimal, round_digits: Option<i64>) -> String {
     // Round the value to limit the number of decimal places
-    let value = value.round(12).normalized();
+    let value = value.round(round_digits.unwrap_or(12)).normalized();
     // Format the value to a string
     value.to_plain_string()
 }
@@ -115,12 +134,12 @@ mod tests {
     use bigdecimal::{num_bigint::BigInt, BigDecimal};
 
     macro_rules! assert_decimal_str_eq {
-        ($integer:expr, $scale:expr, $expected:expr) => {
+        ($integer:expr, $scale:expr, $round_digits:expr, $expected:expr) => {
             assert_eq!(
-                big_decimal_to_str(BigDecimal::from_bigint(
-                    BigInt::from($integer),
-                    $scale
-                )),
+                big_decimal_to_str(
+                    BigDecimal::from_bigint(BigInt::from($integer), $scale),
+                    $round_digits
+                ),
                 $expected
             );
         };
@@ -128,44 +147,51 @@ mod tests {
 
     #[test]
     fn test_big_decimal_to_str() {
-        assert_decimal_str_eq!(110, 3, "0.11");
-        assert_decimal_str_eq!(11, 3, "0.011");
-        assert_decimal_str_eq!(11, 2, "0.11");
-        assert_decimal_str_eq!(11, 1, "1.1");
-        assert_decimal_str_eq!(11, 0, "11");
-        assert_decimal_str_eq!(11, -1, "110");
-        assert_decimal_str_eq!(0, 0, "0");
+        assert_decimal_str_eq!(110, 3, None, "0.11");
+        assert_decimal_str_eq!(11, 3, None, "0.011");
+        assert_decimal_str_eq!(11, 2, None, "0.11");
+        assert_decimal_str_eq!(11, 1, None, "1.1");
+        assert_decimal_str_eq!(11, 0, None, "11");
+        assert_decimal_str_eq!(11, -1, None, "110");
+        assert_decimal_str_eq!(0, 0, None, "0");
         assert_decimal_str_eq!(
             12345678901234567890123456789012345678_i128,
             0,
+            None,
             "12345678901234567890123456789012345678"
         );
         assert_decimal_str_eq!(
             12345678901234567890123456789012345678_i128,
             38,
+            None,
             "0.123456789012"
         );
 
         // Negative cases
-        assert_decimal_str_eq!(-110, 3, "-0.11");
-        assert_decimal_str_eq!(-11, 3, "-0.011");
-        assert_decimal_str_eq!(-11, 2, "-0.11");
-        assert_decimal_str_eq!(-11, 1, "-1.1");
-        assert_decimal_str_eq!(-11, 0, "-11");
-        assert_decimal_str_eq!(-11, -1, "-110");
+        assert_decimal_str_eq!(-110, 3, None, "-0.11");
+        assert_decimal_str_eq!(-11, 3, None, "-0.011");
+        assert_decimal_str_eq!(-11, 2, None, "-0.11");
+        assert_decimal_str_eq!(-11, 1, None, "-1.1");
+        assert_decimal_str_eq!(-11, 0, None, "-11");
+        assert_decimal_str_eq!(-11, -1, None, "-110");
         assert_decimal_str_eq!(
             -12345678901234567890123456789012345678_i128,
             0,
+            None,
             "-12345678901234567890123456789012345678"
         );
         assert_decimal_str_eq!(
             -12345678901234567890123456789012345678_i128,
             38,
+            None,
             "-0.123456789012"
         );
 
         // Round to 12 decimal places
         // 1.0000000000011 -> 1.000000000001
-        assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, "1.000000000001");
+        assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, None, "1.000000000001");
+        assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, Some(12), "1.000000000001");
+
+        assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, Some(13), "1.0000000000011");
     }
 }

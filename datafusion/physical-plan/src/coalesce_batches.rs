@@ -32,9 +32,14 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
 use crate::execution_plan::CardinalityEffect;
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+};
+use datafusion_common::config::ConfigOptions;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -192,7 +197,16 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)?.with_fetch(
+            self.schema(),
+            self.fetch,
+            0,
+            1,
+        )
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -211,6 +225,25 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::transparent(
+            child_pushdown_result,
+        ))
     }
 }
 
@@ -321,6 +354,7 @@ impl CoalesceBatchesStream {
                     }
                 }
                 CoalesceBatchesStreamState::ReturnBuffer => {
+                    let _timer = cloned_time.timer();
                     // Combine buffered batches into one batch and return it.
                     let batch = self.coalescer.finish_batch()?;
                     // Set to pull state for the next iteration.
@@ -333,6 +367,7 @@ impl CoalesceBatchesStream {
                         // If buffer is empty, return None indicating the stream is fully consumed.
                         Poll::Ready(None)
                     } else {
+                        let _timer = cloned_time.timer();
                         // If the buffer still contains batches, prepare to return them.
                         let batch = self.coalescer.finish_batch()?;
                         Poll::Ready(Some(Ok(batch)))

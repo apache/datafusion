@@ -728,7 +728,7 @@ async fn run_window_test(
             for (line1, line2) in
                 usual_formatted_sorted.iter().zip(running_formatted_sorted)
             {
-                println!("{:?}   ---   {:?}", line1, line2);
+                println!("{line1:?}   ---   {line2:?}");
             }
             unreachable!();
         }

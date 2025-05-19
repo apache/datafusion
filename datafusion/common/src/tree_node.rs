@@ -2354,7 +2354,7 @@ pub(crate) mod tests {
     fn test_large_tree() {
         let mut item = TestTreeNode::new_leaf("initial".to_string());
         for i in 0..3000 {
-            item = TestTreeNode::new(vec![item], format!("parent-{}", i));
+            item = TestTreeNode::new(vec![item], format!("parent-{i}"));
         }
 
         let mut visitor =

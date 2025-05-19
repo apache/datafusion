@@ -5079,7 +5079,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
         .await?;
 
     // Explicitly read the parquet file at c2=123 to verify the physical files are partitioned
-    let partitioned_file = format!("{out_dir}/c2=123", out_dir = out_dir);
+    let partitioned_file = format!("{out_dir}/c2=123");
     let filter_df = ctx
         .read_parquet(&partitioned_file, ParquetReadOptions::default())
         .await?;

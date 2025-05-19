@@ -385,7 +385,7 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                 let mut builder = LogicalPlanBuilder::scan(
                     table_scan.table_name.clone(),
                     Arc::clone(&table_scan.source),
-                    None,
+                    table_scan.projection.clone(),
                 )?;
 
                 if let Some(alias) = table_alias.take() {

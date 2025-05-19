@@ -20,7 +20,7 @@
 use arrow::array::{
     Array, ArrayRef, ArrowNumericType, AsArray, BinaryArray, BinaryViewArray,
     BooleanArray, LargeBinaryArray, LargeStringArray, PrimitiveArray, StringArray,
-    StringViewArray,
+    StringViewArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
@@ -189,6 +189,18 @@ pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<Arr
                 Arc::new(BinaryViewArray::new_unchecked(
                     input.views().clone(),
                     input.data_buffers().to_vec(),
+                    nulls,
+                ))
+            }
+        }
+        DataType::Struct(_) => {
+            let input = input.as_struct();
+            // safety: values / offsets came from a valid struct array
+            // and we checked nulls has the same length as values
+            unsafe {
+                Arc::new(StructArray::new_unchecked(
+                    input.fields().clone(),
+                    input.columns().to_vec(),
                     nulls,
                 ))
             }

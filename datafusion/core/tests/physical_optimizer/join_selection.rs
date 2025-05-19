@@ -251,11 +251,19 @@ async fn test_join_with_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -291,11 +299,19 @@ async fn test_left_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -336,11 +352,19 @@ async fn test_join_with_swap_semi() {
 
         assert_eq!(swapped_join.schema().fields().len(), 1);
         assert_eq!(
-            swapped_join.left().statistics().unwrap().total_byte_size,
+            swapped_join
+                .left()
+                .partition_statistics(None)
+                .unwrap()
+                .total_byte_size,
             Precision::Inexact(8192)
         );
         assert_eq!(
-            swapped_join.right().statistics().unwrap().total_byte_size,
+            swapped_join
+                .right()
+                .partition_statistics(None)
+                .unwrap()
+                .total_byte_size,
             Precision::Inexact(2097152)
         );
         assert_eq!(original_schema, swapped_join.schema());
@@ -455,11 +479,19 @@ async fn test_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -524,11 +556,19 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     );
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -589,11 +629,19 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     );
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -1066,6 +1114,14 @@ impl ExecutionPlan for StatisticsExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        Ok(if partition.is_some() {
+            Statistics::new_unknown(&self.schema)
+        } else {
+            self.stats.clone()
+        })
     }
 }
 

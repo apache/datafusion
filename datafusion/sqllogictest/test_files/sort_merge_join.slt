@@ -695,6 +695,144 @@ select t2.* from t1 right anti join t2 on t1.a = t2.a and t1.b = t2.b
 ----
 51 54
 
+# RIGHTSEMI join tests
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t2.* from t1 right semi join t2 on t1.a = t2.a and t1.b = t2.b 
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t2.* from t1 right semi join t2 on t1.a = t2.a and t1.b != t2.b 
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select null a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t2.* from t1 right semi join t2 on t1.a = t2.a and t1.b != t2.b 
+) order by 1, 2;
+----
+11 12
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b)
+   select t2.* from t1 right semi join t1 t2 on t1.a = t2.a and t1.b = t2.b 
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b)
+   select t2.* from t1 right semi join t1 t2 on t1.a = t2.a and t1.b != t2.b 
+) order by 1, 2;
+----
+11 12
+11 13
+
+query II
+select * from (
+with
+t1 as (
+    select null a, 12 b union all
+    select 11 a, 13 b)
+   select t2.* from t1 right semi join t1 t2 on t1.a = t2.a and t1.b != t2.b 
+) order by 1, 2;
+----
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 14 b
+    )
+    select t2.* from t1 right semi join t2 on t1.a = t2.a and t1.b != t2.b 
+) order by 1, 2;
+----
+11 12
+11 14
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 12 b union all
+    select 11 a, 14 b
+    ),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b
+    )
+    select t2.* from t1 right semi join t2 on t1.a = t2.a and t1.b != t2.b 
+) order by 1, 2;
+----
+11 12
+11 13
+
+# Test RIGHTSEMI with cross batch data distribution
+
+query II
+select * from (
+with
+t1 as (
+    select 11 a, 12 b union all
+    select 11 a, 13 b union all
+    select 12 a, 14 b),
+t2 as (
+    select 11 a, 12 b union all
+    select 11 a, 14 b union all
+    select 12 a, 15 b
+    )
+    select t2.* from t1 right semi join t2 on t1.a = t2.a and t1.b != t2.b 
+) order by 1, 2;
+----
+11 12
+11 14
+12 15
+
 # return sql params back to default values
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;

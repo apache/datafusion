@@ -205,10 +205,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = CsvOptionsProto::decode(buf).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to decode CsvOptionsProto: {:?}",
-                e
-            ))
+            DataFusionError::Execution(format!("Failed to decode CsvOptionsProto: {e:?}"))
         })?;
         let options: CsvOptions = (&proto).into();
         Ok(Arc::new(CsvFormatFactory {
@@ -233,7 +230,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         });
 
         proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode CsvOptions: {:?}", e))
+            DataFusionError::Execution(format!("Failed to encode CsvOptions: {e:?}"))
         })?;
 
         Ok(())
@@ -316,8 +313,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = JsonOptionsProto::decode(buf).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to decode JsonOptionsProto: {:?}",
-                e
+                "Failed to decode JsonOptionsProto: {e:?}"
             ))
         })?;
         let options: JsonOptions = (&proto).into();
@@ -346,7 +342,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         });
 
         proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode JsonOptions: {:?}", e))
+            DataFusionError::Execution(format!("Failed to encode JsonOptions: {e:?}"))
         })?;
 
         Ok(())
@@ -415,6 +411,9 @@ impl TableParquetOptionsProto {
                 schema_force_view_types: global_options.global.schema_force_view_types,
                 binary_as_string: global_options.global.binary_as_string,
                 skip_arrow_metadata: global_options.global.skip_arrow_metadata,
+                coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
+                    parquet_options::CoerceInt96Opt::CoerceInt96(compression)
+                }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -511,6 +510,9 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             schema_force_view_types: proto.schema_force_view_types,
             binary_as_string: proto.binary_as_string,
             skip_arrow_metadata: proto.skip_arrow_metadata,
+            coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
+                parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
+            }),
         }
     }
 }
@@ -626,8 +628,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = TableParquetOptionsProto::decode(buf).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to decode TableParquetOptionsProto: {:?}",
-                e
+                "Failed to decode TableParquetOptionsProto: {e:?}"
             ))
         })?;
         let options: TableParquetOptions = (&proto).into();
@@ -657,8 +658,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
 
         proto.encode(buf).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to encode TableParquetOptionsProto: {:?}",
-                e
+                "Failed to encode TableParquetOptionsProto: {e:?}"
             ))
         })?;
 

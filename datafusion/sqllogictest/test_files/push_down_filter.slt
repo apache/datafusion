@@ -18,7 +18,7 @@
 # Test push down filter
 
 statement ok
-set datafusion.explain.logical_plan_only = true;
+set datafusion.explain.physical_plan_only = true;
 
 statement ok
 CREATE TABLE IF NOT EXISTS v AS VALUES(1,[1,2,3]),(2,[3,4,5]);
@@ -35,12 +35,14 @@ select uc2 from (select unnest(column2) as uc2, column1 from v) where column1 = 
 query TT
 explain select uc2 from (select unnest(column2) as uc2, column1 from v) where column1 = 2;
 ----
-logical_plan
-01)Projection: __unnest_placeholder(v.column2,depth=1) AS uc2
-02)--Unnest: lists[__unnest_placeholder(v.column2)|depth=1] structs[]
-03)----Projection: v.column2 AS __unnest_placeholder(v.column2), v.column1
-04)------Filter: v.column1 = Int64(2)
-05)--------TableScan: v projection=[column1, column2]
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2]
+02)--UnnestExec
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------FilterExec: column1@0 = 2
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
 select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
@@ -52,13 +54,15 @@ select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
 query TT
 explain select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
 ----
-logical_plan
-01)Projection: __unnest_placeholder(v.column2,depth=1) AS uc2
-02)--Filter: __unnest_placeholder(v.column2,depth=1) > Int64(3)
-03)----Projection: __unnest_placeholder(v.column2,depth=1)
-04)------Unnest: lists[__unnest_placeholder(v.column2)|depth=1] structs[]
-05)--------Projection: v.column2 AS __unnest_placeholder(v.column2), v.column1
-06)----------TableScan: v projection=[column1, column2]
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as __unnest_placeholder(v.column2,depth=1)]
+06)----------UnnestExec
+07)------------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 AND column1 = 2;
@@ -70,13 +74,16 @@ select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where 
 query TT
 explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 AND column1 = 2;
 ----
-logical_plan
-01)Projection: __unnest_placeholder(v.column2,depth=1) AS uc2, v.column1
-02)--Filter: __unnest_placeholder(v.column2,depth=1) > Int64(3)
-03)----Unnest: lists[__unnest_placeholder(v.column2)|depth=1] structs[]
-04)------Projection: v.column2 AS __unnest_placeholder(v.column2), v.column1
-05)--------Filter: v.column1 = Int64(2)
-06)----------TableScan: v projection=[column1, column2]
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2, column1@1 as column1]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3
+04)------UnnestExec
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
+07)------------CoalesceBatchesExec: target_batch_size=8192
+08)--------------FilterExec: column1@0 = 2
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 OR column1 = 2;
@@ -89,12 +96,14 @@ select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where 
 query TT
 explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 OR column1 = 2;
 ----
-logical_plan
-01)Projection: __unnest_placeholder(v.column2,depth=1) AS uc2, v.column1
-02)--Filter: __unnest_placeholder(v.column2,depth=1) > Int64(3) OR v.column1 = Int64(2)
-03)----Unnest: lists[__unnest_placeholder(v.column2)|depth=1] structs[]
-04)------Projection: v.column2 AS __unnest_placeholder(v.column2), v.column1
-05)--------TableScan: v projection=[column1, column2]
+physical_plan
+01)ProjectionExec: expr=[__unnest_placeholder(v.column2,depth=1)@0 as uc2, column1@1 as column1]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: __unnest_placeholder(v.column2,depth=1)@0 > 3 OR column1@1 = 2
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------UnnestExec
+06)----------ProjectionExec: expr=[column2@1 as __unnest_placeholder(v.column2), column1@0 as column1]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table v;
@@ -111,12 +120,14 @@ select * from (select column1, unnest(column2) as o from d) where o['a'] = 1;
 query TT
 explain select * from (select column1, unnest(column2) as o from d) where o['a'] = 1;
 ----
-logical_plan
-01)Projection: d.column1, __unnest_placeholder(d.column2,depth=1) AS o
-02)--Filter: get_field(__unnest_placeholder(d.column2,depth=1), Utf8("a")) = Int64(1)
-03)----Unnest: lists[__unnest_placeholder(d.column2)|depth=1] structs[]
-04)------Projection: d.column1, d.column2 AS __unnest_placeholder(d.column2)
-05)--------TableScan: d projection=[column1, column2]
+physical_plan
+01)ProjectionExec: expr=[column1@0 as column1, __unnest_placeholder(d.column2,depth=1)@1 as o]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: get_field(__unnest_placeholder(d.column2,depth=1)@1, a) = 1
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------UnnestExec
+06)----------ProjectionExec: expr=[column1@0 as column1, column2@1 as __unnest_placeholder(d.column2)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 
@@ -179,9 +190,9 @@ LOCATION 'test_files/scratch/parquet/test_filter_with_limit/';
 query TT
 explain select * from test_filter_with_limit where value = 2 limit 1;
 ----
-logical_plan
-01)Limit: skip=0, fetch=1
-02)--TableScan: test_filter_with_limit projection=[part_key, value], full_filters=[test_filter_with_limit.value = Int32(2)], fetch=1
+physical_plan
+01)CoalescePartitionsExec: fetch=1
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-2.parquet]]}, projection=[part_key, value], limit=1, file_type=parquet, predicate=value@1 = 2, pruning_predicate=value_null_count@2 != row_count@3 AND value_min@0 <= 2 AND 2 <= value_max@1, required_guarantees=[value in (2)]
 
 query II
 select * from test_filter_with_limit where value = 2 limit 1;
@@ -218,43 +229,43 @@ LOCATION 'test_files/scratch/push_down_filter/t.parquet';
 query TT
 explain select a from t where a = '100';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[t.a = Int32(100)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 = 100, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 100 AND 100 <= a_max@1, required_guarantees=[a in (100)]
 
 # The predicate should not have a column cast  when the value is a valid i32
 query TT
 explain select a from t where a != '100';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[t.a != Int32(100)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 != 100, pruning_predicate=a_null_count@2 != row_count@3 AND (a_min@0 != 100 OR 100 != a_max@1), required_guarantees=[a not in (100)]
 
 # The predicate should still have the column cast when the value is a NOT valid i32
 query TT
 explain select a from t where a = '99999999999';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("99999999999")]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 99999999999
 
 # The predicate should still have the column cast when the value is a NOT valid i32
 query TT
 explain select a from t where a = '99.99';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("99.99")]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 99.99
 
 # The predicate should still have the column cast when the value is a NOT valid i32
 query TT
 explain select a from t where a = '';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("")]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 
 
 # The predicate should not have a column cast when the operator is = or != and the literal can be round-trip casted without losing information.
 query TT
 explain select a from t where cast(a as string) = '100';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[t.a = Int32(100)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=a@0 = 100, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 100 AND 100 <= a_max@1, required_guarantees=[a in (100)]
 
 # The predicate should still have the column cast when the literal alters its string representation after round-trip casting (leading zero lost).
 query TT
 explain select a from t where CAST(a AS string) = '0123';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("0123")]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8) = 0123
 
 
 statement ok

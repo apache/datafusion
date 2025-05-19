@@ -482,7 +482,7 @@ async fn main() -> Result<()> {
         ctx.register_udaf(udf.clone());
 
         let sql_df = ctx
-            .sql(&format!("SELECT {}(a) FROM t GROUP BY b", udf_name))
+            .sql(&format!("SELECT {udf_name}(a) FROM t GROUP BY b"))
             .await?;
         sql_df.show().await?;
 

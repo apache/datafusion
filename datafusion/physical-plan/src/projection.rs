@@ -26,7 +26,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::{CastExpr, Column, Literal};
+use super::expressions::{Column, Literal};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -79,14 +79,14 @@ impl ProjectionExec {
         let fields: Result<Vec<Field>> = expr
             .iter()
             .map(|(e, name)| {
-                let mut field = Field::new(
+                let metadata = e.return_field(&input_schema)?.metadata().clone();
+
+                let field = Field::new(
                     name,
                     e.data_type(&input_schema)?,
                     e.nullable(&input_schema)?,
-                );
-                field.set_metadata(
-                    get_field_metadata(e, &input_schema).unwrap_or_default(),
-                );
+                )
+                .with_metadata(metadata);
 
                 Ok(field)
             })
@@ -198,21 +198,9 @@ impl ExecutionPlan for ProjectionExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         // Tell optimizer this operator doesn't reorder its input
         vec![true]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        ProjectionExec::try_new(self.expr.clone(), children.swap_remove(0))
-            .map(|p| Arc::new(p) as _)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -223,6 +211,18 @@ impl ExecutionPlan for ProjectionExec {
         // If expressions are all either column_expr or Literal, then all computations in this projection are reorder or rename,
         // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
         vec![!all_simple_exprs]
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        ProjectionExec::try_new(self.expr.clone(), children.swap_remove(0))
+            .map(|p| Arc::new(p) as _)
     }
 
     fn execute(
@@ -244,8 +244,13 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        let input_stats = self.input.partition_statistics(partition)?;
         Ok(stats_projection(
-            self.input.statistics()?,
+            input_stats,
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
             Arc::clone(&self.schema),
         ))
@@ -271,24 +276,6 @@ impl ExecutionPlan for ProjectionExec {
             Ok(Some(Arc::new(projection.clone())))
         }
     }
-}
-
-/// If 'e' is a direct column reference, returns the field level
-/// metadata for that field, if any. Otherwise returns None
-pub(crate) fn get_field_metadata(
-    e: &Arc<dyn PhysicalExpr>,
-    input_schema: &Schema,
-) -> Option<HashMap<String, String>> {
-    if let Some(cast) = e.as_any().downcast_ref::<CastExpr>() {
-        return get_field_metadata(cast.expr(), input_schema);
-    }
-
-    // Look up field by index in schema (not NAME as there can be more than one
-    // column with the same name)
-    e.as_any()
-        .downcast_ref::<Column>()
-        .map(|column| input_schema.field(column.index()).metadata())
-        .cloned()
 }
 
 fn stats_projection(
@@ -538,7 +525,7 @@ pub fn remove_unnecessary_projections(
         } else {
             return Ok(Transformed::no(plan));
         };
-    Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
+    Ok(maybe_modified.map_or_else(|| Transformed::no(plan), Transformed::yes))
 }
 
 /// Compare the inputs and outputs of the projection. All expressions must be
@@ -1093,13 +1080,11 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
 
         let exec = test::scan_partitioned(1);
-        let expected = collect(exec.execute(0, Arc::clone(&task_ctx))?)
-            .await
-            .unwrap();
+        let expected = collect(exec.execute(0, Arc::clone(&task_ctx))?).await?;
 
         let projection = ProjectionExec::try_new(vec![], exec)?;
         let stream = projection.execute(0, Arc::clone(&task_ctx))?;
-        let output = collect(stream).await.unwrap();
+        let output = collect(stream).await?;
         assert_eq!(output.len(), expected.len());
 
         Ok(())

@@ -32,6 +32,8 @@ pub struct QueryBuilder {
     fetch: Option<ast::Fetch>,
     locks: Vec<ast::LockClause>,
     for_clause: Option<ast::ForClause>,
+    // If true, we need to unparse LogicalPlan::Union as a SQL `UNION` rather than a `UNION ALL`.
+    distinct_union: bool,
 }
 
 #[allow(dead_code)]
@@ -75,6 +77,13 @@ impl QueryBuilder {
         self.for_clause = value;
         self
     }
+    pub fn distinct_union(&mut self) -> &mut Self {
+        self.distinct_union = true;
+        self
+    }
+    pub fn is_distinct_union(&self) -> bool {
+        self.distinct_union
+    }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
         let order_by = self
             .order_by_kind
@@ -112,6 +121,7 @@ impl QueryBuilder {
             fetch: Default::default(),
             locks: Default::default(),
             for_clause: Default::default(),
+            distinct_union: false,
         }
     }
 }
@@ -154,6 +164,11 @@ impl SelectBuilder {
     pub fn projection(&mut self, value: Vec<ast::SelectItem>) -> &mut Self {
         self.projection = value;
         self
+    }
+    pub fn pop_projections(&mut self) -> Vec<ast::SelectItem> {
+        let ret = self.projection.clone();
+        self.projection.clear();
+        ret
     }
     pub fn already_projected(&self) -> bool {
         !self.projection.is_empty()
@@ -690,9 +705,9 @@ impl fmt::Display for BuilderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UninitializedField(ref field) => {
-                write!(f, "`{}` must be initialized", field)
+                write!(f, "`{field}` must be initialized")
             }
-            Self::ValidationError(ref error) => write!(f, "{}", error),
+            Self::ValidationError(ref error) => write!(f, "{error}"),
         }
     }
 }
