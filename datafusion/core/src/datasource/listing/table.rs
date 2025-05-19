@@ -32,6 +32,7 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
+use datafusion_execution::config::SessionConfig;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -320,10 +321,21 @@ impl ListingOptions {
             file_extension: format.get_ext(),
             format,
             table_partition_cols: vec![],
-            collect_stat: true,
+            collect_stat: false,
             target_partitions: 1,
             file_sort_order: vec![],
         }
+    }
+
+    /// Set options from [`SessionConfig`] and returns self.
+    ///
+    /// Currently this sets `target_partitions` and `collect_stat`
+    /// but if more options are added in the future that need to be coordinated
+    /// they will be synchronized thorugh this method.
+    pub fn with_session_config_options(mut self, config: &SessionConfig) -> Self {
+        self = self.with_target_partitions(config.target_partitions());
+        self = self.with_collect_stat(config.collect_statistics());
+        self
     }
 
     /// Set file extension on [`ListingOptions`] and returns self.
