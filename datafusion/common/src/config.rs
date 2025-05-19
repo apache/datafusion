@@ -292,7 +292,9 @@ config_namespace! {
         /// target batch size is determined by the configuration setting
         pub coalesce_batches: bool, default = true
 
-        /// Should DataFusion collect statistics after listing files
+        /// Should DataFusion collect statistics when first creating a table.
+        /// Has no effect after the table is created. Applies to the default
+        /// `ListingTableProvider` in DataFusion Defaults to false.
         pub collect_statistics: bool, default = false
 
         /// Number of partitions for query execution. Increasing partitions can increase
