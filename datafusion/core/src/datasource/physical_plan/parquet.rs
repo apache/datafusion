@@ -897,7 +897,12 @@ mod tests {
         let metrics = rt.parquet_exec.metrics().unwrap();
         assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
         assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 0);
-        let read = rt.batches.unwrap().iter().map(|b| b.num_rows()).sum::<usize>();
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
         assert_eq!(read, 2, "Expected 2 rows to match the predicate");
     }
 
@@ -932,7 +937,12 @@ mod tests {
         // There should be no predicate evaluation errors
         let metrics = rt.parquet_exec.metrics().unwrap();
         assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
-        let read = rt.batches.unwrap().iter().map(|b| b.num_rows()).sum::<usize>();
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
         assert_eq!(read, 2, "Expected 2 rows to match the predicate");
     }
 
