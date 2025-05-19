@@ -216,3 +216,181 @@ impl ScalarUDFImpl for GroupingFunc {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::{array::{Int32Array, ListArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array}, datatypes::Int32Type};
+    use datafusion_common::Result;
+
+    #[test]
+    fn test_grouping_uint8() -> Result<()> {
+        let grouping_id = UInt8Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let indices = vec![Some(vec![Some(0), Some(1)])];
+        
+        let args = vec![
+            ColumnarValue::Array(Arc::new(grouping_id)),
+            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
+        ];
+
+        let func = GroupingFunc::new();
+        let return_type = DataType::Int32;
+        let result = func.invoke_with_args(ScalarFunctionArgs { 
+            args,
+            number_rows: 4,
+            return_type: &return_type,
+        })?;
+        
+        let result = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array result"),
+        };
+
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(result.values().to_vec(), vec![1, 2, 3, 3]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_uint16() -> Result<()> {
+        let grouping_id = UInt16Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let indices = vec![Some(vec![Some(0), Some(1)])];
+    
+        let args = vec![
+            ColumnarValue::Array(Arc::new(grouping_id)),
+            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
+        ];
+
+        let func = GroupingFunc::new();
+        let return_type = DataType::Int32;
+        let result = func.invoke_with_args(ScalarFunctionArgs { 
+            args,
+            number_rows: 4,
+            return_type: &return_type,
+        })?;
+        
+        let result = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array result"),
+        };
+
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(result.values().to_vec(), vec![1, 2, 3, 3]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_uint32() -> Result<()> {
+        let grouping_id = UInt32Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let indices = vec![Some(vec![Some(0), Some(1)])];
+        
+        let args = vec![
+            ColumnarValue::Array(Arc::new(grouping_id)),
+            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
+        ];
+
+        let func = GroupingFunc::new();
+        let return_type = DataType::Int32;
+        let result = func.invoke_with_args(ScalarFunctionArgs { 
+            args,
+            number_rows: 4,
+            return_type: &return_type,
+        })?;
+        
+        let result = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array result"),
+        };
+
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(result.values().to_vec(), vec![1, 2, 3, 3]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_uint64() -> Result<()> {
+        let grouping_id = UInt64Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let indices = vec![Some(vec![Some(0), Some(1)])];
+        
+        let args = vec![
+            ColumnarValue::Array(Arc::new(grouping_id)),
+            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
+        ];
+
+        let func = GroupingFunc::new();
+        let return_type = DataType::Int32;
+        let result = func.invoke_with_args(ScalarFunctionArgs { 
+            args,
+            number_rows: 4,
+            return_type: &return_type,
+        })?;
+        
+        let result = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array result"),
+        };
+
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(result.values().to_vec(), vec![1, 2, 3, 3]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_with_null_indices() -> Result<()> {
+        let grouping_id = UInt8Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let indices = vec![Some(vec![Some(0), None])];
+        
+        let args = vec![
+            ColumnarValue::Array(Arc::new(grouping_id)),
+            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
+        ];
+
+        let func = GroupingFunc::new();
+        let return_type = DataType::Int32;
+        let result = func.invoke_with_args(ScalarFunctionArgs { 
+            args,
+            number_rows: 4,
+            return_type: &return_type,
+        });
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_with_invalid_args() -> Result<()> {
+        let grouping_id = UInt8Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
+        let indices = vec![Some(vec![Some(0)])];
+        
+        // Test with too many arguments
+        let args = vec![
+            ColumnarValue::Array(Arc::new(grouping_id)),
+            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
+        ];
+
+        let func = GroupingFunc::new();
+        let return_type = DataType::Int32;
+        let result = func.invoke_with_args(ScalarFunctionArgs { 
+            args,
+            number_rows: 4,
+            return_type: &return_type,
+        });
+        assert!(result.is_err());
+
+        // Test with invalid array type
+        let args = vec![
+            ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(1)]))),
+            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
+        ];
+
+        let func = GroupingFunc::new();
+        let return_type = DataType::Int32;
+        let result = func.invoke_with_args(ScalarFunctionArgs { 
+            args,
+            number_rows: 1,
+            return_type: &return_type,
+        });
+        assert!(result.is_err());
+        Ok(())
+    }
+}
+
