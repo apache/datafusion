@@ -62,7 +62,9 @@ use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
@@ -2069,29 +2071,37 @@ fn maybe_fix_physical_column_name(
     expr: Result<Arc<dyn PhysicalExpr>>,
     input_physical_schema: &SchemaRef,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    if let Ok(e) = &expr {
-        if let Some(column) = e.as_any().downcast_ref::<Column>() {
-            let physical_field = input_physical_schema.field(column.index());
-            let expr_col_name = column.name();
-            let physical_name = physical_field.name();
+    expr.and_then(|e| {
+        e.transform_down(|node| {
+            if let Some(column) = node.as_any().downcast_ref::<Column>() {
+                let idx = column.index();
+                let physical_field = input_physical_schema.field(idx);
+                let expr_col_name = column.name();
+                let physical_name = physical_field.name();
 
-            if physical_name != expr_col_name {
-                // handle edge cases where the physical_name contains ':'.
-                let colon_count = physical_name.matches(':').count();
-                let mut splits = expr_col_name.match_indices(':');
-                let split_pos = splits.nth(colon_count);
+                if expr_col_name != physical_name {
+                    // handle edge cases where the physical_name contains ':'.
+                    let colon_count = physical_name.matches(':').count();
+                    let mut splits = expr_col_name.match_indices(':');
+                    let split_pos = splits.nth(colon_count);
 
-                if let Some((idx, _)) = split_pos {
-                    let base_name = &expr_col_name[..idx];
-                    if base_name == physical_name {
-                        let updated_column = Column::new(physical_name, column.index());
-                        return Ok(Arc::new(updated_column));
+                    if let Some((i, _)) = split_pos {
+                        let base_name = &expr_col_name[..i];
+                        if base_name == physical_name {
+                            let updated_column = Column::new(physical_name, idx);
+                            return Ok(Transformed::yes(Arc::new(updated_column)));
+                        }
                     }
                 }
+
+                // If names already match or fix is not possible, just leave it as it is
+                Ok(Transformed::no(node))
+            } else {
+                Ok(Transformed::no(node))
             }
-        }
-    }
-    expr
+        })
+        .data()
+    })
 }
 
 struct OptimizationInvariantChecker<'a> {
