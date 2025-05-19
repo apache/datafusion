@@ -88,12 +88,12 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.17", default-features = false }
-arrow = { version = "55.0.0", features = [
+arrow = { version = "55.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
 arrow-buffer = { version = "55.0.0", default-features = false }
-arrow-flight = { version = "55.0.0", features = [
+arrow-flight = { version = "55.1.0", features = [
     "flight-sql-experimental",
 ] }
 arrow-ipc = { version = "55.0.0", default-features = false, features = [
@@ -151,7 +151,7 @@ itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.12.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "55.0.0", default-features = false, features = [
+parquet = { version = "55.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -213,6 +213,7 @@ large_futures = "warn"
 used_underscore_binding = "warn"
 or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
+uninlined_format_args = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }

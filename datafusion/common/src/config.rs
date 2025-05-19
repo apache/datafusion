@@ -1223,8 +1223,7 @@ impl ConfigField for u8 {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if value.is_empty() {
             return Err(DataFusionError::Configuration(format!(
-                "Input string for {} key is empty",
-                key
+                "Input string for {key} key is empty"
             )));
         }
         // Check if the string is a valid number
@@ -1236,8 +1235,7 @@ impl ConfigField for u8 {
             // Check if the first character is ASCII (single byte)
             if bytes.len() > 1 || !value.chars().next().unwrap().is_ascii() {
                 return Err(DataFusionError::Configuration(format!(
-                    "Error parsing {} as u8. Non-ASCII string provided",
-                    value
+                    "Error parsing {value} as u8. Non-ASCII string provided"
                 )));
             }
             *self = bytes[0];
@@ -2090,7 +2088,7 @@ impl Display for OutputFormat {
             OutputFormat::AVRO => "avro",
             OutputFormat::ARROW => "arrow",
         };
-        write!(f, "{}", out)
+        write!(f, "{out}")
     }
 }
 

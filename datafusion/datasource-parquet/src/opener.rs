@@ -229,8 +229,7 @@ impl FileOpener for ParquetOpener {
                     Ok(None) => {}
                     Err(e) => {
                         debug!(
-                            "Ignoring error building row filter for '{:?}': {}",
-                            predicate, e
+                            "Ignoring error building row filter for '{predicate:?}': {e}"
                         );
                     }
                 };
