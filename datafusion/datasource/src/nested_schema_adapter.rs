@@ -178,29 +178,6 @@ impl NestedStructSchemaAdapter {
             self.table_schema.metadata().clone(),
         )))
     }
-
-    /// Create a schema mapping that can transform data from source schema to target schema
-    fn create_schema_mapping(
-        &self,
-        source_schema: &Schema,
-        target_schema: &Schema,
-    ) -> Result<Arc<dyn SchemaMapper>> {
-        // Map field names between schemas
-        let mut field_mappings = Vec::new();
-
-        for target_field in target_schema.fields() {
-            let index = source_schema.index_of(target_field.name());
-            field_mappings.push(index.ok());
-        }
-
-        // Create our custom NestedStructSchemaMapping
-        let mapping = NestedStructSchemaMapping::new(
-            Arc::new(target_schema.clone()), // projected_table_schema
-            field_mappings,                  // field_mappings
-        );
-
-        Ok(Arc::new(mapping))
-    }
 }
 
 impl SchemaAdapter for NestedStructSchemaAdapter {
