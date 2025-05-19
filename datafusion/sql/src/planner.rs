@@ -198,13 +198,35 @@ pub struct PlannerContext {
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
-    /// The query schema of the outer query plan, used to resolve the columns in subquery
-    outer_query_schema: Option<DFSchemaRef>,
     /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
     /// FROM clauses, this should become a suffix of the `outer_query_schema`.
     outer_from_schema: Option<DFSchemaRef>,
     /// The query schema defined by the table
     create_table_schema: Option<DFSchemaRef>,
+
+    // TODO: take outer_from_schema and create_table_schema into consideration.
+    /// All levels query schema of the outer query plan, used to resolve the columns in subquery.
+    /// Use `depth` to index different level outer_query_schema.
+    /// For example:
+    /// SELECT name <---------------------------------------- depth = 0
+    /// FROM employees e
+    /// WHERE salary > (
+    ///     SELECT AVG(salary) <----------------------------- depth = 1
+    ///     FROM employees e2
+    ///     WHERE e2.department_id = e.department_id
+    ///       AND e.department_id IN (
+    ///           SELECT department_id <--------------------- depth = 2
+    ///           FROM employees
+    ///           GROUP BY department_id
+    ///           HAVING AVG(salary) > (
+    ///               SELECT AVG(salary)
+    ///               FROM employees
+    ///           )
+    ///       )
+    /// );
+    outer_query_schemas: Vec<Option<DFSchemaRef>>,
+    /// Current depth of query, starting from 0.
+    cur_depth: usize,
 }
 
 impl Default for PlannerContext {
@@ -219,9 +241,10 @@ impl PlannerContext {
         Self {
             prepare_param_data_types: Arc::new(vec![]),
             ctes: HashMap::new(),
-            outer_query_schema: None,
             outer_from_schema: None,
             create_table_schema: None,
+            outer_query_schemas: vec![None], // depth 0 has no outer query schema
+            cur_depth: 0,
         }
     }
 
@@ -234,27 +257,40 @@ impl PlannerContext {
         self
     }
 
+    // TODO: replace all places with outer_query_schemas()
     // Return a reference to the outer query's schema
     pub fn outer_query_schema(&self) -> Option<&DFSchema> {
-        self.outer_query_schema.as_ref().map(|s| s.as_ref())
+        self.outer_query_schemas[self.cur_depth]
+            .as_ref()
+            .map(|s| s.as_ref())
+    }
+
+    pub fn outer_query_schemas(&self) -> &[Option<DFSchemaRef>] {
+        &self.outer_query_schemas
+    }
+
+    /// Returns an iterator over the outer query schemas from back to front,
+    /// along with their indices.
+    pub fn iter_outer_query_schemas_rev(&self) -> impl Iterator<Item = (usize, Option<&DFSchema>)> {
+        self.outer_query_schemas
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(i, schema_ref)| (i, schema_ref.as_ref().map(|s| s.as_ref())))
     }
 
     /// Sets the outer query schema, returning the existing one, if
     /// any
-    pub fn set_outer_query_schema(
-        &mut self,
-        mut schema: Option<DFSchemaRef>,
-    ) -> Option<DFSchemaRef> {
-        std::mem::swap(&mut self.outer_query_schema, &mut schema);
-        schema
+    pub fn push_outer_query_schema(&mut self, schema: Option<DFSchemaRef>) {
+        self.outer_query_schemas.push(schema);
     }
 
-    pub fn extend_outer_query_schema(&mut self, schema: &DFSchemaRef) -> Result<()> {
-        match self.outer_query_schema.as_mut() {
-            Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
-            None => self.outer_query_schema = Some(Arc::clone(schema)),
-        };
-        Ok(())
+    pub fn increase_depth(&mut self) {
+        self.cur_depth += 1;
+    }
+
+    pub fn decrease_depth(&mut self) {
+        self.cur_depth -= 1;
     }
 
     pub fn set_table_schema(

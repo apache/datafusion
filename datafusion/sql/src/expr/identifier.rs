@@ -165,48 +165,49 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         not_impl_err!("compound identifier: {ids:?}")
                     } else {
                         // Check the outer_query_schema and try to find a match
-                        if let Some(outer) = planner_context.outer_query_schema() {
-                            let search_result = search_dfschema(&ids, outer);
-                            match search_result {
-                                // Found matching field with spare identifier(s) for nested field(s) in structure
-                                Some((field, qualifier, nested_names))
-                                    if !nested_names.is_empty() =>
-                                {
-                                    // TODO: remove when can support nested identifiers for OuterReferenceColumn
-                                    not_impl_err!(
-                                        "Nested identifiers are not yet supported for OuterReferenceColumn {}",
-                                        Column::from((qualifier, field)).quoted_flat_name()
-                                    )
+                        // TODO: Put the depth somewhere to record it like (OuterReferenceColumn)
+                        for (_depth, schema) in
+                            planner_context.iter_outer_query_schemas_rev()
+                        {
+                            if let Some(outer) = schema {
+                                let search_result = search_dfschema(&ids, outer);
+                                match search_result {
+                                    // Found matching field with spare identifier(s) for nested field(s) in structure
+                                    Some((field, qualifier, nested_names))
+                                        if !nested_names.is_empty() =>
+                                    {
+                                        // TODO: remove when can support nested identifiers for OuterReferenceColumn
+                                        return not_impl_err!("Nested identifiers are not yet supported for OuterReferenceColumn {}", Column::from((qualifier, field)).quoted_flat_name());
+                                    }
+                                    // Found matching field with no spare identifier(s)
+                                    Some((field, qualifier, _nested_names)) => {
+                                        // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                                        return Ok(Expr::OuterReferenceColumn(
+                                            field.data_type().clone(),
+                                            Column::from((qualifier, field)),
+                                        ));
+                                    }
+                                    // Found no matching field, will return a default
+                                    None => continue,
                                 }
-                                // Found matching field with no spare identifier(s)
-                                Some((field, qualifier, _nested_names)) => {
-                                    // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                                    Ok(Expr::OuterReferenceColumn(
-                                        field.data_type().clone(),
-                                        Column::from((qualifier, field)),
-                                    ))
+                            } else {
+                                // Only depth=0 outer_query_schema can reach here.
+                                let s = &ids[0..ids.len()];
+                                // Safe unwrap as s can never be empty or exceed the bounds
+                                let (relation, column_name) = form_identifier(s).unwrap();
+                                let mut column = Column::new(relation, column_name);
+                                if self.options.collect_spans {
+                                    if let Some(span) = ids_span {
+                                        column.spans_mut().add_span(span);
+                                    }
                                 }
-                                // Found no matching field, will return a default
-                                None => {
-                                    let s = &ids[0..ids.len()];
-                                    // safe unwrap as s can never be empty or exceed the bounds
-                                    let (relation, column_name) =
-                                        form_identifier(s).unwrap();
-                                    Ok(Expr::Column(Column::new(relation, column_name)))
-                                }
+                                return Ok(Expr::Column(column));
                             }
-                        } else {
-                            let s = &ids[0..ids.len()];
-                            // Safe unwrap as s can never be empty or exceed the bounds
-                            let (relation, column_name) = form_identifier(s).unwrap();
-                            let mut column = Column::new(relation, column_name);
-                            if self.options.collect_spans {
-                                if let Some(span) = ids_span {
-                                    column.spans_mut().add_span(span);
-                                }
-                            }
-                            Ok(Expr::Column(column))
                         }
+                        let s = &ids[0..ids.len()];
+                        // safe unwrap as s can never be empty or exceed the bounds
+                        let (relation, column_name) = form_identifier(s).unwrap();
+                        return Ok(Expr::Column(Column::new(relation, column_name)));
                     }
                 }
             }
