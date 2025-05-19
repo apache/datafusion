@@ -1871,31 +1871,31 @@ async fn describe_lookup_via_quoted_identifier() -> Result<()> {
         ])?
         .select_columns(&["c1"])?;
 
-    let df_renamed = df.clone().with_column_renamed("c1", "CoLu.Mn1")?;
+    let df_renamed = df.clone().with_column_renamed("c1", "CoLu.Mn[\"1\"]")?;
 
     let describe_result = df_renamed.describe().await?;
     describe_result
         .clone()
         .sort(vec![
             col("describe").sort(true, true),
-            col("\"CoLu.Mn1\"").sort(true, true),
+            col("CoLu.Mn[\"1\"]").sort(true, true),
         ])?
         .show()
         .await?;
     assert_snapshot!(
         batches_to_sort_string(&describe_result.clone().collect().await?),
         @r###"
-        +------------+----------+
-        | describe   | CoLu.Mn1 |
-        +------------+----------+
-        | count      | 1        |
-        | max        | a        |
-        | mean       | null     |
-        | median     | null     |
-        | min        | a        |
-        | null_count | 0        |
-        | std        | null     |
-        +------------+----------+
+        +------------+--------------+
+        | describe   | CoLu.Mn["1"] |
+        +------------+--------------+
+        | count      | 1            |
+        | max        | a            |
+        | mean       | null         |
+        | median     | null         |
+        | min        | a            |
+        | null_count | 0            |
+        | std        | null         |
+        +------------+--------------+
     "###
     );
 
