@@ -85,9 +85,9 @@ jobs:
       - name: Run semver-check proto
         run: cargo semver-checks check-release -p datafusion-proto -p datafusion-proto-common
         continue-on-error: true
-      # - name: Run semver-check substrait #not working for some reason, TB Triaged
-      #   run: cargo semver-checks check-release -p datafusion-substrait
-      #   continue-on-error: true
+      - name: Run semver-check substrait #not working for some reason, TB Triaged
+        run: apt-get install -y cmake && cargo semver-checks check-release -p datafusion-substrait
+        continue-on-error: true
       - name: Run semver-check sql
         run: cargo semver-checks check-release -p datafusion-sql
         continue-on-error: true
