@@ -153,10 +153,7 @@ mod tests {
         config.options_mut().explain.physical_plan_only = true;
         config.options_mut().explain.show_statistics = true;
         let content = explain_query_all_with_config(config).await?;
-        assert_contains!(
-            content,
-            "statistics=[Rows=Absent,"
-        );
+        assert_contains!(content, "statistics=[Rows=Absent,");
 
         // Explicitly set to false
         let mut config = SessionConfig::new();
@@ -164,10 +161,7 @@ mod tests {
         config.options_mut().explain.show_statistics = true;
         config.options_mut().execution.collect_statistics = false;
         let content = explain_query_all_with_config(config).await?;
-        assert_contains!(
-            content,
-            "statistics=[Rows=Absent,"
-        );
+        assert_contains!(content, "statistics=[Rows=Absent,");
 
         // Explicitly set to true
         let mut config = SessionConfig::new();
@@ -175,10 +169,7 @@ mod tests {
         config.options_mut().explain.show_statistics = true;
         config.options_mut().execution.collect_statistics = true;
         let content = explain_query_all_with_config(config).await?;
-        assert_contains!(
-            content,
-            "statistics=[Rows=Exact(10),"
-        );
+        assert_contains!(content, "statistics=[Rows=Exact(10),");
 
         Ok(())
     }
