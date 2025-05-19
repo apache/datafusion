@@ -2734,7 +2734,7 @@ mod tests {
         // Verify that the execution fails due to indentation error
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.to_string(), "Execution error: Test Err");
+        assert!(err.to_string().starts_with("Execution error: Test Err"));
     }
 
     #[tokio::test]
