@@ -29,6 +29,8 @@ and relied on the default value of `collect_stat` being `true`, you will need to
 explicitly set it to `true` in your code.
 
 ```rust
+use datafusion::datasource::listing::ListingOptions;
+
 ListingOptions::new()
     .with_collect_stat(true)
     // other options
