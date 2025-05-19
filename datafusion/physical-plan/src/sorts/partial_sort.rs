@@ -105,7 +105,8 @@ impl PartialSortExec {
     ) -> Self {
         debug_assert!(common_prefix_length > 0);
         let preserve_partitioning = false;
-        let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning);
+        let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning)
+            .unwrap();
         Self {
             input,
             expr,
@@ -189,24 +190,24 @@ impl PartialSortExec {
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
         preserve_partitioning: bool,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
         let eq_properties = input
             .equivalence_properties()
             .clone()
-            .with_reorder(sort_exprs);
+            .with_reorder(sort_exprs)?;
 
         // Get output partitioning:
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             input.pipeline_behavior(),
             input.boundedness(),
-        )
+        ))
     }
 }
 

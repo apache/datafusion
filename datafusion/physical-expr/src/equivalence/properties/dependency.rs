@@ -925,7 +925,7 @@ mod tests {
         let base_properties = EquivalenceProperties::new(Arc::clone(&schema))
             .with_reorder(["a", "b", "c"].into_iter().map(|c| {
                 PhysicalSortExpr::new_default(col(c, schema.as_ref()).unwrap())
-            }));
+            }))?;
 
         struct TestCase {
             name: &'static str,
@@ -1194,17 +1194,18 @@ mod tests {
         eq_properties.add_constants([ConstExpr::from(Arc::clone(&col_a))])?;
 
         let sort_exprs = vec![
-            PhysicalSortExpr::new_default(col_a),
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)),
         ];
 
-        let result = eq_properties.with_reorder(sort_exprs);
+        let result = eq_properties.with_reorder(sort_exprs)?;
 
         // Should only contain b since a is constant
         assert_eq!(result.oeq_class().len(), 1);
         let ordering = result.oeq_class().iter().next().unwrap();
-        assert_eq!(ordering.len(), 1);
-        assert!(ordering[0].expr.eq(&col_b));
+        assert_eq!(ordering.len(), 2);
+        assert!(ordering[0].expr.eq(&col_a));
+        assert!(ordering[1].expr.eq(&col_b));
 
         Ok(())
     }
@@ -1234,7 +1235,7 @@ mod tests {
         // New ordering: [a ASC]
         let new_order = vec![PhysicalSortExpr::new(Arc::clone(&col_a), asc)];
 
-        let result = eq_properties.with_reorder(new_order);
+        let result = eq_properties.with_reorder(new_order)?;
 
         // Should only contain [a ASC, b DESC, c ASC]
         assert_eq!(result.oeq_class().len(), 1);
@@ -1271,7 +1272,7 @@ mod tests {
         // New ordering: [b ASC]
         let new_order = vec![PhysicalSortExpr::new_default(Arc::clone(&col_b))];
 
-        let result = eq_properties.with_reorder(new_order);
+        let result = eq_properties.with_reorder(new_order)?;
 
         // Should only contain [a/b ASC, c ASC]
         assert_eq!(result.oeq_class().len(), 1);
@@ -1311,7 +1312,7 @@ mod tests {
         // New ordering: [a DESC]
         let new_order = vec![PhysicalSortExpr::new(Arc::clone(&col_a), desc)];
 
-        let result = eq_properties.with_reorder(new_order.clone());
+        let result = eq_properties.with_reorder(new_order.clone())?;
 
         // Should only contain the new ordering since options don't match
         assert_eq!(result.oeq_class().len(), 1);
@@ -1353,25 +1354,10 @@ mod tests {
             PhysicalSortExpr::new_default(Arc::clone(&col_c)),
         ];
 
-        let result = eq_properties.with_reorder(new_order);
-
-        // Should preserve the original [d ASC, a ASC] ordering
-        assert_eq!(result.oeq_class().len(), 1);
-        let ordering = result.oeq_class().iter().next().unwrap();
-        assert_eq!(ordering.len(), 2);
-
-        // First expression should be either b or d (they're equivalent)
-        let asc = SortOptions::default();
-        assert!(
-            ordering[0].expr.eq(&col_b) || ordering[0].expr.eq(&col_d),
-            "Expected b or d as first expression, got {:?}",
-            ordering[0].expr
-        );
-        assert!(ordering[0].options.eq(&asc));
-
-        // Second expression should be a
-        assert!(ordering[1].expr.eq(&col_a));
-        assert!(ordering[1].options.eq(&asc));
+        let old_orderings = eq_properties.oeq_class().clone();
+        let result = eq_properties.with_reorder(new_order)?;
+        // Original orderings should be preserved:
+        assert_eq!(result.oeq_class, old_orderings);
 
         Ok(())
     }

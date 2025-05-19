@@ -22,9 +22,9 @@ mod union; // Submodule containing calculate_union
 pub use joins::*;
 pub use union::*;
 
+use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
-use std::{fmt, mem};
 
 use self::dependency::{
     construct_prefix_orderings, generate_dependency_orderings, referred_dependencies,
@@ -205,14 +205,8 @@ impl EquivalenceProperties {
 
     /// Returns the output ordering of the properties.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let mut sort_exprs: Vec<_> = self.oeq_class.output_ordering()?.into();
-        // Prune out constant expressions:
-        sort_exprs.retain(|sort_expr| {
-            self.eq_group
-                .get_equivalence_class(&sort_expr.expr)
-                .is_none_or(|cls| cls.constant.is_none())
-        });
-        LexOrdering::new(sort_exprs)
+        let concat = self.oeq_class.iter().flat_map(|o| o.iter().cloned());
+        self.normalize_sort_exprs(concat)
     }
 
     /// Extends this `EquivalenceProperties` with the `other` object.
@@ -385,31 +379,19 @@ impl EquivalenceProperties {
     pub fn with_reorder(
         mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
-    ) -> Self {
-        // Normalize the given ordering and process:
-        if let Some(normal_ordering) = self.normalize_sort_exprs(ordering) {
-            // Preserve valid suffixes from existing orderings:
-            let mut orderings: Vec<_> = mem::take(&mut self.oeq_class).into();
-            orderings.retain(|existing| {
-                // Check if the existing ordering is a prefix of the new ordering:
-                self.is_prefix_of(&normal_ordering, existing)
-            });
-            if orderings.is_empty() {
-                orderings.push(normal_ordering);
-            }
-            self.oeq_class = OrderingEquivalenceClass::new(orderings);
+    ) -> Result<Self> {
+        let sort_exprs = ordering.into_iter().collect::<Vec<_>>();
+        // First, standardize the given ordering:
+        let Some(normal_ordering) = self.normalize_sort_exprs(sort_exprs.clone()) else {
+            // If the ordering vanishes after normalization, it is satisfied:
+            return Ok(self);
+        };
+        if normal_ordering.len() != self.common_sort_prefix_length(normal_ordering)? {
+            // If the ordering is unsatisfied, replace existing orderings:
+            self.clear_orderings();
+            self.add_ordering(sort_exprs);
         }
-        self
-    }
-
-    /// Checks if the ordering `given` matches a prefix of the ordering
-    /// `reference` (considering expression equivalences).
-    fn is_prefix_of(&self, given: &LexOrdering, reference: &LexOrdering) -> bool {
-        given.len() <= reference.len()
-            && given.iter().zip(reference).all(|(new, existing)| {
-                self.eq_group.exprs_equal(&new.expr, &existing.expr)
-                    && new.options == existing.options
-            })
+        Ok(self)
     }
 
     /// Normalizes the given sort expressions (i.e. `sort_exprs`) using the

@@ -1111,7 +1111,7 @@ impl SortExec {
         let eq_properties = input
             .equivalence_properties()
             .clone()
-            .with_reorder(sort_exprs);
+            .with_reorder(sort_exprs)?;
 
         // Get output partitioning:
         let output_partitioning =
