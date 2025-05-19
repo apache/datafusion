@@ -20,6 +20,7 @@
 //! This parser implements DataFusion specific statements such as
 //! `CREATE EXTERNAL TABLE`
 
+use datafusion_common::config::SqlParserOptions;
 use datafusion_common::DataFusionError;
 use datafusion_common::{sql_err, Diagnostic, Span};
 use sqlparser::ast::{ExprWithAlias, OrderByOptions};
@@ -38,9 +39,14 @@ use std::fmt;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
-    ($MSG:expr) => {
-        Err(ParserError::ParserError($MSG.to_string()))
-    };
+    ($MSG:expr $(; diagnostic = $DIAG:expr)?) => {{
+
+        let err = DataFusionError::from(ParserError::ParserError($MSG.to_string()));
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        Err(err)
+    }};
 }
 
 fn parse_file_type(s: &str) -> Result<String, DataFusionError> {
@@ -141,7 +147,7 @@ impl fmt::Display for CopyToStatement {
 
         write!(f, "COPY {source} TO {target}")?;
         if let Some(file_type) = stored_as {
-            write!(f, " STORED AS {}", file_type)?;
+            write!(f, " STORED AS {file_type}")?;
         }
         if !partitioned_by.is_empty() {
             write!(f, " PARTITIONED BY ({})", partitioned_by.join(", "))?;
@@ -284,6 +290,7 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionErro
 /// [`Statement`] for a list of this special syntax
 pub struct DFParser<'a> {
     pub parser: Parser<'a>,
+    options: SqlParserOptions,
 }
 
 /// Same as `sqlparser`
@@ -366,6 +373,10 @@ impl<'a> DFParserBuilder<'a> {
             parser: Parser::new(self.dialect)
                 .with_tokens_with_locations(tokens)
                 .with_recursion_limit(self.recursion_limit),
+            options: SqlParserOptions {
+                recursion_limit: self.recursion_limit,
+                ..Default::default()
+            },
         })
     }
 }
@@ -442,20 +453,16 @@ impl<'a> DFParser<'a> {
         found: TokenWithSpan,
     ) -> Result<T, DataFusionError> {
         let sql_parser_span = found.span;
-        parser_err!(format!(
-            "Expected: {expected}, found: {found}{}",
-            found.span.start
-        ))
-        .map_err(|e| {
-            let e = DataFusionError::from(e);
-            let span = Span::try_from_sqlparser_span(sql_parser_span);
-            let diagnostic = Diagnostic::new_error(
-                format!("Expected: {expected}, found: {found}{}", found.span.start),
-                span,
-            );
-
-            e.with_diagnostic(diagnostic)
-        })
+        let span = Span::try_from_sqlparser_span(sql_parser_span);
+        let diagnostic = Diagnostic::new_error(
+            format!("Expected: {expected}, found: {found}{}", found.span.start),
+            span,
+        );
+        parser_err!(
+            format!("Expected: {expected}, found: {found}{}", found.span.start);
+            diagnostic=
+            diagnostic
+        )
     }
 
     /// Parse a new expression
@@ -471,9 +478,7 @@ impl<'a> DFParser<'a> {
                         if let Token::Word(w) = self.parser.peek_nth_token(1).token {
                             // use native parser for COPY INTO
                             if w.keyword == Keyword::INTO {
-                                return Ok(Statement::Statement(Box::from(
-                                    self.parser.parse_statement()?,
-                                )));
+                                return self.parse_and_handle_statement();
                             }
                         }
                         self.parser.next_token(); // COPY
@@ -485,17 +490,13 @@ impl<'a> DFParser<'a> {
                     }
                     _ => {
                         // use sqlparser-rs parser
-                        Ok(Statement::Statement(Box::from(
-                            self.parser.parse_statement()?,
-                        )))
+                        self.parse_and_handle_statement()
                     }
                 }
             }
             _ => {
                 // use the native parser
-                Ok(Statement::Statement(Box::from(
-                    self.parser.parse_statement()?,
-                )))
+                self.parse_and_handle_statement()
             }
         }
     }
@@ -511,6 +512,23 @@ impl<'a> DFParser<'a> {
         }
 
         Ok(self.parser.parse_expr_with_alias()?)
+    }
+
+    /// Helper method to parse a statement and handle errors consistently, especially for recursion limits
+    fn parse_and_handle_statement(&mut self) -> Result<Statement, DataFusionError> {
+        self.parser
+            .parse_statement()
+            .map(|stmt| Statement::Statement(Box::from(stmt)))
+            .map_err(|e| match e {
+                ParserError::RecursionLimitExceeded => DataFusionError::SQL(
+                    ParserError::RecursionLimitExceeded,
+                    Some(format!(
+                        " (current limit: {})",
+                        self.options.recursion_limit
+                    )),
+                ),
+                other => DataFusionError::SQL(other, None),
+            })
     }
 
     /// Parse a SQL `COPY TO` statement
@@ -1760,6 +1778,9 @@ mod tests {
             .parse_statements()
             .unwrap_err();
 
-        assert_contains!(err.to_string(), "SQL error: RecursionLimitExceeded");
+        assert_contains!(
+            err.to_string(),
+            "SQL error: RecursionLimitExceeded (current limit: 1)"
+        );
     }
 }

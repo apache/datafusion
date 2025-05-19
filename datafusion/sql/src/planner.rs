@@ -816,7 +816,7 @@ impl std::fmt::Display for IdentTaker {
             if !first {
                 write!(f, ".")?;
             }
-            write!(f, "{}", ident)?;
+            write!(f, "{ident}")?;
             first = false;
         }
 

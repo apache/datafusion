@@ -1366,8 +1366,47 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn show(self) -> Result<()> {
+        println!("{}", self.to_string().await?);
+        Ok(())
+    }
+
+    /// Execute the `DataFrame` and return a string representation of the results.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::execution::SessionStateBuilder;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let cfg = SessionConfig::new()
+    ///     .set_str("datafusion.format.null", "no-value");
+    /// let session_state = SessionStateBuilder::new()
+    ///     .with_config(cfg)
+    ///     .with_default_features()
+    ///     .build();
+    /// let ctx = SessionContext::new_with_state(session_state);
+    /// let df = ctx.sql("select null as 'null-column'").await?;
+    /// let result = df.to_string().await?;
+    /// assert_eq!(result,
+    /// "+-------------+
+    /// | null-column |
+    /// +-------------+
+    /// | no-value    |
+    /// +-------------+"
+    /// );
+    /// # Ok(())
+    /// # }
+    pub async fn to_string(self) -> Result<String> {
+        let options = self.session_state.config().options().format.clone();
+        let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
+
         let results = self.collect().await?;
-        Ok(pretty::print_batches(&results)?)
+        Ok(
+            pretty::pretty_format_batches_with_options(&results, &arrow_options)?
+                .to_string(),
+        )
     }
 
     /// Execute the `DataFrame` and print only the first `num` rows of the
