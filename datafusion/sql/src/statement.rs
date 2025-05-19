@@ -1609,7 +1609,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
-                let renamed_key = format!("format.{}", key);
+                let renamed_key = format!("format.{key}");
                 options_map.insert(renamed_key.to_lowercase(), value_string);
             } else {
                 options_map.insert(key.to_lowercase(), value_string);

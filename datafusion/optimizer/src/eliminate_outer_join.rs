@@ -306,6 +306,7 @@ mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
+    use crate::OptimizerContext;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
         binary_expr, cast, col, lit,
@@ -317,11 +318,13 @@ mod tests {
     macro_rules! assert_optimized_plan_equal {
         (
             $plan:expr,
-            @$expected:literal $(,)?
+            @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateOuterJoin::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateOuterJoin::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )

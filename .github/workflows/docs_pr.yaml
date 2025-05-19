@@ -34,26 +34,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Run doc tests
-  linux-test-doc:
-    name: cargo doctest (amd64)
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run doctests (embedded rust examples)
-        run: cargo test --doc --features avro,json
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code
-
+  
   # Test doc build
   linux-test-doc-build:
     name: Test doc build

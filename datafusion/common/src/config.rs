@@ -473,6 +473,9 @@ config_namespace! {
         /// nanosecond resolution.
         pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
+        /// (reading) Use any available bloom filters when reading parquet files
+        pub bloom_filter_on_read: bool, default = true
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -547,9 +550,6 @@ config_namespace! {
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<String>, transform = str::to_lowercase, default = None
-
-        /// (writing) Use any available bloom filters when reading parquet files
-        pub bloom_filter_on_read: bool, default = true
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
@@ -638,13 +638,20 @@ config_namespace! {
         /// long runner execution, all types of joins may encounter out-of-memory errors.
         pub allow_symmetric_joins_without_pruning: bool, default = true
 
-        /// When set to `true`, file groups will be repartitioned to achieve maximum parallelism.
-        /// Currently Parquet and CSV formats are supported.
+        /// When set to `true`, datasource partitions will be repartitioned to achieve maximum parallelism.
+        /// This applies to both in-memory partitions and FileSource's file groups (1 group is 1 partition).
         ///
-        /// If set to `true`, all files will be repartitioned evenly (i.e., a single large file
+        /// For FileSources, only Parquet and CSV formats are currently supported.
+        ///
+        /// If set to `true` for a FileSource, all files will be repartitioned evenly (i.e., a single large file
         /// might be partitioned into smaller chunks) for parallel scanning.
-        /// If set to `false`, different files will be read in parallel, but repartitioning won't
+        /// If set to `false` for a FileSource, different files will be read in parallel, but repartitioning won't
         /// happen within a single file.
+        ///
+        /// If set to `true` for an in-memory source, all memtable's partitions will have their batches
+        /// repartitioned evenly to the desired number of `target_partitions`. Repartitioning can change
+        /// the total number of partitions and batches per partition, but does not slice the initial
+        /// record tables provided to the MemTable on creation.
         pub repartition_file_scans: bool, default = true
 
         /// Should DataFusion repartition data using the partitions keys to execute window
@@ -1216,8 +1223,7 @@ impl ConfigField for u8 {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if value.is_empty() {
             return Err(DataFusionError::Configuration(format!(
-                "Input string for {} key is empty",
-                key
+                "Input string for {key} key is empty"
             )));
         }
         // Check if the string is a valid number
@@ -1229,8 +1235,7 @@ impl ConfigField for u8 {
             // Check if the first character is ASCII (single byte)
             if bytes.len() > 1 || !value.chars().next().unwrap().is_ascii() {
                 return Err(DataFusionError::Configuration(format!(
-                    "Error parsing {} as u8. Non-ASCII string provided",
-                    value
+                    "Error parsing {value} as u8. Non-ASCII string provided"
                 )));
             }
             *self = bytes[0];
@@ -2083,7 +2088,7 @@ impl Display for OutputFormat {
             OutputFormat::AVRO => "avro",
             OutputFormat::ARROW => "arrow",
         };
-        write!(f, "{}", out)
+        write!(f, "{out}")
     }
 }
 

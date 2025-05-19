@@ -505,7 +505,7 @@ fn analyze_immediate_sort_removal(
             sort_exec
                 .properties()
                 .output_ordering()
-                .unwrap_or(LexOrdering::empty()),
+                .unwrap_or_else(|| LexOrdering::empty()),
         ) {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1

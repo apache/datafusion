@@ -38,13 +38,34 @@ has been removed, so you will need to remove all references to it.
 `ScalarFunctionArgs` now contains a field called `arg_fields`. You can use this
 to access the metadata associated with the columnar values during invocation.
 
-### Physical Expression return field
+### Physical Expression return `Field`
 
 To support the changes to user defined functions processing metadata, the
 `PhysicalExpr` trait, which now must specify a return `Field` based on the input
 schema. To upgrade structs which implement `PhysicalExpr` you need to implement
 the `return_field` function. There are numerous examples in the `physical-expr`
 crate.
+
+### `FileFormat::supports_filters_pushdown` replaced with `FileSource::try_pushdown_filters`
+
+To support more general filter pushdown, the `FileFormat::supports_filters_pushdown` was replaced with
+`FileSource::try_pushdown_filters`.
+If you implemented a custom `FileFormat` that uses a custom `FileSource` you will need to implement
+`FileSource::try_pushdown_filters`.
+See `ParquetSource::try_pushdown_filters` for an example of how to implement this.
+
+`FileFormat::supports_filters_pushdown` has been removed.
+
+### `ParquetExec`, `AvroExec`, `CsvExec`, `JsonExec` Removed
+
+`ParquetExec`, `AvroExec`, `CsvExec`, and `JsonExec` were deprecated in
+DataFusion 46 and are removed in DataFusion 48. This is sooner than the normal
+process described in the [API Deprecation Guidelines] because all the tests
+cover the new `DataSourceExec` rather than the older structures. As we evolve
+`DataSource`, the old structures began to show signs of "bit rotting" (not
+working but no one knows due to lack of test coverage).
+
+[api deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines
 
 ## DataFusion `47.0.0`
 
@@ -307,7 +328,7 @@ let mut file_source = ParquetSource::new(parquet_options)
 // Add filter
 if let Some(predicate) = logical_filter {
     if config.enable_parquet_pushdown {
-        file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
+        file_source = file_source.with_predicate(predicate);
     }
 };
 

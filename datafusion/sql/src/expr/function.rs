@@ -461,7 +461,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let mut diagnostic =
                 Diagnostic::new_error(format!("Invalid function '{name}'"), span);
             diagnostic
-                .add_note(format!("Possible function '{}'", suggested_func_name), None);
+                .add_note(format!("Possible function '{suggested_func_name}'"), None);
             plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?"; diagnostic=diagnostic)
         } else {
             internal_err!("No functions registered with this context.")
