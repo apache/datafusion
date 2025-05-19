@@ -413,8 +413,10 @@ mod tests {
         let user_info_struct_type = Struct(user_info_fields.into());
 
         Arc::new(Schema::new(vec![
-            Field::new("id", Int32, false),
-            // Add a list of user_info structs (without the individual user_info field)
+            Field::new("id", Int32, false), // Same as in flat schema
+            Field::new("user", Utf8, true), // Include original "user" field from flat schema
+            Field::new("timestamp", Timestamp(Millisecond, None), true), // Include original "timestamp" field from flat schema
+            // Add a list of user_info structs
             Field::new(
                 "user_infos",
                 List(Arc::new(Field::new("item", user_info_struct_type, true))),
@@ -682,8 +684,8 @@ mod tests {
         // Verify structure of adapted schema
         assert_eq!(
             adapted.fields().len(),
-            2,
-            "Adapted schema should have id and user_infos fields"
+            4,
+            "Adapted schema should have id, user, timestamp and user_infos fields"
         );
 
         // Test user_infos list field
