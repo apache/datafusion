@@ -17,6 +17,7 @@
 
 use datafusion::prelude::*;
 
+use datafusion_sql::unparser::plan_to_sql;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -205,4 +206,37 @@ async fn ddl_can_not_be_planned_by_session_state() {
         physical_plan.unwrap_err().strip_backtrace(),
         "This feature is not implemented: Unsupported logical plan: DropTable"
     );
+}
+
+#[tokio::test]
+async fn unparse_group_by_with_filter() {
+    let ctx = SessionContext::new();
+    let df = ctx.sql("CREATE TABLE test (c1 VARCHAR,c2 VARCHAR,c3 INT) as values ('a','A',1), ('b','B',2);").await.unwrap();
+    let _ = df.collect().await.unwrap();
+
+    ctx.sql("set datafusion.sql_parser.dialect = 'Postgres';").await.unwrap();
+
+    let df = ctx.sql(r#"select
+  c1,
+  c2,
+  CASE WHEN grouping(c1) = 1 THEN sum(c3) filter (where c2 = 'A') ELSE NULL END as gx,
+  grouping(c1) as g0,
+  grouping(c2) as g1,
+  grouping(c1, c2) as g2,
+  grouping(c2, c1) as g3
+from
+  test
+group by
+  grouping sets (
+    (c1, c2),
+    (c1),
+    (c2),
+    ()
+  )
+order by
+  c1, c2, g0, g1, g2, g3;"#).await.unwrap();
+  let plan = df.into_optimized_plan().unwrap();
+  let sql = plan_to_sql(&plan).unwrap().to_string();
+  println!("!!!{}", sql);
+  assert_eq!(sql, "SELECT c1,c2,c3 FROM test GROUP BY c1,c2,c3 HAVING c3 > 1;");
 }

@@ -37,6 +37,7 @@ pub mod planner;
 pub mod r#struct;
 pub mod union_extract;
 pub mod version;
+pub mod grouping;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, arrow_cast);
@@ -53,6 +54,7 @@ make_udf_function!(greatest::GreatestFunc, greatest);
 make_udf_function!(least::LeastFunc, least);
 make_udf_function!(union_extract::UnionExtractFun, union_extract);
 make_udf_function!(version::VersionFunc, version);
+make_udf_function!(grouping::GroupingFunc, grouping);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
