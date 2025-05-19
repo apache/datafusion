@@ -22,7 +22,7 @@
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
 use arrow::datatypes::{DataType::Struct, Field, Fields, Schema, SchemaRef};
-use datafusion_common::{ColumnStatistics, Result};
+use datafusion_common::{plan_err, ColumnStatistics, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ use crate::schema_adapter::{
     SchemaAdapterFactory, SchemaMapper,
 };
 use arrow::array::{Array, ArrayRef, StructArray};
-use arrow::compute::cast;
+use arrow::compute::{can_cast_types, cast};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::arrow::array::new_null_array;
 
@@ -222,20 +222,8 @@ impl SchemaAdapter for NestedStructSchemaAdapter {
                 match (file_field.data_type(), table_field.data_type()) {
                     (Struct(_), Struct(_)) => Ok(true),
                     _ => {
-                        // For non-struct fields, follow the default adapter's behavior
-                        if arrow::compute::can_cast_types(
-                            file_field.data_type(),
-                            table_field.data_type(),
-                        ) {
-                            Ok(true)
-                        } else {
-                            datafusion_common::plan_err!(
-                                "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
-                                file_field.name(),
-                                file_field.data_type(),
-                                table_field.data_type()
-                            )
-                        }
+                        // For non-struct fields, use the regular cast check
+                        crate::schema_adapter::can_cast_field(file_field, table_field)
                     }
                 }
             },

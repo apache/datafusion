@@ -225,6 +225,25 @@ pub(crate) struct DefaultSchemaAdapter {
     projected_table_schema: SchemaRef,
 }
 
+/// Checks if a file field can be cast to a table field
+///
+/// Returns Ok(true) if casting is possible, or an error explaining why casting is not possible
+pub(crate) fn can_cast_field(
+    file_field: &Field,
+    table_field: &Field,
+) -> datafusion_common::Result<bool> {
+    if can_cast_types(file_field.data_type(), table_field.data_type()) {
+        Ok(true)
+    } else {
+        plan_err!(
+            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+            file_field.name(),
+            file_field.data_type(),
+            table_field.data_type()
+        )
+    }
+}
+
 impl SchemaAdapter for DefaultSchemaAdapter {
     /// Map a column index in the table schema to a column index in a particular
     /// file schema
@@ -251,18 +270,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
         let (field_mappings, projection) = create_field_mapping(
             file_schema,
             &self.projected_table_schema,
-            |file_field, table_field| {
-                if can_cast_types(file_field.data_type(), table_field.data_type()) {
-                    Ok(true)
-                } else {
-                    plan_err!(
-                        "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
-                        file_field.name(),
-                        file_field.data_type(),
-                        table_field.data_type()
-                    )
-                }
-            },
+            can_cast_field,
         )?;
 
         Ok((
