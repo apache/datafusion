@@ -1181,31 +1181,29 @@ impl DependentJoinTracker {
             for expr in predicate_expr.into_iter() {
                 // exist query may not have any transformed expr
                 // i.e where exists(suquery) => semi join
+
+                let projected_exprs: Vec<Expr> = if pulled_up_projections.is_empty() {
+                    subquery_input_node.plan.expressions()
+                } else {
+                    pulled_up_projections
+                        .iter()
+                        .cloned()
+                        .map(strip_outer_reference)
+                        .collect()
+                };
                 let (transformed, maybe_join_predicate, maybe_post_join_predicate) =
                     extract_join_metadata_from_subquery(
                         expr,
                         &subquery,
-                        &subquery_input_node.plan.expressions(),
+                        &projected_exprs,
                         &subquery_alias,
                         &outer_relations,
                     )?;
 
                 if let Some(transformed) = maybe_join_predicate {
-                    join_predicates.push(strip_outer_reference(transformed));
+                    join_predicates.push(transformed);
                 }
                 if let Some(post_join_expr) = maybe_post_join_predicate {
-                    if post_join_expr
-                        .exists(|e| {
-                            if let Expr::Column(col) = e {
-                                return Ok(col.name == "mark");
-                            }
-                            return Ok(false);
-                        })
-                        .unwrap()
-                    {
-                        // only use mark join if required
-                        join_type = JoinType::LeftMark
-                    }
                     post_join_predicates.push(strip_outer_reference(post_join_expr))
                 }
                 if !transformed {
@@ -1853,7 +1851,7 @@ impl SubqueryType {
                 panic!("not reached")
             }
             SubqueryType::In => JoinType::LeftSemi,
-            SubqueryType::Exists => JoinType::LeftSemi,
+            SubqueryType::Exists => JoinType::LeftMark,
             // TODO: in duckdb, they have JoinType::Single
             // where there is only at most one join partner entry on the LEFT
             SubqueryType::Scalar => JoinType::Left,
@@ -2042,19 +2040,19 @@ mod tests {
     use super::DependentJoinTracker;
     use arrow::datatypes::DataType as ArrowDataType;
     #[test]
-    fn simple_1_level_subquery_in_from_expr() -> Result<()> {
+    fn simple_in_subquery_inside_from_expr() -> Result<()> {
         unimplemented!()
     }
     #[test]
-    fn simple_1_level_subquery_in_selection_expr() -> Result<()> {
+    fn simple_in_subquery_inside_select_expr() -> Result<()> {
         unimplemented!()
     }
     #[test]
-    fn complex_1_level_decorrelate_2_subqueries_at_the_same_level() -> Result<()> {
+    fn one_simple_and_one_complex_subqueries_at_the_same_level() -> Result<()> {
         unimplemented!()
     }
     #[test]
-    fn simple_1_level_decorrelate_2_subqueries_at_the_same_level() -> Result<()> {
+    fn two_simple_subqueries_at_the_same_level() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let in_sq_level1 = Arc::new(
@@ -2102,7 +2100,7 @@ mod tests {
     }
 
     #[test]
-    fn complex_1_level_decorrelate_in_subquery_with_count() -> Result<()> {
+    fn in_subquery_with_count_depth_1() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -2134,9 +2132,7 @@ mod tests {
             .build()?;
         let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
         index.build(input1)?;
-        println!("{:?}", index);
         let new_plan = index.root_dependent_join_elimination()?;
-        println!("{}", new_plan);
         let expected = "\
         Filter: outer_table.a > Int32(1)\
         \n  LeftSemi Join:  Filter: outer_table.c = count_a\
@@ -2149,7 +2145,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn simple_decorrelate_with_exist_subquery_with_dependent_columns() -> Result<()> {
+    fn simple_exist_subquery_with_dependent_columns() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -2179,9 +2175,10 @@ mod tests {
         index.build(input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
-        Filter: outer_table.a > Int32(1) AND __exists_sq_1.mark\
+        Filter: __exists_sq_1.mark\
         \n  LeftMark Join:  Filter: __exists_sq_1.a = outer_table.a AND outer_table.a > __exists_sq_1.c AND outer_table.b = __exists_sq_1.b\
-        \n    TableScan: outer_table\
+        \n    Filter: outer_table.a > Int32(1)\
+        \n      TableScan: outer_table\
         \n    SubqueryAlias: __exists_sq_1\
         \n      Filter: inner_table_lv1.b = Int32(1)\
         \n        TableScan: inner_table_lv1";
@@ -2189,7 +2186,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn simple_decorrelate_with_exist_subquery_no_dependent_column() -> Result<()> {
+    fn simple_exist_subquery_with_no_dependent_columns() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -2206,9 +2203,10 @@ mod tests {
         index.build(input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
-        Filter: outer_table.a > Int32(1) AND __exists_sq_1.mark\
+        Filter: __exists_sq_1.mark\
         \n  LeftMark Join:  Filter: Boolean(true)\
-        \n    TableScan: outer_table\
+        \n    Filter: outer_table.a > Int32(1)\
+        \n      TableScan: outer_table\
         \n    SubqueryAlias: __exists_sq_1\
         \n      Projection: inner_table_lv1.b, inner_table_lv1.a\
         \n        Filter: inner_table_lv1.b = Int32(1)\
@@ -2238,13 +2236,13 @@ mod tests {
         index.build(input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
         let expected = "\
-        Filter: outer_table.a > Int32(1)\
-        \n  LeftSemi Join:  Filter: outer_table.c = __in_sq_1.b\
+        LeftSemi Join:  Filter: outer_table.c = __in_sq_1.b\
+        \n  Filter: outer_table.a > Int32(1)\
         \n    TableScan: outer_table\
-        \n    SubqueryAlias: __in_sq_1\
-        \n      Projection: inner_table_lv1.b\
-        \n        Filter: inner_table_lv1.b = Int32(1)\
-        \n          TableScan: inner_table_lv1";
+        \n  SubqueryAlias: __in_sq_1\
+        \n    Projection: inner_table_lv1.b\
+        \n      Filter: inner_table_lv1.b = Int32(1)\
+        \n        TableScan: inner_table_lv1";
         assert_eq!(expected, format!("{new_plan}"));
         Ok(())
     }
@@ -2282,13 +2280,14 @@ mod tests {
         let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
         index.build(input1)?;
         let new_plan = index.root_dependent_join_elimination()?;
+        println!("{new_plan}");
         let expected = "\
-        Filter: outer_table.a > Int32(1)\
-        \n  LeftSemi Join:  Filter: outer_table.c = outer_table.b AS outer_b_alias AND __in_sq_1.a = outer_table.a AND outer_table.a > __in_sq_1.c AND outer_table.b = __in_sq_1.b\
+        LeftSemi Join:  Filter: outer_table.c = outer_table.b AS outer_b_alias AND __in_sq_1.a = outer_table.a AND outer_table.a > __in_sq_1.c AND outer_table.b = __in_sq_1.b\
+        \n  Filter: outer_table.a > Int32(1)\
         \n    TableScan: outer_table\
-        \n    SubqueryAlias: __in_sq_1\
-        \n      Filter: inner_table_lv1.b = Int32(1)\
-        \n        TableScan: inner_table_lv1";
+        \n  SubqueryAlias: __in_sq_1\
+        \n    Filter: inner_table_lv1.b = Int32(1)\
+        \n      TableScan: inner_table_lv1";
         assert_eq!(expected, format!("{new_plan}"));
         Ok(())
     }
