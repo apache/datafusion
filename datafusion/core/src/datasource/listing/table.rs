@@ -315,7 +315,7 @@ impl ListingOptions {
     /// - use default file extension filter
     /// - no input partition to discover
     /// - one target partition
-    /// - stat collection
+    /// - do not collect statistics
     pub fn new(format: Arc<dyn FileFormat>) -> Self {
         Self {
             file_extension: format.get_ext(),
