@@ -135,6 +135,26 @@ static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         "first_value(expression)",
     )
     .with_argument("expression", "Expression to operate on")
+        .with_sql_example(r#"```sql
+    --Example usage of the first_value window function:
+    SELECT department,
+           employee_id,
+           salary,
+           first_value(salary) OVER (PARTITION BY department ORDER BY salary DESC) AS top_salary
+    FROM employees;
+```
+
+```sql
++-------------+-------------+--------+------------+
+| department  | employee_id | salary | top_salary |
++-------------+-------------+--------+------------+
+| Sales       | 1           | 70000  | 70000      |
+| Sales       | 2           | 50000  | 70000      |
+| Sales       | 3           | 30000  | 70000      |
+| Engineering | 4           | 90000  | 90000      |
+| Engineering | 5           | 80000  | 90000      |
++-------------+-------------+--------+------------+
+```"#)
     .build()
 });
 
@@ -150,6 +170,26 @@ static LAST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         "last_value(expression)",
     )
     .with_argument("expression", "Expression to operate on")
+        .with_sql_example(r#"```sql
+-- SQL example of last_value:
+SELECT department,
+       employee_id,
+       salary,
+       last_value(salary) OVER (PARTITION BY department ORDER BY salary) AS running_last_salary
+FROM employees;
+```
+
+```sql
++-------------+-------------+--------+---------------------+
+| department  | employee_id | salary | running_last_salary |
++-------------+-------------+--------+---------------------+
+| Sales       | 1           | 30000  | 30000               |
+| Sales       | 2           | 50000  | 50000               |
+| Sales       | 3           | 70000  | 70000               |
+| Engineering | 4           | 40000  | 40000               |
+| Engineering | 5           | 60000  | 60000               |
++-------------+-------------+--------+---------------------+
+```"#)
     .build()
 });
 

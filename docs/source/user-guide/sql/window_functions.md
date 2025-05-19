@@ -228,7 +228,7 @@ ntile(expression)
 
 - **expression**: An integer describing the number groups the partition should be split into
 
-#### Exmaple
+#### Example
 
 ```sql
     --Example usage of the ntile window function:
@@ -330,7 +330,7 @@ row_number()
     FROM employees;
 ```
 
-```sql
+````sql
 +-------------+--------+---------+
 | department  | salary | row_num |
 +-------------+--------+---------+
@@ -341,7 +341,8 @@ row_number()
 | Engineering | 90000  | 1       |
 | Engineering | 80000  | 2       |
 +-------------+--------+---------+
-```
+```#
+
 
 ## Analytical Functions
 
@@ -357,7 +358,7 @@ Returns value evaluated at the row that is the first row of the window frame.
 
 ```sql
 first_value(expression)
-```
+````
 
 #### Arguments
 
@@ -433,6 +434,8 @@ last_value(expression)
 
 - **expression**: Expression to operate on
 
+#### Example
+
 ```sql
 -- SQL example of last_value:
 SELECT department,
@@ -467,6 +470,8 @@ lead(expression, offset, default)
 - **expression**: Expression to operate on
 - **offset**: Integer. Specifies how many rows forward the value of expression should be retrieved. Defaults to 1.
 - **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
+
+#### Example
 
 ```sql
 -- Example usage of lead() :
