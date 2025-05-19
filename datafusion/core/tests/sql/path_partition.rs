@@ -431,7 +431,9 @@ async fn parquet_multiple_nonstring_partitions() -> Result<()> {
 
 #[tokio::test]
 async fn parquet_statistics() -> Result<()> {
-    let ctx = SessionContext::new();
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.collect_statistics = true;
+    let ctx = SessionContext::new_with_config(config);
 
     register_partitioned_alltypes_parquet(
         &ctx,
