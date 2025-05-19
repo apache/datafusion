@@ -334,8 +334,8 @@ fn pushdown_requirement_to_children(
         let mut spm_eqs = plan.equivalence_properties().clone();
         let old_ordering = spm_eqs.output_ordering().unwrap();
         // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
-        spm_eqs = spm_eqs.with_reorder(new_ordering)?;
-        if spm_eqs.ordering_satisfy(old_ordering)? {
+        let change = spm_eqs.reorder(new_ordering)?;
+        if !change || spm_eqs.ordering_satisfy(old_ordering)? {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
             Ok(Some(vec![Some(parent_required)]))
@@ -414,11 +414,8 @@ fn try_pushdown_requirements_to_join(
     let ordering = LexOrdering::new(sort_exprs.clone());
     let (new_left_ordering, new_right_ordering) = match push_side {
         JoinSide::Left => {
-            let left_eq_properties = smj
-                .left()
-                .equivalence_properties()
-                .clone()
-                .with_reorder(sort_exprs)?;
+            let mut left_eq_properties = smj.left().equivalence_properties().clone();
+            left_eq_properties.reorder(sort_exprs)?;
             let Some(left_requirement) = smj_required_orderings.swap_remove(0) else {
                 return Ok(None);
             };
@@ -431,11 +428,8 @@ fn try_pushdown_requirements_to_join(
             (ordering.as_ref(), smj.right().output_ordering())
         }
         JoinSide::Right => {
-            let right_eq_properties = smj
-                .right()
-                .equivalence_properties()
-                .clone()
-                .with_reorder(sort_exprs)?;
+            let mut right_eq_properties = smj.right().equivalence_properties().clone();
+            right_eq_properties.reorder(sort_exprs)?;
             let Some(right_requirement) = smj_required_orderings.swap_remove(1) else {
                 return Ok(None);
             };
@@ -462,7 +456,7 @@ fn try_pushdown_requirements_to_join(
     let mut smj_eqs = smj.properties().equivalence_properties().clone();
     if let Some(new_output_ordering) = new_output_ordering {
         // smj will have this ordering when its input changes.
-        smj_eqs = smj_eqs.with_reorder(new_output_ordering)?;
+        smj_eqs.reorder(new_output_ordering)?;
     }
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required)?;
     Ok(should_pushdown.then(|| {

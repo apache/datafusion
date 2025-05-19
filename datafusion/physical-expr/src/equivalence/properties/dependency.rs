@@ -922,10 +922,12 @@ mod tests {
             Field::new("b", DataType::Utf8, true),
             Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
         ]));
-        let base_properties = EquivalenceProperties::new(Arc::clone(&schema))
-            .with_reorder(["a", "b", "c"].into_iter().map(|c| {
-                PhysicalSortExpr::new_default(col(c, schema.as_ref()).unwrap())
-            }))?;
+        let mut base_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        base_properties.reorder(
+            ["a", "b", "c"]
+                .into_iter()
+                .map(|c| PhysicalSortExpr::new_default(col(c, schema.as_ref()).unwrap())),
+        )?;
 
         struct TestCase {
             name: &'static str,
@@ -1198,11 +1200,11 @@ mod tests {
             PhysicalSortExpr::new_default(Arc::clone(&col_b)),
         ];
 
-        let result = eq_properties.with_reorder(sort_exprs)?;
+        let change = eq_properties.reorder(sort_exprs)?;
+        assert!(change);
 
-        // Should only contain b since a is constant
-        assert_eq!(result.oeq_class().len(), 1);
-        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(eq_properties.oeq_class().len(), 1);
+        let ordering = eq_properties.oeq_class().iter().next().unwrap();
         assert_eq!(ordering.len(), 2);
         assert!(ordering[0].expr.eq(&col_a));
         assert!(ordering[1].expr.eq(&col_b));
@@ -1235,11 +1237,12 @@ mod tests {
         // New ordering: [a ASC]
         let new_order = vec![PhysicalSortExpr::new(Arc::clone(&col_a), asc)];
 
-        let result = eq_properties.with_reorder(new_order)?;
+        let change = eq_properties.reorder(new_order)?;
+        assert!(!change);
 
         // Should only contain [a ASC, b DESC, c ASC]
-        assert_eq!(result.oeq_class().len(), 1);
-        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(eq_properties.oeq_class().len(), 1);
+        let ordering = eq_properties.oeq_class().iter().next().unwrap();
         assert_eq!(ordering.len(), 3);
         assert!(ordering[0].expr.eq(&col_a));
         assert!(ordering[0].options.eq(&asc));
@@ -1272,14 +1275,15 @@ mod tests {
         // New ordering: [b ASC]
         let new_order = vec![PhysicalSortExpr::new_default(Arc::clone(&col_b))];
 
-        let result = eq_properties.with_reorder(new_order)?;
+        let change = eq_properties.reorder(new_order)?;
 
+        assert!(!change);
         // Should only contain [a/b ASC, c ASC]
-        assert_eq!(result.oeq_class().len(), 1);
+        assert_eq!(eq_properties.oeq_class().len(), 1);
 
         // Verify orderings
         let asc = SortOptions::default();
-        let ordering = result.oeq_class().iter().next().unwrap();
+        let ordering = eq_properties.oeq_class().iter().next().unwrap();
         assert_eq!(ordering.len(), 2);
         assert!(ordering[0].expr.eq(&col_a) || ordering[0].expr.eq(&col_b));
         assert!(ordering[0].options.eq(&asc));
@@ -1312,11 +1316,12 @@ mod tests {
         // New ordering: [a DESC]
         let new_order = vec![PhysicalSortExpr::new(Arc::clone(&col_a), desc)];
 
-        let result = eq_properties.with_reorder(new_order.clone())?;
+        let change = eq_properties.reorder(new_order.clone())?;
 
+        assert!(change);
         // Should only contain the new ordering since options don't match
-        assert_eq!(result.oeq_class().len(), 1);
-        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(eq_properties.oeq_class().len(), 1);
+        let ordering = eq_properties.oeq_class().iter().next().unwrap();
         assert_eq!(ordering.to_vec(), new_order);
 
         Ok(())
@@ -1355,9 +1360,10 @@ mod tests {
         ];
 
         let old_orderings = eq_properties.oeq_class().clone();
-        let result = eq_properties.with_reorder(new_order)?;
+        let change = eq_properties.reorder(new_order)?;
         // Original orderings should be preserved:
-        assert_eq!(result.oeq_class, old_orderings);
+        assert!(!change);
+        assert_eq!(eq_properties.oeq_class, old_orderings);
 
         Ok(())
     }

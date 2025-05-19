@@ -373,25 +373,27 @@ impl EquivalenceProperties {
     }
 
     /// Updates the ordering equivalence class within assuming that the table
-    /// is re-sorted according to the argument `ordering`. Note that equivalence
-    /// classes (and constants) do not change as they are unaffected by a re-sort.
-    /// If the given ordering is already satisfied, the function does nothing.
-    pub fn with_reorder(
-        mut self,
+    /// is re-sorted according to the argument `ordering`, and returns whether
+    /// this operation resulted in any change. Note that equivalence classes
+    /// (and constants) do not change as they are unaffected by a re-sort. If
+    /// the given ordering is already satisfied, the function does nothing.
+    pub fn reorder(
+        &mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
-    ) -> Result<Self> {
+    ) -> Result<bool> {
         let (ordering, ordering_tee) = ordering.into_iter().tee();
         // First, standardize the given ordering:
         let Some(normal_ordering) = self.normalize_sort_exprs(ordering) else {
             // If the ordering vanishes after normalization, it is satisfied:
-            return Ok(self);
+            return Ok(false);
         };
         if normal_ordering.len() != self.common_sort_prefix_length(normal_ordering)? {
             // If the ordering is unsatisfied, replace existing orderings:
             self.clear_orderings();
             self.add_ordering(ordering_tee);
+            return Ok(true);
         }
-        Ok(self)
+        Ok(false)
     }
 
     /// Normalizes the given sort expressions (i.e. `sort_exprs`) using the

@@ -1108,10 +1108,8 @@ impl SortExec {
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
-        let eq_properties = input
-            .equivalence_properties()
-            .clone()
-            .with_reorder(sort_exprs)?;
+        let mut eq_properties = input.equivalence_properties().clone();
+        eq_properties.reorder(sort_exprs)?;
 
         // Get output partitioning:
         let output_partitioning =
