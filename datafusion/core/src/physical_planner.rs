@@ -1113,8 +1113,6 @@ impl DefaultPhysicalPlanner {
                     && !prefer_hash_join
                 {
                     // Use SortMergeJoin if hash join is not preferred
-                    // Sort-Merge join support currently is experimental
-
                     let join_on_len = join_on.len();
                     Arc::new(SortMergeJoinExec::try_new(
                         physical_left,
