@@ -289,7 +289,7 @@ impl SimpleDecorrelationResult {
     // because we don't track which expr was pullled up for which relation to give alias for
     fn rewrite_all_pulled_up_expr(
         &mut self,
-        subquery_node_alias_map: &IndexMap<String, &Node>,
+        subquery_node_alias_map: &IndexMap<String, Node>,
         outer_relations: &[String],
     ) -> Result<()> {
         let alias_by_subquery_node_id: IndexMap<usize, &String> = subquery_node_alias_map
@@ -593,7 +593,7 @@ impl DependentJoinTracker {
                 // in this case outer.col_a=1 is pull up, but the access tracker must remain
                 // so later on we can tell "simple approach" is not enough, and continue with
                 // the "general approach".
-                let removable = kept.iter().all(|e| {
+                let can_pull_up = kept.iter().all(|e| {
                     !e.exists(|e| {
                         if let Expr::Column(col) = e {
                             return Ok(*col == col_access.col);
@@ -602,9 +602,10 @@ impl DependentJoinTracker {
                     })
                     .unwrap()
                 });
-                if removable {
-                    root_node.access_tracker.swap_remove(col_access);
+                if !can_pull_up {
+                    return Ok(());
                 }
+                root_node.access_tracker.swap_remove(col_access);
                 result
                     .pulled_up_predicates
                     .extend(pulled_up.iter().map(|e| PulledUpExpr {
@@ -925,6 +926,74 @@ impl DependentJoinTracker {
         }
     }
 
+    // Rewrite from
+    // TopNodeParent
+    // |
+    // TopNode
+    // |-SubqueryNode -----> This was decorelated
+    // |    |- SubqueryInputNode
+    // |-SubqueryNode2
+    // |-SomeTableScan
+    //
+    // Into
+    // TopNodeParent
+    // |
+    // NewTopNode <-------- This was added
+    // |
+    // |----TopNode
+    // |    |-SubqueryNode2
+    // |    |-SomeTableScan
+    // |
+    // |----SubqueryInputNode
+    fn create_new_top_node<'a>(
+        &'a mut self,
+        new_plan: LogicalPlan,
+        current_top_node: &mut Node,
+        mut subquery_input_node: Node,
+        post_join_predicates: Option<Expr>,
+    ) -> Result<Node> {
+        let mut new_node = self.new_empty_node(new_plan);
+
+        if let Some(parent) = current_top_node.parent {
+            unimplemented!()
+        }
+        subquery_input_node.parent = Some(new_node.id);
+        new_node.children = vec![current_top_node.id, subquery_input_node.id];
+        let mut node_id = new_node.id;
+        if let Some(expr) = post_join_predicates {
+            let new_plan = LogicalPlanBuilder::new(new_node.plan.clone())
+                .filter(expr)?
+                .build()?;
+            let new_node = self.new_empty_node(new_plan);
+            new_node.parent = Some(node_id);
+            new_node.children = vec![node_id];
+            node_id = new_node.id;
+        }
+
+        self.root = Some(node_id);
+        self.nodes
+            .insert(subquery_input_node.id, subquery_input_node);
+
+        Ok(self.nodes.swap_remove(&node_id).unwrap())
+    }
+    fn new_empty_node<'a>(&'a mut self, plan: LogicalPlan) -> &'a mut Node {
+        self.current_id = self.current_id + 1;
+        let node_id = self.current_id;
+        let new_node = Node {
+            id: node_id,
+            plan,
+            parent: None,
+            is_subquery_node: false,
+            is_dependent_join_node: false,
+            children: vec![],
+            access_tracker: IndexSet::new(),
+            subquery_type: SubqueryType::None,
+            correlated_relations: IndexSet::new(),
+        };
+        self.nodes.insert(node_id, new_node);
+        self.nodes.get_mut(&node_id).unwrap()
+    }
+
     // this function is aware that multiple subqueries may exist inside the filter predicate
     // and it tries it best to decorrelate all possible exprs, while leave the un-correlatable
     // expr untouched
@@ -932,14 +1001,18 @@ impl DependentJoinTracker {
     // Example of such expression
     // `select * from outer_table where exists(select * from inner_table where ...) & col_b < complex_subquery`
     // the relationship tree looks like this
-    //      [1]dependent_join_node (filter exists(select * from inner_table where ...) & col_b < complex_subquery)
+    //     [0] some parent node
+    //     |
+    //     -[1]dependent_join_node (filter exists(select * from inner_table where ...) & col_b < complex_subquery)
     //      |
     //      |- [2]simple_subquery
     //      |- [3]complex_subquery
     //      |- [4]outer_table scan
     // After decorrelation, the relationship tree may be translated using 2 approaches
     // Approach 1: Replace the left side of the join using the new input
-    //      [1]dependent_join_node (filter col_b < complex_subquery)
+    //     [0] some parent node
+    //     |
+    //     -[1]dependent_join_node (filter col_b < complex_subquery)
     //      |
     //      |- [2]REMOVED
     //      |- [3]complex_subquery
@@ -949,7 +1022,10 @@ impl DependentJoinTracker {
     //
     // Approach 2: Keep everything except for the decorrelated expressions,
     // and add a new join above the original dependent join
-    //      [NEW_NODE_ID] markjoin <----------------- This was added
+    //     [0] some parent node
+    //     |
+    //     -[NEW_NODE_ID] markjoin <----------------- This was added
+    //      |
     //      |-inner_table scan
     //      |-[1]dependent_join_node (filter col_b < complex_subquery)
     //        |
@@ -958,19 +1034,27 @@ impl DependentJoinTracker {
     //        |- [4]outer_table scan
     // The following uses approach 2
     //
-    // This function will returns a new Node object that is supposed to be the new root of the tree
+    // If decorrelation happen, this function will returns a new Node object that is supposed to be the new root of the tree
     fn build_join_from_simple_decorrelation_result_filter(
-        &self,
-        dependent_join_node: &mut Node,
+        &mut self,
+        mut dependent_join_node: Node,
         outer_relations: &[String],
         ret: &mut SimpleDecorrelationResult,
-        mut filter: Filter,
-    ) -> Result<Node> {
-        let subquery_node_ids = self.get_children_subquery_ids(dependent_join_node);
-        let subquery_node_alias_map: IndexMap<String, &Node> = subquery_node_ids
+    ) -> Result<()> {
+        let still_correlated_sq_ids: Vec<usize> = dependent_join_node
+            .access_tracker
             .iter()
+            .map(|ac| ac.stack[1])
+            .unique()
+            .collect();
+
+        let decorrelated_sq_ids = self
+            .get_children_subquery_ids(&dependent_join_node)
+            .into_iter()
+            .filter(|n| still_correlated_sq_ids.contains(n));
+        let subquery_node_alias_map: IndexMap<String, Node> = decorrelated_sq_ids
             .map(|id| {
-                let subquery_node = self.nodes.get(id).unwrap();
+                let subquery_node = self.nodes.swap_remove(&id).unwrap();
                 let subquery_alias = self
                     .alias_generator
                     .next(&subquery_node.subquery_type.prefix());
@@ -979,10 +1063,43 @@ impl DependentJoinTracker {
             .collect();
 
         ret.rewrite_all_pulled_up_expr(&subquery_node_alias_map, &outer_relations)?;
-        for (subquery_alias, subquery_node) in subquery_node_alias_map.iter() {
-            let input_plan = filter.input.as_ref().clone();
+        let mut pullup_projection_by_sq_id: IndexMap<usize, Vec<Expr>> = ret
+            .pulled_up_projections
+            .iter()
+            .fold(IndexMap::<usize, Vec<Expr>>::new(), |mut acc, e| {
+                acc.entry(e.subquery_node_id)
+                    .or_default()
+                    .push(e.expr.clone());
+                acc
+            });
+        let mut pullup_predicate_by_sq_id: IndexMap<usize, Vec<Expr>> = ret
+            .pulled_up_predicates
+            .iter()
+            .fold(IndexMap::<usize, Vec<Expr>>::new(), |mut acc, e| {
+                acc.entry(e.subquery_node_id)
+                    .or_default()
+                    .push(e.expr.clone());
+                acc
+            });
+        let mut filter =
+            if let LogicalPlan::Filter(filter) = dependent_join_node.plan.clone() {
+                filter
+            } else {
+                return internal_err!("dependent join node is not a filter");
+            };
+
+        let dependent_join_node_id = dependent_join_node.id;
+        let mut top_node = dependent_join_node;
+
+        for (subquery_alias, subquery_node) in subquery_node_alias_map {
+            let subquery_input_node = self
+                .nodes
+                .swap_remove(subquery_node.children.first().unwrap())
+                .unwrap();
+            let subquery_input_plan = subquery_input_node.plan.clone();
             let mut join_predicates = vec![];
             let mut post_join_predicates = vec![]; // this loop heavily assume that all subqueries belong to the same `dependent_join_node`
+            let mut remained_predicates = vec![];
             let sq_type = subquery_node.subquery_type;
             let subquery = if let LogicalPlan::Subquery(subquery) = &subquery_node.plan {
                 Ok(subquery)
@@ -991,34 +1108,16 @@ impl DependentJoinTracker {
                     "object construction error: subquery.plan is not with type Subquery"
                 )
             }?;
-            let subquery_children = self
-                .nodes
-                .get(subquery_node.children.first().unwrap())
-                .unwrap()
-                .plan
-                .clone();
+            let mut join_type = sq_type.default_join_type();
 
             let predicate_expr = split_conjunction(&filter.predicate);
 
-            // maybe we also need to collect join columns here
-            // TODO: we need to also pull up projectoin to support subqueries that appear
-            // in select expressions
-            let pulled_projection: Vec<Expr> = ret
-                .pulled_up_projections
-                .iter()
-                .cloned()
-                .map(|pe| strip_outer_reference(pe.expr))
-                .collect();
-            let right_exprs: Vec<Expr> = if ret.pulled_up_projections.is_empty() {
-                subquery_children.expressions()
-            } else {
-                ret.pulled_up_projections
-                    .iter()
-                    .cloned()
-                    .map(|pe| strip_outer_reference(pe.expr))
-                    .collect()
-            };
-            let mut join_type = sq_type.default_join_type();
+            let pulled_up_projections = pullup_projection_by_sq_id
+                .swap_remove(&subquery_node.id)
+                .unwrap_or(vec![]);
+            let pulled_up_predicates = pullup_predicate_by_sq_id
+                .swap_remove(&subquery_node.id)
+                .unwrap_or(vec![]);
 
             for expr in predicate_expr.into_iter() {
                 // exist query may not have any transformed expr
@@ -1027,13 +1126,13 @@ impl DependentJoinTracker {
                     extract_join_metadata_from_subquery(
                         expr,
                         &subquery,
-                        &right_exprs,
+                        &subquery_input_plan.expressions(),
                         &subquery_alias,
                         &outer_relations,
                     )?;
 
                 if let Some(transformed) = maybe_join_predicate {
-                    join_predicates.push(transformed)
+                    join_predicates.push(strip_outer_reference(transformed));
                 }
                 if let Some(post_join_expr) = maybe_post_join_predicate {
                     if post_join_expr
@@ -1048,23 +1147,23 @@ impl DependentJoinTracker {
                         // only use mark join if required
                         join_type = JoinType::LeftMark
                     }
-                    post_join_predicates.push(post_join_expr)
+                    post_join_predicates.push(strip_outer_reference(post_join_expr))
                 }
                 if !transformed {
-                    post_join_predicates.push(expr.clone())
+                    remained_predicates.push(expr.clone());
                 }
             }
-            let new_predicates = ret
-                .pulled_up_predicates
-                .iter()
-                .map(|e| strip_outer_reference(e.expr.clone()));
 
-            join_predicates.extend(new_predicates);
+            join_predicates
+                .extend(pulled_up_predicates.into_iter().map(strip_outer_reference));
+            filter.predicate = conjunction(remained_predicates).unwrap();
 
-            let mut right = LogicalPlanBuilder::new(subquery_children)
+            // building new join node
+            // let left = top_node.plan.clone();
+            let mut right = LogicalPlanBuilder::new(subquery_input_plan)
                 .alias(subquery_alias)?
                 .build()?;
-            let mut builder = LogicalPlanBuilder::new(*filter.input);
+            let mut builder = LogicalPlanBuilder::empty(false);
 
             builder = if join_predicates.is_empty() {
                 builder.join_on(right, join_type, vec![lit(true)])?
@@ -1077,24 +1176,48 @@ impl DependentJoinTracker {
                 )?
             };
 
-            if post_join_predicates.len() > 0 {
-                builder = builder.filter(conjunction(post_join_predicates).unwrap())?
-            }
-            let temp_plan = builder.build()?;
-            filter.input = Arc::new(temp_plan);
-            // self.remove_node(parent, node);
-            // TODO: filter predicate is kept
-            // remove this subquery node from the map
-            // remove this subquery node from the current dependent join node
-            // update the dependent join node input
-            println!("temp plan\n{}", plan);
+            let new_plan = builder.build()?;
+            let new_top_node = self.create_new_top_node(
+                new_plan,
+                &mut top_node,
+                subquery_input_node,
+                conjunction(post_join_predicates),
+                // TODO: post join projection
+            )?;
+            self.nodes.insert(top_node.id, top_node);
+            top_node = new_top_node;
         }
-        Ok(plan)
+        self.nodes.insert(top_node.id, top_node);
+        self.nodes.get_mut(&dependent_join_node_id).unwrap().plan =
+            LogicalPlan::Filter((filter));
+
+        Ok(())
+    }
+    fn rewrite_node(&mut self, node_id: usize) -> Result<LogicalPlan> {
+        let mut node = self.nodes.swap_remove(&node_id).unwrap();
+        assert!(
+            !node.is_subquery_node,
+            "calling on rewrite_node while still exists subquery in the tree"
+        );
+        if node.children.is_empty() {
+            return Ok(node.plan);
+        }
+        let new_children = node
+            .children
+            .iter()
+            .map(|c| self.rewrite_node(*c))
+            .collect::<Result<Vec<LogicalPlan>>>()?;
+        node.plan
+            .with_new_exprs(node.plan.expressions(), new_children)
+    }
+
+    fn rewrite_from_root(&mut self) -> Result<LogicalPlan> {
+        self.rewrite_node(self.root.unwrap())
     }
 
     fn build_join_from_simple_decorrelation_result(
-        &self,
-        dependent_join_node: &mut Node,
+        &mut self,
+        mut dependent_join_node: Node,
         ret: &mut SimpleDecorrelationResult,
     ) -> Result<LogicalPlan> {
         let outer_relations: Vec<String> = dependent_join_node
@@ -1104,13 +1227,14 @@ impl DependentJoinTracker {
             .collect();
 
         match dependent_join_node.plan.clone() {
-            LogicalPlan::Filter(filter) => self
-                .build_join_from_simple_decorrelation_result_filter(
+            LogicalPlan::Filter(filter) => {
+                self.build_join_from_simple_decorrelation_result_filter(
                     dependent_join_node,
                     &outer_relations,
                     ret,
-                    filter,
-                ),
+                )?;
+                self.rewrite_from_root()
+            }
             _ => {
                 unimplemented!()
             }
@@ -1156,7 +1280,8 @@ impl DependentJoinTracker {
             pulled_up_projections: IndexSet::new(),
         };
 
-        self.simple_decorrelation(&mut dependent_join_node, &mut simple_unnesting)?;
+        dependent_join_node =
+            self.simple_decorrelation(dependent_join_node, &mut simple_unnesting)?;
         if dependent_join_node.access_tracker.is_empty() {
             if parent.is_some() {
                 // for each projection of outer column moved up by simple_decorrelation
@@ -1169,10 +1294,7 @@ impl DependentJoinTracker {
                 )?;
                 return Ok(dependent_join_node.plan.clone());
             }
-            return self.build_join_from_simple_decorrelation_result(
-                &mut dependent_join_node,
-                &mut simple_unnesting,
-            );
+            return self.rewrite_from_root();
         } else {
             // TODO: some of the expr was removed and expect to be pulled up in a best effort fashion
             // (i.e partially decorrelate)
@@ -1413,11 +1535,17 @@ impl DependentJoinTracker {
         self.nodes.get(node_id).unwrap().clone()
     }
 
+    // Decorrelate the current node using `simple` approach.
+    // It will consume the node and returns a new node where the decorrelatoin should continue
+    // using `general` approach, should `simple` approach is not sufficient.
+    // Most of the time the same Node is returned, avoid using &mut Node because of borrow checker
+    // Beware that after calling this function, the root node may be changed (as new join node being added to the top)
     fn simple_decorrelation(
         &mut self,
-        node: &mut Node,
+        mut node: Node,
         simple_unnesting: &mut SimpleDecorrelationResult,
-    ) -> Result<()> {
+    ) -> Result<Node> {
+        let node_id = node.id;
         // the iteration should happen with the order of bottom up, so any node pull up won't
         // affect its children (by accident)
         let accesses_bottom_up = node.access_tracker.clone().sorted_by(|a, b| {
@@ -1433,17 +1561,17 @@ impl DependentJoinTracker {
             // let mut descendent = self.get_node_uncheck(&col_access.node_id);
             let mut descendent = self.nodes.swap_remove(&col_access.node_id).unwrap();
             self.try_simple_decorrelate_descendent(
-                node,
+                &mut node,
                 &mut descendent,
                 &col_access,
                 simple_unnesting,
             )?;
             // TODO: find a nicer way to do in-place update
-            // self.nodes.insert(node_id, parent_node.clone());
             self.nodes.insert(col_access.node_id, descendent);
         }
+        self.build_join_from_simple_decorrelation_result(node, simple_unnesting)?;
 
-        Ok(())
+        Ok(self.nodes.swap_remove(&node_id).unwrap())
     }
 }
 
@@ -2113,21 +2241,3 @@ mod tests {
         Ok(())
     }
 }
-
-// filter col < subquery1 & col < subquery 2
-//     1.subquery
-//         (table inner scan)
-//     ------------------
-//         post joint
-//             join
-//                 table scan
-//                 inner table scan
-//         items todo:
-//         create a new plan, set this new plan = parent's input
-//         replace parent's last children with this plan
-
-//         create new operator and replace parent's last children
-//         maybe invoke indexing for this new branch
-
-//     2.subquery2
-//     3.table scan
