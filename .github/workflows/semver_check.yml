@@ -39,11 +39,14 @@ jobs:
   semver-checks:
     runs-on: ubuntu-latest
     continue-on-error: true
+    container:
+      image: amd64/rust
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v4
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       - name: Install semver-checks
         run: cargo install cargo-semver-checks --locked
       - name: Run semver-check datasource
@@ -74,11 +77,14 @@ jobs:
   semver-checks-2:
     runs-on: ubuntu-latest
     continue-on-error: true
+    container:
+      image: amd64/rust
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v4
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       - name: Install semver-checks
         run: cargo install cargo-semver-checks --locked
       - name: Run semver-check physical-plan
