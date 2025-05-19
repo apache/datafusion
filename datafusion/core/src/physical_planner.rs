@@ -1757,6 +1757,12 @@ impl DefaultPhysicalPlanner {
             )));
         }
 
+        if !e.logical_optimization_succeeded {
+            if let Some(plan) = e.stringified_plans.last() {
+                return exec_err!("{}", plan.plan);
+            }
+        }
+
         // The indent mode is quite sophisticated, and handles quite a few
         // different cases / options for displaying the plan.
         if !config.physical_plan_only {
@@ -2192,7 +2198,9 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
+    use datafusion_common::{
+        assert_contains, DFSchemaRef, TableReference, ToDFSchema as _,
+    };
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
@@ -2687,6 +2695,46 @@ mod tests {
                 displayable(plan.as_ref()).indent(true)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_explain_indent_err() {
+        let planner = DefaultPhysicalPlanner::default();
+        let ctx = SessionContext::new();
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+        let plan = Arc::new(
+            scan_empty(Some("employee"), &schema, None)
+                .unwrap()
+                .explain(true, false)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Create a schema
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("plan_type", DataType::Utf8, false),
+            Field::new("plan", DataType::Utf8, false),
+        ]));
+
+        // Create invalid indentation in the plan
+        let stringified_plans =
+            vec![StringifiedPlan::new(PlanType::FinalLogicalPlan, "Test Err")];
+
+        let explain = Explain {
+            verbose: false,
+            explain_format: ExplainFormat::Indent,
+            plan,
+            stringified_plans,
+            schema: schema.to_dfschema_ref().unwrap(),
+            logical_optimization_succeeded: false,
+        };
+        let result = planner.handle_explain(&explain, &ctx.state()).await;
+
+        // Verify that the execution fails due to indentation error
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.to_string(), "Execution error: Test Err");
     }
 
     #[tokio::test]
