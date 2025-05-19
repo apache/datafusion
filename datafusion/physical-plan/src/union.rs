@@ -513,7 +513,12 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
 
     let fields = (0..first_schema.fields().len())
         .map(|i| {
-            inputs
+            // We take the name from the left side of the union to match how names are coerced during logical planning,
+            // which also uses the left side names.
+            let base_field = first_schema.field(i).clone();
+
+            // Coerce metadata and nullability across all inputs
+            let merged_field = inputs
                 .iter()
                 .enumerate()
                 .map(|(input_idx, input)| {
@@ -535,6 +540,9 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
                 // We can unwrap this because if inputs was empty, this would've already panic'ed when we
                 // indexed into inputs[0].
                 .unwrap()
+                .with_name(base_field.name());
+
+            merged_field
         })
         .collect::<Vec<_>>();
 

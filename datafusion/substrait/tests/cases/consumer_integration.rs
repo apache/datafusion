@@ -560,4 +560,26 @@ mod tests {
                         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_multiple_unions() -> Result<()> {
+        let plan_str = test_plan_to_string("multiple_unions.json").await?;
+        assert_snapshot!(
+        plan_str,
+        @"Projection: Utf8(\"people\") AS product_category, Utf8(\"people\")__temp__0 AS product_type, product_key\
+        \n  Union\
+        \n    Projection: Utf8(\"people\"), Utf8(\"people\") AS Utf8(\"people\")__temp__0, sales.product_key\
+        \n      Left Join: sales.product_key = food.@food_id\
+        \n        TableScan: sales\
+        \n        TableScan: food\
+        \n    Union\
+        \n      Projection: people.$f3, people.$f5, people.product_key0\
+        \n        Left Join: people.product_key0 = food.@food_id\
+        \n          TableScan: people\
+        \n          TableScan: food\
+        \n      TableScan: more_products"
+        );
+
+        Ok(())
+    }
 }
