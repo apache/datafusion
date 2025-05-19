@@ -929,10 +929,10 @@ impl DependentJoinTracker {
     // Rewrite from
     // TopNodeParent
     // |
-    // TopNode
+    // (current_top_node)
     // |-SubqueryNode -----> This was decorelated
-    // |    |- SubqueryInputNode
-    // |-SubqueryNode2
+    // |    |- (subquery_input_node)
+    // |-SubqueryNode2 -----> This is not yet decorrelated
     // |-SomeTableScan
     //
     // Into
@@ -940,60 +940,112 @@ impl DependentJoinTracker {
     // |
     // NewTopNode <-------- This was added
     // |
-    // |----TopNode
+    // |----(current_top_node)
     // |    |-SubqueryNode2
     // |    |-SomeTableScan
     // |
-    // |----SubqueryInputNode
-    fn create_new_top_node<'a>(
+    // |----(subquery_input_node)
+    fn create_new_join_node_on_top<'a>(
         &'a mut self,
-        new_plan: LogicalPlan,
+        subquery_alias: String,
+        join_type: JoinType,
         current_top_node: &mut Node,
-        mut subquery_input_node: Node,
+        subquery_input_node: Node,
+        join_predicates: Vec<Expr>,
         post_join_predicates: Option<Expr>,
     ) -> Result<Node> {
-        let mut new_node = self.new_empty_node(new_plan);
-        let parent = current_top_node.parent.clone();
-        let previous_node_id = new_node.id;
+        self.nodes
+            .insert(subquery_input_node.id, subquery_input_node.clone());
+        // Build the join node
+        let mut right = LogicalPlanBuilder::new(subquery_input_node.plan.clone())
+            .alias(subquery_alias)?
+            .build()?;
+        let alias_node = self.insert_node_and_links(
+            right.clone(),
+            0,
+            None,
+            vec![subquery_input_node.id],
+        );
+        let right_node_id = alias_node.id;
+        // the left input does not matter, because later on the rewritting will happen using the pointers
+        // from top node, following the children using Node.chilren field
+        let mut builder = LogicalPlanBuilder::empty(false);
 
-        subquery_input_node.parent = Some(new_node.id);
-        new_node.children = vec![current_top_node.id, subquery_input_node.id];
-        let mut node_id = new_node.id;
+        builder = if join_predicates.is_empty() {
+            builder.join_on(right, join_type, vec![lit(true)])?
+        } else {
+            builder.join_on(
+                right,
+                // TODO: join type based on filter condition
+                join_type,
+                join_predicates,
+            )?
+        };
+
+        let join_node = builder.build()?;
+
+        let upper_most_parent = current_top_node.parent.clone();
+        let mut new_node = self.insert_node_and_links(
+            join_node,
+            current_top_node.id,
+            upper_most_parent,
+            vec![current_top_node.id, right_node_id],
+        );
+        current_top_node.parent = Some(new_node.id);
+
+        let mut new_node_id = new_node.id;
         if let Some(expr) = post_join_predicates {
             let new_plan = LogicalPlanBuilder::new(new_node.plan.clone())
                 .filter(expr)?
                 .build()?;
-            let new_node = self.new_empty_node(new_plan);
-            new_node.parent = Some(node_id);
-            new_node.children = vec![node_id];
-            node_id = new_node.id;
+            let new_node = self.insert_node_and_links(
+                new_plan,
+                new_node_id,
+                upper_most_parent,
+                vec![new_node_id],
+            );
+            new_node_id = new_node.id;
         }
-        if let Some(parent) = parent {
-            let parent_node = self.nodes.get_mut(&parent).unwrap();
-            for child_id in parent_node.children.iter_mut() {
-                if *child_id == previous_node_id {
+
+        self.root = Some(new_node_id);
+
+        Ok(self.nodes.swap_remove(&new_node_id).unwrap())
+    }
+
+    // insert a new node, if any link of parent, children is mentioned
+    // also update the relationship in these remote nodes
+    fn insert_node_and_links<'a>(
+        &'a mut self,
+        plan: LogicalPlan,
+        // which node id in the parent should be replaced by this new node
+        swapped_node_id: usize,
+        parent: Option<usize>,
+        children: Vec<usize>,
+    ) -> &'a mut Node {
+        self.current_id = self.current_id + 1;
+        let node_id = self.current_id;
+
+        // update parent
+        if let Some(parent_id) = parent {
+            for child_id in self.nodes.get_mut(&parent_id).unwrap().children.iter_mut() {
+                if *child_id == swapped_node_id {
                     *child_id = node_id;
                 }
             }
-            current_top_node.parent = Some(parent);
+        }
+        for child_id in children.iter() {
+            if let Some(node) = self.nodes.get_mut(child_id) {
+                node.parent = Some(node_id);
+            }
         }
 
-        self.root = Some(node_id);
-        self.nodes
-            .insert(subquery_input_node.id, subquery_input_node);
-
-        Ok(self.nodes.swap_remove(&node_id).unwrap())
-    }
-    fn new_empty_node<'a>(&'a mut self, plan: LogicalPlan) -> &'a mut Node {
-        self.current_id = self.current_id + 1;
-        let node_id = self.current_id;
         let new_node = Node {
             id: node_id,
             plan,
-            parent: None,
+            parent,
             is_subquery_node: false,
             is_dependent_join_node: false,
-            children: vec![],
+            children,
             access_tracker: IndexSet::new(),
             subquery_type: SubqueryType::None,
             correlated_relations: IndexSet::new(),
@@ -1103,7 +1155,7 @@ impl DependentJoinTracker {
                 .nodes
                 .swap_remove(subquery_node.children.first().unwrap())
                 .unwrap();
-            let subquery_input_plan = subquery_input_node.plan.clone();
+            // let subquery_input_plan = subquery_input_node.plan.clone();
             let mut join_predicates = vec![];
             let mut post_join_predicates = vec![]; // this loop heavily assume that all subqueries belong to the same `dependent_join_node`
             let mut remained_predicates = vec![];
@@ -1133,7 +1185,7 @@ impl DependentJoinTracker {
                     extract_join_metadata_from_subquery(
                         expr,
                         &subquery,
-                        &subquery_input_plan.expressions(),
+                        &subquery_input_node.plan.expressions(),
                         &subquery_alias,
                         &outer_relations,
                     )?;
@@ -1167,27 +1219,12 @@ impl DependentJoinTracker {
 
             // building new join node
             // let left = top_node.plan.clone();
-            let mut right = LogicalPlanBuilder::new(subquery_input_plan)
-                .alias(subquery_alias)?
-                .build()?;
-            let mut builder = LogicalPlanBuilder::empty(false);
-
-            builder = if join_predicates.is_empty() {
-                builder.join_on(right, join_type, vec![lit(true)])?
-            } else {
-                builder.join_on(
-                    right,
-                    // TODO: join type based on filter condition
-                    join_type,
-                    join_predicates,
-                )?
-            };
-
-            let new_plan = builder.build()?;
-            let new_top_node = self.create_new_top_node(
-                new_plan,
+            let new_top_node = self.create_new_join_node_on_top(
+                subquery_alias,
+                join_type,
                 &mut top_node,
                 subquery_input_node,
+                join_predicates,
                 conjunction(post_join_predicates),
                 // TODO: post join projection
             )?;
@@ -2053,11 +2090,13 @@ mod tests {
         \n    LeftMark Join:  Filter: Boolean(true)\
         \n      Filter: outer_table.a > Int32(1)\
         \n        TableScan: outer_table\
-        \n      Filter: inner_table_lv1.a AND inner_table_lv1.b = Int32(1)\
-        \n        TableScan: inner_table_lv1\
-        \n  Projection: inner_table_lv1.a\
-        \n    Filter: inner_table_lv1.c = Int32(2)\
-        \n      TableScan: inner_table_lv1";
+        \n      SubqueryAlias: __exists_sq_1\
+        \n        Filter: inner_table_lv1.a AND inner_table_lv1.b = Int32(1)\
+        \n          TableScan: inner_table_lv1\
+        \n  SubqueryAlias: __in_sq_2\
+        \n    Projection: inner_table_lv1.a\
+        \n      Filter: inner_table_lv1.c = Int32(2)\
+        \n        TableScan: inner_table_lv1";
         assert_eq!(expected, format!("{new_plan}"));
         Ok(())
     }
