@@ -834,6 +834,18 @@ field is not important. It will be overwritten during planning. <code class="doc
 has been removed, so you will need to remove all references to it.</p>
 <p><code class="docutils literal notranslate"><span class="pre">ScalarFunctionArgs</span></code> now contains a field called <code class="docutils literal notranslate"><span class="pre">arg_fields</span></code>. You can use this
 to access the metadata associated with the columnar values during invocation.</p>
+<p>To upgrade user defined aggregate functions, there is now a function
+<code class="docutils literal notranslate"><span class="pre">return_field</span></code> that will allow you to specify both metadata and nullability of
+your function. You are not required to implement this if you do not need to
+handle metatdata.</p>
+<p>The largest change to aggregate functions happens in the accumulator arguments.
+Both the <code class="docutils literal notranslate"><span class="pre">AccumulatorArgs</span></code> and <code class="docutils literal notranslate"><span class="pre">StateFieldsArgs</span></code> now contain <code class="docutils literal notranslate"><span class="pre">Field</span></code> rather
+than <code class="docutils literal notranslate"><span class="pre">DataType</span></code>.</p>
+<p>To upgrade window functions, <code class="docutils literal notranslate"><span class="pre">ExpressionArgs</span></code> now contains input fields instead
+of input data types. When setting these fields, the name of the field is
+not important since this gets overwritten during the planning stage. All you
+should need to do is wrap your existing data types in fields with nullability
+set depending on your use case.</p>
 </section>
 <section id="physical-expression-return-field">
 <h3>Physical Expression return <code class="docutils literal notranslate"><span class="pre">Field</span></code><a class="headerlink" href="#physical-expression-return-field" title="Link to this heading">¶</a></h3>
