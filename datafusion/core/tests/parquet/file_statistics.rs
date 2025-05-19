@@ -167,20 +167,12 @@ async fn list_files_with_session_level_cache() {
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{testdata}/{p_name}");
 
-    let temp_path1 = tempdir()
-        .unwrap()
-        .into_path()
-        .into_os_string()
-        .into_string()
-        .unwrap();
+    let temp_dir1 = tempdir().unwrap();
+    let temp_path1 = temp_dir1.path().to_str().unwrap();
     let temp_filename1 = format!("{temp_path1}/{p_name}");
 
-    let temp_path2 = tempdir()
-        .unwrap()
-        .into_path()
-        .into_os_string()
-        .into_string()
-        .unwrap();
+    let temp_dir2 = tempdir().unwrap();
+    let temp_path2 = temp_dir2.path().to_str().unwrap();
     let temp_filename2 = format!("{temp_path2}/{p_name}");
 
     fs::copy(filename.clone(), temp_filename1).expect("panic");
