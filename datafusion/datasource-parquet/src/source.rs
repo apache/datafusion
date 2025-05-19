@@ -281,9 +281,9 @@ pub struct ParquetSource {
 }
 
 impl ParquetSource {
-    /// Create a new [`ParquetSource`] to read the data specified in the file scan
-    /// configuration with the provided [`TableParquetOptions`].
-    /// If default values are going to be used, use [`ParquetSource::default`] instead.
+    /// Create a new ParquetSource to read the data specified in the file scan
+    /// configuration with the provided `TableParquetOptions`.
+    /// if default values are going to be used, use `ParguetConfig::default()` instead
     pub fn new(table_parquet_options: TableParquetOptions) -> Self {
         Self {
             table_parquet_options,
