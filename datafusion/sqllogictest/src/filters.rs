@@ -23,12 +23,12 @@ use std::path::Path;
 use std::str::FromStr;
 
 /// Filter specification that determines whether a certain sqllogictest record in
-/// a certain file should be filtered. In order for a [`Filter`] to match a record,
-/// it needs to:
-/// - Belong to a file whose absolute path contains the `file_substring` substring.
-/// - If a `line_number` is specific, be declared in that same line number.
+/// a certain file should be filtered. In order for a [`Filter`] to match a test case:
 ///
-/// If a [`Filter`] matches a specific record, then the record is executed, if there's
+/// - The test must belong to a file whose absolute path contains the `file_substring` substring.
+/// - If a `line_number` is specified, the test must be declared in that same line number.
+///
+/// If a [`Filter`] matches a specific test case, then the record is executed, if there's
 /// no match, the record is skipped.
 #[derive(Debug, Clone)]
 pub struct Filter {
