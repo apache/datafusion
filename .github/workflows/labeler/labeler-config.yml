@@ -41,7 +41,7 @@ physical-expr:
 
 physical-plan:
   - changed-files:
-      - any-glob-to-any-file: [datafusion/physical-plan/**/*']
+      - any-glob-to-any-file: ['datafusion/physical-plan/**/*']
 
 
 catalog:
