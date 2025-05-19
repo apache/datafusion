@@ -40,7 +40,7 @@ fn bench_new_groups(c: &mut Criterion) {
     // Test with 1, 2, 4, and 8 order indices
     for num_columns in [1, 2, 4, 8] {
         let fields: Vec<Field> = (0..num_columns)
-            .map(|i| Field::new(format!("col{}", i), DataType::Int32, false))
+            .map(|i| Field::new(format!("col{i}"), DataType::Int32, false))
             .collect();
         let schema = Schema::new(fields);
 
@@ -49,14 +49,14 @@ fn bench_new_groups(c: &mut Criterion) {
             (0..num_columns)
                 .map(|i| {
                     PhysicalSortExpr::new(
-                        col(&format!("col{}", i), &schema).unwrap(),
+                        col(&format!("col{i}"), &schema).unwrap(),
                         SortOptions::default(),
                     )
                 })
                 .collect(),
         );
 
-        group.bench_function(format!("order_indices_{}", num_columns), |b| {
+        group.bench_function(format!("order_indices_{num_columns}"), |b| {
             let batch_group_values = create_test_arrays(num_columns);
             let group_indices: Vec<usize> = (0..BATCH_SIZE).collect();
 

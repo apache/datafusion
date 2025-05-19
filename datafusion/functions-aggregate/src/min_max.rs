@@ -19,6 +19,7 @@
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
 mod min_max_bytes;
+mod min_max_struct;
 
 use arrow::array::{
     ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
@@ -56,6 +57,7 @@ use arrow::datatypes::{
 };
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
+use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
@@ -267,6 +269,7 @@ impl AggregateUDFImpl for Max {
                 | LargeBinary
                 | BinaryView
                 | Duration(_)
+                | Struct(_)
         )
     }
 
@@ -342,7 +345,9 @@ impl AggregateUDFImpl for Max {
             Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
                 Ok(Box::new(MinMaxBytesAccumulator::new_max(data_type.clone())))
             }
-
+            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_max(
+                data_type.clone(),
+            ))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for max({})", data_type),
         }
@@ -611,12 +616,63 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
+        DataType::Struct(_) => min_max_batch_generic(values, Ordering::Greater)?,
+        DataType::List(_) => min_max_batch_generic(values, Ordering::Greater)?,
         DataType::Dictionary(_, _) => {
             let values = values.as_any_dictionary().values();
             min_batch(values)?
         }
         _ => min_max_batch!(values, min),
     })
+}
+
+fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
+    if array.len() == array.null_count() {
+        return ScalarValue::try_from(array.data_type());
+    }
+    let mut extreme = ScalarValue::try_from_array(array, 0)?;
+    for i in 1..array.len() {
+        let current = ScalarValue::try_from_array(array, i)?;
+        if current.is_null() {
+            continue;
+        }
+        if extreme.is_null() {
+            extreme = current;
+            continue;
+        }
+        if let Some(cmp) = extreme.partial_cmp(&current) {
+            if cmp == ordering {
+                extreme = current;
+            }
+        }
+    }
+
+    Ok(extreme)
+}
+
+macro_rules! min_max_generic {
+    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
+        if $VALUE.is_null() {
+            let mut delta_copy = $DELTA.clone();
+            // When the new value won we want to compact it to
+            // avoid storing the entire input
+            delta_copy.compact();
+            delta_copy
+        } else if $DELTA.is_null() {
+            $VALUE.clone()
+        } else {
+            match $VALUE.partial_cmp(&$DELTA) {
+                Some(choose_min_max!($OP)) => {
+                    // When the new value won we want to compact it to
+                    // avoid storing the entire input
+                    let mut delta_copy = $DELTA.clone();
+                    delta_copy.compact();
+                    delta_copy
+                }
+                _ => $VALUE.clone(),
+            }
+        }
+    }};
 }
 
 /// dynamically-typed max(array) -> ScalarValue
@@ -658,6 +714,8 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 max_binary
             )
         }
+        DataType::Struct(_) => min_max_batch_generic(values, Ordering::Less)?,
+        DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::Dictionary(_, _) => {
             let values = values.as_any_dictionary().values();
             max_batch(values)?
@@ -932,6 +990,20 @@ macro_rules! min_max {
             ) => {
                 typed_min_max!(lhs, rhs, DurationNanosecond, $OP)
             }
+
+            (
+                lhs @ ScalarValue::Struct(_),
+                rhs @ ScalarValue::Struct(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
+            (
+                lhs @ ScalarValue::List(_),
+                rhs @ ScalarValue::List(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
             e => {
                 return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
@@ -1142,6 +1214,7 @@ impl AggregateUDFImpl for Min {
                 | LargeBinary
                 | BinaryView
                 | Duration(_)
+                | Struct(_)
         )
     }
 
@@ -1217,7 +1290,9 @@ impl AggregateUDFImpl for Min {
             Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
                 Ok(Box::new(MinMaxBytesAccumulator::new_min(data_type.clone())))
             }
-
+            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_min(
+                data_type.clone(),
+            ))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for min({})", data_type),
         }

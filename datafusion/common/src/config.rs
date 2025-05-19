@@ -17,16 +17,15 @@
 
 //! Runtime configuration, via [`ConfigOptions`]
 
+use crate::error::_config_err;
+use crate::parsers::CompressionTypeVariant;
+use crate::utils::get_available_parallelism;
+use crate::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
-
-use crate::error::_config_err;
-use crate::parsers::CompressionTypeVariant;
-use crate::utils::get_available_parallelism;
-use crate::{DataFusionError, Result};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -474,6 +473,9 @@ config_namespace! {
         /// nanosecond resolution.
         pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
+        /// (reading) Use any available bloom filters when reading parquet files
+        pub bloom_filter_on_read: bool, default = true
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -548,9 +550,6 @@ config_namespace! {
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<String>, transform = str::to_lowercase, default = None
-
-        /// (writing) Use any available bloom filters when reading parquet files
-        pub bloom_filter_on_read: bool, default = true
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
@@ -639,13 +638,20 @@ config_namespace! {
         /// long runner execution, all types of joins may encounter out-of-memory errors.
         pub allow_symmetric_joins_without_pruning: bool, default = true
 
-        /// When set to `true`, file groups will be repartitioned to achieve maximum parallelism.
-        /// Currently Parquet and CSV formats are supported.
+        /// When set to `true`, datasource partitions will be repartitioned to achieve maximum parallelism.
+        /// This applies to both in-memory partitions and FileSource's file groups (1 group is 1 partition).
         ///
-        /// If set to `true`, all files will be repartitioned evenly (i.e., a single large file
+        /// For FileSources, only Parquet and CSV formats are currently supported.
+        ///
+        /// If set to `true` for a FileSource, all files will be repartitioned evenly (i.e., a single large file
         /// might be partitioned into smaller chunks) for parallel scanning.
-        /// If set to `false`, different files will be read in parallel, but repartitioning won't
+        /// If set to `false` for a FileSource, different files will be read in parallel, but repartitioning won't
         /// happen within a single file.
+        ///
+        /// If set to `true` for an in-memory source, all memtable's partitions will have their batches
+        /// repartitioned evenly to the desired number of `target_partitions`. Repartitioning can change
+        /// the total number of partitions and batches per partition, but does not slice the initial
+        /// record tables provided to the MemTable on creation.
         pub repartition_file_scans: bool, default = true
 
         /// Should DataFusion repartition data using the partitions keys to execute window
@@ -759,6 +765,59 @@ impl ExecutionOptions {
     }
 }
 
+config_namespace! {
+    /// Options controlling the format of output when printing record batches
+    /// Copies [`arrow::util::display::FormatOptions`]
+    pub struct FormatOptions {
+        /// If set to `true` any formatting errors will be written to the output
+        /// instead of being converted into a [`std::fmt::Error`]
+        pub safe: bool, default = true
+        /// Format string for nulls
+        pub null: String, default = "".into()
+        /// Date format for date arrays
+        pub date_format: Option<String>, default = Some("%Y-%m-%d".to_string())
+        /// Format for DateTime arrays
+        pub datetime_format: Option<String>, default = Some("%Y-%m-%dT%H:%M:%S%.f".to_string())
+        /// Timestamp format for timestamp arrays
+        pub timestamp_format: Option<String>, default = Some("%Y-%m-%dT%H:%M:%S%.f".to_string())
+        /// Timestamp format for timestamp with timezone arrays. When `None`, ISO 8601 format is used.
+        pub timestamp_tz_format: Option<String>, default = None
+        /// Time format for time arrays
+        pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
+        /// Duration format. Can be either `"pretty"` or `"ISO8601"`
+        pub duration_format: String, transform = str::to_lowercase, default = "pretty".into()
+        /// Show types in visual representation batches
+        pub types_info: bool, default = false
+    }
+}
+
+impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
+    type Error = DataFusionError;
+    fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
+        let duration_format = match self.duration_format.as_str() {
+            "pretty" => arrow::util::display::DurationFormat::Pretty,
+            "iso8601" => arrow::util::display::DurationFormat::ISO8601,
+            _ => {
+                return _config_err!(
+                    "Invalid duration format: {}. Valid values are pretty or iso8601",
+                    self.duration_format
+                )
+            }
+        };
+
+        Ok(arrow::util::display::FormatOptions::new()
+            .with_display_error(self.safe)
+            .with_null(&self.null)
+            .with_date_format(self.date_format.as_deref())
+            .with_datetime_format(self.datetime_format.as_deref())
+            .with_timestamp_format(self.timestamp_format.as_deref())
+            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
+            .with_time_format(self.time_format.as_deref())
+            .with_duration_format(duration_format)
+            .with_types_info(self.types_info))
+    }
+}
+
 /// A key value pair, with a corresponding description
 #[derive(Debug)]
 pub struct ConfigEntry {
@@ -788,6 +847,8 @@ pub struct ConfigOptions {
     pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]
     pub extensions: Extensions,
+    /// Formatting options when printing batches
+    pub format: FormatOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -800,6 +861,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
+            "format" => self.format.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -810,6 +872,7 @@ impl ConfigField for ConfigOptions {
         self.optimizer.visit(v, "datafusion.optimizer", "");
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
+        self.format.visit(v, "datafusion.format", "");
     }
 }
 
@@ -1160,8 +1223,7 @@ impl ConfigField for u8 {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if value.is_empty() {
             return Err(DataFusionError::Configuration(format!(
-                "Input string for {} key is empty",
-                key
+                "Input string for {key} key is empty"
             )));
         }
         // Check if the string is a valid number
@@ -1173,8 +1235,7 @@ impl ConfigField for u8 {
             // Check if the first character is ASCII (single byte)
             if bytes.len() > 1 || !value.chars().next().unwrap().is_ascii() {
                 return Err(DataFusionError::Configuration(format!(
-                    "Error parsing {} as u8. Non-ASCII string provided",
-                    value
+                    "Error parsing {value} as u8. Non-ASCII string provided"
                 )));
             }
             *self = bytes[0];
@@ -2004,11 +2065,11 @@ config_namespace! {
     }
 }
 
-pub trait FormatOptionsExt: Display {}
+pub trait OutputFormatExt: Display {}
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
-pub enum FormatOptions {
+pub enum OutputFormat {
     CSV(CsvOptions),
     JSON(JsonOptions),
     #[cfg(feature = "parquet")]
@@ -2017,17 +2078,17 @@ pub enum FormatOptions {
     ARROW,
 }
 
-impl Display for FormatOptions {
+impl Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let out = match self {
-            FormatOptions::CSV(_) => "csv",
-            FormatOptions::JSON(_) => "json",
+            OutputFormat::CSV(_) => "csv",
+            OutputFormat::JSON(_) => "json",
             #[cfg(feature = "parquet")]
-            FormatOptions::PARQUET(_) => "parquet",
-            FormatOptions::AVRO => "avro",
-            FormatOptions::ARROW => "arrow",
+            OutputFormat::PARQUET(_) => "parquet",
+            OutputFormat::AVRO => "avro",
+            OutputFormat::ARROW => "arrow",
         };
-        write!(f, "{}", out)
+        write!(f, "{out}")
     }
 }
 

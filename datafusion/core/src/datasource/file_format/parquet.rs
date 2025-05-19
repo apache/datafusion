@@ -1085,7 +1085,7 @@ mod tests {
         let format = state
             .get_file_format_factory("parquet")
             .map(|factory| factory.create(state, &Default::default()).unwrap())
-            .unwrap_or(Arc::new(ParquetFormat::new()));
+            .unwrap_or_else(|| Arc::new(ParquetFormat::new()));
 
         scan_format(
             state, &*format, None, &testdata, file_name, projection, limit,
@@ -1320,7 +1320,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_sink_write_with_extension() -> Result<()> {
         let filename = "test_file.custom_ext";
-        let file_path = format!("file:///path/to/{}", filename);
+        let file_path = format!("file:///path/to/{filename}");
         let parquet_sink = create_written_parquet_sink(file_path.as_str()).await?;
 
         // assert written to proper path
@@ -1535,8 +1535,7 @@ mod tests {
             let prefix = path_parts[0].as_ref();
             assert!(
                 expected_partitions.contains(prefix),
-                "expected path prefix to match partition, instead found {:?}",
-                prefix
+                "expected path prefix to match partition, instead found {prefix:?}"
             );
             expected_partitions.remove(prefix);
 

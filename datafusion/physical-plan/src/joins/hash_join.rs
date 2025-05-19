@@ -664,7 +664,7 @@ impl DisplayAs for HashJoinExec {
                 let on = self
                     .on
                     .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
                 write!(
@@ -686,7 +686,7 @@ impl DisplayAs for HashJoinExec {
                 if *self.join_type() != JoinType::Inner {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
-                writeln!(f, "on={}", on)
+                writeln!(f, "on={on}")
             }
         }
     }
@@ -4001,10 +4001,7 @@ mod tests {
                 assert_eq!(
                     batches.len(),
                     expected_batch_count,
-                    "expected {} output batches for {} join with batch_size = {}",
-                    expected_batch_count,
-                    join_type,
-                    batch_size
+                    "expected {expected_batch_count} output batches for {join_type} join with batch_size = {batch_size}"
                 );
 
                 let expected = match join_type {
@@ -4069,12 +4066,12 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput"
             );
 
             assert_contains!(
                 err.to_string(),
-                "Failed to allocate additional 120 bytes for HashJoinInput"
+                "Failed to allocate additional 120.0 B for HashJoinInput"
             );
         }
 
@@ -4150,13 +4147,13 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
 
             );
 
             assert_contains!(
                 err.to_string(),
-                "Failed to allocate additional 120 bytes for HashJoinInput[1]"
+                "Failed to allocate additional 120.0 B for HashJoinInput[1]"
             );
         }
 

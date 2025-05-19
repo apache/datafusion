@@ -33,11 +33,10 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
+    ChildPushdownResult, FilterPushdownPropagation,
 };
 
 /// A source of data, typically a list of files or memory
@@ -71,7 +70,16 @@ pub trait DataSource: Send + Sync + Debug {
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
-    /// Return a copy of this DataSource with a new partitioning scheme
+    /// Return a copy of this DataSource with a new partitioning scheme.
+    ///
+    /// Returns `Ok(None)` (the default) if the partitioning cannot be changed.
+    /// Refer to [`ExecutionPlan::repartitioned`] for details on when None should be returned.
+    ///
+    /// Repartitioning should not change the output ordering, if this ordering exists.
+    /// Refer to [`MemorySourceConfig::repartition_preserving_order`](crate::memory::MemorySourceConfig)
+    /// and the FileSource's
+    /// [`FileGroupPartitioner::repartition_file_groups`](crate::file_groups::FileGroupPartitioner::repartition_file_groups)
+    /// for examples.
     fn repartitioned(
         &self,
         _target_partitions: usize,
@@ -95,13 +103,15 @@ pub trait DataSource: Send + Sync + Debug {
         _projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
     /// Try to push down filters into this DataSource.
-    /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
+    /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
+    ///
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
     fn try_pushdown_filters(
         &self,
-        fd: FilterDescription,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
-        Ok(filter_pushdown_not_supported(fd))
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        Ok(FilterPushdownPropagation::unsupported(filters))
     }
 }
 
@@ -161,6 +171,10 @@ impl ExecutionPlan for DataSourceExec {
         Ok(self)
     }
 
+    /// Implementation of [`ExecutionPlan::repartitioned`] which relies upon the inner [`DataSource::repartitioned`].
+    ///
+    /// If the data source does not support changing its partitioning, returns `Ok(None)` (the default). Refer
+    /// to [`ExecutionPlan::repartitioned`] for more details.
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -237,39 +251,31 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.try_swapping_with_projection(projection)
     }
 
-    fn try_pushdown_filters(
+    fn handle_child_pushdown_result(
         &self,
-        fd: FilterDescription,
+        child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        let FilterPushdownResult {
-            support,
-            remaining_description,
-        } = self.data_source.try_pushdown_filters(fd, config)?;
-
-        match support {
-            FilterPushdownSupport::Supported {
-                child_descriptions,
-                op,
-                revisit,
-            } => {
-                let new_exec = Arc::new(DataSourceExec::new(op));
-
-                debug_assert!(child_descriptions.is_empty());
-                debug_assert!(!revisit);
-
-                Ok(FilterPushdownResult {
-                    support: FilterPushdownSupport::Supported {
-                        child_descriptions,
-                        op: new_exec,
-                        revisit,
-                    },
-                    remaining_description,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Push any remaining filters into our data source
+        let res = self.data_source.try_pushdown_filters(
+            child_pushdown_result.parent_filters.collect_all(),
+            config,
+        )?;
+        match res.updated_node {
+            Some(data_source) => {
+                let mut new_node = self.clone();
+                new_node.data_source = data_source;
+                new_node.cache =
+                    Self::compute_properties(Arc::clone(&new_node.data_source));
+                Ok(FilterPushdownPropagation {
+                    filters: res.filters,
+                    updated_node: Some(Arc::new(new_node)),
                 })
             }
-            FilterPushdownSupport::NotSupported => {
-                Ok(filter_pushdown_not_supported(remaining_description))
-            }
+            None => Ok(FilterPushdownPropagation {
+                filters: res.filters,
+                updated_node: None,
+            }),
         }
     }
 }

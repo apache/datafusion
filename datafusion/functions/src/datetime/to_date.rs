@@ -447,7 +447,7 @@ mod tests {
                     let expected = Date32Type::parse_formatted("2020-09-08", "%Y-%m-%d");
                     assert_eq!(date_val, expected, "to_date created wrong value");
                 }
-                _ => panic!("Conversion of {} failed", date_str),
+                _ => panic!("Conversion of {date_str} failed"),
             }
         }
     }
@@ -465,11 +465,10 @@ mod tests {
                 let expected = Date32Type::parse_formatted("2024-12-31", "%Y-%m-%d");
                 assert_eq!(
                     date_val, expected,
-                    "to_date created wrong value for {}",
-                    date_str
+                    "to_date created wrong value for {date_str}"
                 );
             }
-            _ => panic!("Conversion of {} failed", date_str),
+            _ => panic!("Conversion of {date_str} failed"),
         }
     }
 
@@ -482,10 +481,7 @@ mod tests {
             invoke_to_date_with_args(vec![ColumnarValue::Scalar(date_scalar)], 1);
 
         if let Ok(ColumnarValue::Scalar(ScalarValue::Date32(_))) = to_date_result {
-            panic!(
-                "Conversion of {} succeeded, but should have failed, ",
-                date_str
-            );
+            panic!("Conversion of {date_str} succeeded, but should have failed. ");
         }
     }
 }

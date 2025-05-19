@@ -205,7 +205,7 @@ pub fn display_all_functions() -> Result<()> {
     let array = StringArray::from(
         ALL_FUNCTIONS
             .iter()
-            .map(|f| format!("{}", f))
+            .map(|f| format!("{f}"))
             .collect::<Vec<String>>(),
     );
     let schema = Schema::new(vec![Field::new("Function", DataType::Utf8, false)]);
