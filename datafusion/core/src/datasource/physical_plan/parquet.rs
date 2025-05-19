@@ -898,7 +898,7 @@ mod tests {
         assert_eq!(read.len(), 0);
 
         // TODO: this is failing on main, and has been for a long time!
-        // See <comment on PR>
+        // See https://github.com/apache/datafusion/pull/16086#discussion_r2094817127
         // // Predicate should prune no row groups
         // let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(1))));
         // let read = RoundTrip::new()
