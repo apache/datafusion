@@ -61,6 +61,7 @@ pub struct ParameterTest<'a> {
     pub param_values: Vec<ScalarValue>,
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> ParameterTest<'a> {
     pub fn run(&self) -> String {
         let plan = logical_plan(self.sql).unwrap();
