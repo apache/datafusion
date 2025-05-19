@@ -18,13 +18,11 @@
 //! Analyzed rule to replace TableScan references
 //! such as DataFrames and Views and inlines the LogicalPlan.
 
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::analyzer::AnalyzerRule;
 
-use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
@@ -33,11 +31,10 @@ use datafusion_common::{
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::grouping_set_to_exprlist;
-use datafusion_expr::{
-    bitwise_and, bitwise_or, bitwise_shift_left, bitwise_shift_right, cast, Aggregate,
-    Expr, Projection,
-};
+use datafusion_expr::{Aggregate, Expr, Projection};
 use itertools::Itertools;
+use datafusion_functions::core::grouping;
+use datafusion_functions_nested::make_array::make_array_udf;
 
 /// Replaces grouping aggregation function with value derived from internal grouping id
 #[derive(Default, Debug)]
@@ -193,18 +190,6 @@ fn grouping_function_on_id(
     }
 
     let group_by_expr_count = group_by_expr.len();
-    let literal = |value: usize| {
-        if group_by_expr_count < 8 {
-            Expr::Literal(ScalarValue::from(value as u8))
-        } else if group_by_expr_count < 16 {
-            Expr::Literal(ScalarValue::from(value as u16))
-        } else if group_by_expr_count < 32 {
-            Expr::Literal(ScalarValue::from(value as u32))
-        } else {
-            Expr::Literal(ScalarValue::from(value as u64))
-        }
-    };
-
     let grouping_id_column = Expr::Column(Column::from(Aggregate::INTERNAL_GROUPING_ID));
     // The grouping call is exactly our internal grouping id
     if args.len() == group_by_expr_count
@@ -214,35 +199,17 @@ fn grouping_function_on_id(
             .enumerate()
             .all(|(idx, expr)| group_by_expr.get(expr) == Some(&idx))
     {
-        return Ok(cast(grouping_id_column, DataType::Int32));
+        return Ok(grouping().call(vec![grouping_id_column]));
     }
 
-    args.iter()
-        .rev()
-        .enumerate()
-        .map(|(arg_idx, expr)| {
-            group_by_expr.get(expr).map(|group_by_idx| {
-                let group_by_bit =
-                    bitwise_and(grouping_id_column.clone(), literal(1 << group_by_idx));
-                match group_by_idx.cmp(&arg_idx) {
-                    Ordering::Less => {
-                        bitwise_shift_left(group_by_bit, literal(arg_idx - group_by_idx))
-                    }
-                    Ordering::Greater => {
-                        bitwise_shift_right(group_by_bit, literal(group_by_idx - arg_idx))
-                    }
-                    Ordering::Equal => group_by_bit,
-                }
-            })
+    args.iter().map(|expr| {
+        group_by_expr.get(expr).map(|group_by_idx| {
+            Expr::Literal(ScalarValue::from(*group_by_idx as i32))
         })
-        .collect::<Option<Vec<_>>>()
-        .and_then(|bit_exprs| {
-            bit_exprs
-                .into_iter()
-                .reduce(bitwise_or)
-                .map(|expr| cast(expr, DataType::Int32))
-        })
-        .ok_or_else(|| {
-            internal_datafusion_err!("Grouping sets should contains at least one element")
-        })
+    }).collect::<Option<Vec<_>>>()
+    .and_then(|exprs| {
+        Some(grouping().call(vec![grouping_id_column, make_array_udf().call(exprs)]))
+    }).ok_or_else(|| {
+        internal_datafusion_err!("Grouping sets should contains at least one element")
+    })
 }

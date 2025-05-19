@@ -26,12 +26,36 @@ use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
+macro_rules! grouping_id {
+    ($grouping_id:expr, $indices:expr, $type:ty, $array_type:ty) => {{
+        let grouping_id = match $grouping_id.as_any().downcast_ref::<$array_type>() {
+            Some(array) => array,
+            None => return exec_err!("grouping function requires {} grouping_id array", stringify!($type)),
+        };
+        grouping_id
+            .iter()
+            .map(|grouping_id| {
+                grouping_id.map(|grouping_id| {
+                    let mut result = 0 as $type;
+                    for (i, index) in $indices.iter().enumerate() {
+                        if let Some(index) = index {
+                            let bit = (grouping_id >> index) & 1;
+                            result |= bit << i;
+                        }
+                    }
+                    result as i32
+                })
+            })
+            .collect()
+    }};
+}
+
 #[user_doc(
-    doc_section(label = "Aggregate Functions"),
-    description = "Returns 1 if the specified column is not included in the grouping set, 0 if it is included.",
-    syntax_example = "grouping(grouping_id, indices)",
+    doc_section(label = "Other Functions"),
+    description = "[Developer API] Returns 1 if the specified column is not included in the grouping set, 0 if it is included.",
+    syntax_example = "grouping(grouping_id[, indices])",
     sql_example = r#"```sql
-> SELECT grouping(grouping_id, 0) FROM table GROUP BY GROUPING SETS ((a), (b));
+> SELECT grouping(__grouping_id, make_array(0)) FROM table GROUP BY GROUPING SETS ((a), (b));
 +----------------+
 | grouping       |
 +----------------+
@@ -90,9 +114,9 @@ impl ScalarUDFImpl for GroupingFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
-        if args.len() != 2 {
+        if args.len() != 2 && args.len() != 1 {
             return exec_err!(
-                "grouping function requires exactly 2 arguments, got {}",
+                "grouping function requires 1 or 2 arguments, got {}",
                 args.len()
             );
         }
@@ -103,6 +127,10 @@ impl ScalarUDFImpl for GroupingFunc {
                 return exec_err!("grouping function requires array input for grouping_id")
             }
         };
+
+        if args.len() == 1 {
+            return args[0].cast_to(grouping_id.data_type(), None);
+        }
 
         let indices = match &args[1] {
             ColumnarValue::Scalar(scalar) => {
@@ -136,90 +164,10 @@ impl ScalarUDFImpl for GroupingFunc {
         }
 
         let result: Int32Array = match grouping_id.data_type() {
-            DataType::UInt8 => {
-                let grouping_id = match grouping_id.as_any().downcast_ref::<UInt8Array>() {
-                    Some(array) => array,
-                    None => return exec_err!("grouping function requires UInt8 grouping_id array"),
-                };
-                grouping_id
-                    .iter()
-                    .map(|grouping_id| {
-                        grouping_id.map(|grouping_id| {
-                            let mut result = 0u8;
-                            for (i, index) in indices.iter().enumerate() {
-                                if let Some(index) = index {
-                                    let bit = (grouping_id >> index) & 1;
-                                    result |= bit << i;
-                                }
-                            }
-                            result as i32
-                        })
-                    })
-                    .collect()
-            }
-            DataType::UInt16 => {
-                let grouping_id = match grouping_id.as_any().downcast_ref::<UInt16Array>() {
-                    Some(array) => array,
-                    None => return exec_err!("grouping function requires UInt16 grouping_id array"),
-                };
-                grouping_id
-                    .iter()
-                    .map(|grouping_id| {
-                        grouping_id.map(|grouping_id| {
-                            let mut result = 0u16;
-                            for (i, index) in indices.iter().enumerate() {
-                                if let Some(index) = index {
-                                    let bit = (grouping_id >> index) & 1;
-                                    result |= bit << i;
-                                }
-                            }
-                            result as i32
-                        })
-                    })
-                    .collect()
-            }
-            DataType::UInt32 => {
-                let grouping_id = match grouping_id.as_any().downcast_ref::<UInt32Array>() {
-                    Some(array) => array,
-                    None => return exec_err!("grouping function requires UInt32 grouping_id array"),
-                };
-                grouping_id
-                    .iter()
-                    .map(|grouping_id| {
-                        grouping_id.map(|grouping_id| {
-                            let mut result = 0u32;
-                            for (i, index) in indices.iter().enumerate() {
-                                if let Some(index) = index {
-                                    let bit = (grouping_id >> index) & 1;
-                                    result |= bit << i;
-                                }
-                            }
-                            result as i32
-                        })
-                    })
-                    .collect()
-            }
-            DataType::UInt64 => {
-                let grouping_id = match grouping_id.as_any().downcast_ref::<UInt64Array>() {
-                    Some(array) => array,
-                    None => return exec_err!("grouping function requires UInt64 grouping_id array"),
-                };
-                grouping_id
-                    .iter()
-                    .map(|grouping_id| {
-                        grouping_id.map(|grouping_id| {
-                            let mut result = 0u64;
-                            for (i, index) in indices.iter().enumerate() {
-                                if let Some(index) = index {
-                                    let bit = (grouping_id >> index) & 1;
-                                    result |= bit << i;
-                                }
-                            }
-                            result as i32
-                        })
-                    })
-                    .collect()
-            }
+            DataType::UInt8 => grouping_id!(grouping_id, indices, u8, UInt8Array),
+            DataType::UInt16 => grouping_id!(grouping_id, indices, u16, UInt16Array),
+            DataType::UInt32 => grouping_id!(grouping_id, indices, u32, UInt32Array),
+            DataType::UInt64 => grouping_id!(grouping_id, indices, u64, UInt64Array),
             _ => {
                 return exec_err!(
                     "grouping function requires UInt8/16/32/64 for grouping_id, got {}",
