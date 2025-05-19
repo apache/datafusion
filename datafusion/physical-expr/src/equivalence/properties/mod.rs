@@ -380,16 +380,16 @@ impl EquivalenceProperties {
         mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Result<Self> {
-        let sort_exprs = ordering.into_iter().collect::<Vec<_>>();
+        let (ordering, ordering_tee) = ordering.into_iter().tee();
         // First, standardize the given ordering:
-        let Some(normal_ordering) = self.normalize_sort_exprs(sort_exprs.clone()) else {
+        let Some(normal_ordering) = self.normalize_sort_exprs(ordering) else {
             // If the ordering vanishes after normalization, it is satisfied:
             return Ok(self);
         };
         if normal_ordering.len() != self.common_sort_prefix_length(normal_ordering)? {
             // If the ordering is unsatisfied, replace existing orderings:
             self.clear_orderings();
-            self.add_ordering(sort_exprs);
+            self.add_ordering(ordering_tee);
         }
         Ok(self)
     }
