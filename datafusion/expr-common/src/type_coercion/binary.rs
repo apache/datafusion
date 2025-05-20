@@ -1138,7 +1138,7 @@ fn dictionary_comparison_coercion(
 /// 2. Data type of the other side should be able to cast to string type
 fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    string_coercion(lhs_type, rhs_type).or(match (lhs_type, rhs_type) {
+    string_coercion(lhs_type, rhs_type).or_else(|| match (lhs_type, rhs_type) {
         (Utf8View, from_type) | (from_type, Utf8View) => {
             string_concat_internal_coercion(from_type, &Utf8View)
         }
@@ -1297,6 +1297,10 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
             Some(LargeBinary)
         }
         (Binary, Utf8) | (Utf8, Binary) => Some(Binary),
+
+        // Cast FixedSizeBinary to Binary
+        (FixedSizeBinary(_), Binary) | (Binary, FixedSizeBinary(_)) => Some(Binary),
+
         _ => None,
     }
 }

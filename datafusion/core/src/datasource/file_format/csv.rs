@@ -217,8 +217,11 @@ mod tests {
         assert_eq!(tt_batches, 50 /* 100/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
+        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
 
         Ok(())
     }
@@ -250,6 +253,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -300,6 +304,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -582,7 +587,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", arrow_test_data());
         let format = CsvFormat::default().with_has_header(has_header);
-        scan_format(state, &format, &root, file_name, projection, limit).await
+        scan_format(state, &format, None, &root, file_name, projection, limit).await
     }
 
     #[tokio::test]
@@ -1021,7 +1026,7 @@ mod tests {
         for _ in 0..batch_count {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?;
         }
@@ -1059,7 +1064,7 @@ mod tests {
         for _ in 0..batch_count {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?;
         }
@@ -1140,18 +1145,14 @@ mod tests {
 
     fn csv_line(line_number: usize) -> Bytes {
         let (int_value, float_value, bool_value, char_value) = csv_values(line_number);
-        format!(
-            "{},{},{},{}\n",
-            int_value, float_value, bool_value, char_value
-        )
-        .into()
+        format!("{int_value},{float_value},{bool_value},{char_value}\n").into()
     }
 
     fn csv_values(line_number: usize) -> (i32, f64, bool, String) {
         let int_value = line_number as i32;
         let float_value = line_number as f64;
         let bool_value = line_number % 2 == 0;
-        let char_value = format!("{}-string", line_number);
+        let char_value = format!("{line_number}-string");
         (int_value, float_value, bool_value, char_value)
     }
 

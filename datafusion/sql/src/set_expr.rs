@@ -95,26 +95,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if left_plan.schema().fields().len() == right_plan.schema().fields().len() {
             return Ok(());
         }
-
-        plan_err!("{} queries have different number of columns", op).map_err(|err| {
-            err.with_diagnostic(
-                Diagnostic::new_error(
-                    format!("{} queries have different number of columns", op),
-                    set_expr_span,
-                )
-                .with_note(
-                    format!("this side has {} fields", left_plan.schema().fields().len()),
-                    left_span,
-                )
-                .with_note(
-                    format!(
-                        "this side has {} fields",
-                        right_plan.schema().fields().len()
-                    ),
-                    right_span,
-                ),
-            )
-        })
+        let diagnostic = Diagnostic::new_error(
+            format!("{op} queries have different number of columns"),
+            set_expr_span,
+        )
+        .with_note(
+            format!("this side has {} fields", left_plan.schema().fields().len()),
+            left_span,
+        )
+        .with_note(
+            format!(
+                "this side has {} fields",
+                right_plan.schema().fields().len()
+            ),
+            right_span,
+        );
+        plan_err!("{} queries have different number of columns", op; diagnostic =diagnostic)
     }
 
     pub(super) fn set_operation_to_plan(

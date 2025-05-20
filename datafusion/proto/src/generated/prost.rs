@@ -115,8 +115,8 @@ pub struct ListingTableScanNode {
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "6")]
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
-    #[prost(string, repeated, tag = "7")]
-    pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "7")]
+    pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(bool, tag = "8")]
     pub collect_stat: bool,
     #[prost(uint32, tag = "9")]
@@ -1824,6 +1824,8 @@ pub struct CoalesceBatchesExecNode {
 pub struct CoalescePartitionsExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(uint32, optional, tag = "2")]
+    pub fetch: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalHashRepartition {

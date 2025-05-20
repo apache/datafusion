@@ -189,7 +189,7 @@ impl ExternalAggrConfig {
     ) -> Result<Vec<QueryResult>> {
         let query_name =
             format!("Q{query_id}({})", human_readable_size(mem_limit as usize));
-        let config = self.common.config();
+        let config = self.common.config()?;
         let memory_pool: Arc<dyn MemoryPool> = match mem_pool_type {
             "fair" => Arc::new(FairSpillPool::new(mem_limit as usize)),
             "greedy" => Arc::new(GreedyMemoryPool::new(mem_limit as usize)),
@@ -335,7 +335,7 @@ impl ExternalAggrConfig {
     fn partitions(&self) -> usize {
         self.common
             .partitions
-            .unwrap_or(get_available_parallelism())
+            .unwrap_or_else(get_available_parallelism)
     }
 }
 

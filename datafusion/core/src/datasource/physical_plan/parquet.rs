@@ -38,13 +38,13 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
-        ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
+        ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
         StructArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
     use arrow::util::pretty::pretty_format_batches;
-    use arrow_schema::SchemaRef;
+    use arrow_schema::{SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
@@ -54,6 +54,7 @@ mod tests {
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
+    use datafusion_datasource::file::FileSource;
     use datafusion_datasource::{FileRange, PartitionedFile};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
@@ -139,7 +140,7 @@ mod tests {
             self.round_trip(batches).await.batches
         }
 
-        fn build_file_source(&self, file_schema: SchemaRef) -> Arc<ParquetSource> {
+        fn build_file_source(&self, file_schema: SchemaRef) -> Arc<dyn FileSource> {
             // set up predicate (this is normally done by a layer higher up)
             let predicate = self
                 .predicate
@@ -148,7 +149,7 @@ mod tests {
 
             let mut source = ParquetSource::default();
             if let Some(predicate) = predicate {
-                source = source.with_predicate(Arc::clone(&file_schema), predicate);
+                source = source.with_predicate(predicate);
             }
 
             if self.pushdown_predicate {
@@ -161,14 +162,14 @@ mod tests {
                 source = source.with_enable_page_index(true);
             }
 
-            Arc::new(source)
+            source.with_schema(Arc::clone(&file_schema))
         }
 
         fn build_parquet_exec(
             &self,
             file_schema: SchemaRef,
             file_group: FileGroup,
-            source: Arc<ParquetSource>,
+            source: Arc<dyn FileSource>,
         ) -> Arc<DataSourceExec> {
             let base_config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),
@@ -1109,6 +1110,7 @@ mod tests {
         let parquet_exec = scan_format(
             &state,
             &ParquetFormat::default(),
+            None,
             &testdata,
             filename,
             Some(vec![0, 1, 2]),
@@ -1137,6 +1139,210 @@ mod tests {
 
         let batch = results.next().await;
         assert!(batch.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_with_int96_from_spark() -> Result<()> {
+        // arrow-rs relies on the chrono library to convert between timestamps and strings, so
+        // instead compare as Int64. The underlying type should be a PrimitiveArray of Int64
+        // anyway, so this should be a zero-copy non-modifying cast at the SchemaAdapter.
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let filename = "int96_from_spark.parquet";
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+
+        let time_units_and_expected = vec![
+            (
+                None, // Same as "ns" time_unit
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456000), // Reads as nanosecond fine (note 3 extra 0s)
+                    Some(1704070800000000000), // Reads as nanosecond fine (note 3 extra 0s)
+                    Some(-4852191831933722624), // Cannot be represented with nanos timestamp (year 9999)
+                    Some(1735599600000000000), // Reads as nanosecond fine (note 3 extra 0s)
+                    None,
+                    Some(-4864435138808946688), // Cannot be represented with nanos timestamp (year 290000)
+                ])),
+            ),
+            (
+                Some("ns".to_string()),
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456000),
+                    Some(1704070800000000000),
+                    Some(-4852191831933722624),
+                    Some(1735599600000000000),
+                    None,
+                    Some(-4864435138808946688),
+                ])),
+            ),
+            (
+                Some("us".to_string()),
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456),
+                    Some(1704070800000000),
+                    Some(253402225200000000),
+                    Some(1735599600000000),
+                    None,
+                    Some(9089380393200000000),
+                ])),
+            ),
+        ];
+
+        for (time_unit, expected) in time_units_and_expected {
+            let parquet_exec = scan_format(
+                &state,
+                &ParquetFormat::default().with_coerce_int96(time_unit.clone()),
+                Some(schema.clone()),
+                &testdata,
+                filename,
+                Some(vec![0]),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+
+            let mut results = parquet_exec.execute(0, task_ctx.clone())?;
+            let batch = results.next().await.unwrap()?;
+
+            assert_eq!(6, batch.num_rows());
+            assert_eq!(1, batch.num_columns());
+
+            assert_eq!(batch.num_columns(), 1);
+            let column = batch.column(0);
+
+            assert_eq!(column.len(), expected.len());
+
+            column
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .iter()
+                .zip(expected.iter())
+                .for_each(|(lhs, rhs)| {
+                    assert_eq!(lhs, rhs);
+                });
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_with_int96_nested() -> Result<()> {
+        // This test ensures that we maintain compatibility with coercing int96 to the desired
+        // resolution when they're within a nested type (e.g., struct, map, list). This file
+        // originates from a modified CometFuzzTestSuite ParquetGenerator to generate combinations
+        // of primitive and complex columns using int96. Other tests cover reading the data
+        // correctly with this coercion. Here we're only checking the coerced schema is correct.
+        let testdata = "../../datafusion/core/tests/data";
+        let filename = "int96_nested.parquet";
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+
+        let parquet_exec = scan_format(
+            &state,
+            &ParquetFormat::default().with_coerce_int96(Some("us".to_string())),
+            None,
+            testdata,
+            filename,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+
+        let mut results = parquet_exec.execute(0, task_ctx.clone())?;
+        let batch = results.next().await.unwrap()?;
+
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new_struct(
+                "c1",
+                vec![Field::new(
+                    "c0",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_struct(
+                "c2",
+                vec![Field::new_list(
+                    "c0",
+                    Field::new(
+                        "element",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_map(
+                "c3",
+                "key_value",
+                Field::new(
+                    "key",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    false,
+                ),
+                Field::new(
+                    "value",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                false,
+                true,
+            ),
+            Field::new_list(
+                "c4",
+                Field::new(
+                    "element",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                true,
+            ),
+            Field::new_list(
+                "c5",
+                Field::new_struct(
+                    "element",
+                    vec![Field::new(
+                        "c0",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    )],
+                    true,
+                ),
+                true,
+            ),
+            Field::new_list(
+                "c6",
+                Field::new_map(
+                    "element",
+                    "key_value",
+                    Field::new(
+                        "key",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        false,
+                    ),
+                    Field::new(
+                        "value",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    false,
+                    true,
+                ),
+                true,
+            ),
+        ]));
+
+        assert_eq!(batch.schema(), expected_schema);
 
         Ok(())
     }
