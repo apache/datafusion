@@ -101,11 +101,11 @@ impl Hash for CopyTo {
 ///   [`TableProvider`] trait or builtin sources.
 ///
 /// * `UPDATE` - Modifies existing rows in the table. Currently NOT supported by
-///    the [`TableProvider`] trait or builtin sources.
+///   the [`TableProvider`] trait or builtin sources.
 ///
 /// * `CREATE TABLE AS SELECT` - Creates a new table and populates it with data
-///    from a query. This is similar to the `INSERT` operation, but it creates a new
-///    table instead of modifying an existing one.
+///   from a query. This is similar to the `INSERT` operation, but it creates a new
+///   table instead of modifying an existing one.
 ///
 /// Note that the structure is adapted from substrait WriteRel)
 ///
