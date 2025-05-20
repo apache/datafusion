@@ -1242,7 +1242,7 @@ impl<T: FileSource + ?Sized> FileSourceExt for T {
             // Add more format-specific schema adapters here as needed
         }
         // Return the original source if no adapters are available or applicable
-        self
+        self as Arc<dyn FileSource>
     }
 }
 
