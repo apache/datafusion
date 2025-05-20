@@ -1300,6 +1300,9 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
         // Cast FixedSizeBinary to Binary
         (FixedSizeBinary(_), Binary) | (Binary, FixedSizeBinary(_)) => Some(Binary),
+        (FixedSizeBinary(_), BinaryView) | (BinaryView, FixedSizeBinary(_)) => {
+            Some(BinaryView)
+        }
 
         _ => None,
     }
