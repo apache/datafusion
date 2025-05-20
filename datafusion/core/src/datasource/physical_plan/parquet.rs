@@ -44,7 +44,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
     use arrow::util::pretty::pretty_format_batches;
-    use arrow_schema::SchemaRef;
+    use arrow_schema::{SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
@@ -1225,6 +1225,124 @@ mod tests {
                     assert_eq!(lhs, rhs);
                 });
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_with_int96_nested() -> Result<()> {
+        // This test ensures that we maintain compatibility with coercing int96 to the desired
+        // resolution when they're within a nested type (e.g., struct, map, list). This file
+        // originates from a modified CometFuzzTestSuite ParquetGenerator to generate combinations
+        // of primitive and complex columns using int96. Other tests cover reading the data
+        // correctly with this coercion. Here we're only checking the coerced schema is correct.
+        let testdata = "../../datafusion/core/tests/data";
+        let filename = "int96_nested.parquet";
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+
+        let parquet_exec = scan_format(
+            &state,
+            &ParquetFormat::default().with_coerce_int96(Some("us".to_string())),
+            None,
+            testdata,
+            filename,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+
+        let mut results = parquet_exec.execute(0, task_ctx.clone())?;
+        let batch = results.next().await.unwrap()?;
+
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new_struct(
+                "c1",
+                vec![Field::new(
+                    "c0",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_struct(
+                "c2",
+                vec![Field::new_list(
+                    "c0",
+                    Field::new(
+                        "element",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    true,
+                )],
+                true,
+            ),
+            Field::new_map(
+                "c3",
+                "key_value",
+                Field::new(
+                    "key",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    false,
+                ),
+                Field::new(
+                    "value",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                false,
+                true,
+            ),
+            Field::new_list(
+                "c4",
+                Field::new(
+                    "element",
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    true,
+                ),
+                true,
+            ),
+            Field::new_list(
+                "c5",
+                Field::new_struct(
+                    "element",
+                    vec![Field::new(
+                        "c0",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    )],
+                    true,
+                ),
+                true,
+            ),
+            Field::new_list(
+                "c6",
+                Field::new_map(
+                    "element",
+                    "key_value",
+                    Field::new(
+                        "key",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        false,
+                    ),
+                    Field::new(
+                        "value",
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        true,
+                    ),
+                    false,
+                    true,
+                ),
+                true,
+            ),
+        ]));
+
+        assert_eq!(batch.schema(), expected_schema);
 
         Ok(())
     }
