@@ -17,11 +17,9 @@
 /// // | 2  | bar  |,
 /// // | 3  | baz  |,
 /// // +----+------+,
-/// let df = df!()?; // empty DataFrame
-/// df.show().await?;
-/// // ++
-/// // ++
-/// // ++
+/// let df_empty = df!()?; // empty DataFrame
+/// assert_eq!(df_empty.schema().fields().len(), 0);
+/// assert_eq!(df_empty.count().await?, 0);
 /// # Ok(())
 /// # }
 /// ```

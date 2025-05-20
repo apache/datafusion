@@ -724,7 +724,7 @@ pub mod datasource;
 pub mod error;
 pub mod execution;
 
-/// helpers for creating [`DataFrame`]
+/// helpers for creating DataFrame
 pub mod macros;
 
 pub mod physical_planner;

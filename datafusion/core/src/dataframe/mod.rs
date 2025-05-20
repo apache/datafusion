@@ -167,9 +167,12 @@ impl Default for DataFrameWriteOptions {
 ///
 /// # Example
 /// ```
+/// # use std::sync::Arc;
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # use datafusion::functions_aggregate::expr_fn::min;
+/// # use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray};
+/// # use datafusion::arrow::datatypes::{DataType, Field, Schema};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
@@ -183,10 +186,25 @@ impl Default for DataFrameWriteOptions {
 /// // Perform the actual computation
 /// let results = df.collect();
 ///
+/// // Create a new dataframe with in-memory data
+/// let schema = Schema::new(vec![
+///     Field::new("id", DataType::Int32, true),
+///     Field::new("name", DataType::Utf8, true),
+/// ]);
+/// let batch = RecordBatch::try_new(
+///     Arc::new(schema),
+///     vec![
+///         Arc::new(Int32Array::from(vec![1, 2, 3])),
+///         Arc::new(StringArray::from(vec!["foo", "bar", "baz"])),
+///     ],
+/// )?;
+/// let df = ctx.read_batch(batch)?;
+/// df.show().await?;
+///
 /// // Create a new dataframe with in-memory data using macro
 /// let df = df!(
-///     "a" => ["a", "b", "c", "d"],
-///     "b" => [1, 10, 10, 100]
+///     "id" => [1, 2, 3],
+///     "name" => ["foo", "bar", "baz"]
 ///  )?;
 /// df.show().await?;
 /// # Ok(())
@@ -2249,7 +2267,7 @@ impl DataFrame {
         }
 
         let schema = Arc::new(Schema::new(fields));
-        let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+        let batch = RecordBatch::try_new(schema, arrays)?;
         let ctx = SessionContext::new();
         ctx.read_batch(batch)
     }
