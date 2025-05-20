@@ -78,15 +78,14 @@ impl Command {
                 exec_and_print(ctx, print_options, "SHOW TABLES".into()).await
             }
             Self::DescribeTableStmt(name) => {
-                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {}", name))
+                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {name}"))
                     .await
             }
             Self::Include(filename) => {
                 if let Some(filename) = filename {
                     let file = File::open(filename).map_err(|e| {
                         DataFusionError::Execution(format!(
-                            "Error opening {:?} {}",
-                            filename, e
+                            "Error opening {filename:?} {e}"
                         ))
                     })?;
                     exec_from_lines(ctx, &mut BufReader::new(file), print_options)
@@ -116,7 +115,7 @@ impl Command {
             Self::SearchFunctions(function) => {
                 if let Ok(func) = function.parse::<Function>() {
                     let details = func.function_details()?;
-                    println!("{}", details);
+                    println!("{details}");
                     Ok(())
                 } else {
                     exec_err!("{function} is not a supported function")

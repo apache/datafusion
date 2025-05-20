@@ -118,7 +118,7 @@ See [Reading Explain Plans](../explain-usage.md) for more information on how to 
 0 row(s) fetched.
 Elapsed 0.004 seconds.
 
-> EXPLAIN SELECT SUM(x) FROM t GROUP BY b;
+> EXPLAIN FORMAT INDENT SELECT SUM(x) FROM t GROUP BY b;
 +---------------+-------------------------------------------------------------------------------+
 | plan_type     | plan                                                                          |
 +---------------+-------------------------------------------------------------------------------+

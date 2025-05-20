@@ -304,9 +304,9 @@ impl AggregateUDFImpl for Count {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         if args.is_distinct {
-            let dtype: DataType = match &args.input_types[0] {
+            let dtype: DataType = match &args.input_fields[0].data_type() {
                 DataType::Dictionary(_, values_type) => (**values_type).clone(),
-                dtype => dtype.clone(),
+                &dtype => dtype.clone(),
             };
 
             Ok(vec![Field::new_list(
@@ -799,7 +799,7 @@ mod tests {
             name: "count",
             ignore_nulls: false,
             is_reversed: false,
-            return_type: &DataType::Int64,
+            return_field: &Field::new_list_field(DataType::Int64, true),
             ordering_req: &LexOrdering::default(),
         };
 

@@ -436,7 +436,7 @@ mod tests {
         schema: &Schema,
     ) -> Result<ScalarValue> {
         let args1 = AccumulatorArgs {
-            return_type: &DataType::Float64,
+            return_field: &Field::new("f", DataType::Float64, true),
             schema,
             ignore_nulls: false,
             ordering_req: &LexOrdering::default(),
@@ -447,7 +447,7 @@ mod tests {
         };
 
         let args2 = AccumulatorArgs {
-            return_type: &DataType::Float64,
+            return_field: &Field::new("f", DataType::Float64, true),
             schema,
             ignore_nulls: false,
             ordering_req: &LexOrdering::default(),
