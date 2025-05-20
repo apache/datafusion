@@ -234,7 +234,9 @@ impl AggregateUDFImpl for Max {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MaxAccumulator::try_new(acc_args.return_type)?))
+        Ok(Box::new(MaxAccumulator::try_new(
+            acc_args.return_field.data_type(),
+        )?))
     }
 
     fn aliases(&self) -> &[String] {
@@ -244,7 +246,7 @@ impl AggregateUDFImpl for Max {
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
-            args.return_type,
+            args.return_field.data_type(),
             Int8 | Int16
                 | Int32
                 | Int64
@@ -279,7 +281,7 @@ impl AggregateUDFImpl for Max {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.return_type;
+        let data_type = args.return_field.data_type();
         match data_type {
             Int8 => primitive_max_accumulator!(data_type, i8, Int8Type),
             Int16 => primitive_max_accumulator!(data_type, i16, Int16Type),
@@ -357,7 +359,9 @@ impl AggregateUDFImpl for Max {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMaxAccumulator::try_new(args.return_type)?))
+        Ok(Box::new(SlidingMaxAccumulator::try_new(
+            args.return_field.data_type(),
+        )?))
     }
 
     fn is_descending(&self) -> Option<bool> {
@@ -1202,7 +1206,9 @@ impl AggregateUDFImpl for Min {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MinAccumulator::try_new(acc_args.return_type)?))
+        Ok(Box::new(MinAccumulator::try_new(
+            acc_args.return_field.data_type(),
+        )?))
     }
 
     fn aliases(&self) -> &[String] {
@@ -1212,7 +1218,7 @@ impl AggregateUDFImpl for Min {
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
-            args.return_type,
+            args.return_field.data_type(),
             Int8 | Int16
                 | Int32
                 | Int64
@@ -1247,7 +1253,7 @@ impl AggregateUDFImpl for Min {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.return_type;
+        let data_type = args.return_field.data_type();
         match data_type {
             Int8 => primitive_min_accumulator!(data_type, i8, Int8Type),
             Int16 => primitive_min_accumulator!(data_type, i16, Int16Type),
@@ -1325,7 +1331,9 @@ impl AggregateUDFImpl for Min {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMinAccumulator::try_new(args.return_type)?))
+        Ok(Box::new(SlidingMinAccumulator::try_new(
+            args.return_field.data_type(),
+        )?))
     }
 
     fn is_descending(&self) -> Option<bool> {
