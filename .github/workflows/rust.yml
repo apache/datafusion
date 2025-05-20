@@ -398,10 +398,10 @@ jobs:
       - name: Setup wasm-pack
         run: |
           cargo install wasm-pack
+          echo "RUSTFLAGS='--cfg getrandom_backend=\"wasm_js\"'" >> $GITHUB_ENV
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         run: |
-          echo "RUSTFLAGS='--cfg getrandom_backend=\"wasm_js\"'" >> $GITHUB_ENV
           echo $RUSTFLAGS
           wasm-pack test --headless --firefox
           wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
