@@ -677,15 +677,7 @@ impl ExternalSorter {
         }
 
         // If less than sort_in_place_threshold_bytes, we sort in memory.
-        // Note:
-        // In theory we should always be able to sort in place, but some corner cases for merging testing
-        // failed, so we set a large threshold to avoid that.
-        // Also, we only support sort expressions with less than 3 columns for now. Because from testing, when
-        // columns > 3, the performance of in-place sort is worse than sort/merge.
-        // Need to further investigate the performance of in-place sort when columns > 3.
-        if self.expr.len() <= 2
-            && self.reservation.size() < self.sort_in_place_threshold_bytes
-        {
+        if self.reservation.size() < self.sort_in_place_threshold_bytes {
             let interleave_indices = self.build_sorted_indices(
                 self.in_mem_batches.as_slice(),
                 Arc::clone(&self.expr),
