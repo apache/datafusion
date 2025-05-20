@@ -30,8 +30,12 @@ use crate::datasource::{
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
+use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+#[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -60,7 +64,7 @@ use object_store::ObjectStore;
 /// Configuration for creating a [`ListingTable`]
 ///
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
     /// They should share the same schema and object store.
@@ -73,16 +77,16 @@ pub struct ListingTableConfig {
     ///
     /// See details on [`ListingTableConfig::with_listing_options`]
     pub options: Option<ListingOptions>,
+    /// schema_adapter to handle schema evolution of fields over time
+    pub schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl ListingTableConfig {
     /// Creates new [`ListingTableConfig`] for reading the specified URL
     pub fn new(table_path: ListingTableUrl) -> Self {
-        let table_paths = vec![table_path];
         Self {
-            table_paths,
-            file_schema: None,
-            options: None,
+            table_paths: vec![table_path],
+            ..Default::default()
         }
     }
 
@@ -92,8 +96,7 @@ impl ListingTableConfig {
     pub fn new_with_multi_paths(table_paths: Vec<ListingTableUrl>) -> Self {
         Self {
             table_paths,
-            file_schema: None,
-            options: None,
+            ..Default::default()
         }
     }
     /// Set the `schema` for the overall [`ListingTable`]
@@ -111,6 +114,7 @@ impl ListingTableConfig {
             table_paths: self.table_paths,
             file_schema: Some(schema),
             options: self.options,
+            schema_adapter_factory: self.schema_adapter_factory,
         }
     }
 
@@ -123,7 +127,21 @@ impl ListingTableConfig {
             table_paths: self.table_paths,
             file_schema: self.file_schema,
             options: Some(listing_options),
+            schema_adapter_factory: self.schema_adapter_factory,
         }
+    }
+
+    /// Add a schema adapter factory to the [`ListingTableConfig`]
+    ///
+    /// Schema adapters handle schema evolution over time, allowing the table to adapt
+    /// to changes in file schemas. This is particularly useful for handling nested fields
+    /// in formats like Parquet where the schema may evolve.
+    pub fn with_schema_adapter_factory(
+        mut self,
+        factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        self.schema_adapter_factory = Some(factory);
+        self
     }
 
     /// Returns a tuple of `(file_extension, optional compression_extension)`
@@ -201,6 +219,7 @@ impl ListingTableConfig {
             table_paths: self.table_paths,
             file_schema: self.file_schema,
             options: Some(listing_options),
+            schema_adapter_factory: self.schema_adapter_factory,
         })
     }
 
@@ -224,6 +243,7 @@ impl ListingTableConfig {
                     table_paths: self.table_paths,
                     file_schema: Some(schema),
                     options: Some(options),
+                    schema_adapter_factory: self.schema_adapter_factory,
                 })
             }
             None => internal_err!("No `ListingOptions` set for inferring schema"),
@@ -264,6 +284,7 @@ impl ListingTableConfig {
                     table_paths: self.table_paths,
                     file_schema: self.file_schema,
                     options: Some(options),
+                    schema_adapter_factory: self.schema_adapter_factory,
                 })
             }
             None => config_err!("No `ListingOptions` set for inferring schema"),
@@ -750,6 +771,8 @@ pub struct ListingTable {
     collected_statistics: FileStatisticsCache,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
+    /// schema_adapter to  handle schema evolution of fields over time
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl ListingTable {
@@ -786,6 +809,7 @@ impl ListingTable {
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             constraints: Constraints::empty(),
             column_defaults: HashMap::new(),
+            schema_adapter_factory: config.schema_adapter_factory,
         };
 
         Ok(table)
@@ -942,6 +966,11 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
+        let mut source = self.options.format.file_source();
+
+        // Apply schema adapter to source if available
+        source = source.with_schema_adapter(self.schema_adapter_factory.clone());
+
         // create the execution plan
         self.options
             .format
@@ -950,7 +979,7 @@ impl TableProvider for ListingTable {
                 FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
-                    self.options.format.file_source(),
+                    source,
                 )
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
@@ -1175,6 +1204,31 @@ impl ListingTable {
                 Ok(statistics)
             }
         }
+    }
+}
+
+/// Extension trait for FileSource to allow schema evolution support
+pub trait FileSourceExt {
+    /// Wraps the source in a schema-evolution wrapper if supported.
+    fn with_schema_adapter(
+        self: Arc<Self>,
+        factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    ) -> Arc<dyn FileSource>;
+}
+
+impl FileSourceExt for dyn FileSource {
+    fn with_schema_adapter(
+        self: Arc<Self>,
+        factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    ) -> Arc<dyn FileSource> {
+        #[cfg(feature = "parquet")]
+        if let Some(source) = self.as_any().downcast_ref::<ParquetSource>() {
+            if let Some(f) = factory {
+                return Arc::new(source.clone().with_schema_adapter_factory(f));
+            }
+            return self;
+        }
+        self
     }
 }
 
