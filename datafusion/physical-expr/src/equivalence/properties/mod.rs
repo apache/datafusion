@@ -484,7 +484,7 @@ impl EquivalenceProperties {
                     let nullable = element.expr.nullable(schema).unwrap_or(true);
                     options_compatible(&options, &opts, nullable)
                 }),
-                // Singleton expressions satisfies any requirement.
+                // Singleton expressions satisfy any requirement.
                 SortProperties::Singleton => true,
                 SortProperties::Unordered => false,
             };
@@ -532,7 +532,7 @@ impl EquivalenceProperties {
                     &element.options,
                     element.expr.nullable(schema).unwrap_or(true),
                 ),
-                // Singleton expressions satisfies any ordering.
+                // Singleton expressions satisfy any ordering.
                 SortProperties::Singleton => true,
                 SortProperties::Unordered => false,
             };
