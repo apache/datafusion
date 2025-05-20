@@ -1248,7 +1248,7 @@ impl FileSourceExt for ParquetSource {
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource> {
         if let Some(factory) = factory {
-            Arc::new(self.clone().with_schema_adapter_factory(factory))
+            Arc::new((*self).clone().with_schema_adapter_factory(factory))
         } else {
             self
         }
