@@ -136,7 +136,11 @@ impl ListingTableConfig {
         }
     }
 
-    /// Add `schema_adapter_factory` to [`ListingTableConfig`]
+    /// Add a schema adapter factory to the [`ListingTableConfig`]
+    ///
+    /// Schema adapters handle schema evolution over time, allowing the table to adapt
+    /// to changes in file schemas. This is particularly useful for handling nested fields
+    /// in formats like Parquet where the schema may evolve.
     pub fn with_schema_adapter_factory(
         self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
