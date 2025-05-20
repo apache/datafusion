@@ -1714,6 +1714,14 @@ impl DefaultPhysicalPlanner {
         let config = &session_state.config_options().explain;
         let explain_format = &e.explain_format;
 
+        if !e.logical_optimization_succeeded {
+            return Ok(Arc::new(ExplainExec::new(
+                Arc::clone(e.schema.inner()),
+                e.stringified_plans.clone(),
+                e.verbose,
+            )));
+        }
+
         match explain_format {
             ExplainFormat::Indent => { /* fall through */ }
             ExplainFormat::Tree => {
@@ -1755,12 +1763,6 @@ impl DefaultPhysicalPlanner {
                 stringified_plans,
                 e.verbose,
             )));
-        }
-
-        if !e.logical_optimization_succeeded {
-            if let Some(plan) = e.stringified_plans.last() {
-                return exec_err!("{}", plan.plan);
-            }
         }
 
         // The indent mode is quite sophisticated, and handles quite a few
