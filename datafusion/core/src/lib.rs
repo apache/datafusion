@@ -617,7 +617,7 @@
 //! The state required to execute queries is managed by the following
 //! structures:
 //!
-//! 1. [`SessionContext`]: State needed for creating [`LogicalPlan`]s such
+//! 1. [`SessionContext`]: State needed to create [`LogicalPlan`]s such
 //!    as the table definitions and the function registries.
 //!
 //! 2. [`TaskContext`]: State needed for execution such as the
