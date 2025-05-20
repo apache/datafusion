@@ -1222,36 +1222,29 @@ pub trait FileSourceExt {
     /// Wraps `self` in a schema-evolution wrapper if the format supports it,
     /// otherwise returns `self` unchanged.
     fn with_schema_adapter(
-        self: Arc<Self>,
+        self: Arc<dyn FileSource>,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource>;
 }
 
-// Provide a "no-op" default impl for *all* FileSources
-impl<T> FileSourceExt for T
-where
-    T: FileSource + 'static,
-{
+/// Implementation of FileSourceExt that handles the dynamic dispatch to the appropriate
+/// format-specific schema adapter logic.
+impl FileSourceExt for Arc<dyn FileSource> {
     fn with_schema_adapter(
-        self: Arc<Self>,
-        _factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    ) -> Arc<dyn FileSource> {
-        self
-    }
-}
-
-// Specialize for ParquetSource when the feature is enabled
-#[cfg(feature = "parquet")]
-impl FileSourceExt for ParquetSource {
-    fn with_schema_adapter(
-        self: Arc<Self>,
+        self: Arc<dyn FileSource>,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource> {
         if let Some(factory) = factory {
-            Arc::new((*self).clone().with_schema_adapter_factory(factory))
-        } else {
-            self
+            // Handle ParquetSource schema adaptation when the feature is enabled
+            #[cfg(feature = "parquet")]
+            if let Some(parquet_source) = self.as_any().downcast_ref::<ParquetSource>() {
+                return Arc::new(parquet_source.clone().with_schema_adapter_factory(factory));
+            }
+            
+            // Add more format-specific schema adapters here as needed
         }
+        // Return the original source if no adapters are available or applicable
+        self
     }
 }
 
