@@ -142,15 +142,11 @@ impl ListingTableConfig {
     /// to changes in file schemas. This is particularly useful for handling nested fields
     /// in formats like Parquet where the schema may evolve.
     pub fn with_schema_adapter_factory(
-        self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+        mut self,
+        factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Self {
-        Self {
-            table_paths: self.table_paths,
-            file_schema: self.file_schema,
-            options: self.options,
-            schema_adapter_factory: Some(schema_adapter_factory),
-        }
+        self.schema_adapter_factory = Some(factory);
+        self
     }
 
     /// Returns a tuple of `(file_extension, optional compression_extension)`
