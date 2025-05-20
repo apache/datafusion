@@ -38,7 +38,7 @@ use log::debug;
 
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
@@ -448,6 +448,9 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let n = match emit_to {
             EmitTo::All => self.count.len(),
             EmitTo::First(n) => n,
+            EmitTo::NextBlock => {
+                return internal_err!("correlation does not support blocked groups")
+            }
         };
 
         let mut values = Vec::with_capacity(n);
@@ -501,6 +504,9 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let n = match emit_to {
             EmitTo::All => self.count.len(),
             EmitTo::First(n) => n,
+            EmitTo::NextBlock => {
+                return internal_err!("correlation does not support blocked groups")
+            }
         };
 
         Ok(vec![

@@ -83,7 +83,7 @@ impl CommonOpt {
             config =
                 config.with_sort_spill_reservation_bytes(sort_spill_reservation_bytes);
         }
-
+        
         config
     }
 

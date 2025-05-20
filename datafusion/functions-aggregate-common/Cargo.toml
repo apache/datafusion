@@ -50,3 +50,7 @@ rand = { workspace = true }
 [[bench]]
 harness = false
 name = "accumulate"
+
+[[bench]]
+harness = false
+name = "null_state_accumulate"
