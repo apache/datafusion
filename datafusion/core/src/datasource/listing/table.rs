@@ -1222,8 +1222,11 @@ impl FileSourceExt for dyn FileSource {
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource> {
         #[cfg(feature = "parquet")]
-        if let Some(ps) = self.as_any().downcast_ref::<ParquetSource>() {
-            return Arc::new(ps.clone().with_schema_adapter_factory(factory));
+        if let Some(source) = self.as_any().downcast_ref::<ParquetSource>() {
+            if let Some(f) = factory {
+                return Arc::new(source.clone().with_schema_adapter_factory(f));
+            }
+            return self;
         }
         self
     }
