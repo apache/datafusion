@@ -1231,9 +1231,6 @@ impl FileSourceExt for dyn FileSource {
     }
 }
 
-// The apply_schema_adapter_to_source function was removed as its functionality
-// is now directly handled by the FileSourceExt::with_schema_adapter trait method.
-
 /// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
 ///
 /// This function collects files from the provided stream until either:
