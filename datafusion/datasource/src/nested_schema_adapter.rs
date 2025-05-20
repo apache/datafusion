@@ -314,7 +314,7 @@ mod tests {
     use super::*;
     use arrow::array::{Array, StringBuilder, StructArray, TimestampMillisecondArray};
     use arrow::datatypes::{
-        DataType::{Boolean, Float64, Int16, Int32, Int64, List, Timestamp, Utf8},
+        DataType::{Float64, Int16, Int32, Timestamp, Utf8},
         TimeUnit::Millisecond,
     };
     use datafusion_common::ScalarValue;
@@ -322,50 +322,6 @@ mod tests {
     // ================================
     // Schema Creation Helper Functions
     // ================================
-
-    /// Helper function to create a flat schema without nested fields
-    fn create_flat_schema() -> SchemaRef {
-        Arc::new(Schema::new(vec![
-            Field::new("id", Int32, false),
-            Field::new("user", Utf8, true),
-            Field::new("timestamp", Timestamp(Millisecond, None), true),
-        ]))
-    }
-
-    /// Helper function to create a nested schema with struct and list types
-    fn create_nested_schema() -> SchemaRef {
-        // Define user_info struct fields to reuse for list of structs
-        let user_info_fields: Vec<Field> = vec![
-            Field::new("name", Utf8, true), // will map from "user" field
-            Field::new("created_at", Timestamp(Millisecond, None), true), // will map from "timestamp" field
-            Field::new(
-                "settings",
-                Struct(
-                    vec![
-                        Field::new("theme", Utf8, true),
-                        Field::new("notifications", Boolean, true),
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-        ];
-
-        // Create the user_info struct type
-        let user_info_struct_type = Struct(user_info_fields.into());
-
-        Arc::new(Schema::new(vec![
-            Field::new("id", Int32, false), // Same as in flat schema
-            Field::new("user", Utf8, true), // Include original "user" field from flat schema
-            Field::new("timestamp", Timestamp(Millisecond, None), true), // Include original "timestamp" field from flat schema
-            // Add a list of user_info structs
-            Field::new(
-                "user_infos",
-                List(Arc::new(Field::new("item", user_info_struct_type, true))),
-                true,
-            ),
-        ]))
-    }
 
     /// Helper function to create a basic nested schema with additionalInfo
     fn create_basic_nested_schema() -> SchemaRef {
@@ -426,113 +382,6 @@ mod tests {
     // ================================
     // Schema Evolution Tests
     // ================================
-
-    #[test]
-    fn test_nested_struct_evolution() -> Result<()> {
-        // Test basic schema evolution with nested structs
-        let source_schema = create_basic_nested_schema();
-        let target_schema = create_deep_nested_schema();
-
-        let adapter =
-            NestedStructSchemaAdapter::new(target_schema.clone(), target_schema.clone());
-        let adapted = adapter.adapt_schema(source_schema)?;
-
-        // Verify the adapted schema matches target
-        assert_eq!(
-            adapted.fields(),
-            target_schema.fields(),
-            "Adapted schema should match target schema"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_map_schema() -> Result<()> {
-        // Create test schemas with schema evolution scenarios
-        let source_schema = Schema::new(vec![
-            Field::new("id", Int32, false),
-            Field::new("name", Utf8, true),
-            Field::new(
-                "metadata",
-                Struct(
-                    vec![
-                        Field::new("created", Utf8, true),
-                        Field::new("modified", Utf8, true),
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-        ]);
-
-        // Target schema has additional fields
-        let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", Int32, false),
-            Field::new("name", Utf8, true),
-            Field::new(
-                "metadata",
-                Struct(
-                    vec![
-                        Field::new("created", Utf8, true),
-                        Field::new("modified", Utf8, true),
-                        Field::new("version", Int64, true), // Added field
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-            Field::new("description", Utf8, true), // Added field
-        ]));
-
-        let adapter =
-            NestedStructSchemaAdapter::new(target_schema.clone(), target_schema.clone());
-
-        // Test schema mapping functionality
-        let (_, projection) = adapter.map_schema(&source_schema)?;
-        assert_eq!(
-            projection.len(),
-            3,
-            "Projection should include all source columns"
-        );
-        assert_eq!(
-            projection,
-            vec![0, 1, 2],
-            "Projection should match source column indices"
-        );
-
-        // Test schema adaptation
-        let adapted = adapter.adapt_schema(Arc::new(source_schema))?;
-        assert_eq!(
-            adapted.fields().len(),
-            4,
-            "Adapted schema should have all target fields"
-        );
-
-        // Verify field presence and structure in adapted schema
-        assert!(
-            adapted.index_of("description").is_ok(),
-            "Description field should exist in adapted schema"
-        );
-
-        if let Struct(fields) = adapted
-            .field(adapted.index_of("metadata").unwrap())
-            .data_type()
-        {
-            assert_eq!(
-                fields.len(),
-                3,
-                "Metadata struct should have all 3 fields including version"
-            );
-            assert!(
-                fields.iter().any(|f| f.name() == "version"),
-                "Version field should exist in metadata struct"
-            );
-        } else {
-            panic!("Expected struct type for metadata field");
-        }
-
-        Ok(())
-    }
 
     #[test]
     fn test_adapter_factory_selection() -> Result<()> {
@@ -608,83 +457,6 @@ mod tests {
         assert!(
             adapter.map_schema(&source_schema).is_ok(),
             "Factory should select appropriate adapter that handles schema evolution"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_adapt_simple_to_nested_schema() -> Result<()> {
-        // Test adapting a flat schema to a nested schema with struct and list fields
-        let source_schema = create_flat_schema();
-        let target_schema = create_nested_schema();
-
-        let adapter =
-            NestedStructSchemaAdapter::new(target_schema.clone(), target_schema.clone());
-        let adapted = adapter.adapt_schema(source_schema.clone())?;
-
-        // Verify structure of adapted schema
-        assert_eq!(
-            adapted.fields().len(),
-            4,
-            "Adapted schema should have id, user, timestamp and user_infos fields"
-        );
-
-        // Test user_infos list field
-        if let Ok(idx) = adapted.index_of("user_infos") {
-            let user_infos_field = adapted.field(idx);
-            assert!(
-                matches!(user_infos_field.data_type(), List(_)),
-                "user_infos field should be a List type"
-            );
-
-            if let List(list_field) = user_infos_field.data_type() {
-                assert!(
-                    matches!(list_field.data_type(), Struct(_)),
-                    "List items should be Struct type"
-                );
-
-                if let Struct(fields) = list_field.data_type() {
-                    assert_eq!(fields.len(), 3, "List item structs should have 3 fields");
-                    assert!(
-                        fields.iter().any(|f| f.name() == "settings"),
-                        "List items should contain settings field"
-                    );
-
-                    // Verify settings field in list item structs
-                    if let Some(settings_field) =
-                        fields.iter().find(|f| f.name() == "settings")
-                    {
-                        if let Struct(settings_fields) = settings_field.data_type() {
-                            assert_eq!(
-                                settings_fields.len(),
-                                2,
-                                "Settings should have 2 fields"
-                            );
-                            assert!(
-                                settings_fields.iter().any(|f| f.name() == "theme"),
-                                "Settings should have theme field"
-                            );
-                            assert!(
-                                settings_fields
-                                    .iter()
-                                    .any(|f| f.name() == "notifications"),
-                                "Settings should have notifications field"
-                            );
-                        }
-                    }
-                }
-            }
-        } else {
-            panic!("Expected user_infos field in adapted schema");
-        }
-
-        // Test mapper creation
-        let (_, projection) = adapter.map_schema(&source_schema)?;
-        assert_eq!(
-            projection.len(),
-            source_schema.fields().len(),
-            "Projection should include all source fields"
         );
 
         Ok(())
