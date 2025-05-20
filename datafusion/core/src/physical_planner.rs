@@ -1718,7 +1718,7 @@ impl DefaultPhysicalPlanner {
             return Ok(Arc::new(ExplainExec::new(
                 Arc::clone(e.schema.inner()),
                 e.stringified_plans.clone(),
-                e.verbose,
+                true,
             )));
         }
 
@@ -2731,12 +2731,20 @@ mod tests {
             schema: schema.to_dfschema_ref().unwrap(),
             logical_optimization_succeeded: false,
         };
-        let result = planner.handle_explain(&explain, &ctx.state()).await;
-
-        // Verify that the execution fails due to indentation error
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().starts_with("Execution error: Test Err"));
+        let plan = planner
+            .handle_explain(&explain, &ctx.state())
+            .await
+            .unwrap();
+        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+            let stringified_plans = plan.stringified_plans();
+            assert_eq!(stringified_plans.len(), 1);
+            assert_eq!(stringified_plans[0].plan.as_str(), "Test Err");
+        } else {
+            panic!(
+                "Plan was not an explain plan: {}",
+                displayable(plan.as_ref()).indent(true)
+            );
+        }
     }
 
     #[tokio::test]
