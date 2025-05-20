@@ -17,6 +17,7 @@
 
 pub mod ascii;
 pub mod char;
+pub mod luhn_check;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
