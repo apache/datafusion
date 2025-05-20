@@ -10,7 +10,7 @@ SELECT MIN(column1), MAX(column1) FROM VALUES
 query ??
 SELECT MIN(column1), MAX(column1) FROM VALUES
 (arrow_cast(make_array('a', 'b', 'c'), 'FixedSizeList(3, Utf8)')),
-(arrow_cast(make_array('a', 'b'), 'FixedSizeList(2, Utf8)'));
+(arrow_cast(make_array('a', 'b'), 'LargeList(Utf8)'));
 ----
 [a, b] [a, b, c]
 
