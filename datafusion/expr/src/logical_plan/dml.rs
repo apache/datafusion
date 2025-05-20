@@ -97,10 +97,10 @@ impl Hash for CopyTo {
 /// * `INSERT` - Appends new rows to the existing table. Calls
 ///   [`TableProvider::insert_into`]
 ///
-/// * `DELETE` - Removes rows from the table. NOT currently supported by the
+/// * `DELETE` - Removes rows from the table. Currently NOT supported by the
 ///   [`TableProvider`] trait or builtin sources.
 ///
-/// * `UPDATE` - Modifies existing rows in the table. NOT currently supported by
+/// * `UPDATE` - Modifies existing rows in the table. Currently NOT supported by
 ///    the [`TableProvider`] trait or builtin sources.
 ///
 /// * `CREATE TABLE AS SELECT` - Creates a new table and populates it with data
