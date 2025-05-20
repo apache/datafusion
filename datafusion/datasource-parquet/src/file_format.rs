@@ -1597,5 +1597,5 @@ fn preserve_conf_schema_adapter_factory(
         .downcast_ref::<ParquetSource>()
         .and_then(|parquet_source| parquet_source.schema_adapter_factory().cloned());
 
-    *source = source.clone().with_factory(factory);
+    *source = source.clone().with_schema_adapter_factory(factory);
 }

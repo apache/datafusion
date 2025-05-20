@@ -366,7 +366,7 @@ impl ParquetSource {
     ///
     /// This is a convenience method for code that already has an Option<Arc<dyn SchemaAdapterFactory>>.
     /// See [`ParquetSource::with_schema_adapter_factory`] for more details.
-    pub fn with_factory(
+    pub fn with_schema_adapter_factory(
         mut self,
         schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Self {
