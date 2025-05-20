@@ -55,10 +55,6 @@ datafusion-sql = { workspace = true }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 wasm-bindgen = "0.2.99"
 
-[patch.crates-io]
-# getrandom must be compiled with js feature
-getrandom = { version = "0.3", features = ["wasm_js"] }
-
 [dev-dependencies]
 insta = { workspace = true }
 object_store = { workspace = true }
