@@ -746,11 +746,9 @@ impl JoinFuzzTestCase {
                         path.to_str().unwrap(),
                         datafusion::prelude::ParquetReadOptions::default(),
                     )
-                    .await
-                    .unwrap()
+                    .await?
                     .collect()
-                    .await
-                    .unwrap();
+                    .await?;
 
                 batches.append(&mut batch);
             }
