@@ -62,3 +62,6 @@ object_store = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 wasm-bindgen-test = "0.3.49"
+
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
