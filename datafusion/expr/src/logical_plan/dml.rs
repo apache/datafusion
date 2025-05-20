@@ -109,6 +109,7 @@ impl Hash for CopyTo {
 ///
 /// Note that the structure is adapted from substrait WriteRel)
 ///
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 /// [`TableProvider::insert_into`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.insert_into
 #[derive(Clone)]
 pub struct DmlStatement {
