@@ -1467,7 +1467,7 @@ mod tests {
     use crate::test::TestMemoryExec;
 
     use arrow::array::*;
-    use arrow::compute::{concat_batches, SortOptions};
+    use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::test_util::batches_to_string;
