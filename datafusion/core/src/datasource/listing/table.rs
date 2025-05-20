@@ -969,8 +969,7 @@ impl TableProvider for ListingTable {
         let mut source = self.options.format.file_source();
 
         // Apply schema adapter to source if available
-        source =
-            apply_schema_adapter_to_source(source, self.schema_adapter_factory.clone());
+        source = source.with_schema_adapter(self.schema_adapter_factory.clone());
 
         // create the execution plan
         self.options
@@ -1241,20 +1240,8 @@ impl FileSourceExt for Arc<dyn FileSource> {
     }
 }
 
-/// Apply schema adapter to a file source if the adapter is available and compatible
-/// with the source type.
-///
-/// Currently only tested with ParquetSource schema adaptation for nested fields.
-/// In the future, this could be generalized to support other file formats
-/// through a trait-based mechanism.
-fn apply_schema_adapter_to_source(
-    source: Arc<dyn FileSource>,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-) -> Arc<dyn FileSource> {
-    // thanks to FileSourceExt, this will only wrap ParquetSource;
-    // all other formats just get returned as-is
-    source.with_schema_adapter(schema)
-}
+// The apply_schema_adapter_to_source function was removed as its functionality
+// is now directly handled by the FileSourceExt::with_schema_adapter trait method.
 
 /// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
 ///
