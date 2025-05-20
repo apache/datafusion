@@ -362,18 +362,6 @@ impl ParquetSource {
         self
     }
 
-    /// Set optional schema adapter factory from an Option.
-    ///
-    /// This is a convenience method for code that already has an Option<Arc<dyn SchemaAdapterFactory>>.
-    /// See [`ParquetSource::with_schema_adapter_factory`] for more details on the schema adapter concept.
-    pub fn with_schema_adapter_factory_opt(
-        mut self,
-        schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    ) -> Self {
-        self.schema_adapter_factory = schema_adapter_factory;
-        self
-    }
-
     /// If true, the predicate will be used during the parquet scan.
     /// Defaults to false
     ///

@@ -1597,6 +1597,7 @@ fn preserve_conf_schema_adapter_factory(
         .downcast_ref::<ParquetSource>()
         .and_then(|parquet_source| parquet_source.schema_adapter_factory().cloned());
 
-    // Use the explicit method that accepts Option<Arc<dyn SchemaAdapterFactory>>
-    *source = source.clone().with_schema_adapter_factory_opt(factory);
+    if let Some(factory) = factory {
+        *source = source.clone().with_schema_adapter_factory(factory);
+    }
 }
