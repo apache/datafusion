@@ -311,9 +311,9 @@
 //! ```
 //!
 //! A [`TableProvider`] provides information for planning and
-//! an [`ExecutionPlan`]s for execution. DataFusion includes [`ListingTable`],
+//! an [`ExecutionPlan`] for execution. DataFusion includes [`ListingTable`],
 //! a [`TableProvider`] which reads individual files or directories of files
-//! ("partitioned datasets") of several common file formats. Uses can add
+//! ("partitioned datasets") of several common file formats. Users can add
 //! support for new file formats by implementing the [`TableProvider`]
 //! trait.
 //!
@@ -488,8 +488,8 @@
 //! DataFusion automatically runs each plan with multiple CPU cores using
 //! a [Tokio] [`Runtime`] as a thread pool. While tokio is most commonly used
 //! for asynchronous network I/O, the combination of an efficient, work-stealing
-//! scheduler and first class compiler support for automatic continuation
-//! generation (`async`), also makes it a compelling choice for CPU intensive
+//! scheduler, and first class compiler support for automatic continuation
+//! generation (`async`) also makes it a compelling choice for CPU intensive
 //! applications as explained in the [Using Rustlang’s Async Tokio
 //! Runtime for CPU-Bound Tasks] blog.
 //!
@@ -497,7 +497,7 @@
 //! configuration setting, which defaults to the number of CPU cores.
 //! While preparing for execution, DataFusion tries to create this many distinct
 //! `async` [`Stream`]s for each `ExecutionPlan`.
-//! The `Stream`s for certain `ExecutionPlans`, such as as [`RepartitionExec`]
+//! The `Stream`s for certain `ExecutionPlan`s, such as [`RepartitionExec`]
 //! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that are run by
 //! threads managed by the `Runtime`.
 //! Many DataFusion `Stream`s perform CPU intensive processing.
@@ -617,8 +617,8 @@
 //! The state required to execute queries is managed by the following
 //! structures:
 //!
-//! 1. [`SessionContext`]: State needed for create [`LogicalPlan`]s such
-//!    as the table definitions, and the function registries.
+//! 1. [`SessionContext`]: State needed for creating [`LogicalPlan`]s such
+//!    as the table definitions and the function registries.
 //!
 //! 2. [`TaskContext`]: State needed for execution such as the
 //!    [`MemoryPool`], [`DiskManager`], and [`ObjectStoreRegistry`].
