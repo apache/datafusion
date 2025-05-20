@@ -807,7 +807,7 @@ displayed the same as <code class="docutils literal notranslate"><span class="pr
 </div>
 <p>Looking at the <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output we can see that the optimizer has effectively rewritten <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">2</span></code> into effectively
 <code class="docutils literal notranslate"><span class="pre">3</span> <span class="pre">as</span> <span class="pre">&quot;1</span> <span class="pre">+</span> <span class="pre">2&quot;</span></code>:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; explain select 1 + 2;
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&gt; explain format indent select 1 + 2;
 +---------------+-------------------------------------------------+
 | plan_type     | plan                                            |
 +---------------+-------------------------------------------------+

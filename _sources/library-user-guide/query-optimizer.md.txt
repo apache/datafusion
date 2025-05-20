@@ -165,7 +165,7 @@ Looking at the `EXPLAIN` output we can see that the optimizer has effectively re
 `3 as "1 + 2"`:
 
 ```text
-> explain select 1 + 2;
+> explain format indent select 1 + 2;
 +---------------+-------------------------------------------------+
 | plan_type     | plan                                            |
 +---------------+-------------------------------------------------+
