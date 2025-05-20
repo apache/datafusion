@@ -1218,16 +1218,16 @@ pub trait FileSourceExt {
     /// Wraps the source in a schema-evolution wrapper if the format supports it,
     /// otherwise returns the source unchanged.
     fn with_schema_adapter(
-        self: Arc<Self>,
+        self,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource>;
 }
 
 /// Implementation that handles the dynamic dispatch to the appropriate
 /// format-specific schema adapter logic.
-impl<T: FileSource + ?Sized> FileSourceExt for T {
+impl FileSourceExt for Arc<dyn FileSource> {
     fn with_schema_adapter(
-        self: Arc<Self>,
+        self,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource> {
         if let Some(factory) = factory {
@@ -1242,7 +1242,7 @@ impl<T: FileSource + ?Sized> FileSourceExt for T {
             // Add more format-specific schema adapters here as needed
         }
         // Return the original source if no adapters are available or applicable
-        self as Arc<dyn FileSource>
+        self
     }
 }
 
