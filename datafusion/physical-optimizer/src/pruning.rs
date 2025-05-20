@@ -1610,8 +1610,8 @@ fn build_predicate_expression(
 
     // TODO(ets): this is rather parquet specific...still wonder if this should be done
     //            at the datasource level
-    let colidx =
-        column_index_for_expr(&left, schema).or(column_index_for_expr(&right, schema));
+    let colidx = column_index_for_expr(&left, schema)
+        .or_else(|| column_index_for_expr(&right, schema));
     if let Some(colidx) = colidx {
         let col_order = column_orderings[colidx];
 
