@@ -2069,37 +2069,36 @@ fn maybe_fix_physical_column_name(
     expr: Result<Arc<dyn PhysicalExpr>>,
     input_physical_schema: &SchemaRef,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.and_then(|e| {
-        e.transform_down(|node| {
-            if let Some(column) = node.as_any().downcast_ref::<Column>() {
-                let idx = column.index();
-                let physical_field = input_physical_schema.field(idx);
-                let expr_col_name = column.name();
-                let physical_name = physical_field.name();
+    let Ok(expr) = expr else { return expr };
+    expr.transform_down(|node| {
+        if let Some(column) = node.as_any().downcast_ref::<Column>() {
+            let idx = column.index();
+            let physical_field = input_physical_schema.field(idx);
+            let expr_col_name = column.name();
+            let physical_name = physical_field.name();
 
-                if expr_col_name != physical_name {
-                    // handle edge cases where the physical_name contains ':'.
-                    let colon_count = physical_name.matches(':').count();
-                    let mut splits = expr_col_name.match_indices(':');
-                    let split_pos = splits.nth(colon_count);
+            if expr_col_name != physical_name {
+                // handle edge cases where the physical_name contains ':'.
+                let colon_count = physical_name.matches(':').count();
+                let mut splits = expr_col_name.match_indices(':');
+                let split_pos = splits.nth(colon_count);
 
-                    if let Some((i, _)) = split_pos {
-                        let base_name = &expr_col_name[..i];
-                        if base_name == physical_name {
-                            let updated_column = Column::new(physical_name, idx);
-                            return Ok(Transformed::yes(Arc::new(updated_column)));
-                        }
+                if let Some((i, _)) = split_pos {
+                    let base_name = &expr_col_name[..i];
+                    if base_name == physical_name {
+                        let updated_column = Column::new(physical_name, idx);
+                        return Ok(Transformed::yes(Arc::new(updated_column)));
                     }
                 }
-
-                // If names already match or fix is not possible, just leave it as it is
-                Ok(Transformed::no(node))
-            } else {
-                Ok(Transformed::no(node))
             }
-        })
-        .data()
+
+            // If names already match or fix is not possible, just leave it as it is
+            Ok(Transformed::no(node))
+        } else {
+            Ok(Transformed::no(node))
+        }
     })
+    .data()
 }
 
 struct OptimizationInvariantChecker<'a> {
