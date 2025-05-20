@@ -1263,7 +1263,10 @@ fn apply_schema_adapter_to_source(
 ) -> Arc<dyn FileSource> {
     // thanks to FileSourceExt, this will only wrap ParquetSource;
     // all other formats just get returned as-is
-    FileSourceExt::with_schema_adapter(source, schema_adapter_factory)
+    <Arc<dyn FileSource> as FileSourceExt>::with_schema_adapter(
+        source,
+        schema_adapter_factory,
+    )
 }
 
 /// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
