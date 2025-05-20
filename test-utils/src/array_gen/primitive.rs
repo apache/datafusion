@@ -66,6 +66,7 @@ impl PrimitiveArrayGenerator {
             | DataType::Time32(_)
             | DataType::Time64(_)
             | DataType::Interval(_)
+            | DataType::Duration(_)
             | DataType::Binary
             | DataType::LargeBinary
             | DataType::BinaryView
