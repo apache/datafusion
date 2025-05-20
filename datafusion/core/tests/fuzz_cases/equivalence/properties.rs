@@ -70,7 +70,8 @@ fn test_find_longest_permutation_random() -> Result<()> {
         for n_req in 0..=exprs.len() {
             for exprs in exprs.iter().combinations(n_req) {
                 let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-                let (ordering, indices) = eq_properties.find_longest_permutation(&exprs);
+                let (ordering, indices) =
+                    eq_properties.find_longest_permutation(&exprs)?;
                 // Make sure that find_longest_permutation return values are consistent
                 let ordering2 = indices
                     .iter()

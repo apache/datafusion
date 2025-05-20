@@ -25,11 +25,9 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
-use datafusion_physical_plan::aggregates::concat_slices;
+use datafusion_physical_plan::aggregates::{concat_slices, AggregateExec};
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
-use datafusion_physical_plan::{
-    aggregates::AggregateExec, ExecutionPlan, ExecutionPlanProperties,
-};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use crate::PhysicalOptimizerRule;
 
@@ -93,14 +91,12 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                 // If the existing ordering satisfies a prefix of the GROUP BY
                 // expressions, prefix requirements with this section. In this
                 // case, aggregation will work more efficiently.
-                let indices = get_ordered_partition_by_indices(&groupby_exprs, input);
+                let indices = get_ordered_partition_by_indices(&groupby_exprs, input)?;
                 let requirement = indices
                     .iter()
                     .map(|&idx| {
                         PhysicalSortRequirement::new(
-                            Arc::<dyn datafusion_physical_plan::PhysicalExpr>::clone(
-                                &groupby_exprs[idx],
-                            ),
+                            Arc::clone(&groupby_exprs[idx]),
                             None,
                         )
                     })

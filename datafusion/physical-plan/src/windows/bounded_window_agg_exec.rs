@@ -114,7 +114,7 @@ impl BoundedWindowAggExec {
                 let indices = get_ordered_partition_by_indices(
                     window_expr[0].partition_by(),
                     &input,
-                );
+                )?;
                 if indices.len() == partition_by_exprs.len() {
                     indices
                 } else {

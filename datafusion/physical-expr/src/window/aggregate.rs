@@ -72,7 +72,7 @@ impl PlainAggregateWindowExpr {
         &self,
         eq_properties: &mut EquivalenceProperties,
         window_expr_index: usize,
-    ) {
+    ) -> Result<()> {
         if let Some(expr) = self
             .get_aggregate_expr()
             .get_result_ordering(window_expr_index)
@@ -81,8 +81,9 @@ impl PlainAggregateWindowExpr {
                 eq_properties,
                 expr,
                 &self.partition_by,
-            );
+            )?;
         }
+        Ok(())
     }
 }
 

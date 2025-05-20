@@ -316,11 +316,11 @@ pub(crate) fn calc_requirements<
 pub fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
-) -> Vec<usize> {
+) -> Result<Vec<usize>> {
     let (_, indices) = input
         .equivalence_properties()
-        .find_longest_permutation(partition_by_exprs);
-    indices
+        .find_longest_permutation(partition_by_exprs)?;
+    Ok(indices)
 }
 
 pub(crate) fn get_partition_by_sort_exprs(
@@ -336,7 +336,7 @@ pub(crate) fn get_partition_by_sort_exprs(
     assert!(ordered_partition_by_indices.len() <= partition_by_exprs.len());
     let (ordering, _) = input
         .equivalence_properties()
-        .find_longest_permutation(&ordered_partition_exprs);
+        .find_longest_permutation(&ordered_partition_exprs)?;
     if ordering.len() == ordered_partition_exprs.len() {
         Ok(ordering)
     } else {
@@ -382,7 +382,7 @@ pub(crate) fn window_equivalence_properties(
             return Ok(window_eq_properties);
         } else if let Some(std_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
         {
-            std_expr.add_equal_orderings(&mut window_eq_properties);
+            std_expr.add_equal_orderings(&mut window_eq_properties)?;
         } else if let Some(plain_expr) =
             expr.as_any().downcast_ref::<PlainAggregateWindowExpr>()
         {
@@ -417,7 +417,7 @@ pub(crate) fn window_equivalence_properties(
                 plain_expr.add_equal_orderings(
                     &mut window_eq_properties,
                     window_expr_indices[i],
-                );
+                )?;
             }
         } else if let Some(sliding_expr) =
             expr.as_any().downcast_ref::<SlidingAggregateWindowExpr>()
@@ -591,7 +591,7 @@ pub fn get_window_mode(
     input: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<(bool, InputOrderMode)>> {
     let mut input_eqs = input.equivalence_properties().clone();
-    let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
+    let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs)?;
     let partition_by_reqs = indices
         .iter()
         .map(|&idx| PhysicalSortRequirement {

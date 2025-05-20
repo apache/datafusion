@@ -70,15 +70,19 @@ impl StandardWindowExpr {
     /// If `self.expr` doesn't have an ordering, ordering equivalence properties
     /// are not updated. Otherwise, ordering equivalence properties are updated
     /// by the ordering of `self.expr`.
-    pub fn add_equal_orderings(&self, eq_properties: &mut EquivalenceProperties) {
+    pub fn add_equal_orderings(
+        &self,
+        eq_properties: &mut EquivalenceProperties,
+    ) -> Result<()> {
         let schema = eq_properties.schema();
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
             add_new_ordering_expr_with_partition_by(
                 eq_properties,
                 fn_res_ordering,
                 &self.partition_by,
-            );
+            )?;
         }
+        Ok(())
     }
 }
 
@@ -279,7 +283,7 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
     eqp: &mut EquivalenceProperties,
     expr: PhysicalSortExpr,
     partition_by: &[Arc<dyn PhysicalExpr>],
-) {
+) -> Result<()> {
     if partition_by.is_empty() {
         // In the absence of a PARTITION BY, ordering of `self.expr` is global:
         eqp.add_ordering([expr]);
@@ -290,10 +294,11 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
         // expressions and existing ordering expressions are equal (w.r.t.
         // set equality), we can prefix the ordering of `self.expr` with
         // the existing ordering.
-        let (mut ordering, _) = eqp.find_longest_permutation(partition_by);
+        let (mut ordering, _) = eqp.find_longest_permutation(partition_by)?;
         if ordering.len() == partition_by.len() {
             ordering.push(expr);
             eqp.add_ordering(ordering);
         }
     }
+    Ok(())
 }

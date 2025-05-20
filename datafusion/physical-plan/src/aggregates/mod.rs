@@ -477,7 +477,7 @@ impl AggregateExec {
         // If existing ordering satisfies a prefix of the GROUP BY expressions,
         // prefix requirements with this section. In this case, aggregation will
         // work more efficiently.
-        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
+        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input)?;
         let mut new_requirements = indices
             .iter()
             .map(|&idx| {

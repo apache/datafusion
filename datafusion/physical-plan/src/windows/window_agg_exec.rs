@@ -81,7 +81,7 @@ impl WindowAggExec {
         let schema = Arc::new(schema);
 
         let ordered_partition_by_indices =
-            get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
+            get_ordered_partition_by_indices(window_expr[0].partition_by(), &input)?;
         let cache = Self::compute_properties(Arc::clone(&schema), &input, &window_expr)?;
         Ok(Self {
             input,

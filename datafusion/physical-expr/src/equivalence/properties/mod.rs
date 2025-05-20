@@ -1043,7 +1043,7 @@ impl EquivalenceProperties {
     pub fn find_longest_permutation(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> (Vec<PhysicalSortExpr>, Vec<usize>) {
+    ) -> Result<(Vec<PhysicalSortExpr>, Vec<usize>)> {
         let mut eq_properties = self.clone();
         let mut result = vec![];
         // The algorithm is as follows:
@@ -1091,15 +1091,13 @@ impl EquivalenceProperties {
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
                 let const_expr = ConstExpr::from(Arc::clone(expr));
-                eq_properties
-                    .add_constants(std::iter::once(const_expr))
-                    .unwrap();
+                eq_properties.add_constants(std::iter::once(const_expr))?;
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
         }
-        result.into_iter().unzip()
+        Ok(result.into_iter().unzip())
     }
 
     /// This function determines whether the provided expression is constant

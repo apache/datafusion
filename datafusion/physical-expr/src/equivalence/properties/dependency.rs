@@ -544,7 +544,7 @@ mod tests {
             PhysicalSortExpr::new(Arc::new(Column::new("b", 1)), sort_options_not),
             PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), sort_options),
         ]);
-        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns)?;
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
@@ -573,7 +573,7 @@ mod tests {
                 PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), sort_options),
             ],
         ]);
-        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns)?;
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
@@ -600,7 +600,7 @@ mod tests {
             PhysicalSortExpr::new(Arc::new(Column::new("c", 2)), sort_options),
             PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), sort_options),
         ]);
-        let (_, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        let (_, idxs) = eq_properties.find_longest_permutation(&required_columns)?;
         assert_eq!(idxs, vec![0]);
 
         Ok(())
@@ -767,7 +767,7 @@ mod tests {
         for (exprs, expected) in test_cases {
             let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
             let expected = convert_to_sort_exprs(&expected);
-            let (actual, _) = eq_properties.find_longest_permutation(&exprs);
+            let (actual, _) = eq_properties.find_longest_permutation(&exprs)?;
             assert_eq!(actual, expected);
         }
 
@@ -796,7 +796,7 @@ mod tests {
         for (exprs, expected) in test_cases {
             let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
             let expected = convert_to_sort_exprs(&expected);
-            let (actual, _) = eq_properties.find_longest_permutation(&exprs);
+            let (actual, _) = eq_properties.find_longest_permutation(&exprs)?;
             assert_eq!(actual, expected);
         }
 
