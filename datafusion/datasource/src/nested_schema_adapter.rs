@@ -21,9 +21,8 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
-use arrow::datatypes::{DataType::Struct, Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{DataType::Struct, Field, Schema, SchemaRef};
 use datafusion_common::{ColumnStatistics, Result};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::schema_adapter::{
@@ -105,52 +104,6 @@ pub struct NestedStructSchemaAdapter {
     table_schema: SchemaRef,
 }
 
-/// Adapt the source schema fields to match the target schema while preserving
-/// nested struct fields and handling field additions/removals
-///
-/// The helper function adapt_fields creates a HashMap from the source fields for each call.
-/// If this function is called frequently or on large schemas, consider whether the
-/// performance overhead is acceptable or if caching/optimizing the lookup could be beneficial.
-fn adapt_fields(source_fields: &Fields, target_fields: &Fields) -> Vec<Field> {
-    let mut adapted_fields = Vec::new();
-    let source_map: HashMap<_, _> = source_fields
-        .iter()
-        .map(|f| (f.name().as_str(), f))
-        .collect();
-
-    for target_field in target_fields {
-        match source_map.get(target_field.name().as_str()) {
-            Some(source_field) => {
-                match (source_field.data_type(), target_field.data_type()) {
-                    // Recursively adapt nested struct fields
-                    (Struct(source_children), Struct(target_children)) => {
-                        let adapted_children =
-                            adapt_fields(source_children, target_children);
-                        adapted_fields.push(Field::new(
-                            target_field.name(),
-                            Struct(adapted_children.into()),
-                            target_field.is_nullable(),
-                        ));
-                    }
-                    // If types match exactly, keep source field
-                    _ if source_field.data_type() == target_field.data_type() => {
-                        adapted_fields.push(source_field.as_ref().clone());
-                    }
-                    // Types don't match - use target field definition
-                    _ => {
-                        adapted_fields.push(target_field.as_ref().clone());
-                    }
-                }
-            }
-            // Field doesn't exist in source - add from target
-            None => {
-                adapted_fields.push(target_field.as_ref().clone());
-            }
-        }
-    }
-
-    adapted_fields
-}
 impl NestedStructSchemaAdapter {
     /// Create a new NestedStructSchemaAdapter with the target schema
     pub fn new(projected_table_schema: SchemaRef, table_schema: SchemaRef) -> Self {
@@ -166,17 +119,6 @@ impl NestedStructSchemaAdapter {
 
     pub fn table_schema(&self) -> &Schema {
         self.table_schema.as_ref()
-    }
-
-    // Takes a source schema and transforms it to match the structure of the target schema.
-    fn adapt_schema(&self, source_schema: SchemaRef) -> Result<SchemaRef> {
-        let adapted_fields =
-            adapt_fields(source_schema.fields(), self.table_schema.fields());
-
-        Ok(Arc::new(Schema::new_with_metadata(
-            adapted_fields,
-            self.table_schema.metadata().clone(),
-        )))
     }
 }
 
