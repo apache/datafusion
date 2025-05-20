@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::arrow::datatypes::Field;
+use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
@@ -28,7 +28,7 @@ pub struct PartitionEvaluatorArgs<'a> {
     input_exprs: &'a [Arc<dyn PhysicalExpr>],
     /// The corresponding fields of expressions passed as arguments
     /// to the user-defined window function.
-    input_fields: &'a [Field],
+    input_fields: &'a [FieldRef],
     /// Set to `true` if the user-defined window function is reversed.
     is_reversed: bool,
     /// Set to `true` if `IGNORE NULLS` is specified.
@@ -51,7 +51,7 @@ impl<'a> PartitionEvaluatorArgs<'a> {
     ///
     pub fn new(
         input_exprs: &'a [Arc<dyn PhysicalExpr>],
-        input_fields: &'a [Field],
+        input_fields: &'a [FieldRef],
         is_reversed: bool,
         ignore_nulls: bool,
     ) -> Self {
@@ -71,7 +71,7 @@ impl<'a> PartitionEvaluatorArgs<'a> {
 
     /// Returns the [`Field`]s corresponding to the input expressions
     /// to the user-defined window function.
-    pub fn input_fields(&self) -> &'a [Field] {
+    pub fn input_fields(&self) -> &'a [FieldRef] {
         self.input_fields
     }
 

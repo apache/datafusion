@@ -29,7 +29,7 @@ use crate::window::{
 use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 
 use arrow::array::{Array, ArrayRef};
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
@@ -80,7 +80,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         self
     }
 
-    fn field(&self) -> Result<Field> {
+    fn field(&self) -> Result<FieldRef> {
         Ok(self.aggregate.field())
     }
 

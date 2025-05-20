@@ -17,7 +17,7 @@
 
 use super::binary::binary_numeric_coercion;
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
@@ -84,9 +84,9 @@ pub fn data_types_with_scalar_udf(
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn fields_with_aggregate_udf(
-    current_fields: &[Field],
+    current_fields: &[FieldRef],
     func: &AggregateUDF,
-) -> Result<Vec<Field>> {
+) -> Result<Vec<FieldRef>> {
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
@@ -121,7 +121,10 @@ pub fn fields_with_aggregate_udf(
     Ok(current_fields
         .iter()
         .zip(updated_types)
-        .map(|(current_field, new_type)| current_field.clone().with_data_type(new_type))
+        .map(|(current_field, new_type)| {
+            current_field.as_ref().clone().with_data_type(new_type)
+        })
+        .map(Arc::new)
         .collect())
 }
 
@@ -133,9 +136,9 @@ pub fn fields_with_aggregate_udf(
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn fields_with_window_udf(
-    current_fields: &[Field],
+    current_fields: &[FieldRef],
     func: &WindowUDF,
-) -> Result<Vec<Field>> {
+) -> Result<Vec<FieldRef>> {
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
@@ -170,7 +173,10 @@ pub fn fields_with_window_udf(
     Ok(current_fields
         .iter()
         .zip(updated_types)
-        .map(|(current_field, new_type)| current_field.clone().with_data_type(new_type))
+        .map(|(current_field, new_type)| {
+            current_field.as_ref().clone().with_data_type(new_type)
+        })
+        .map(Arc::new)
         .collect())
 }
 

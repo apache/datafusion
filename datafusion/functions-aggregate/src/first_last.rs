@@ -29,8 +29,8 @@ use arrow::array::{
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, LexicographicalComparator, SortColumn, SortOptions};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field, Float16Type,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field, FieldRef,
+    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
@@ -169,14 +169,15 @@ impl AggregateUDFImpl for FirstValue {
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let mut fields = vec![Field::new(
             format_state_name(args.name, "first_value"),
             args.return_field.data_type().clone(),
             true,
-        )];
+        )
+        .into()];
         fields.extend(args.ordering_fields.to_vec());
-        fields.push(Field::new("is_set", DataType::Boolean, true));
+        fields.push(Field::new("is_set", DataType::Boolean, true).into());
         Ok(fields)
     }
 
@@ -1046,7 +1047,7 @@ impl AggregateUDFImpl for LastValue {
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let StateFieldsArgs {
             name,
             input_fields,
@@ -1058,9 +1059,10 @@ impl AggregateUDFImpl for LastValue {
             format_state_name(name, "last_value"),
             input_fields[0].data_type().clone(),
             true,
-        )];
+        )
+        .into()];
         fields.extend(ordering_fields.to_vec());
-        fields.push(Field::new("is_set", DataType::Boolean, true));
+        fields.push(Field::new("is_set", DataType::Boolean, true).into());
         Ok(fields)
     }
 

@@ -26,8 +26,8 @@ use std::mem::{size_of, size_of_val};
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{ArrowNumericType, AsArray};
-use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::ArrowPrimitiveType;
+use arrow::datatypes::{ArrowNativeType, FieldRef};
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type,
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
@@ -201,20 +201,22 @@ impl AggregateUDFImpl for Sum {
         }
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "sum distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
                 Field::new_list_field(args.return_field.data_type().clone(), true),
                 false,
-            )])
+            )
+            .into()])
         } else {
             Ok(vec![Field::new(
                 format_state_name(args.name, "sum"),
                 args.return_field.data_type().clone(),
                 true,
-            )])
+            )
+            .into()])
         }
     }
 

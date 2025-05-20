@@ -482,15 +482,15 @@ mod tests {
         ])));
 
         let arg_fields = vec![
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
         ];
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 3,
-            return_field: &Field::new("f", Utf8, true),
+            return_field: Field::new("f", Utf8, true).into(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -518,15 +518,15 @@ mod tests {
         ])));
 
         let arg_fields = vec![
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
         ];
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 3,
-            return_field: &Field::new("f", Utf8, true),
+            return_field: Field::new("f", Utf8, true).into(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;

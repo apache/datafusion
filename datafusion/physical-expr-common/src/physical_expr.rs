@@ -25,7 +25,7 @@ use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
@@ -81,12 +81,12 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
     /// The output field associated with this expression
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
-        Ok(Field::new(
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
             format!("{self}"),
             self.data_type(input_schema)?,
             self.nullable(input_schema)?,
-        ))
+        )))
     }
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
