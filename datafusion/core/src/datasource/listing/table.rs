@@ -1238,9 +1238,11 @@ impl FileSourceExt for Arc<dyn FileSource> {
             // Handle ParquetSource schema adaptation when the feature is enabled
             #[cfg(feature = "parquet")]
             if let Some(parquet_source) = self.as_any().downcast_ref::<ParquetSource>() {
-                return Arc::new(parquet_source.clone().with_schema_adapter_factory(factory));
+                return Arc::new(
+                    parquet_source.clone().with_schema_adapter_factory(factory),
+                );
             }
-            
+
             // Add more format-specific schema adapters here as needed
         }
         // Return the original source if no adapters are available or applicable
@@ -1260,7 +1262,10 @@ fn apply_schema_adapter_to_source(
 ) -> Arc<dyn FileSource> {
     // thanks to FileSourceExt, this will only wrap ParquetSource;
     // all other formats just get returned as-is
-    source.with_schema_adapter(schema_adapter_factory)
+    <Arc<dyn FileSource> as FileSourceExt>::with_schema_adapter(
+        source,
+        schema_adapter_factory,
+    )
 }
 
 /// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
