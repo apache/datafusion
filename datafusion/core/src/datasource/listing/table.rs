@@ -1218,23 +1218,22 @@ pub trait FileSourceExt {
     /// Wraps the source in a schema-evolution wrapper if the format supports it,
     /// otherwise returns the source unchanged.
     fn with_schema_adapter(
-        source: Arc<dyn FileSource>,
+        self: Arc<Self>,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource>;
 }
 
 /// Implementation that handles the dynamic dispatch to the appropriate
 /// format-specific schema adapter logic.
-impl FileSourceExt for Arc<dyn FileSource> {
+impl<T: FileSource + ?Sized> FileSourceExt for T {
     fn with_schema_adapter(
-        source: Arc<dyn FileSource>,
+        self: Arc<Self>,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource> {
         if let Some(factory) = factory {
             // Handle ParquetSource schema adaptation when the feature is enabled
             #[cfg(feature = "parquet")]
-            if let Some(parquet_source) = source.as_any().downcast_ref::<ParquetSource>()
-            {
+            if let Some(parquet_source) = self.as_any().downcast_ref::<ParquetSource>() {
                 return Arc::new(
                     parquet_source.clone().with_schema_adapter_factory(factory),
                 );
@@ -1243,7 +1242,7 @@ impl FileSourceExt for Arc<dyn FileSource> {
             // Add more format-specific schema adapters here as needed
         }
         // Return the original source if no adapters are available or applicable
-        source
+        self
     }
 }
 
@@ -1259,10 +1258,7 @@ fn apply_schema_adapter_to_source(
 ) -> Arc<dyn FileSource> {
     // thanks to FileSourceExt, this will only wrap ParquetSource;
     // all other formats just get returned as-is
-    <Arc<dyn FileSource> as FileSourceExt>::with_schema_adapter(
-        source,
-        schema_adapter_factory,
-    )
+    source.with_schema_adapter(schema_adapter_factory)
 }
 
 /// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
