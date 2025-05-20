@@ -52,7 +52,7 @@ macro_rules! grouping_id {
 
 #[user_doc(
     doc_section(label = "Other Functions"),
-    description = "[Developer API] Returns 1 if the specified column is not included in the grouping set, 0 if it is included.",
+    description = "Developer API: Returns the level of grouping, equals to (((grouping_id >> array[0]) & 1) << (n-1)) + (((grouping_id >> array[1]) & 1) << (n-2)) + ... + (((grouping_id >> array[n-1]) & 1) << 0). Returns grouping_id if indices is not provided.",
     syntax_example = "grouping(grouping_id[, indices])",
     sql_example = r#"```sql
 > SELECT grouping(__grouping_id, make_array(0)) FROM table GROUP BY GROUPING SETS ((a), (b));
