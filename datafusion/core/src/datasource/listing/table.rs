@@ -1217,6 +1217,44 @@ impl ListingTable {
     }
 }
 
+/// Extension trait for FileSource to allow schema evolution support
+pub trait FileSourceExt {
+    /// Wraps `self` in a schema-evolution wrapper if the format supports it,
+    /// otherwise returns `self` unchanged.
+    fn with_schema_adapter(
+        self: Arc<Self>,
+        factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    ) -> Arc<dyn FileSource>;
+}
+
+// Provide a "no-op" default impl for *all* FileSources
+impl<T> FileSourceExt for T
+where
+    T: FileSource + 'static,
+{
+    fn with_schema_adapter(
+        self: Arc<Self>,
+        _factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    ) -> Arc<dyn FileSource> {
+        self
+    }
+}
+
+// Specialize for ParquetSource when the feature is enabled
+#[cfg(feature = "parquet")]
+impl FileSourceExt for ParquetSource {
+    fn with_schema_adapter(
+        self: Arc<Self>,
+        factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    ) -> Arc<dyn FileSource> {
+        if let Some(factory) = factory {
+            Arc::new(self.clone().with_schema_adapter_factory(factory))
+        } else {
+            self
+        }
+    }
+}
+
 /// Apply schema adapter to a file source if the adapter is available and compatible
 /// with the source type.
 ///
@@ -1227,29 +1265,9 @@ fn apply_schema_adapter_to_source(
     source: Arc<dyn FileSource>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 ) -> Arc<dyn FileSource> {
-    // Apply schema adapter to the source if it's a ParquetSource
-    // This handles the special case for ParquetSource which supports schema evolution
-    // through the schema_adapter_factory
-    //
-    // TODO: This approach requires explicit downcasts for each file format that supports
-    // schema evolution. Consider introducing a trait like `SchemaEvolutionSupport` that file
-    // sources could implement, allowing this logic to be generalized without requiring
-    // format-specific downcasts. This would make it easier to add schema evolution support
-    // to other file formats in the future.
-    #[cfg(feature = "parquet")]
-    if let (Some(parquet_source), Some(schema_adapter_factory)) = (
-        source.as_any().downcast_ref::<ParquetSource>(),
-        schema_adapter_factory,
-    ) {
-        return Arc::new(
-            parquet_source
-                .clone()
-                .with_schema_adapter_factory(schema_adapter_factory),
-        );
-    }
-
-    // If we didn't apply an adapter, return the original source
-    source
+    // thanks to FileSourceExt, this will only wrap ParquetSource;
+    // all other formats just get returned as-is
+    source.with_schema_adapter(schema_adapter_factory)
 }
 
 /// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
