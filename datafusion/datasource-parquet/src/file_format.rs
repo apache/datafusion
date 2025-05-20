@@ -1591,14 +1591,11 @@ fn preserve_conf_schema_adapter_factory(
     conf: &FileScanConfig,
     source: &mut ParquetSource,
 ) {
-    if let Some(schema_adapter_factory) = conf
+    let factory = conf
         .file_source()
         .as_any()
         .downcast_ref::<ParquetSource>()
-        .and_then(|parquet_source| parquet_source.schema_adapter_factory())
-    {
-        *source = source
-            .clone()
-            .with_schema_adapter_factory(Arc::clone(schema_adapter_factory));
-    }
+        .and_then(|parquet_source| parquet_source.schema_adapter_factory().cloned());
+
+    *source = source.clone().with_factory(factory);
 }
