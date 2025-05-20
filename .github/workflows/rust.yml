@@ -401,8 +401,8 @@ jobs:
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         run: |
-          wasm-pack test --headless --firefox
-          wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --firefox
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
