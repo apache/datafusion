@@ -1219,25 +1219,26 @@ impl ListingTable {
 
 /// Extension trait for FileSource to allow schema evolution support
 pub trait FileSourceExt {
-    /// Wraps `self` in a schema-evolution wrapper if the format supports it,
-    /// otherwise returns `self` unchanged.
+    /// Wraps the source in a schema-evolution wrapper if the format supports it,
+    /// otherwise returns the source unchanged.
     fn with_schema_adapter(
-        self: Arc<dyn FileSource>,
+        source: Arc<dyn FileSource>,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource>;
 }
 
-/// Implementation of FileSourceExt that handles the dynamic dispatch to the appropriate
+/// Implementation that handles the dynamic dispatch to the appropriate
 /// format-specific schema adapter logic.
 impl FileSourceExt for Arc<dyn FileSource> {
     fn with_schema_adapter(
-        self: Arc<dyn FileSource>,
+        source: Arc<dyn FileSource>,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
     ) -> Arc<dyn FileSource> {
         if let Some(factory) = factory {
             // Handle ParquetSource schema adaptation when the feature is enabled
             #[cfg(feature = "parquet")]
-            if let Some(parquet_source) = self.as_any().downcast_ref::<ParquetSource>() {
+            if let Some(parquet_source) = source.as_any().downcast_ref::<ParquetSource>()
+            {
                 return Arc::new(
                     parquet_source.clone().with_schema_adapter_factory(factory),
                 );
@@ -1246,7 +1247,7 @@ impl FileSourceExt for Arc<dyn FileSource> {
             // Add more format-specific schema adapters here as needed
         }
         // Return the original source if no adapters are available or applicable
-        self
+        source
     }
 }
 
@@ -1262,10 +1263,7 @@ fn apply_schema_adapter_to_source(
 ) -> Arc<dyn FileSource> {
     // thanks to FileSourceExt, this will only wrap ParquetSource;
     // all other formats just get returned as-is
-    <Arc<dyn FileSource> as FileSourceExt>::with_schema_adapter(
-        source,
-        schema_adapter_factory,
-    )
+    FileSourceExt::with_schema_adapter(source, schema_adapter_factory)
 }
 
 /// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
