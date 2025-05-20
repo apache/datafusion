@@ -91,12 +91,6 @@ jobs:
       - name: Run semver-check sql
         run: cargo semver-checks check-release -p datafusion-sql
         continue-on-error: true
-      - name: Run semver-check spark
-        run: cargo semver-checks check-release -p datafusion-spark
-        continue-on-error: true
-      - name: Run semver-check sqllogictest
-        run: cargo semver-checks check-release -p datafusion-sqllogictest
-        continue-on-error: true
 
   semver-checks-3:
     runs-on: ubuntu-latest
@@ -125,4 +119,10 @@ jobs:
         continue-on-error: true
       - name: Run semver-check physical-plan
         run: cargo semver-checks check-release -p datafusion-physical-plan
+        continue-on-error: true
+      - name: Run semver-check spark
+        run: cargo semver-checks check-release -p datafusion-spark
+        continue-on-error: true
+      - name: Run semver-check sqllogictest
+        run: cargo semver-checks check-release -p datafusion-sqllogictest
         continue-on-error: true
