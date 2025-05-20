@@ -41,7 +41,7 @@ physical-expr:
 
 physical-plan:
   - changed-files:
-      - any-glob-to-any-file: [datafusion/physical-plan/**/*']
+      - any-glob-to-any-file: ['datafusion/physical-plan/**/*']
 
 
 catalog:
@@ -76,6 +76,10 @@ core:
 proto:
   - changed-files:
       - any-glob-to-any-file: ['datafusion/proto/**/*', 'datafusion/proto-common/**/*']
+
+spark:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/spark/**/*']
 
 substrait:
 - changed-files:
