@@ -64,7 +64,7 @@ use object_store::ObjectStore;
 /// Configuration for creating a [`ListingTable`]
 ///
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
     /// They should share the same schema and object store.
@@ -84,12 +84,9 @@ pub struct ListingTableConfig {
 impl ListingTableConfig {
     /// Creates new [`ListingTableConfig`] for reading the specified URL
     pub fn new(table_path: ListingTableUrl) -> Self {
-        let table_paths = vec![table_path];
         Self {
-            table_paths,
-            file_schema: None,
-            options: None,
-            schema_adapter_factory: None,
+            table_paths: vec![table_path],
+            ..Default::default()
         }
     }
 
@@ -99,9 +96,7 @@ impl ListingTableConfig {
     pub fn new_with_multi_paths(table_paths: Vec<ListingTableUrl>) -> Self {
         Self {
             table_paths,
-            file_schema: None,
-            options: None,
-            schema_adapter_factory: None,
+            ..Default::default()
         }
     }
     /// Set the `schema` for the overall [`ListingTable`]
@@ -1258,7 +1253,7 @@ fn apply_schema_adapter_to_source(
 ) -> Arc<dyn FileSource> {
     // thanks to FileSourceExt, this will only wrap ParquetSource;
     // all other formats just get returned as-is
-    source.with_schema_adapter(schema_adapter_factory)
+    source.with_schema_adapter(schema)
 }
 
 /// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
