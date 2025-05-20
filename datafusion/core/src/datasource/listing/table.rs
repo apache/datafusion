@@ -2383,8 +2383,10 @@ mod tests {
 
         // create table
         let tmp_dir = TempDir::new()?;
-        let tmp_path = tmp_dir.into_path();
-        let str_path = tmp_path.to_str().expect("Temp path should convert to &str");
+        let str_path = tmp_dir
+            .path()
+            .to_str()
+            .expect("Temp path should convert to &str");
         session_ctx
             .sql(&format!(
                 "create external table foo(a varchar, b varchar, c int) \

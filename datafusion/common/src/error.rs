@@ -397,7 +397,7 @@ impl Error for DataFusionError {
 
 impl From<DataFusionError> for io::Error {
     fn from(e: DataFusionError) -> Self {
-        io::Error::new(io::ErrorKind::Other, e)
+        io::Error::other(e)
     }
 }
 
@@ -1120,8 +1120,7 @@ mod test {
         );
 
         // assert wrapping other Error
-        let generic_error: GenericError =
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let generic_error: GenericError = Box::new(std::io::Error::other("io error"));
         let datafusion_error: DataFusionError = generic_error.into();
         println!("{}", datafusion_error.strip_backtrace());
         assert_eq!(
@@ -1132,8 +1131,7 @@ mod test {
 
     #[test]
     fn external_error_no_recursive() {
-        let generic_error_1: GenericError =
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let generic_error_1: GenericError = Box::new(std::io::Error::other("io error"));
         let external_error_1: DataFusionError = generic_error_1.into();
         let generic_error_2: GenericError = Box::new(external_error_1);
         let external_error_2: DataFusionError = generic_error_2.into();

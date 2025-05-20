@@ -154,7 +154,7 @@ async fn main_inner() -> Result<()> {
     let args = Args::parse();
 
     if !args.quiet {
-        println!("DataFusion CLI v{}", DATAFUSION_CLI_VERSION);
+        println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
     }
 
     if let Some(ref path) = args.data_path {
@@ -280,7 +280,7 @@ fn parse_valid_file(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_file() {
         Ok(dir.to_string())
     } else {
-        Err(format!("Invalid file '{}'", dir))
+        Err(format!("Invalid file '{dir}'"))
     }
 }
 
@@ -288,14 +288,14 @@ fn parse_valid_data_dir(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_dir() {
         Ok(dir.to_string())
     } else {
-        Err(format!("Invalid data directory '{}'", dir))
+        Err(format!("Invalid data directory '{dir}'"))
     }
 }
 
 fn parse_batch_size(size: &str) -> Result<usize, String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(size),
-        _ => Err(format!("Invalid batch size '{}'", size)),
+        _ => Err(format!("Invalid batch size '{size}'")),
     }
 }
 
@@ -352,20 +352,20 @@ fn parse_size_string(size: &str, label: &str) -> Result<usize, String> {
         let num_str = caps.get(1).unwrap().as_str();
         let num = num_str
             .parse::<usize>()
-            .map_err(|_| format!("Invalid numeric value in {} '{}'", label, size))?;
+            .map_err(|_| format!("Invalid numeric value in {label} '{size}'"))?;
 
         let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("b");
         let unit = BYTE_SUFFIXES
             .get(suffix)
-            .ok_or_else(|| format!("Invalid {} '{}'", label, size))?;
+            .ok_or_else(|| format!("Invalid {label} '{size}'"))?;
         let total_bytes = usize::try_from(unit.multiplier())
             .ok()
             .and_then(|multiplier| num.checked_mul(multiplier))
-            .ok_or_else(|| format!("{} '{}' is too large", label, size))?;
+            .ok_or_else(|| format!("{label} '{size}' is too large"))?;
 
         Ok(total_bytes)
     } else {
-        Err(format!("Invalid {} '{}'", label, size))
+        Err(format!("Invalid {label} '{size}'"))
     }
 }
 

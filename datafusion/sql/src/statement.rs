@@ -1794,7 +1794,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
-        let schema = table_source.schema().to_dfschema_ref()?;
+        let schema = DFSchema::try_from_qualified_schema(
+            table_ref.clone(),
+            &table_source.schema(),
+        )?;
         let scan =
             LogicalPlanBuilder::scan(table_ref.clone(), Arc::clone(&table_source), None)?
                 .build()?;

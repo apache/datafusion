@@ -126,7 +126,7 @@ fn roundtrip_expr_test_with_codec(
     codec: &dyn LogicalExtensionCodec,
 ) {
     let proto: protobuf::LogicalExprNode = serialize_expr(&initial_struct, codec)
-        .unwrap_or_else(|e| panic!("Error serializing expression: {:?}", e));
+        .unwrap_or_else(|e| panic!("Error serializing expression: {e:?}"));
     let round_trip: Expr = from_proto::parse_expr(&proto, &ctx, codec).unwrap();
 
     assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
@@ -2517,13 +2517,13 @@ fn roundtrip_window() {
         }
 
         fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-            if let Some(return_type) = field_args.get_input_type(0) {
-                Ok(Field::new(field_args.name(), return_type, true))
+            if let Some(return_field) = field_args.get_input_field(0) {
+                Ok(return_field.with_name(field_args.name()))
             } else {
                 plan_err!(
                     "dummy_udwf expects 1 argument, got {}: {:?}",
-                    field_args.input_types().len(),
-                    field_args.input_types()
+                    field_args.input_fields().len(),
+                    field_args.input_fields()
                 )
             }
         }

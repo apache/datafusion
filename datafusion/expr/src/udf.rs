@@ -34,7 +34,7 @@ use std::sync::Arc;
 ///
 /// A scalar function produces a single row output for each row of input. This
 /// struct contains the information DataFusion needs to plan and invoke
-/// functions you supply such name, type signature, return type, and actual
+/// functions you supply such as name, type signature, return type, and actual
 /// implementation.
 ///
 /// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
@@ -42,11 +42,11 @@ use std::sync::Arc;
 /// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
 ///    access (examples in  [`advanced_udf.rs`]).
 ///
-/// See [`Self::call`] to invoke a `ScalarUDF` with arguments.
+/// See [`Self::call`] to create an `Expr` which invokes a `ScalarUDF` with arguments.
 ///
 /// # API Note
 ///
-/// This is a separate struct from `ScalarUDFImpl` to maintain backwards
+/// This is a separate struct from [`ScalarUDFImpl`] to maintain backwards
 /// compatibility with the older API.
 ///
 /// [`create_udf`]: crate::expr_fn::create_udf
@@ -317,9 +317,9 @@ pub struct ScalarFunctionArgs<'a, 'b> {
 pub struct ReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
     pub arg_fields: &'a [Field],
-    /// Is argument `i` to the function a scalar (constant)
+    /// Is argument `i` to the function a scalar (constant)?
     ///
-    /// If argument `i` is not a scalar, it will be None
+    /// If the argument `i` is not a scalar, it will be None
     ///
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
@@ -451,15 +451,36 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Notes
     ///
-    /// Most UDFs should implement [`Self::return_type`] and not this
-    /// function as the output type for most functions only depends on the types
-    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
+    /// For the majority of UDFs, implementing [`Self::return_type`] is sufficient,
+    /// as the result type is typically a deterministic function of the input types
+    /// (e.g., `sqrt(f32)` consistently yields `f32`). Implementing this method directly
+    /// is generally unnecessary unless the return type depends on runtime values.
     ///
     /// This function can be used for more advanced cases such as:
     ///
     /// 1. specifying nullability
     /// 2. return types based on the **values** of the arguments (rather than
     ///    their **types**.
+    ///
+    /// # Example creating `Field`
+    ///
+    /// Note the name of the [`Field`] is ignored, except for structured types such as
+    /// `DataType::Struct`.
+    ///
+    /// ```rust
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::Result;
+    /// # use datafusion_expr::ReturnFieldArgs;
+    /// # struct Example{};
+    /// # impl Example {
+    /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    ///   // report output is only nullable if any one of the arguments are nullable
+    ///   let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+    ///   let field = Field::new("ignored_name", DataType::Int32, true);
+    ///   Ok(field)
+    /// }
+    /// # }
+    /// ```
     ///
     /// # Output Type based on Values
     ///
@@ -547,13 +568,15 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
-    /// and thus any side effects (like divide by zero) may not be encountered
-    /// Setting this to true prevents certain optimizations such as common subexpression elimination
+    /// and thus any side effects (like divide by zero) may not be encountered.
+    ///
+    /// Setting this to true prevents certain optimizations such as common
+    /// subexpression elimination
     fn short_circuits(&self) -> bool {
         false
     }
 
-    /// Computes the output interval for a [`ScalarUDFImpl`], given the input
+    /// Computes the output [`Interval`] for a [`ScalarUDFImpl`], given the input
     /// intervals.
     ///
     /// # Parameters
@@ -569,9 +592,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Interval::make_unbounded(&DataType::Null)
     }
 
-    /// Updates bounds for child expressions, given a known interval for this
-    /// function. This is used to propagate constraints down through an expression
-    /// tree.
+    /// Updates bounds for child expressions, given a known [`Interval`]s for this
+    /// function.
+    ///
+    /// This function is used to propagate constraints down through an
+    /// expression tree.
     ///
     /// # Parameters
     ///
@@ -620,19 +645,24 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         }
     }
 
-    /// Whether the function preserves lexicographical ordering based on the input ordering
+    /// Returns true if the function preserves lexicographical ordering based on
+    /// the input ordering.
+    ///
+    /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
     fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(false)
     }
 
     /// Coerce arguments of a function call to types that the function can evaluate.
     ///
-    /// This function is only called if [`ScalarUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
-    /// UDFs should return one of the other variants of `TypeSignature` which handle common
-    /// cases
+    /// This function is only called if [`ScalarUDFImpl::signature`] returns
+    /// [`crate::TypeSignature::UserDefined`]. Most UDFs should return one of
+    /// the other variants of [`TypeSignature`] which handle common cases.
     ///
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
+    ///
+    /// [`TypeSignature`]: crate::TypeSignature
     ///
     /// For example, if your function requires a floating point arguments, but the user calls
     /// it like `my_func(1::int)` (i.e. with `1` as an integer), coerce_types can return `[DataType::Float64]`
@@ -677,8 +707,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Returns the documentation for this Scalar UDF.
     ///
-    /// Documentation can be accessed programmatically as well as
-    /// generating publicly facing documentation.
+    /// Documentation can be accessed programmatically as well as generating
+    /// publicly facing documentation.
     fn documentation(&self) -> Option<&Documentation> {
         None
     }

@@ -154,7 +154,11 @@ impl AggregateUDFImpl for StringAgg {
         };
 
         let array_agg_acc = self.array_agg.accumulator(AccumulatorArgs {
-            return_type: &DataType::new_list(acc_args.return_type.clone(), true),
+            return_field: &Field::new(
+                "f",
+                DataType::new_list(acc_args.return_field.data_type().clone(), true),
+                true,
+            ),
             exprs: &filter_index(acc_args.exprs, 1),
             ..acc_args
         })?;
@@ -436,7 +440,7 @@ mod tests {
 
         fn build(&self) -> Result<Box<dyn Accumulator>> {
             StringAgg::new().accumulator(AccumulatorArgs {
-                return_type: &DataType::LargeUtf8,
+                return_field: &Field::new("f", DataType::LargeUtf8, true),
                 schema: &self.schema,
                 ignore_nulls: false,
                 ordering_req: &self.ordering,

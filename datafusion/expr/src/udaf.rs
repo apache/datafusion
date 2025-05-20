@@ -224,6 +224,13 @@ impl AggregateUDF {
         self.inner.return_type(args)
     }
 
+    /// Return the field of the function given its input fields
+    ///
+    /// See [`AggregateUDFImpl::return_field`] for more details.
+    pub fn return_field(&self, args: &[Field]) -> Result<Field> {
+        self.inner.return_field(args)
+    }
+
     /// Return an accumulator the given aggregate, given its return datatype
     pub fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         self.inner.accumulator(acc_args)
@@ -403,7 +410,7 @@ where
 ///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
 ///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
 ///        Ok(vec![
-///             Field::new("value", args.return_type.clone(), true),
+///             args.return_field.clone().with_name("value"),
 ///             Field::new("ordering", DataType::UInt32, true)
 ///        ])
 ///    }
@@ -674,6 +681,31 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
+    /// What type will be returned by this function, given the arguments?
+    ///
+    /// By default, this function calls [`Self::return_type`] with the
+    /// types of each argument.
+    ///
+    /// # Notes
+    ///
+    /// Most UDFs should implement [`Self::return_type`] and not this
+    /// function as the output type for most functions only depends on the types
+    /// of their inputs (e.g. `sum(f64)` is always `f64`).
+    ///
+    /// This function can be used for more advanced cases such as:
+    ///
+    /// 1. specifying nullability
+    /// 2. return types based on the **values** of the arguments (rather than
+    ///    their **types**.
+    /// 3. return types based on metadata within the fields of the inputs
+    fn return_field(&self, arg_fields: &[Field]) -> Result<Field> {
+        let arg_types: Vec<_> =
+            arg_fields.iter().map(|f| f.data_type()).cloned().collect();
+        let data_type = self.return_type(&arg_types)?;
+
+        Ok(Field::new(self.name(), data_type, self.is_nullable()))
+    }
+
     /// Whether the aggregate function is nullable.
     ///
     /// Nullable means that the function could return `null` for any inputs.
@@ -713,11 +745,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        let fields = vec![Field::new(
-            format_state_name(args.name, "value"),
-            args.return_type.clone(),
-            true,
-        )];
+        let fields = vec![args
+            .return_field
+            .clone()
+            .with_name(format_state_name(args.name, "value"))];
 
         Ok(fields
             .into_iter()

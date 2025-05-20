@@ -885,7 +885,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             | SelectItem::UnnamedExpr(expr) = proj
             {
                 let mut err = None;
-                visit_expressions_mut(expr, |expr| {
+                let _ = visit_expressions_mut(expr, |expr| {
                     if let SQLExpr::Function(f) = expr {
                         if let Some(WindowType::NamedWindow(ident)) = &f.over {
                             let normalized_ident =
