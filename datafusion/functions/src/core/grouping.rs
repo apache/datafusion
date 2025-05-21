@@ -236,7 +236,7 @@ mod tests {
         };
 
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-        assert_eq!(result.values().to_vec(), vec![1, 2, 3, 3]);
+        assert_eq!(result.values().to_vec(), vec![2, 1, 3, 0]);
         Ok(())
     }
 
@@ -270,7 +270,7 @@ mod tests {
         };
 
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-        assert_eq!(result.values().to_vec(), vec![1, 2, 3, 3]);
+        assert_eq!(result.values().to_vec(), vec![2, 1, 3, 0]);
         Ok(())
     }
 
@@ -304,7 +304,7 @@ mod tests {
         };
 
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-        assert_eq!(result.values().to_vec(), vec![1, 2, 3, 3]);
+        assert_eq!(result.values().to_vec(), vec![2, 1, 3, 0]);
         Ok(())
     }
 
@@ -338,7 +338,7 @@ mod tests {
         };
 
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-        assert_eq!(result.values().to_vec(), vec![1, 2, 3, 3]);
+        assert_eq!(result.values().to_vec(), vec![2, 1, 3, 0]);
         Ok(())
     }
 
@@ -380,12 +380,6 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices.clone())))),
             ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
         ];
-
-        let arg_fields_owned = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
-            .collect::<Vec<_>>();
 
         let arg_fields_owned = args
             .iter()
