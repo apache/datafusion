@@ -152,7 +152,7 @@ pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusi
 
 #[inline]
 fn compute_factorial(num: Option<i64>) -> Option<i64> {
-    num.filter(|&v| v >= 0 && v <= 20)
+    num.filter(|&v| (0..=20).contains(&v))
         .map(|v| FACTORIALS[v as usize])
 }
 
