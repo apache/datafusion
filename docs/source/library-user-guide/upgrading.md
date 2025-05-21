@@ -21,6 +21,21 @@
 
 ## DataFusion `48.0.0`
 
+### `ListingOptions` default for `collect_stat` changed from `true` to `false`
+
+This makes it agree with the default for `SessionConfig`.
+Most users won't be impacted by this change but if you were using `ListingOptions` directly
+and relied on the default value of `collect_stat` being `true`, you will need to
+explicitly set it to `true` in your code.
+
+```rust
+# /* comment to avoid running
+ListingOptions::new(Arc::new(ParquetFormat::default()))
+    .with_collect_stat(true)
+    // other options
+# */
+```
+
 ### Processing `Field` instead of `DataType` for user defined functions
 
 In order to support metadata handling and extension types, user defined functions are
