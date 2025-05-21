@@ -146,12 +146,16 @@ mod tests {
             self.round_trip(batches).await.batches
         }
 
-        fn build_file_source(&self, file_schema: SchemaRef) -> Arc<dyn FileSource> {
+        fn build_file_source(
+            &self,
+            table_schema: SchemaRef,
+            file_schema: SchemaRef,
+        ) -> Arc<dyn FileSource> {
             // set up predicate (this is normally done by a layer higher up)
             let predicate = self
                 .predicate
                 .as_ref()
-                .map(|p| logical2physical(p, &file_schema));
+                .map(|p| logical2physical(p, &table_schema));
 
             let mut source = ParquetSource::default();
             if let Some(predicate) = predicate {
@@ -200,14 +204,17 @@ mod tests {
 
         /// run the test, returning the `RoundTripResult`
         async fn round_trip(&self, batches: Vec<RecordBatch>) -> RoundTripResult {
-            let file_schema = match &self.schema {
-                Some(schema) => schema,
-                None => &Arc::new(
+            let table_schema = self.schema.clone().unwrap_or_else(|| {
+                Arc::new(
                     Schema::try_merge(
                         batches.iter().map(|b| b.schema().as_ref().clone()),
                     )
                     .unwrap(),
-                ),
+                )
+            });
+            let file_schema = match &self.schema {
+                Some(schema) => schema,
+                None => &table_schema,
             };
             let file_schema = Arc::clone(file_schema);
             // If testing with page_index_predicate, write parquet
@@ -217,7 +224,8 @@ mod tests {
             let file_group: FileGroup = meta.into_iter().map(Into::into).collect();
 
             // build a ParquetExec to return the results
-            let parquet_source = self.build_file_source(file_schema.clone());
+            let parquet_source =
+                self.build_file_source(table_schema.clone(), file_schema.clone());
             let parquet_exec = self.build_parquet_exec(
                 file_schema.clone(),
                 file_group.clone(),
@@ -231,7 +239,7 @@ mod tests {
                 self.build_parquet_exec(
                     file_schema.clone(),
                     file_group.clone(),
-                    self.build_file_source(file_schema.clone()),
+                    self.build_file_source(table_schema.clone(), file_schema.clone()),
                 ),
                 Arc::new(Schema::new(vec![
                     Field::new("plan_type", DataType::Utf8, true),
