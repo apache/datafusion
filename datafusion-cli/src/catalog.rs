@@ -337,8 +337,7 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_substitute_tilde() {
-        use std::env;
-        use std::path::MAIN_SEPARATOR;
+        use std::{env, path::PathBuf};
         let original_home = home_dir();
         let test_home_path = if cfg!(windows) {
             "C:\\Users\\user"
@@ -350,17 +349,16 @@ mod tests {
             test_home_path,
         );
         let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
-        let expected = format!(
-            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
-            test_home_path,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR
-        );
+        let expected = PathBuf::from(test_home_path)
+            .join("Code")
+            .join("datafusion")
+            .join("benchmarks")
+            .join("data")
+            .join("tpch_sf1")
+            .join("part")
+            .join("part-0.parquet")
+            .to_string_lossy()
+            .to_string();
         let actual = substitute_tilde(input.to_string());
         assert_eq!(actual, expected);
         match original_home {

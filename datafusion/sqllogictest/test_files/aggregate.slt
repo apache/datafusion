@@ -303,17 +303,19 @@ CREATE TABLE array_agg_distinct_list_table AS VALUES
   ('b', [1,0]),
   ('b', [1,0]),
   ('b', [1,0]),
-  ('b', [0,1])
+  ('b', [0,1]),
+  (NULL, [0,1]),
+  ('b', NULL)
 ;
 
 # Apply array_sort to have deterministic result, higher dimension nested array also works but not for array sort,
 # so they are covered in `datafusion/functions-aggregate/src/array_agg.rs`
 query ??
 select array_sort(c1), array_sort(c2) from (
-  select array_agg(distinct column1) as c1, array_agg(distinct column2) as c2 from array_agg_distinct_list_table
+  select array_agg(distinct column1) as c1, array_agg(distinct column2) ignore nulls as c2 from array_agg_distinct_list_table
 );
 ----
-[b, w] [[0, 1], [1, 0]]
+[NULL, b, w] [[0, 1], [1, 0]]
 
 statement ok
 drop table array_agg_distinct_list_table;
@@ -3226,6 +3228,33 @@ select array_agg(column1) from t;
 statement ok
 drop table t;
 
+# array_agg_ignore_nulls
+statement ok
+create table t as values (NULL, ''), (1, 'c'), (2, 'a'), (NULL, 'b'), (4, NULL), (NULL, NULL), (5, 'a');
+
+query ?
+select array_agg(column1) ignore nulls as c1 from t;
+----
+[1, 2, 4, 5]
+
+query II
+select count(*), array_length(array_agg(distinct column2) ignore nulls) from t;
+----
+7 4
+
+query ?
+select array_agg(column2 order by column1) ignore nulls from t;
+----
+[c, a, a, , b]
+
+query ?
+select array_agg(DISTINCT column2 order by column2) ignore nulls from t;
+----
+[, a, b, c]
+
+statement ok
+drop table t;
+
 # variance_single_value
 query RRRR
 select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.column1) from (values (1.0)) as sq;
@@ -5069,6 +5098,28 @@ FROM d WHERE column1 IS NOT NULL;
 statement ok
 drop table d;
 
+statement ok
+create table dn as values
+  (arrow_cast(10, 'Duration(Second)'), 'a', 1),
+  (arrow_cast(20, 'Duration(Second)'), 'a', 2),
+  (NULL, 'b', 1),
+  (arrow_cast(40, 'Duration(Second)'), 'b', 2),
+  (arrow_cast(50, 'Duration(Second)'), 'c', 1),
+  (NULL, 'c', 2);
+
+query T?I
+SELECT column2, avg(column1), column3 FROM dn GROUP BY column2, column3 ORDER BY column2, column3;
+----
+a 0 days 0 hours 0 mins 10 secs 1
+a 0 days 0 hours 0 mins 20 secs 2
+b NULL 1
+b 0 days 0 hours 0 mins 40 secs 2
+c 0 days 0 hours 0 mins 50 secs 1
+c NULL 2
+
+statement ok
+drop table dn;
+
 # Prepare the table with dictionary values for testing
 statement ok
 CREATE TABLE value(x bigint) AS VALUES (1), (2), (3), (1), (3), (4), (5), (2);
@@ -6894,3 +6945,224 @@ select c2, count(*) from test WHERE 1 = 1 group by c2;
 4 1
 5 1
 6 1
+
+# Min/Max struct
+query ?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c FROM t)
+----
+{a: 1, b: 2} {a: 10, b: 11}
+
+# Min/Max struct with NULL
+query ?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT CASE WHEN c1 % 2 == 0 THEN STRUCT(c1 AS 'a', c2 AS 'b') ELSE NULL END AS c FROM t)
+----
+{a: 2, b: 3} {a: 10, b: 11}
+
+# Min/Max struct with two recordbatch
+query ?? rowsort
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(1 as 'a', 2 as 'b') AS c UNION SELECT STRUCT(3 as 'a', 4 as 'b') AS c )
+----
+{a: 1, b: 2} {a: 3, b: 4}
+
+# Min/Max struct empty
+query ?? rowsort
+SELECT MIN(c), MAX(c) FROM (SELECT * FROM (SELECT STRUCT(1 as 'a', 2 as 'b') AS c) LIMIT 0)
+----
+NULL NULL
+
+# Min/Max group struct
+query I?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT key, MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c, (c1 % 2) AS key FROM t) GROUP BY key
+----
+0 {a: 2, b: 3} {a: 10, b: 11}
+1 {a: 1, b: 2} {a: 9, b: 10}
+
+# Min/Max group struct with NULL
+query I?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT key, MIN(c), MAX(c) FROM (SELECT CASE WHEN c1 % 2 == 0 THEN STRUCT(c1 AS 'a', c2 AS 'b') ELSE NULL END AS c, (c1 % 2) AS key FROM t) GROUP BY key
+----
+0 {a: 2, b: 3} {a: 10, b: 11}
+1 NULL NULL
+
+# Min/Max group struct with NULL
+query I?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT key, MIN(c), MAX(c) FROM (SELECT CASE WHEN c1 % 3 == 0 THEN STRUCT(c1 AS 'a', c2 AS 'b') ELSE NULL END AS c, (c1 % 2) AS key FROM t) GROUP BY key
+----
+0 {a: 6, b: 7} {a: 6, b: 7}
+1 {a: 3, b: 4} {a: 9, b: 10}
+
+# Min/Max struct empty
+query ?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c, (c1 % 2) AS key FROM t LIMIT 0) GROUP BY key
+----
+
+# Min/Max aggregation on struct with a single field
+query ??
+WITH t AS (SELECT i as c1 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a') AS c FROM t);
+----
+{a: 1} {a: 10}
+
+# Min/Max aggregation on struct with identical first fields but different last fields
+query ??
+SELECT MIN(column1),MAX(column1) FROM (
+VALUES
+  (STRUCT(1 AS 'a',2 AS 'b', 3 AS 'c')),
+  (STRUCT(1 AS 'a',2 AS 'b', 4 AS 'c'))
+);
+----
+{a: 1, b: 2, c: 3} {a: 1, b: 2, c: 4}
+
+# Min/Max with list over integers
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+([1, 2, 3]),
+([1, 2]);
+----
+[1, 2] [1, 2, 3]
+
+# Min/Max with lists over strings
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+(['a', 'b', 'c']),
+(['a', 'b']);
+----
+[a, b] [a, b, c]
+
+# Min/Max with list over booleans
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+([true, true, false]),
+([false, true]);
+----
+[false, true] [true, true, false]
+
+# Min/Max with list over nullable integers
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+([NULL, 1, 2]),
+([1, 2]);
+----
+[1, 2] [NULL, 1, 2]
+
+# Min/Max list with different lengths and nulls
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+([1, NULL, 3]),
+([1, 2, 3, 4]),
+([1, 2]);
+----
+[1, 2] [1, NULL, 3]
+
+# Min/Max list with only NULLs
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+([NULL, NULL]),
+([NULL]);
+----
+[NULL] [NULL, NULL]
+
+# Min/Max list with empty lists
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+([]),
+([1]),
+([]);
+----
+[] [1]
+
+# Min/Max list of varying types (integers and NULLs)
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+([1, 2, 3]),
+([NULL, 2, 3]),
+([1, 2, NULL]);
+----
+[1, 2, 3] [NULL, 2, 3]
+
+# Min/Max list grouped by key with NULLs and differing lengths
+query I?? rowsort
+SELECT column1, MIN(column2), MAX(column2) FROM VALUES
+(0, [1, NULL, 3]),
+(0, [1, 2, 3, 4]),
+(1, [1, 2]),
+(1, [NULL, 5]),
+(1, [])
+GROUP BY column1;
+----
+0 [1, 2, 3, 4] [1, NULL, 3]
+1 [] [NULL, 5]
+
+# Min/Max list grouped by key with NULLs and differing lengths
+query I?? rowsort
+SELECT column1, MIN(column2), MAX(column2) FROM VALUES
+(0, [NULL]),
+(0, [NULL, NULL]),
+(1, [NULL])
+GROUP BY column1;
+----
+0 [NULL] [NULL, NULL]
+1 [NULL] [NULL]
+
+# Min/Max grouped list with empty and non-empty
+query I?? rowsort
+SELECT column1, MIN(column2), MAX(column2) FROM VALUES
+(0, []),
+(0, [1]),
+(0, []),
+(1, [5, 6]),
+(1, [])
+GROUP BY column1;
+----
+0 [] [1]
+1 [] [5, 6]
+
+# Min/Max over lists with a window function
+query ?
+SELECT min(column1) OVER (ORDER BY column1) FROM VALUES
+([1, 2, 3]),
+([1, 2, 3]),
+([2, 3])
+----
+[1, 2, 3]
+[1, 2, 3]
+[1, 2, 3]
+
+# Min/Max over lists with a window function and nulls
+query ?
+SELECT min(column1) OVER (ORDER BY column1) FROM VALUES
+(NULL),
+([4, 5]),
+([2, 3])
+----
+[2, 3]
+[2, 3]
+[2, 3]
+
+# Min/Max over lists with a window function, nulls and ROWS BETWEEN statement
+query ?
+SELECT min(column1) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM VALUES
+(NULL),
+([4, 5]),
+([2, 3])
+----
+[2, 3]
+[2, 3]
+[4, 5]
+
+# Min/Max over lists with a window function using a different column
+query ?
+SELECT max(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM VALUES
+([1, 2, 3], [4, 5]),
+([2, 3], [2, 3]),
+([1, 2, 3], NULL)
+----
+[4, 5]
+[4, 5]
+[2, 3]

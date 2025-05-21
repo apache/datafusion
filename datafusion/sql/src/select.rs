@@ -94,12 +94,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             planner_context,
         )?;
 
-        let order_by =
-            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
-
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;
         let select_exprs = projected_plan.expressions();
+
+        let order_by =
+            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
 
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
@@ -885,7 +885,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             | SelectItem::UnnamedExpr(expr) = proj
             {
                 let mut err = None;
-                visit_expressions_mut(expr, |expr| {
+                let _ = visit_expressions_mut(expr, |expr| {
                     if let SQLExpr::Function(f) = expr {
                         if let Some(WindowType::NamedWindow(ident)) = &f.over {
                             let normalized_ident =

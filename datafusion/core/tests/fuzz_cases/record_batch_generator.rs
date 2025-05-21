@@ -19,13 +19,14 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{
-    BooleanType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
-    Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    BooleanType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Field, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, Schema, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::{
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
@@ -84,6 +85,23 @@ pub fn get_supported_types_columns(rng_seed: u64) -> Vec<ColumnDescr> {
         ColumnDescr::new(
             "interval_month_day_nano",
             DataType::Interval(IntervalUnit::MonthDayNano),
+        ),
+        // Internal error: AggregationFuzzer task error: JoinError::Panic(Id(29108), "called `Option::unwrap()` on a `None` value", ...).
+        // ColumnDescr::new(
+        //     "duration_seconds",
+        //     DataType::Duration(TimeUnit::Second),
+        // ),
+        ColumnDescr::new(
+            "duration_milliseconds",
+            DataType::Duration(TimeUnit::Millisecond),
+        ),
+        ColumnDescr::new(
+            "duration_microsecond",
+            DataType::Duration(TimeUnit::Microsecond),
+        ),
+        ColumnDescr::new(
+            "duration_nanosecond",
+            DataType::Duration(TimeUnit::Nanosecond),
         ),
         ColumnDescr::new("decimal128", {
             let precision: u8 = rng.gen_range(1..=DECIMAL128_MAX_PRECISION);
@@ -484,6 +502,46 @@ impl RecordBatchGenerator {
                     IntervalMonthDayNanoType
                 )
             }
+            DataType::Duration(TimeUnit::Second) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    DurationSecondType
+                )
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    DurationMillisecondType
+                )
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    DurationMicrosecondType
+                )
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    DurationNanosecondType
+                )
+            }
             DataType::Timestamp(TimeUnit::Second, None) => {
                 generate_primitive_array!(
                     self,
@@ -636,8 +694,8 @@ mod tests {
         let batch1 = gen1.generate().unwrap();
         let batch2 = gen2.generate().unwrap();
 
-        let batch1_formatted = format!("{:?}", batch1);
-        let batch2_formatted = format!("{:?}", batch2);
+        let batch1_formatted = format!("{batch1:?}");
+        let batch2_formatted = format!("{batch2:?}");
 
         assert_eq!(batch1_formatted, batch2_formatted);
     }

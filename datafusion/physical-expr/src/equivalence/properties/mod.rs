@@ -1364,7 +1364,7 @@ impl EquivalenceProperties {
             .transform_up(|expr| update_properties(expr, self))
             .data()
             .map(|node| node.data)
-            .unwrap_or(ExprProperties::new_unknown())
+            .unwrap_or_else(|_| ExprProperties::new_unknown())
     }
 
     /// Transforms this `EquivalenceProperties` into a new `EquivalenceProperties`
@@ -1600,7 +1600,7 @@ fn get_expr_properties(
     } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
-            range: Interval::try_new(literal.value().clone(), literal.value().clone())?,
+            range: literal.value().into(),
             preserves_lex_ordering: true,
         })
     } else {

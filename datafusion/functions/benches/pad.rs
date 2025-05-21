@@ -16,11 +16,12 @@
 // under the License.
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, OffsetSizeTrait, PrimitiveArray};
-use arrow::datatypes::{DataType, Int64Type};
+use arrow::datatypes::{DataType, Field, Int64Type};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::{lpad, rpad};
 use rand::distributions::{Distribution, Uniform};
@@ -95,21 +96,42 @@ fn create_args<O: OffsetSizeTrait>(
     }
 }
 
+fn invoke_pad_with_args(
+    args: Vec<ColumnarValue>,
+    number_rows: usize,
+    left_pad: bool,
+) -> Result<ColumnarValue, DataFusionError> {
+    let arg_fields_owned = args
+        .iter()
+        .enumerate()
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .collect::<Vec<_>>();
+    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
+    let scalar_args = ScalarFunctionArgs {
+        args: args.clone(),
+        arg_fields,
+        number_rows,
+        return_field: &Field::new("f", DataType::Utf8, true),
+    };
+
+    if left_pad {
+        lpad().invoke_with_args(scalar_args)
+    } else {
+        rpad().invoke_with_args(scalar_args)
+    }
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 2048] {
         let mut group = c.benchmark_group("lpad function");
 
         let args = create_args::<i32>(size, 32, false);
+
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
             b.iter(|| {
                 criterion::black_box(
-                    lpad()
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            number_rows: size,
-                            return_type: &DataType::Utf8,
-                        })
-                        .unwrap(),
+                    invoke_pad_with_args(args.clone(), size, true).unwrap(),
                 )
             })
         });
@@ -118,13 +140,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
             b.iter(|| {
                 criterion::black_box(
-                    lpad()
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            number_rows: size,
-                            return_type: &DataType::LargeUtf8,
-                        })
-                        .unwrap(),
+                    invoke_pad_with_args(args.clone(), size, true).unwrap(),
                 )
             })
         });
@@ -133,13 +149,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
             b.iter(|| {
                 criterion::black_box(
-                    lpad()
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            number_rows: size,
-                            return_type: &DataType::Utf8,
-                        })
-                        .unwrap(),
+                    invoke_pad_with_args(args.clone(), size, true).unwrap(),
                 )
             })
         });
@@ -152,13 +162,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
             b.iter(|| {
                 criterion::black_box(
-                    rpad()
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            number_rows: size,
-                            return_type: &DataType::Utf8,
-                        })
-                        .unwrap(),
+                    invoke_pad_with_args(args.clone(), size, false).unwrap(),
                 )
             })
         });
@@ -167,13 +171,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
             b.iter(|| {
                 criterion::black_box(
-                    rpad()
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            number_rows: size,
-                            return_type: &DataType::LargeUtf8,
-                        })
-                        .unwrap(),
+                    invoke_pad_with_args(args.clone(), size, false).unwrap(),
                 )
             })
         });
@@ -183,13 +181,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
             b.iter(|| {
                 criterion::black_box(
-                    rpad()
-                        .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            number_rows: size,
-                            return_type: &DataType::Utf8,
-                        })
-                        .unwrap(),
+                    invoke_pad_with_args(args.clone(), size, false).unwrap(),
                 )
             })
         });

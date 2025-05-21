@@ -75,7 +75,7 @@ impl Eq for DynamicFilterPhysicalExpr {}
 impl Display for DynamicFilterPhysicalExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let inner = self.current().expect("Failed to get current expression");
-        write!(f, "DynamicFilterPhysicalExpr [ {} ]", inner)
+        write!(f, "DynamicFilterPhysicalExpr [ {inner} ]")
     }
 }
 

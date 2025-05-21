@@ -23,21 +23,22 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DataType,
-    DataType::{FixedSizeList, Float64, LargeList, List},
+    DataType::{FixedSizeList, LargeList, List, Null},
 };
 use datafusion_common::cast::{
     as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
     as_int64_array,
 };
-use datafusion_common::utils::coerced_fixed_size_list_to_list;
+use datafusion_common::utils::{coerced_type_with_base_type_only, ListCoercion};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, utils::take_function_args, Result,
+    exec_err, internal_datafusion_err, plan_err, utils::take_function_args, Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 use datafusion_macros::user_doc;
+use itertools::Itertools;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -104,24 +105,26 @@ impl ScalarUDFImpl for ArrayDistance {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => Ok(Float64),
-            _ => exec_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [_, _] = take_function_args(self.name(), arg_types)?;
-        let mut result = Vec::new();
-        for arg_type in arg_types {
-            match arg_type {
-                List(_) | LargeList(_) | FixedSizeList(_, _) => result.push(coerced_fixed_size_list_to_list(arg_type)),
-                _ => return exec_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
+        let coercion = Some(&ListCoercion::FixedSizedListToList);
+        let arg_types = arg_types.iter().map(|arg_type| {
+            if matches!(arg_type, Null | List(_) | LargeList(_) | FixedSizeList(..)) {
+                Ok(coerced_type_with_base_type_only(
+                    arg_type,
+                    &DataType::Float64,
+                    coercion,
+                ))
+            } else {
+                plan_err!("{} does not support type {arg_type}", self.name())
             }
-        }
+        });
 
-        Ok(result)
+        arg_types.try_collect()
     }
 
     fn invoke_with_args(
@@ -142,12 +145,11 @@ impl ScalarUDFImpl for ArrayDistance {
 
 pub fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_distance", args)?;
-
-    match (&array1.data_type(), &array2.data_type()) {
+    match (array1.data_type(), array2.data_type()) {
         (List(_), List(_)) => general_array_distance::<i32>(args),
         (LargeList(_), LargeList(_)) => general_array_distance::<i64>(args),
-        (array_type1, array_type2) => {
-            exec_err!("array_distance does not support types '{array_type1:?}' and '{array_type2:?}'")
+        (arg_type1, arg_type2) => {
+            exec_err!("array_distance does not support types {arg_type1} and {arg_type2}")
         }
     }
 }
@@ -243,7 +245,7 @@ fn compute_array_distance(
 /// Converts an array of any numeric type to a Float64Array.
 fn convert_to_f64_array(array: &ArrayRef) -> Result<Float64Array> {
     match array.data_type() {
-        Float64 => Ok(as_float64_array(array)?.clone()),
+        DataType::Float64 => Ok(as_float64_array(array)?.clone()),
         DataType::Float32 => {
             let array = as_float32_array(array)?;
             let converted: Float64Array =
