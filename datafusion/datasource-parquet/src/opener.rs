@@ -56,8 +56,9 @@ pub(super) struct ParquetOpener {
     pub limit: Option<usize>,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
-    /// Schema of the output table
-    pub table_schema: SchemaRef,
+    /// Schema of the output table without partition columns.
+    /// This is the schema we coerce the physical file schema into.
+    pub logical_file_schema: SchemaRef,
     /// Optional hint for how large the initial request to read parquet metadata
     /// should be
     pub metadata_size_hint: Option<usize>,
@@ -105,13 +106,13 @@ impl FileOpener for ParquetOpener {
         let batch_size = self.batch_size;
 
         let projected_schema =
-            SchemaRef::from(self.table_schema.project(&self.projection)?);
+            SchemaRef::from(self.logical_file_schema.project(&self.projection)?);
         let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
         let schema_adapter = self
             .schema_adapter_factory
-            .create(projected_schema, Arc::clone(&self.table_schema));
+            .create(projected_schema, Arc::clone(&self.logical_file_schema));
         let predicate = self.predicate.clone();
-        let table_schema = Arc::clone(&self.table_schema);
+        let logical_file_schema = Arc::clone(&self.logical_file_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let coerce_int96 = self.coerce_int96;
@@ -142,17 +143,20 @@ impl FileOpener for ParquetOpener {
                     .await?;
 
             // Note about schemas: we are actually dealing with **3 different schemas** here:
-            // - The table schema as defined by the TableProvider. This is what the user sees, what they get when they `SELECT * FROM table`, etc.
-            // - The "virtual" file schema: this is the table schema minus any hive partition columns and projections. This is what the file schema is coerced to.
+            // - The table schema as defined by the TableProvider.
+            //   This is what the user sees, what they get when they `SELECT * FROM table`, etc.
+            // - The logical file schema: this is the table schema minus any hive partition columns and projections.
+            //   This is what the physicalfile schema is coerced to.
             // - The physical file schema: this is the schema as defined by the parquet file. This is what the parquet file actually contains.
             let mut physical_file_schema = Arc::clone(reader_metadata.schema());
 
             // The schema loaded from the file may not be the same as the
             // desired schema (for example if we want to instruct the parquet
             // reader to read strings using Utf8View instead). Update if necessary
-            if let Some(merged) =
-                apply_file_schema_type_coercions(&table_schema, &physical_file_schema)
-            {
+            if let Some(merged) = apply_file_schema_type_coercions(
+                &logical_file_schema,
+                &physical_file_schema,
+            ) {
                 physical_file_schema = Arc::new(merged);
                 options = options.with_schema(Arc::clone(&physical_file_schema));
                 reader_metadata = ArrowReaderMetadata::try_new(
@@ -179,7 +183,7 @@ impl FileOpener for ParquetOpener {
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 &predicate,
-                &physical_file_schema,
+                &logical_file_schema,
                 &predicate_creation_errors,
             );
 
@@ -216,7 +220,7 @@ impl FileOpener for ParquetOpener {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
                     &physical_file_schema,
-                    &table_schema,
+                    &logical_file_schema,
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,

@@ -450,7 +450,7 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     physical_file_schema: &SchemaRef,
-    table_schema: &SchemaRef,
+    logical_file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
@@ -471,7 +471,7 @@ pub fn build_row_filter(
             FilterCandidateBuilder::new(
                 Arc::clone(expr),
                 Arc::clone(physical_file_schema),
-                Arc::clone(table_schema),
+                Arc::clone(logical_file_schema),
                 Arc::clone(schema_adapter_factory),
             )
             .build(metadata)

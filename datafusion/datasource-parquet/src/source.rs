@@ -489,7 +489,7 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
-            table_schema: Arc::clone(&base_config.file_schema),
+            logical_file_schema: Arc::clone(&base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,

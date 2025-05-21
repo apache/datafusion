@@ -39,7 +39,7 @@ mod tests {
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
         ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
-        StructArray,
+        StringViewArray, StructArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
@@ -99,6 +99,7 @@ mod tests {
         predicate: Option<Expr>,
         pushdown_predicate: bool,
         page_index_predicate: bool,
+        bloom_filters: bool,
     }
 
     impl RoundTrip {
@@ -131,6 +132,11 @@ mod tests {
             self
         }
 
+        fn with_bloom_filters(mut self) -> Self {
+            self.bloom_filters = true;
+            self
+        }
+
         /// run the test, returning only the resulting RecordBatches
         async fn round_trip_to_batches(
             self,
@@ -155,10 +161,20 @@ mod tests {
                 source = source
                     .with_pushdown_filters(true)
                     .with_reorder_filters(true);
+            } else {
+                source = source.with_pushdown_filters(false);
             }
 
             if self.page_index_predicate {
                 source = source.with_enable_page_index(true);
+            } else {
+                source = source.with_enable_page_index(false);
+            }
+
+            if self.bloom_filters {
+                source = source.with_bloom_filter_on_read(true);
+            } else {
+                source = source.with_bloom_filter_on_read(false);
             }
 
             Arc::new(source)
@@ -816,7 +832,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evolved_schema_filter() {
+    async fn evolved_schema_column_order_filter() {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
 
@@ -845,6 +861,88 @@ mod tests {
 
         // Predicate should prune all row groups
         assert_eq!(read.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_column_type_filter_strings() {
+        // The table and filter have a common data type, but the file schema differs
+        let c1: ArrayRef =
+            Arc::new(StringViewArray::from(vec![Some("foo"), Some("bar")]));
+        let batch = create_batch(vec![("c1", c1.clone())]);
+
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
+
+        // Predicate should prune all row groups
+        let filter = col("c1").eq(lit(ScalarValue::Utf8(Some("aaa".to_string()))));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_schema(schema.clone())
+            .round_trip(vec![batch.clone()])
+            .await;
+        // There should be no predicate evaluation errors
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 0);
+        assert_eq!(rt.batches.unwrap().len(), 0);
+
+        // Predicate should prune no row groups
+        let filter = col("c1").eq(lit(ScalarValue::Utf8(Some("foo".to_string()))));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_schema(schema)
+            .round_trip(vec![batch])
+            .await;
+        // There should be no predicate evaluation errors
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 2, "Expected 2 rows to match the predicate");
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_column_type_filter_ints() {
+        // The table and filter have a common data type, but the file schema differs
+        let c1: ArrayRef = Arc::new(Int8Array::from(vec![Some(1), Some(2)]));
+        let batch = create_batch(vec![("c1", c1.clone())]);
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt64, false)]));
+
+        // Predicate should prune all row groups
+        let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(5))));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_schema(schema.clone())
+            .round_trip(vec![batch.clone()])
+            .await;
+        // There should be no predicate evaluation errors
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        assert_eq!(rt.batches.unwrap().len(), 0);
+
+        // Predicate should prune no row groups
+        let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(1))));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_schema(schema)
+            .round_trip(vec![batch])
+            .await;
+        // There should be no predicate evaluation errors
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        assert_eq!(get_value(&metrics, "predicate_evaluation_errors"), 0);
+        let read = rt
+            .batches
+            .unwrap()
+            .iter()
+            .map(|b| b.num_rows())
+            .sum::<usize>();
+        assert_eq!(read, 2, "Expected 2 rows to match the predicate");
     }
 
     #[tokio::test]
@@ -1629,6 +1727,7 @@ mod tests {
         let rt = RoundTrip::new()
             .with_predicate(filter.clone())
             .with_pushdown_predicate()
+            .with_bloom_filters()
             .round_trip(vec![batch1])
             .await;
 
