@@ -21,7 +21,7 @@
 
 ## DataFusion `48.0.0`
 
-### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow.
+\### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow.
 
 The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`
 which improves performance for many string operations. You can read more about
@@ -86,6 +86,9 @@ ListingOptions::new(Arc::new(ParquetFormat::default()))
 ```
 
 ### Processing `FieldRef` instead of `DataType` for user defined functions
+=======
+### Processing `Field` instead of `DataType` for user defined functions
+>>>>>>> 6cf74d64e (Make `SessionContext::register_parquet` obey `collect_statistics` config (#16080))
 
 In order to support metadata handling and extension types, user defined functions are
 now switching to traits which use `FieldRef` rather than a `DataType` and nullability.
