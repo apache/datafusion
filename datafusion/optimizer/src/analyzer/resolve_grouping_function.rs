@@ -23,18 +23,17 @@ use std::sync::Arc;
 
 use crate::analyzer::AnalyzerRule;
 
+use arrow::array::ListArray;
+use arrow::datatypes::Int32Type;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{
-    internal_datafusion_err, plan_err, Column, DFSchemaRef, Result, ScalarValue,
-};
+use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{Aggregate, Expr, Projection};
-use itertools::Itertools;
 use datafusion_functions::core::grouping;
-use datafusion_functions_nested::make_array::make_array_udf;
+use itertools::Itertools;
 
 /// Replaces grouping aggregation function with value derived from internal grouping id
 #[derive(Default, Debug)]
@@ -202,14 +201,17 @@ fn grouping_function_on_id(
         return Ok(grouping().call(vec![grouping_id_column]));
     }
 
-    args.iter().map(|expr| {
-        group_by_expr.get(expr).map(|group_by_idx| {
-            Expr::Literal(ScalarValue::from(*group_by_idx as i32))
+    let args = args
+        .iter()
+        .flat_map(|expr| {
+            group_by_expr
+                .get(expr)
+                .map(|group_by_idx| Some(*group_by_idx as i32))
         })
-    }).collect::<Option<Vec<_>>>()
-    .and_then(|exprs| {
-        Some(grouping().call(vec![grouping_id_column, make_array_udf().call(exprs)]))
-    }).ok_or_else(|| {
-        internal_datafusion_err!("Grouping sets should contains at least one element")
-    })
+        .collect::<Vec<_>>();
+
+    let indices = Expr::Literal(ScalarValue::List(Arc::new(
+        ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(args)]),
+    )));
+    Ok(grouping().call(vec![grouping_id_column, indices]))
 }

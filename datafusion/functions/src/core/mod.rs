@@ -27,6 +27,7 @@ pub mod expr_ext;
 pub mod getfield;
 pub mod greatest;
 mod greatest_least_utils;
+pub mod grouping;
 pub mod least;
 pub mod named_struct;
 pub mod nullif;
@@ -38,7 +39,6 @@ pub mod r#struct;
 pub mod union_extract;
 pub mod union_tag;
 pub mod version;
-pub mod grouping;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, arrow_cast);
