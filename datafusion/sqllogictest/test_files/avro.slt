@@ -124,69 +124,24 @@ STORED AS AVRO
 LOCATION '../../testing/data/avro/simple_fixed.avro';
 
 # test avro query
-query IT
+query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
-----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1
 
 # test avro query with snappy
-query IT
+query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_snappy
-----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1
 
 # test avro query with bzip2
-query IT
+query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_bzip2
-----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1
 
 # test avro query with xz
-query IT
+query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_xz
-----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1
 
 # test avro query with zstandard
-query IT
+query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_zstandard
-----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1
 
 # test avro single nan schema
 query R
