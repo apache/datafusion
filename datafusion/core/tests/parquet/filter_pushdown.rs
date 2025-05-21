@@ -56,7 +56,7 @@ async fn single_file() {
     let ctx: SessionContext = SessionContext::new();
     let batches = ctx
         .read_parquet(
-            "tests/data/filter_pushdown/single_file.parquet".to_string(),
+            "tests/data/filter_pushdown/single_file.gz.parquet".to_string(),
             ParquetReadOptions::default(),
         )
         .await
@@ -228,7 +228,7 @@ async fn single_file_small_data_pages() {
     let ctx: SessionContext = SessionContext::new();
     let batches = ctx
         .read_parquet(
-            "tests/data/filter_pushdown/single_file_small_pages.parquet".to_string(),
+            "tests/data/filter_pushdown/single_file_small_pages.gz.parquet".to_string(),
             ParquetReadOptions::default(),
         )
         .await
