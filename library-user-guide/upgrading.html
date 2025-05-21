@@ -538,6 +538,33 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#listingoptions-default-for-collect-stat-changed-from-true-to-false">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ListingOptions
+      </span>
+     </code>
+     default for
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       collect_stat
+      </span>
+     </code>
+     changed from
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       true
+      </span>
+     </code>
+     to
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       false
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#processing-field-instead-of-datatype-for-user-defined-functions">
      Processing
      <code class="docutils literal notranslate">
@@ -820,6 +847,18 @@
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">¶</a></h1>
 <section id="datafusion-48-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">48.0.0</span></code><a class="headerlink" href="#datafusion-48-0-0" title="Link to this heading">¶</a></h2>
+<section id="listingoptions-default-for-collect-stat-changed-from-true-to-false">
+<h3><code class="docutils literal notranslate"><span class="pre">ListingOptions</span></code> default for <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> changed from <code class="docutils literal notranslate"><span class="pre">true</span></code> to <code class="docutils literal notranslate"><span class="pre">false</span></code><a class="headerlink" href="#listingoptions-default-for-collect-stat-changed-from-true-to-false" title="Link to this heading">¶</a></h3>
+<p>This makes it agree with the default for <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>.
+Most users won’t be impacted by this change but if you were using <code class="docutils literal notranslate"><span class="pre">ListingOptions</span></code> directly
+and relied on the default value of <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> being <code class="docutils literal notranslate"><span class="pre">true</span></code>, you will need to
+explicitly set it to <code class="docutils literal notranslate"><span class="pre">true</span></code> in your code.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">ListingOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">ParquetFormat</span><span class="p">::</span><span class="n">default</span><span class="p">()))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_collect_stat</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// other options</span>
+</pre></div>
+</div>
+</section>
 <section id="processing-field-instead-of-datatype-for-user-defined-functions">
 <h3>Processing <code class="docutils literal notranslate"><span class="pre">Field</span></code> instead of <code class="docutils literal notranslate"><span class="pre">DataType</span></code> for user defined functions<a class="headerlink" href="#processing-field-instead-of-datatype-for-user-defined-functions" title="Link to this heading">¶</a></h3>
 <p>In order to support metadata handling and extension types, user defined functions are
