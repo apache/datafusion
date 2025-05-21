@@ -23,6 +23,7 @@ use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow::util::pretty::pretty_format_batches;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -39,9 +40,7 @@ use datafusion::parquet::arrow::{
     arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
 };
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::{
-    ColumnOrdering, PruningPredicate, PruningStatistics,
-};
+use datafusion::physical_optimizer::pruning::{ColumnOrdering, PruningPredicate};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use std::any::Any;
