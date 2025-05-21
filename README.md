@@ -65,8 +65,7 @@ See [use cases] for examples. The following related subprojects target end users
 - [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
   DataFusion.
 
-"Out of the box,"
-DataFusion offers [SQL] and [`Dataframe`] APIs, excellent [performance],
+"Out of the box," DataFusion offers [`SQL`] and [`Dataframe`] APIs, excellent [performance],
 built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and
 a great community.
 
@@ -96,7 +95,7 @@ Here are links to some important information
 
 ## What can you do with this crate?
 
-DataFusion is great for building projects such as domain specific query engines, new database platforms and data pipelines, query languages and more.
+DataFusion is great for building projects such as domain-specific query engines, new database platforms and data pipelines, query languages and more.
 It lets you start quickly from a fully working engine, and then customize those features specific to your use. [Click Here](https://datafusion.apache.org/user-guide/introduction.html#known-users) to see a list known users.
 
 ## Contributing to DataFusion
@@ -123,7 +122,7 @@ Default features:
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL
-- `recursive_protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
+- `recursive_protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection
 
 Optional features:
 
