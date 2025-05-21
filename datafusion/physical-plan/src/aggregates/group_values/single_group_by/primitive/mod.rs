@@ -1,36 +1,4 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
-use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
-use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
-use arrow::array::{
-    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
-    PrimitiveArray,
-};
-use arrow::datatypes::{i256, DataType};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::EmitTo;
-use half::f16;
-use hashbrown::hash_table::HashTable;
-use std::mem::size_of;
-use std::sync::Arc;
+mod large_primitive;
 
 /// A trait to allow hashing of floating point numbers
 pub(crate) trait HashValue {
@@ -73,6 +41,42 @@ macro_rules! hash_float {
 }
 
 hash_float!(f16, f32, f64);
+
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::aggregates::group_values::GroupValues;
+use ahash::RandomState;
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::array::{
+    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
+    PrimitiveArray,
+};
+use arrow::datatypes::{i256, DataType};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_expr::EmitTo;
+use half::f16;
+use hashbrown::hash_table::HashTable;
+use std::mem::size_of;
+use std::sync::Arc;
+
+pub use large_primitive::GroupValuesLargePrimitive;
 
 /// A [`GroupValues`] storing a single column of primitive values
 ///
@@ -163,55 +167,13 @@ where
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        fn build_primitive<T: ArrowPrimitiveType>(
-            values: Vec<T::Native>,
-            null_idx: Option<usize>,
-        ) -> PrimitiveArray<T> {
-            let nulls = null_idx.map(|null_idx| {
-                let mut buffer = NullBufferBuilder::new(values.len());
-                buffer.append_n_non_nulls(null_idx);
-                buffer.append_null();
-                buffer.append_n_non_nulls(values.len() - null_idx - 1);
-                // NOTE: The inner builder must be constructed as there is at least one null
-                buffer.finish().unwrap()
-            });
-            PrimitiveArray::<T>::new(values.into(), nulls)
-        }
-
-        let array: PrimitiveArray<T> = match emit_to {
-            EmitTo::All => {
-                self.map.clear();
-                build_primitive(std::mem::take(&mut self.values), self.null_group.take())
-            }
-            EmitTo::First(n) => {
-                self.map.retain(|entry| {
-                    // Decrement group index by n
-                    let group_idx = entry.0;
-                    match group_idx.checked_sub(n) {
-                        // Group index was >= n, shift value down
-                        Some(sub) => {
-                            entry.0 = sub;
-                            true
-                        }
-                        // Group index was < n, so remove from table
-                        None => false,
-                    }
-                });
-                let null_group = match &mut self.null_group {
-                    Some(v) if *v >= n => {
-                        *v -= n;
-                        None
-                    }
-                    Some(_) => self.null_group.take(),
-                    None => None,
-                };
-                let mut split = self.values.split_off(n);
-                std::mem::swap(&mut self.values, &mut split);
-                build_primitive(split, null_group)
-            }
-        };
-
-        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+        emit_internal::<T, T::Native>(
+            emit_to,
+            &mut self.values,
+            &mut self.null_group,
+            &mut self.map,
+            self.data_type.clone(),
+        )
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
@@ -221,4 +183,62 @@ where
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
     }
+}
+
+pub(crate) fn emit_internal<T: ArrowPrimitiveType, K>(
+    emit_to: EmitTo,
+    values: &mut Vec<T::Native>,
+    null_group: &mut Option<usize>,
+    map: &mut HashTable<(usize, K)>,
+    data_type: DataType,
+) -> Result<Vec<ArrayRef>> {
+    fn build_primitive<T: ArrowPrimitiveType>(
+        values: Vec<T::Native>,
+        null_idx: Option<usize>,
+    ) -> PrimitiveArray<T> {
+        let nulls = null_idx.map(|null_idx| {
+            let mut buffer = NullBufferBuilder::new(values.len());
+            buffer.append_n_non_nulls(null_idx);
+            buffer.append_null();
+            buffer.append_n_non_nulls(values.len() - null_idx - 1);
+            // NOTE: The inner builder must be constructed as there is at least one null
+            buffer.finish().unwrap()
+        });
+        PrimitiveArray::<T>::new(values.into(), nulls)
+    }
+
+    let array: PrimitiveArray<T> = match emit_to {
+        EmitTo::All => {
+            map.clear();
+            build_primitive(std::mem::take(values), null_group.take())
+        }
+        EmitTo::First(n) => {
+            map.retain(|entry| {
+                // Decrement group index by n
+                let group_idx = entry.0;
+                match group_idx.checked_sub(n) {
+                    // Group index was >= n, shift value down
+                    Some(sub) => {
+                        entry.0 = sub;
+                        true
+                    }
+                    // Group index was < n, so remove from table
+                    None => false,
+                }
+            });
+            let null_group = match null_group {
+                Some(v) if *v >= n => {
+                    *v -= n;
+                    None
+                }
+                Some(_) => null_group.take(),
+                None => None,
+            };
+            let mut split = values.split_off(n);
+            std::mem::swap(values, &mut split);
+            build_primitive(split, null_group)
+        }
+    };
+
+    Ok(vec![Arc::new(array.with_data_type(data_type))])
 }
