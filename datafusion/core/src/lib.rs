@@ -340,11 +340,11 @@
 //! A [`LogicalPlan`] is a Directed Acyclic Graph (DAG) of other
 //! [`LogicalPlan`]s, each potentially containing embedded [`Expr`]s.
 //!
-//! `LogicalPlan`s can be rewritten with [`TreeNode`] API, see the
+//! [`LogicalPlan`]s can be rewritten with [`TreeNode`] API, see the
 //! [`tree_node module`] for more details.
 //!
 //! [`Expr`]s can also be rewritten with [`TreeNode`] API and simplified using
-//! [`ExprSimplifier`]. Examples of working with and executing `Expr`s can be
+//! [`ExprSimplifier`]. Examples of working with and executing [`Expr`]s can be
 //! found in the [`expr_api`.rs] example
 //!
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
@@ -429,17 +429,17 @@
 //!
 //! ## Streaming Execution
 //!
-//! DataFusion is a "streaming" query engine which means `ExecutionPlan`s incrementally
+//! DataFusion is a "streaming" query engine which means [`ExecutionPlan`]s incrementally
 //! read from their input(s) and compute output one [`RecordBatch`] at a time
 //! by continually polling [`SendableRecordBatchStream`]s. Output and
-//! intermediate `RecordBatch`s each have approximately `batch_size` rows,
+//! intermediate [`RecordBatch`]s each have approximately `batch_size` rows,
 //! which amortizes per-batch overhead of execution.
 //!
 //! Note that certain operations, sometimes called "pipeline breakers",
 //! (for example full sorts or hash aggregations) are fundamentally non streaming and
 //! must read their input fully before producing **any** output. As much as possible,
 //! other operators read a single [`RecordBatch`] from their input to produce a
-//! single `RecordBatch` as output.
+//! single [`RecordBatch`] as output.
 //!
 //! For example, given this SQL query:
 //!
@@ -448,9 +448,9 @@
 //! ```
 //!
 //! The diagram below shows the call sequence when a consumer calls [`next()`] to
-//! get the next `RecordBatch` of output. While it is possible that some
+//! get the next [`RecordBatch`] of output. While it is possible that some
 //! steps run on different threads, typically tokio will use the same thread
-//! that called `next()` to read from the input, apply the filter, and
+//! that called [`next()`] to read from the input, apply the filter, and
 //! return the results without interleaving any other operations. This results
 //! in excellent cache locality as the same CPU core that produces the data often
 //! consumes it immediately as well.
@@ -496,27 +496,27 @@
 //! The number of cores used is determined by the `target_partitions`
 //! configuration setting, which defaults to the number of CPU cores.
 //! While preparing for execution, DataFusion tries to create this many distinct
-//! `async` [`Stream`]s for each `ExecutionPlan`.
-//! The `Stream`s for certain `ExecutionPlan`s, such as [`RepartitionExec`]
+//! `async` [`Stream`]s for each [`ExecutionPlan`].
+//! The [`Stream`]s for certain [`ExecutionPlan`]s, such as [`RepartitionExec`]
 //! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that are run by
-//! threads managed by the `Runtime`.
-//! Many DataFusion `Stream`s perform CPU intensive processing.
+//! threads managed by the [`Runtime`].
+//! Many DataFusion [`Stream`]s perform CPU intensive processing.
 //!
 //! Using `async` for CPU intensive tasks makes it easy for [`TableProvider`]s
 //! to perform network I/O using standard Rust `async` during execution.
 //! However, this design also makes it very easy to mix CPU intensive and latency
 //! sensitive I/O work on the same thread pool ([`Runtime`]).
-//! Using the same (default) `Runtime` is convenient, and often works well for
+//! Using the same (default) [`Runtime`] is convenient, and often works well for
 //! initial development and processing local files, but it can lead to problems
 //! under load and/or when reading from network sources such as AWS S3.
 //!
 //! If your system does not fully utilize either the CPU or network bandwidth
 //! during execution, or you see significantly higher tail (e.g. p99) latencies
 //! responding to network requests, **it is likely you need to use a different
-//! `Runtime` for CPU intensive DataFusion plans**. This effect can be especially
+//! [`Runtime`] for CPU intensive DataFusion plans**. This effect can be especially
 //! pronounced when running several queries concurrently.
 //!
-//! As shown in the following figure, using the same `Runtime` for both CPU
+//! As shown in the following figure, using the same [`Runtime`] for both CPU
 //! intensive processing and network requests can introduce significant
 //! delays in responding to those network requests. Delays in processing network
 //! requests can and does lead network flow control to throttle the available
