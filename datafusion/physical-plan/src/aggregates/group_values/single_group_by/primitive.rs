@@ -88,7 +88,7 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// More details can see:
     /// <https://github.com/apache/datafusion/issues/15961>
     ///
-    map: HashTable<(usize, u64)>,
+    map: HashTable<(usize, T::Native)>,
     /// The group index of the null value if any
     null_group: Option<usize>,
     /// The values for each group index
@@ -130,15 +130,15 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |&(g, _)| unsafe { self.values.get_unchecked(g).is_eq(key) },
-                        |&(_, h)| h,
+                        |&(_, v)| v.is_eq(key),
+                        |&(_, v)| v.hash(state),
                     );
 
                     match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
                         hashbrown::hash_table::Entry::Vacant(v) => {
                             let g = self.values.len();
-                            v.insert((g, hash));
+                            v.insert((g, key));
                             self.values.push(key);
                             g
                         }
