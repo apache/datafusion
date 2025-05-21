@@ -78,19 +78,19 @@ use std::sync::Arc;
 
 pub use large_primitive::GroupValuesLargePrimitive;
 
-/// A [`GroupValues`] storing a single column of primitive values
+/// A [`GroupValues`] storing a single column of normal primitive values (bits <= 64)
 ///
 /// This specialization is significantly faster than using the more general
 /// purpose `Row`s format
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// The data type of the output array
     data_type: DataType,
-    /// Stores the `(group_index, hash)` based on the hash of its value
+    /// Stores the `(group_index, group_value)`
     ///
-    /// We also store `hash` is for reducing cost of rehashing. Such cost
-    /// is obvious in high cardinality group by situation.
+    /// We directly store copy of `group_value` for not only efficient
+    /// rehashing, but also efficient probing.
     /// More details can see:
-    /// <https://github.com/apache/datafusion/issues/15961>
+    /// <https://github.com/apache/datafusion/issues/16136>
     ///
     map: HashTable<(usize, T::Native)>,
     /// The group index of the null value if any

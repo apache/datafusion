@@ -20,22 +20,19 @@ use crate::aggregates::group_values::single_group_by::primitive::{
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::array::types;
 use arrow::array::{
-    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
-    PrimitiveArray,
+    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray,
 };
-use arrow::datatypes::{i256, DataType};
+use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
-use half::f16;
 use hashbrown::hash_table::HashTable;
 use std::mem::size_of;
-use std::sync::Arc;
 
-/// A [`GroupValues`] storing a single column of primitive values
+/// A [`GroupValues`] storing a single column of large primitive values (bits > 64)
 ///
 /// This specialization is significantly faster than using the more general
 /// purpose `Row`s format
