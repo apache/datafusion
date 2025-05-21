@@ -285,16 +285,10 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 
 /// Helper function that creates field mappings between file schema and table schema
 ///
-/// # Arguments
+/// Maps columns from the file schema to their corresponding positions in the table schema,
+/// applying type compatibility checking via the provided predicate function.
 ///
-/// * `file_schema` - The schema of the source file
-/// * `projected_table_schema` - The schema that we're mapping to
-/// * `can_map_field` - A closure that determines whether a field from file schema can be mapped to table schema
-///
-/// # Returns
-/// A tuple containing:
-/// * Field mappings from table schema indices to file schema projection indices
-/// * A projection of indices from the file schema
+/// Returns field mappings (for column reordering) and a projection (for field selection).
 pub(crate) fn create_field_mapping<F>(
     file_schema: &Schema,
     projected_table_schema: &SchemaRef,
@@ -345,10 +339,7 @@ pub struct SchemaMapping {
 impl SchemaMapping {
     /// Creates a new SchemaMapping instance
     ///
-    /// # Arguments
-    ///
-    /// * `projected_table_schema` - The schema expected for query results
-    /// * `field_mappings` - Mapping from field index in projected_table_schema to index in file schema
+    /// Initializes the field mappings needed to transform file data to the projected table schema
     pub fn new(
         projected_table_schema: SchemaRef,
         field_mappings: Vec<Option<usize>>,
