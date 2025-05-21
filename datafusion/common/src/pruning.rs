@@ -22,8 +22,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::stats::Precision;
-use crate::{Column, Statistics};
 use crate::ScalarValue;
+use crate::{Column, Statistics};
 
 /// A source of runtime statistical information to [`PruningPredicate`]s.
 ///
@@ -133,6 +133,7 @@ pub trait PruningStatistics {
 /// This feeds into [`CompositePruningStatistics`] to allow pruning
 /// with filters that depend both on partition columns and data columns
 /// (e.g. `WHERE partition_col = data_col`).
+#[derive(Clone)]
 pub struct PartitionPruningStatistics {
     /// Values for each column for each container.
     /// The outer vectors represent the columns while the inner
@@ -240,6 +241,7 @@ impl PruningStatistics for PartitionPruningStatistics {
 
 /// Prune a set of containers represented by their statistics.
 /// Each [`Statistics`] represents a container (e.g. a file or a partition of files).
+#[derive(Clone)]
 pub struct PrunableStatistics {
     /// Statistics for each container.
     /// These are taken as a reference since they may be rather large / expensive to clone
@@ -412,6 +414,11 @@ impl CompositePruningStatistics {
     /// a vector of [`PruningStatistics`].
     pub fn new(statistics: Vec<Box<dyn PruningStatistics>>) -> Self {
         assert!(!statistics.is_empty());
+        // Check that all statistics have the same number of containers
+        let num_containers = statistics[0].num_containers();
+        for stats in &statistics {
+            assert_eq!(num_containers, stats.num_containers());
+        }
         Self { statistics }
     }
 }
@@ -471,10 +478,12 @@ impl PruningStatistics for CompositePruningStatistics {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use crate::{cast::{as_int32_array, as_uint64_array}, ColumnStatistics};
+    use crate::{
+        cast::{as_int32_array, as_uint64_array},
+        ColumnStatistics,
+    };
 
     use super::*;
     use arrow::datatypes::{DataType, Field};
@@ -490,7 +499,8 @@ mod tests {
             Arc::new(Field::new("a", DataType::Int32, false)),
             Arc::new(Field::new("b", DataType::Int32, false)),
         ];
-        let partition_stats = PartitionPruningStatistics::new(partition_values, partition_fields);
+        let partition_stats =
+            PartitionPruningStatistics::new(partition_values, partition_fields);
 
         let column_a = Column::new_unqualified("a");
         let column_b = Column::new_unqualified("b");
@@ -502,17 +512,33 @@ mod tests {
         assert!(partition_stats.row_counts(&column_b).is_none());
 
         // Min/max values are the same as the partition values
-        let min_values_a = as_int32_array(&partition_stats.min_values(&column_a).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let min_values_a =
+            as_int32_array(&partition_stats.min_values(&column_a).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
         let expected_values_a = vec![Some(1), Some(3)];
         assert_eq!(min_values_a, expected_values_a);
-        let max_values_a = as_int32_array(&partition_stats.max_values(&column_a).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let max_values_a =
+            as_int32_array(&partition_stats.max_values(&column_a).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
         let expected_values_a = vec![Some(1), Some(3)];
         assert_eq!(max_values_a, expected_values_a);
 
-        let min_values_b = as_int32_array(&partition_stats.min_values(&column_b).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let min_values_b =
+            as_int32_array(&partition_stats.min_values(&column_b).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
         let expected_values_b = vec![Some(2), Some(4)];
         assert_eq!(min_values_b, expected_values_b);
-        let max_values_b = as_int32_array(&partition_stats.max_values(&column_b).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let max_values_b =
+            as_int32_array(&partition_stats.max_values(&column_b).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
         let expected_values_b = vec![Some(2), Some(4)];
         assert_eq!(max_values_b, expected_values_b);
 
@@ -536,7 +562,8 @@ mod tests {
             Arc::new(Field::new("a", DataType::Int32, false)),
             Arc::new(Field::new("b", DataType::Int32, false)),
         ];
-        let partition_stats = PartitionPruningStatistics::new(partition_values, partition_fields);
+        let partition_stats =
+            PartitionPruningStatistics::new(partition_values, partition_fields);
 
         let column_a = Column::new_unqualified("a");
         let column_b = Column::new_unqualified("b");
@@ -568,32 +595,46 @@ mod tests {
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
                             .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
-                            .with_null_count(Precision::Exact(0))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                100,
+                            ))))
+                            .with_null_count(Precision::Exact(0)),
                     )
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(100))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(200))))
-                            .with_null_count(Precision::Exact(5))
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                100,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                200,
+                            ))))
+                            .with_null_count(Precision::Exact(5)),
                     )
-                    .with_num_rows(Precision::Exact(100))
+                    .with_num_rows(Precision::Exact(100)),
             ),
             Arc::new(
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(50))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(300))))
-                            .with_null_count(Precision::Exact(10))
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                50,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                300,
+                            ))))
+                            .with_null_count(Precision::Exact(10)),
                     )
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(200))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(400))))
-                            .with_null_count(Precision::Exact(0))
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                200,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                400,
+                            ))))
+                            .with_null_count(Precision::Exact(0)),
                     )
-                    .with_num_rows(Precision::Exact(200))
+                    .with_num_rows(Precision::Exact(200)),
             ),
         ];
 
@@ -608,32 +649,58 @@ mod tests {
         let column_b = Column::new_unqualified("b");
 
         // Min/max values are the same as the statistics
-        let min_values_a = as_int32_array(&pruning_stats.min_values(&column_a).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let min_values_a = as_int32_array(&pruning_stats.min_values(&column_a).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_values_a = vec![Some(0), Some(50)];
         assert_eq!(min_values_a, expected_values_a);
-        let max_values_a = as_int32_array(&pruning_stats.max_values(&column_a).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let max_values_a = as_int32_array(&pruning_stats.max_values(&column_a).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_values_a = vec![Some(100), Some(300)];
         assert_eq!(max_values_a, expected_values_a);
-        let min_values_b = as_int32_array(&pruning_stats.min_values(&column_b).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let min_values_b = as_int32_array(&pruning_stats.min_values(&column_b).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_values_b = vec![Some(100), Some(200)];
         assert_eq!(min_values_b, expected_values_b);
-        let max_values_b = as_int32_array(&pruning_stats.max_values(&column_b).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let max_values_b = as_int32_array(&pruning_stats.max_values(&column_b).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_values_b = vec![Some(200), Some(400)];
         assert_eq!(max_values_b, expected_values_b);
 
         // Null counts are the same as the statistics
-        let null_counts_a = as_uint64_array(&pruning_stats.null_counts(&column_a).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let null_counts_a =
+            as_uint64_array(&pruning_stats.null_counts(&column_a).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
         let expected_null_counts_a = vec![Some(0), Some(10)];
         assert_eq!(null_counts_a, expected_null_counts_a);
-        let null_counts_b = as_uint64_array(&pruning_stats.null_counts(&column_b).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let null_counts_b =
+            as_uint64_array(&pruning_stats.null_counts(&column_b).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
         let expected_null_counts_b = vec![Some(5), Some(0)];
         assert_eq!(null_counts_b, expected_null_counts_b);
-        
+
         // Row counts are the same as the statistics
-        let row_counts_a = as_uint64_array(&pruning_stats.row_counts(&column_a).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let row_counts_a = as_uint64_array(&pruning_stats.row_counts(&column_a).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_row_counts_a = vec![Some(100), Some(200)];
         assert_eq!(row_counts_a, expected_row_counts_a);
-        let row_counts_b = as_uint64_array(&pruning_stats.row_counts(&column_b).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let row_counts_b = as_uint64_array(&pruning_stats.row_counts(&column_b).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_row_counts_b = vec![Some(100), Some(200)];
         assert_eq!(row_counts_b, expected_row_counts_b);
 
@@ -655,7 +722,10 @@ mod tests {
         // This is debatable, personally I think `row_count` should not take a `Column` as an argument
         // at all since all columns should have the same number of rows.
         // But for now we just document the current behavior in this test.
-        let row_counts_c = as_uint64_array(&pruning_stats.row_counts(&column_c).unwrap()).unwrap().into_iter().collect::<Vec<_>>();
+        let row_counts_c = as_uint64_array(&pruning_stats.row_counts(&column_c).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
         let expected_row_counts_c = vec![Some(100), Some(200)];
         assert_eq!(row_counts_c, expected_row_counts_c);
         assert!(pruning_stats.contained(&column_c, &values).is_none());
@@ -699,5 +769,389 @@ mod tests {
         // Contained values are all empty
         let values = HashSet::from([ScalarValue::Int32(Some(1))]);
         assert!(pruning_stats.contained(&column_a, &values).is_none());
+    }
+
+    #[test]
+    fn test_composite_pruning_statistics_partition_and_file() {
+        // Create partition statistics
+        let partition_values = vec![
+            vec![ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(10))],
+            vec![ScalarValue::Int32(Some(2)), ScalarValue::Int32(Some(20))],
+        ];
+        let partition_fields = vec![
+            Arc::new(Field::new("part_a", DataType::Int32, false)),
+            Arc::new(Field::new("part_b", DataType::Int32, false)),
+        ];
+        let partition_stats =
+            PartitionPruningStatistics::new(partition_values, partition_fields);
+
+        // Create file statistics
+        let file_statistics = vec![
+            Arc::new(
+                Statistics::default()
+                    .add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                100,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                200,
+                            ))))
+                            .with_null_count(Precision::Exact(0)),
+                    )
+                    .add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                300,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                400,
+                            ))))
+                            .with_null_count(Precision::Exact(5)),
+                    )
+                    .with_num_rows(Precision::Exact(100)),
+            ),
+            Arc::new(
+                Statistics::default()
+                    .add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                500,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                600,
+                            ))))
+                            .with_null_count(Precision::Exact(10)),
+                    )
+                    .add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                700,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                800,
+                            ))))
+                            .with_null_count(Precision::Exact(0)),
+                    )
+                    .with_num_rows(Precision::Exact(200)),
+            ),
+        ];
+
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("col_x", DataType::Int32, false),
+            Field::new("col_y", DataType::Int32, false),
+        ]));
+        let file_stats = PrunableStatistics::new(file_statistics, file_schema);
+
+        // Create composite statistics
+        let composite_stats = CompositePruningStatistics::new(vec![
+            Box::new(partition_stats),
+            Box::new(file_stats),
+        ]);
+
+        // Test accessing columns that are only in partition statistics
+        let part_a = Column::new_unqualified("part_a");
+        let part_b = Column::new_unqualified("part_b");
+
+        // Test accessing columns that are only in file statistics
+        let col_x = Column::new_unqualified("col_x");
+        let col_y = Column::new_unqualified("col_y");
+
+        // For partition columns, should get values from partition statistics
+        let min_values_part_a =
+            as_int32_array(&composite_stats.min_values(&part_a).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_values_part_a = vec![Some(1), Some(2)];
+        assert_eq!(min_values_part_a, expected_values_part_a);
+
+        let max_values_part_a =
+            as_int32_array(&composite_stats.max_values(&part_a).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        // For partition values, min and max are the same
+        assert_eq!(max_values_part_a, expected_values_part_a);
+
+        let min_values_part_b =
+            as_int32_array(&composite_stats.min_values(&part_b).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_values_part_b = vec![Some(10), Some(20)];
+        assert_eq!(min_values_part_b, expected_values_part_b);
+
+        // For file columns, should get values from file statistics
+        let min_values_col_x =
+            as_int32_array(&composite_stats.min_values(&col_x).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_values_col_x = vec![Some(100), Some(500)];
+        assert_eq!(min_values_col_x, expected_values_col_x);
+
+        let max_values_col_x =
+            as_int32_array(&composite_stats.max_values(&col_x).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_max_values_col_x = vec![Some(200), Some(600)];
+        assert_eq!(max_values_col_x, expected_max_values_col_x);
+
+        let min_values_col_y =
+            as_int32_array(&composite_stats.min_values(&col_y).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_values_col_y = vec![Some(300), Some(700)];
+        assert_eq!(min_values_col_y, expected_values_col_y);
+
+        // Test null counts - only available from file statistics
+        assert!(composite_stats.null_counts(&part_a).is_none());
+        assert!(composite_stats.null_counts(&part_b).is_none());
+
+        let null_counts_col_x =
+            as_uint64_array(&composite_stats.null_counts(&col_x).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_null_counts_col_x = vec![Some(0), Some(10)];
+        assert_eq!(null_counts_col_x, expected_null_counts_col_x);
+
+        // Test row counts - only available from file statistics
+        assert!(composite_stats.row_counts(&part_a).is_none());
+        let row_counts_col_x =
+            as_uint64_array(&composite_stats.row_counts(&col_x).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_row_counts = vec![Some(100), Some(200)];
+        assert_eq!(row_counts_col_x, expected_row_counts);
+
+        // Test contained values - only available from partition statistics
+        let values = HashSet::from([ScalarValue::Int32(Some(1))]);
+        let contained_part_a = composite_stats.contained(&part_a, &values).unwrap();
+        let expected_contained_part_a = BooleanArray::from(vec![true, false]);
+        assert_eq!(contained_part_a, expected_contained_part_a);
+
+        // File statistics don't implement contained
+        assert!(composite_stats.contained(&col_x, &values).is_none());
+
+        // Non-existent column should return None for everything
+        let non_existent = Column::new_unqualified("non_existent");
+        assert!(composite_stats.min_values(&non_existent).is_none());
+        assert!(composite_stats.max_values(&non_existent).is_none());
+        assert!(composite_stats.null_counts(&non_existent).is_none());
+        assert!(composite_stats.row_counts(&non_existent).is_none());
+        assert!(composite_stats.contained(&non_existent, &values).is_none());
+
+        // Verify num_containers matches
+        assert_eq!(composite_stats.num_containers(), 2);
+    }
+
+    #[test]
+    fn test_composite_pruning_statistics_priority() {
+        // Create two sets of file statistics with the same column names
+        // but different values to test that the first one gets priority
+
+        // First set of statistics
+        let first_statistics = vec![
+            Arc::new(
+                Statistics::default()
+                    .add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                100,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                200,
+                            ))))
+                            .with_null_count(Precision::Exact(0)),
+                    )
+                    .with_num_rows(Precision::Exact(100)),
+            ),
+            Arc::new(
+                Statistics::default()
+                    .add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                300,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                400,
+                            ))))
+                            .with_null_count(Precision::Exact(5)),
+                    )
+                    .with_num_rows(Precision::Exact(200)),
+            ),
+        ];
+
+        let first_schema = Arc::new(Schema::new(vec![Field::new(
+            "col_a",
+            DataType::Int32,
+            false,
+        )]));
+        let first_stats = PrunableStatistics::new(first_statistics, first_schema);
+
+        // Second set of statistics with the same column name but different values
+        let second_statistics = vec![
+            Arc::new(
+                Statistics::default()
+                    .add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                1000,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                2000,
+                            ))))
+                            .with_null_count(Precision::Exact(10)),
+                    )
+                    .with_num_rows(Precision::Exact(1000)),
+            ),
+            Arc::new(
+                Statistics::default()
+                    .add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                3000,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                4000,
+                            ))))
+                            .with_null_count(Precision::Exact(20)),
+                    )
+                    .with_num_rows(Precision::Exact(2000)),
+            ),
+        ];
+
+        let second_schema = Arc::new(Schema::new(vec![Field::new(
+            "col_a",
+            DataType::Int32,
+            false,
+        )]));
+        let second_stats = PrunableStatistics::new(second_statistics, second_schema);
+
+        // Create composite statistics with first stats having priority
+        let composite_stats = CompositePruningStatistics::new(vec![
+            Box::new(first_stats.clone()),
+            Box::new(second_stats.clone()),
+        ]);
+
+        let col_a = Column::new_unqualified("col_a");
+
+        // Should get values from first statistics since it has priority
+        let min_values = as_int32_array(&composite_stats.min_values(&col_a).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let expected_min_values = vec![Some(100), Some(300)];
+        assert_eq!(min_values, expected_min_values);
+
+        let max_values = as_int32_array(&composite_stats.max_values(&col_a).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let expected_max_values = vec![Some(200), Some(400)];
+        assert_eq!(max_values, expected_max_values);
+
+        let null_counts = as_uint64_array(&composite_stats.null_counts(&col_a).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let expected_null_counts = vec![Some(0), Some(5)];
+        assert_eq!(null_counts, expected_null_counts);
+
+        let row_counts = as_uint64_array(&composite_stats.row_counts(&col_a).unwrap())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let expected_row_counts = vec![Some(100), Some(200)];
+        assert_eq!(row_counts, expected_row_counts);
+
+        // Create composite statistics with second stats having priority
+        // Now that we've added Clone trait to PrunableStatistics, we can just clone them
+
+        let composite_stats_reversed = CompositePruningStatistics::new(vec![
+            Box::new(second_stats.clone()),
+            Box::new(first_stats.clone()),
+        ]);
+
+        // Should get values from second statistics since it now has priority
+        let min_values =
+            as_int32_array(&composite_stats_reversed.min_values(&col_a).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_min_values = vec![Some(1000), Some(3000)];
+        assert_eq!(min_values, expected_min_values);
+
+        let max_values =
+            as_int32_array(&composite_stats_reversed.max_values(&col_a).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_max_values = vec![Some(2000), Some(4000)];
+        assert_eq!(max_values, expected_max_values);
+
+        let null_counts =
+            as_uint64_array(&composite_stats_reversed.null_counts(&col_a).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_null_counts = vec![Some(10), Some(20)];
+        assert_eq!(null_counts, expected_null_counts);
+
+        let row_counts =
+            as_uint64_array(&composite_stats_reversed.row_counts(&col_a).unwrap())
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+        let expected_row_counts = vec![Some(1000), Some(2000)];
+        assert_eq!(row_counts, expected_row_counts);
+    }
+
+    #[test]
+    fn test_composite_pruning_statistics_empty_and_mismatched_containers() {
+        // Test with empty statistics vector
+        // This should never happen, so we panic instead of returning a Result which would burned callers
+        let result = std::panic::catch_unwind(|| {
+            CompositePruningStatistics::new(vec![]);
+        });
+        assert!(result.is_err());
+
+        // We should panic here because the number of containers is different
+        let result = std::panic::catch_unwind(|| {
+            // Create statistics with different number of containers
+            // Use partition stats for the test
+            let partition_values_1 = vec![
+                vec![ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(10))],
+                vec![ScalarValue::Int32(Some(2)), ScalarValue::Int32(Some(20))],
+            ];
+            let partition_fields_1 = vec![
+                Arc::new(Field::new("part_a", DataType::Int32, false)),
+                Arc::new(Field::new("part_b", DataType::Int32, false)),
+            ];
+            let partition_stats_1 =
+                PartitionPruningStatistics::new(partition_values_1, partition_fields_1);
+            let partition_values_2 = vec![
+                vec![ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(30))],
+                vec![ScalarValue::Int32(Some(4)), ScalarValue::Int32(Some(40))],
+                vec![ScalarValue::Int32(Some(5)), ScalarValue::Int32(Some(50))],
+            ];
+            let partition_fields_2 = vec![
+                Arc::new(Field::new("part_x", DataType::Int32, false)),
+                Arc::new(Field::new("part_y", DataType::Int32, false)),
+            ];
+            let partition_stats_2 =
+                PartitionPruningStatistics::new(partition_values_2, partition_fields_2);
+
+            CompositePruningStatistics::new(vec![
+                Box::new(partition_stats_1),
+                Box::new(partition_stats_2),
+            ]);
+        });
+        assert!(result.is_err());
     }
 }
