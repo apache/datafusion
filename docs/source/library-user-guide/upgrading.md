@@ -29,11 +29,11 @@ and relied on the default value of `collect_stat` being `true`, you will need to
 explicitly set it to `true` in your code.
 
 ```rust
-use datafusion::datasource::listing::ListingOptions;
-
-ListingOptions::new()
+# /* comment to avoid running
+ListingOptions::new(Arc::new(ParquetFormat::default()))
     .with_collect_stat(true)
     // other options
+# */
 ```
 
 ### Processing `Field` instead of `DataType` for user defined functions
