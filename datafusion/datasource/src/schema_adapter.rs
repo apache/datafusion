@@ -274,10 +274,10 @@ impl SchemaAdapter for DefaultSchemaAdapter {
         )?;
 
         Ok((
-            Arc::new(SchemaMapping {
-                projected_table_schema: Arc::clone(&self.projected_table_schema),
+            Arc::new(SchemaMapping::new(
+                Arc::clone(&self.projected_table_schema),
                 field_mappings,
-            }),
+            )),
             projection,
         ))
     }
