@@ -1,4 +1,39 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::aggregates::group_values::GroupValues;
+use ahash::RandomState;
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::array::{
+    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
+    PrimitiveArray,
+};
+use arrow::datatypes::{i256, DataType};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_expr::EmitTo;
+use half::f16;
+use hashbrown::hash_table::HashTable;
+use std::mem::size_of;
+use std::sync::Arc;
+
 mod large_primitive;
+pub use large_primitive::GroupValuesLargePrimitive;
 
 /// A trait to allow hashing of floating point numbers
 pub(crate) trait HashValue {
@@ -41,42 +76,6 @@ macro_rules! hash_float {
 }
 
 hash_float!(f16, f32, f64);
-
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
-use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
-use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
-use arrow::array::{
-    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
-    PrimitiveArray,
-};
-use arrow::datatypes::{i256, DataType};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::EmitTo;
-use half::f16;
-use hashbrown::hash_table::HashTable;
-use std::mem::size_of;
-use std::sync::Arc;
-
-pub use large_primitive::GroupValuesLargePrimitive;
 
 /// A [`GroupValues`] storing a single column of normal primitive values (bits <= 64)
 ///
@@ -155,7 +154,8 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<(usize, u64)>() + self.values.allocated_size()
+        self.map.capacity() * size_of::<(usize, T::Native)>()
+            + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
