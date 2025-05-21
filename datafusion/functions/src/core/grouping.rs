@@ -20,7 +20,7 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Int32Type};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
+    ColumnarValue, Documentation, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
@@ -119,10 +119,6 @@ impl ScalarUDFImpl for GroupingFunc {
         Ok(DataType::Int32)
     }
 
-    fn return_type_from_args(&self, _args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        Ok(ReturnInfo::new(DataType::Int32, false))
-    }
-
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(grouping_inner, vec![])(&args.args)
     }
@@ -217,15 +213,22 @@ mod tests {
         
         let args = vec![
             ColumnarValue::Array(Arc::new(grouping_id)),
-            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
+            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices.clone())))),
         ];
+
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
 
         let func = GroupingFunc::new();
         let return_type = DataType::Int32;
         let result = func.invoke_with_args(ScalarFunctionArgs { 
             args,
             number_rows: 4,
-            return_type: &return_type,
+            arg_fields: arg_fields_owned,
+            return_field: &Field::new("f", DataType::Int32, true),
         })?;
         
         let result = match result {
@@ -248,12 +251,19 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
         ];
 
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+
         let func = GroupingFunc::new();
         let return_type = DataType::Int32;
         let result = func.invoke_with_args(ScalarFunctionArgs { 
             args,
             number_rows: 4,
-            return_type: &return_type,
+            arg_fields: arg_fields_owned,
+            return_field: &Field::new("f", DataType::Int32, true),
         })?;
         
         let result = match result {
@@ -276,12 +286,19 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
         ];
 
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+
         let func = GroupingFunc::new();
         let return_type = DataType::Int32;
         let result = func.invoke_with_args(ScalarFunctionArgs { 
             args,
             number_rows: 4,
-            return_type: &return_type,
+            arg_fields: arg_fields_owned,
+            return_field: &Field::new("f", DataType::Int32, true),
         })?;
         
         let result = match result {
@@ -304,12 +321,19 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
         ];
 
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+
         let func = GroupingFunc::new();
         let return_type = DataType::Int32;
         let result = func.invoke_with_args(ScalarFunctionArgs { 
             args,
+            arg_fields: arg_fields_owned,
             number_rows: 4,
-            return_type: &return_type,
+            return_field: &Field::new("f", DataType::Int32, true),
         })?;
         
         let result = match result {
@@ -332,12 +356,19 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
         ];
 
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+
         let func = GroupingFunc::new();
         let return_type = DataType::Int32;
         let result = func.invoke_with_args(ScalarFunctionArgs { 
             args,
+            arg_fields: arg_fields_owned,
             number_rows: 4,
-            return_type: &return_type,
+            return_field: &Field::new("f", DataType::Int32, true),
         });
         assert!(result.is_err());
         Ok(())
@@ -351,16 +382,29 @@ mod tests {
         // Test with too many arguments
         let args = vec![
             ColumnarValue::Array(Arc::new(grouping_id)),
-            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
+            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices.clone())))),
             ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
         ];
+
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
 
         let func = GroupingFunc::new();
         let return_type = DataType::Int32;
         let result = func.invoke_with_args(ScalarFunctionArgs { 
             args,
+            arg_fields: arg_fields_owned,
             number_rows: 4,
-            return_type: &return_type,
+            return_field: &Field::new("f", DataType::Int32, true),
         });
         assert!(result.is_err());
 
@@ -374,8 +418,9 @@ mod tests {
         let return_type = DataType::Int32;
         let result = func.invoke_with_args(ScalarFunctionArgs { 
             args,
+            arg_fields: arg_fields_owned,
             number_rows: 1,
-            return_type: &return_type,
+            return_field: &Field::new("f", DataType::Int32, true),
         });
         assert!(result.is_err());
         Ok(())
