@@ -56,7 +56,7 @@ impl<'a> ExpressionArgs<'a> {
         self.input_exprs
     }
 
-    /// Returns the [`Field`]s corresponding to the input expressions
+    /// Returns the [`FieldRef`]s corresponding to the input expressions
     /// to the user-defined window function.
     pub fn input_fields(&self) -> &'a [FieldRef] {
         self.input_fields
