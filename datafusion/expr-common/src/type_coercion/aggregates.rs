@@ -17,7 +17,7 @@
 
 use crate::signature::TypeSignature;
 use arrow::datatypes::{
-    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, Field, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
@@ -82,48 +82,48 @@ pub static TIMES: &[DataType] = &[
     DataType::Time64(TimeUnit::Nanosecond),
 ];
 
-/// Validate the length of `input_types` matches the `signature` for `agg_fun`.
+/// Validate the length of `input_fields` matches the `signature` for `agg_fun`.
 ///
-/// This method DOES NOT validate the argument types - only that (at least one,
+/// This method DOES NOT validate the argument fields - only that (at least one,
 /// in the case of [`TypeSignature::OneOf`]) signature matches the desired
 /// number of input types.
 pub fn check_arg_count(
     func_name: &str,
-    input_types: &[DataType],
+    input_fields: &[Field],
     signature: &TypeSignature,
 ) -> Result<()> {
     match signature {
         TypeSignature::Uniform(agg_count, _) | TypeSignature::Any(agg_count) => {
-            if input_types.len() != *agg_count {
+            if input_fields.len() != *agg_count {
                 return plan_err!(
                     "The function {func_name} expects {:?} arguments, but {:?} were provided",
                     agg_count,
-                    input_types.len()
+                    input_fields.len()
                 );
             }
         }
         TypeSignature::Exact(types) => {
-            if types.len() != input_types.len() {
+            if types.len() != input_fields.len() {
                 return plan_err!(
                     "The function {func_name} expects {:?} arguments, but {:?} were provided",
                     types.len(),
-                    input_types.len()
+                    input_fields.len()
                 );
             }
         }
         TypeSignature::OneOf(variants) => {
             let ok = variants
                 .iter()
-                .any(|v| check_arg_count(func_name, input_types, v).is_ok());
+                .any(|v| check_arg_count(func_name, input_fields, v).is_ok());
             if !ok {
                 return plan_err!(
                     "The function {func_name} does not accept {:?} function arguments.",
-                    input_types.len()
+                    input_fields.len()
                 );
             }
         }
         TypeSignature::VariadicAny => {
-            if input_types.is_empty() {
+            if input_fields.is_empty() {
                 return plan_err!(
                     "The function {func_name} expects at least one argument"
                 );

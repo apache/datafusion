@@ -16,9 +16,8 @@
 // under the License.
 
 //! Defines the Sort-Merge join execution plan.
-//! A Sort-Merge join plan consumes two sorted children plan and produces
+//! A Sort-Merge join plan consumes two sorted children plans and produces
 //! joined output by given join type and other options.
-//! Sort-Merge join feature is currently experimental.
 
 use std::any::Any;
 use std::cmp::Ordering;
