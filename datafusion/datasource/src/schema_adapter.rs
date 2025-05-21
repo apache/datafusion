@@ -509,4 +509,80 @@ mod tests {
         assert_eq!(table_col_stats[0], ColumnStatistics::new_unknown(),);
         assert_eq!(table_col_stats[1], ColumnStatistics::new_unknown(),);
     }
+
+    #[test]
+    fn test_map_schema_happy_path() {
+        // Create table schema (a, b, c)
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+        ]));
+
+        // Create file schema with compatible types but different order and a missing column
+        let file_schema = Schema::new(vec![
+            Field::new("b", DataType::Utf8, true),
+            Field::new("a", DataType::Int32, true),
+            // c is missing
+        ]);
+
+        // Create SchemaAdapter
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&table_schema),
+        };
+
+        // Get mapper and projection - This should succeed
+        let (mapper, projection) = adapter.map_schema(&file_schema).unwrap();
+
+        // Should project columns 0,1 from file
+        assert_eq!(projection, vec![0, 1]);
+
+        // Check field mappings in the SchemaMapping struct
+        if let Some(schema_mapping) = mapper.downcast_ref::<SchemaMapping>() {
+            assert_eq!(schema_mapping.field_mappings.len(), 3);
+            assert_eq!(schema_mapping.field_mappings[0], Some(1)); // a maps to file index 1
+            assert_eq!(schema_mapping.field_mappings[1], Some(0)); // b maps to file index 0
+            assert_eq!(schema_mapping.field_mappings[2], None); // c is missing
+        } else {
+            panic!("Expected mapper to be a SchemaMapping");
+        }
+    }
+
+    #[test]
+    fn test_map_schema_error_path() {
+        // Create table schema with specific types
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+
+        // Create file schema with incompatible type for column b
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            // Boolean cannot be cast to Utf8
+            Field::new("b", DataType::Boolean, true),
+        ]);
+
+        // Create SchemaAdapter
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&table_schema),
+        };
+
+        // map_schema should return an error
+        let result = adapter.map_schema(&file_schema);
+        assert!(result.is_err());
+
+        // Verify error message contains expected information
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Cannot cast file schema field b"),
+            "Error message '{}' does not contain expected text",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("Boolean") && error_msg.contains("Utf8"),
+            "Error message '{}' does not mention the incompatible types",
+            error_msg
+        );
+    }
 }
