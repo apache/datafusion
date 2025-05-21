@@ -761,7 +761,7 @@ fn plan_delete() {
         plan,
         @r#"
         Dml: op=[Delete] table=[person]
-          Filter: id = Int64(1)
+          Filter: person.id = Int64(1)
             TableScan: person
         "#
     );
@@ -776,7 +776,7 @@ fn plan_delete_quoted_identifier_case_sensitive() {
         plan,
         @r#"
         Dml: op=[Delete] table=[SomeCatalog.SomeSchema.UPPERCASE_test]
-          Filter: Id = Int64(1)
+          Filter: SomeCatalog.SomeSchema.UPPERCASE_test.Id = Int64(1)
             TableScan: SomeCatalog.SomeSchema.UPPERCASE_test
         "#
     );

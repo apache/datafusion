@@ -520,6 +520,7 @@ struct ConstEvaluator<'a> {
 
 #[allow(dead_code)]
 /// The simplify result of ConstEvaluator
+#[allow(clippy::large_enum_variant)]
 enum ConstSimplifyResult {
     // Expr was simplified and contains the new expression
     Simplified(ScalarValue),
