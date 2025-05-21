@@ -111,7 +111,7 @@ impl RandomNativeData for IntervalMonthDayNanoType {
 // https://github.com/apache/arrow-rs/issues/7533
 impl RandomNativeData for DurationSecondType {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
-        rng.gen::<i64>() / 1000
+        rng.random::<i64>() / 1000
     }
 }
 
