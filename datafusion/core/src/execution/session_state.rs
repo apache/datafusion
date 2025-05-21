@@ -179,6 +179,7 @@ pub struct SessionState {
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
+    planner_context: Option<PlannerContext>,
 }
 
 impl Debug for SessionState {
@@ -207,6 +208,7 @@ impl Debug for SessionState {
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
             .field("prepared_plans", &self.prepared_plans)
+            .field("planner_context", &self.planner_context)
             .finish()
     }
 }
@@ -351,6 +353,11 @@ impl SessionState {
     /// Get the function factory
     pub fn function_factory(&self) -> Option<&Arc<dyn FunctionFactory>> {
         self.function_factory.as_ref()
+    }
+
+    /// Set the planner_context.
+    pub fn set_planner_context(&mut self, planner_context: Option<PlannerContext>) {
+        self.planner_context = planner_context;
     }
 
     /// Get the table factories
@@ -1385,6 +1392,7 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             prepared_plans: HashMap::new(),
+            planner_context: None,
         };
 
         if let Some(file_formats) = file_formats {

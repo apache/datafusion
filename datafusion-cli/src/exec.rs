@@ -236,7 +236,9 @@ pub(super) async fn exec_and_print(
         let plan = create_plan(ctx, statement, &mut planner_context).await?;
         let adjusted = adjusted.with_plan(&plan);
 
-        let df = ctx.execute_logical_plan(plan, &mut planner_context).await?;
+        let df = ctx
+            .execute_logical_plan(plan, Some(planner_context))
+            .await?;
         let physical_plan = df.create_physical_plan().await?;
 
         // Track memory usage for the query result if it's bounded
