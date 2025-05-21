@@ -313,7 +313,7 @@
 //! A [`TableProvider`] provides information for planning and
 //! an [`ExecutionPlan`] for execution. DataFusion includes [`ListingTable`],
 //! a [`TableProvider`] which reads individual files or directories of files
-//! ("partitioned datasets") of several common file formats. Users can add
+//! ("partitioned datasets") of the same file format. Users can add
 //! support for new file formats by implementing the [`TableProvider`]
 //! trait.
 //!
