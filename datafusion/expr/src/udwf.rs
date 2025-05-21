@@ -236,7 +236,7 @@ where
 /// ```
 /// # use std::any::Any;
 /// # use std::sync::LazyLock;
-/// # use arrow::datatypes::{DataType, FieldRef};
+/// # use arrow::datatypes::{DataType, Field, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
