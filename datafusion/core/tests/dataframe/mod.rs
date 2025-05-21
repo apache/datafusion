@@ -1853,6 +1853,56 @@ async fn with_column_renamed_case_sensitive() -> Result<()> {
 }
 
 #[tokio::test]
+async fn describe_lookup_via_quoted_identifier() -> Result<()> {
+    let ctx = SessionContext::new();
+    let name = "aggregate_test_100";
+    register_aggregate_csv(&ctx, name).await?;
+    let df = ctx.table(name);
+
+    let df = df
+        .await?
+        .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
+        .limit(0, Some(1))?
+        .sort(vec![
+            // make the test deterministic
+            col("c1").sort(true, true),
+            col("c2").sort(true, true),
+            col("c3").sort(true, true),
+        ])?
+        .select_columns(&["c1"])?;
+
+    let df_renamed = df.clone().with_column_renamed("c1", "CoLu.Mn[\"1\"]")?;
+
+    let describe_result = df_renamed.describe().await?;
+    describe_result
+        .clone()
+        .sort(vec![
+            col("describe").sort(true, true),
+            col("CoLu.Mn[\"1\"]").sort(true, true),
+        ])?
+        .show()
+        .await?;
+    assert_snapshot!(
+        batches_to_sort_string(&describe_result.clone().collect().await?),
+        @r###"
+        +------------+--------------+
+        | describe   | CoLu.Mn["1"] |
+        +------------+--------------+
+        | count      | 1            |
+        | max        | a            |
+        | mean       | null         |
+        | median     | null         |
+        | min        | a            |
+        | null_count | 0            |
+        | std        | null         |
+        +------------+--------------+
+    "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn cast_expr_test() -> Result<()> {
     let df = test_table()
         .await?
