@@ -626,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn test_map_schema_integration() {
+    fn test_map_schema_error_path() {
         // Define the table schema
         let table_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
@@ -651,19 +651,35 @@ mod tests {
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Cannot cast file schema field c"));
+    }
 
-        // Now with compatible types
+    #[test]
+    fn test_map_schema_happy_path() {
+        // Define the table schema
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Decimal128(10, 2), true),
+        ]));
+
+        // Create DefaultSchemaAdapter
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&table_schema),
+        };
+
+        // Define compatible file schema (missing column c)
         let compatible_file_schema = Schema::new(vec![
             Field::new("a", DataType::Int64, true), // Can be cast to Int32
             Field::new("b", DataType::Float64, true), // Can be cast to Utf8
         ]);
 
+        // Test successful schema mapping
         let (mapper, projection) = adapter.map_schema(&compatible_file_schema).unwrap();
 
         // Verify field_mappings and projection created correctly
         assert_eq!(projection, vec![0, 1]); // Projecting a and b
 
-        // Verify the SchemaMapping works
+        // Verify the SchemaMapping works with actual data
         let file_batch = RecordBatch::try_new(
             Arc::new(compatible_file_schema.clone()),
             vec![
@@ -674,10 +690,12 @@ mod tests {
         .unwrap();
 
         let mapped_batch = mapper.map_batch(file_batch).unwrap();
+
+        // Verify correct schema mapping
         assert_eq!(*mapped_batch.schema(), *table_schema);
         assert_eq!(mapped_batch.num_columns(), 3); // a, b, c
 
-        // Column c should be null
+        // Column c should be null since it wasn't in the file schema
         let c_array = mapped_batch.column(2);
         assert_eq!(c_array.len(), 2);
         assert_eq!(c_array.null_count(), 2);
