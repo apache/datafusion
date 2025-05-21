@@ -180,16 +180,16 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
-            let ordering = reader_metadata
-                .metadata()
-                .file_metadata()
-                .column_orders()
-                .map_or_else(
-                    || vec![ColumnOrdering::Unknown; physical_file_schema.fields().len()],
-                    |column_orders| {
-                        column_orders
-                            .iter()
-                            .map(|order| match order {
+            // Map column ordering from physical schema to logical
+            let ordering: Vec<ColumnOrdering> = if let Some(column_orders) =
+                reader_metadata.metadata().file_metadata().column_orders()
+            {
+                logical_file_schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        match physical_file_schema.index_of(field.name()) {
+                            Ok(idx) => match column_orders[idx] {
                                 ColumnOrder::TYPE_DEFINED_ORDER(sort_order) => {
                                     match sort_order {
                                         SortOrder::SIGNED => ColumnOrdering::Signed,
@@ -202,10 +202,14 @@ impl FileOpener for ParquetOpener {
                                     ColumnOrdering::TotalOrder
                                 }*/
                                 ColumnOrder::UNDEFINED => ColumnOrdering::Unknown,
-                            })
-                            .collect::<Vec<_>>()
-                    },
-                );
+                            },
+                            _ => ColumnOrdering::Unknown,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                vec![ColumnOrdering::Unknown; logical_file_schema.fields().len()]
+            };
 
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(

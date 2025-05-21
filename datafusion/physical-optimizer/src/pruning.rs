@@ -1511,35 +1511,39 @@ fn build_predicate_expression(
 
     // TODO(ets): this is rather parquet specific...still wonder if this should be done
     //            at the datasource level
-    let colidx = column_index_for_expr(&left, schema)
-        .or_else(|| column_index_for_expr(&right, schema));
-    if let Some(colidx) = colidx {
-        let col_order = column_orderings[colidx];
 
-        // If the ColumnOrder is undefined (as opposed to unknown), we shouldn't be pruning
-        // since min/max are invalid.
-        if col_order == ColumnOrdering::Undefined {
-            dbg!("Cannot prune because column order is undefined");
-            return unhandled_hook.handle(expr);
-        }
+    // Sanity check that column orderings match schema
+    if column_orderings.len() == schema.fields().len() {
+        let colidx = column_index_for_expr(&left, schema)
+            .or_else(|| column_index_for_expr(&right, schema));
+        if let Some(colidx) = colidx {
+            let col_order = column_orderings[colidx];
 
-        // left and right should have the same type by now, so only check left
-        if left.data_type(schema).is_ok_and(|t| t.is_floating()) {
-            // By the time we've reached this code, we've narrowed down the possible expressions
-            // to binary expressions. Of those allowed by `build_statistics_expr`, we only need
-            // to worry about greater/less than expressions and not equal.
-            match op {
-                Operator::Gt
-                | Operator::GtEq
-                | Operator::Lt
-                | Operator::LtEq
-                | Operator::NotEq => {
-                    if col_order != ColumnOrdering::TotalOrder {
-                        dbg!("Cannot prune floating point column because NaN may be present");
-                        return unhandled_hook.handle(expr);
+            // If the ColumnOrder is undefined (as opposed to unknown), we shouldn't be pruning
+            // since min/max are invalid.
+            if col_order == ColumnOrdering::Undefined {
+                dbg!("Cannot prune because column order is undefined");
+                return unhandled_hook.handle(expr);
+            }
+
+            // left and right should have the same type by now, so only check left
+            if left.data_type(schema).is_ok_and(|t| t.is_floating()) {
+                // By the time we've reached this code, we've narrowed down the possible expressions
+                // to binary expressions. Of those allowed by `build_statistics_expr`, we only need
+                // to worry about greater/less than expressions and not equal.
+                match op {
+                    Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+                    | Operator::NotEq => {
+                        if col_order != ColumnOrdering::TotalOrder {
+                            dbg!("Cannot prune floating point column because NaN may be present");
+                            return unhandled_hook.handle(expr);
+                        }
                     }
+                    _ => (),
                 }
-                _ => (),
             }
         }
     }
