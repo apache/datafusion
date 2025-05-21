@@ -17,13 +17,14 @@
 
 use arrow::array::ArrowPrimitiveType;
 use arrow::datatypes::{
-    i256, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTime,
-    IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType,
-    IntervalYearMonthType, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    i256, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano,
+    IntervalMonthDayNanoType, IntervalYearMonthType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -71,6 +72,11 @@ basic_random_data!(TimestampSecondType);
 basic_random_data!(TimestampMillisecondType);
 basic_random_data!(TimestampMicrosecondType);
 basic_random_data!(TimestampNanosecondType);
+// Note DurationSecondType is restricted to i64::MIN / 1000 to i64::MAX / 1000
+// due to https://github.com/apache/arrow-rs/issues/7533 so handle it specially below
+basic_random_data!(DurationMillisecondType);
+basic_random_data!(DurationMicrosecondType);
+basic_random_data!(DurationNanosecondType);
 
 impl RandomNativeData for Date64Type {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
@@ -97,6 +103,15 @@ impl RandomNativeData for IntervalMonthDayNanoType {
             days: rng.gen::<i32>(),
             nanoseconds: rng.gen::<i64>(),
         }
+    }
+}
+
+// Restrict Duration(Seconds) to i64::MIN / 1000 to i64::MAX / 1000 to
+// avoid panics on pretty printing. See
+// https://github.com/apache/arrow-rs/issues/7533
+impl RandomNativeData for DurationSecondType {
+    fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
+        rng.gen::<i64>() / 1000
     }
 }
 
