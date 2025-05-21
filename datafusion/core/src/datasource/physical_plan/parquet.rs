@@ -38,8 +38,8 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
-        ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
-        StringViewArray, StructArray,
+        Array, ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array,
+        StringArray, StringViewArray, StructArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
@@ -204,14 +204,10 @@ mod tests {
 
         /// run the test, returning the `RoundTripResult`
         async fn round_trip(&self, batches: Vec<RecordBatch>) -> RoundTripResult {
-            let table_schema = self.schema.clone().unwrap_or_else(|| {
-                Arc::new(
-                    Schema::try_merge(
-                        batches.iter().map(|b| b.schema().as_ref().clone()),
-                    )
+            let table_schema = Arc::new(
+                Schema::try_merge(batches.iter().map(|b| b.schema().as_ref().clone()))
                     .unwrap(),
-                )
-            });
+            );
             let file_schema = match &self.schema {
                 Some(schema) => schema,
                 None => &table_schema,
@@ -882,7 +878,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
 
         // Predicate should prune all row groups
-        let filter = col("c1").eq(lit(ScalarValue::Utf8(Some("aaa".to_string()))));
+        let filter = col("c1").eq(lit(ScalarValue::Utf8View(Some("aaa".to_string()))));
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_schema(schema.clone())
@@ -895,7 +891,7 @@ mod tests {
         assert_eq!(rt.batches.unwrap().len(), 0);
 
         // Predicate should prune no row groups
-        let filter = col("c1").eq(lit(ScalarValue::Utf8(Some("foo".to_string()))));
+        let filter = col("c1").eq(lit(ScalarValue::Utf8View(Some("foo".to_string()))));
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_schema(schema)
@@ -924,7 +920,7 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt64, false)]));
 
         // Predicate should prune all row groups
-        let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(5))));
+        let filter = col("c1").eq(lit(ScalarValue::Int8(Some(5))));
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_schema(schema.clone())
@@ -936,7 +932,7 @@ mod tests {
         assert_eq!(rt.batches.unwrap().len(), 0);
 
         // Predicate should prune no row groups
-        let filter = col("c1").eq(lit(ScalarValue::UInt64(Some(1))));
+        let filter = col("c1").eq(lit(ScalarValue::Int8(Some(1))));
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_schema(schema)
