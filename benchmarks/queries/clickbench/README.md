@@ -9,7 +9,7 @@ ClickBench is focused on aggregation and filtering performance (though it has no
 - `queries.sql` - Actual ClickBench queries, downloaded from the [ClickBench repository]
 - `extended.sql` - "Extended" DataFusion specific queries.
 
-[ClickBench repository]: https://github.com/ClickHouse/ClickBench/blob/main/datafusion/queries.sql
+[clickbench repository]: https://github.com/ClickHouse/ClickBench/blob/main/datafusion/queries.sql
 
 ## "Extended" Queries
 
