@@ -20,7 +20,6 @@ use crate::aggregates::group_values::single_group_by::primitive::{
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::array::types;
 use arrow::array::{
     cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray,
 };
