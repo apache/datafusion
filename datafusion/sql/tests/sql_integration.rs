@@ -3360,7 +3360,7 @@ fn parse_decimals_parser_options() -> ParserOptions {
         parse_float_as_decimal: true,
         enable_ident_normalization: false,
         support_varchar_with_length: false,
-        map_varchar_to_utf8view: false,
+        map_varchar_to_utf8view: true,
         enable_options_value_normalization: false,
         collect_spans: false,
     }
@@ -3371,7 +3371,7 @@ fn ident_normalization_parser_options_no_ident_normalization() -> ParserOptions 
         parse_float_as_decimal: true,
         enable_ident_normalization: false,
         support_varchar_with_length: false,
-        map_varchar_to_utf8view: false,
+        map_varchar_to_utf8view: true,
         enable_options_value_normalization: false,
         collect_spans: false,
     }
@@ -3382,7 +3382,7 @@ fn ident_normalization_parser_options_ident_normalization() -> ParserOptions {
         parse_float_as_decimal: true,
         enable_ident_normalization: true,
         support_varchar_with_length: false,
-        map_varchar_to_utf8view: false,
+        map_varchar_to_utf8view: true,
         enable_options_value_normalization: false,
         collect_spans: false,
     }
