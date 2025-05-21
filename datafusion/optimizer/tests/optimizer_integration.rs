@@ -556,7 +556,24 @@ impl MyContextProvider {
         self.tables.insert(
             name.into(),
             Arc::new(MyTableSource {
-                schema: Arc::new(schema),
+                schema: schema.into(),
+                constraints: None,
+            }),
+        );
+        self
+    }
+
+    fn with_schema_constraints(
+        mut self,
+        name: impl Into<String>,
+        schema: Schema,
+        constraints: Constraints,
+    ) -> Self {
+        self.tables.insert(
+            name.into(),
+            Arc::new(MyTableSource {
+                schema: schema.into(),
+                constraints: Some(constraints),
             }),
         );
         self
@@ -612,6 +629,7 @@ impl ContextProvider for MyContextProvider {
 
 struct MyTableSource {
     schema: SchemaRef,
+    constraints: Option<Constraints>,
 }
 
 impl TableSource for MyTableSource {
@@ -621,5 +639,9 @@ impl TableSource for MyTableSource {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
     }
 }
