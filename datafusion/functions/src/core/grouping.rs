@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, Int32Array, PrimitiveArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
+use arrow::array::{Array, ArrayRef, AsArray, Int32Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, Int32Type};
+use arrow::datatypes::{DataType, Field, Int32Type};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, Volatility,
@@ -38,13 +37,21 @@ macro_rules! grouping_id {
         };
         grouping_id
             .iter()
-            .map(|grouping_id| {
+            .zip($indices.iter())
+            .map(|(grouping_id, indices)| {
                 grouping_id.map(|grouping_id| {
                     let mut result = 0 as $type;
-                    for (i, index) in $indices.iter().enumerate() {
-                        if let Some(index) = index {
-                            let bit = (grouping_id >> index) & 1;
-                            result |= bit << i;
+                    match indices {
+                        Some(indices) => {
+                            for index in indices.as_primitive::<Int32Type>().iter() {
+                                if let Some(index) = index {
+                                    let bit = (grouping_id >> index) & 1;
+                                    result = (result << 1) | bit;
+                                }
+                            }
+                        }
+                        None => {
+                            result = grouping_id;
                         }
                     }
                     result as i32
@@ -117,7 +124,7 @@ impl ScalarUDFImpl for GroupingFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(grouping_inner, vec![Hint::Pad, Hint::AcceptsSingular])(&args.args)
+        make_scalar_function(grouping_inner, vec![])(&args.args)
     }
 
     fn short_circuits(&self) -> bool {
@@ -125,37 +132,39 @@ impl ScalarUDFImpl for GroupingFunc {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
+        if arg_types.len() != 2 && arg_types.len() != 1 {
             return exec_err!(
-                "grouping function requires exactly 2 arguments, got {}",
+                "grouping function requires 1 or 2 arguments, got {}",
                 arg_types.len()
             );
         }
 
-        match arg_types[0] {
-            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {}
-            _ => {
-                return exec_err!(
-                    "grouping function requires UInt8/16/32/64 for first argument, got {}",
-                    arg_types[0]
-                )
-            }
+        if !arg_types[0].is_unsigned_integer() {
+            return exec_err!(
+                "grouping function requires unsigned integer for first argument, got {}",
+                arg_types[0]
+            )
         }
+
+        if arg_types.len() == 1 {
+            return Ok(vec![arg_types[0].clone()]);
+        }
+
         let DataType::List(field) = &arg_types[1] else {
             return exec_err!(
-                "grouping function requires Int32 for second argument, got {}",
+                "grouping function requires list for second argument, got {}",
                 arg_types[1]
             );
         };
 
-        if field.data_type() != &DataType::Int32 {
+        if !field.data_type().is_integer() {
             return exec_err!(
-                "grouping function requires Int32 for second argument, got {}",
+                "grouping function requires list of integers for second argument, got {}",
                 arg_types[1]
             );
         }
 
-        Ok(arg_types.to_vec())
+        Ok(vec![arg_types[0].clone(), DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),])
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -177,7 +186,7 @@ fn grouping_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let grouping_id = &args[0];
     let indices = &args[1];
-    let indices = indices.as_any().downcast_ref::<PrimitiveArray<Int32Type>>().unwrap();
+    let indices = indices.as_list::<i32>();
 
     let result: Int32Array = match grouping_id.data_type() {
         DataType::UInt8 => grouping_id!(grouping_id, indices, u8, UInt8Array),
@@ -199,7 +208,7 @@ fn grouping_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::{array::{Int32Array, ListArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array}, datatypes::Int32Type};
-    use datafusion_common::Result;
+    use datafusion_common::{Result, ScalarValue};
 
     #[test]
     fn test_grouping_uint8() -> Result<()> {
