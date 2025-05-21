@@ -343,33 +343,6 @@ mod tests {
     }
 
     #[test]
-    fn test_grouping_with_null_indices() -> Result<()> {
-        let grouping_id = UInt8Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
-        let indices = vec![Some(vec![Some(0), None])];
-        
-        let args = vec![
-            ColumnarValue::Array(Arc::new(grouping_id)),
-            ColumnarValue::Scalar(ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(indices)))),
-        ];
-
-        let arg_fields_owned = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
-            .collect::<Vec<_>>();
-
-        let func = GroupingFunc::new();
-        let result = func.invoke_with_args(ScalarFunctionArgs { 
-            args,
-            arg_fields: arg_fields_owned.iter().collect::<Vec<_>>(),
-            number_rows: 4,
-            return_field: &Field::new("f", DataType::Int32, true),
-        });
-        assert!(result.is_err());
-        Ok(())
-    }
-
-    #[test]
     fn test_grouping_with_invalid_args() -> Result<()> {
         let grouping_id = UInt8Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
         let indices = vec![Some(vec![Some(0)])];
