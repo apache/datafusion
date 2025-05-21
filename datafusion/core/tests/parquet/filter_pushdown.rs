@@ -45,25 +45,29 @@ use tempfile::TempDir;
 /// how many rows of generated data to write to our parquet file (arbitrary)
 const NUM_ROWS: usize = 4096;
 
-#[tokio::test]
-async fn single_file() {
-    // Only create the parquet file once as it is fairly large
-    let tempdir = TempDir::new_in(Path::new(".")).unwrap();
-    // Set row group size smaller so can test with fewer rows
-    let props = WriterProperties::builder()
-        .set_max_row_group_size(1024)
-        .build();
+async fn read_parquet_test_data<T: Into<String>>(path: T) -> Vec<RecordBatch> {
     let ctx: SessionContext = SessionContext::new();
-    let batches = ctx
-        .read_parquet(
-            "tests/data/filter_pushdown/single_file.gz.parquet".to_string(),
-            ParquetReadOptions::default(),
-        )
+    ctx.read_parquet(path.into(), ParquetReadOptions::default())
         .await
         .unwrap()
         .collect()
         .await
-        .unwrap();
+        .unwrap()
+}
+
+#[tokio::test]
+async fn single_file() {
+    let batches =
+        read_parquet_test_data("tests/data/filter_pushdown/single_file.gz.parquet").await;
+
+    // Set the row group size smaller so can test with fewer rows
+    let props = WriterProperties::builder()
+        .set_max_row_group_size(1024)
+        .build();
+
+    // Only create the parquet file once as it is fairly large
+    let tempdir = TempDir::new_in(Path::new(".")).unwrap();
+
     let test_parquet_file =
         TestParquetFile::try_new(tempdir.path().join("data.parquet"), props, batches)
             .unwrap();
@@ -215,7 +219,13 @@ async fn single_file() {
 }
 
 #[tokio::test]
+#[allow(dead_code)]
 async fn single_file_small_data_pages() {
+    let batches = read_parquet_test_data(
+        "tests/data/filter_pushdown/single_file_small_pages.gz.parquet",
+    )
+    .await;
+
     let tempdir = TempDir::new_in(Path::new(".")).unwrap();
 
     // Set a low row count limit to improve page filtering
@@ -225,17 +235,6 @@ async fn single_file_small_data_pages() {
         .set_write_batch_size(512)
         .build();
 
-    let ctx: SessionContext = SessionContext::new();
-    let batches = ctx
-        .read_parquet(
-            "tests/data/filter_pushdown/single_file_small_pages.gz.parquet".to_string(),
-            ParquetReadOptions::default(),
-        )
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
     let test_parquet_file =
         TestParquetFile::try_new(tempdir.path().join("data.parquet"), props, batches)
             .unwrap();
