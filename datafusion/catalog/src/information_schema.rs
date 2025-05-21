@@ -30,6 +30,7 @@ use arrow::{
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
+use datafusion_common::types::NativeType;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
@@ -37,7 +38,7 @@ use datafusion_expr::{TableType, Volatility};
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
 use datafusion_physical_plan::SendableRecordBatchStream;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
@@ -403,58 +404,63 @@ impl InformationSchemaConfig {
 /// returns a tuple of (arg_types, return_type)
 fn get_udf_args_and_return_types(
     udf: &Arc<ScalarUDF>,
-) -> Result<Vec<(Vec<String>, Option<String>)>> {
+) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udf.signature();
     let arg_types = signature.type_signature.get_example_types();
     if arg_types.is_empty() {
-        Ok(vec![(vec![], None)])
+        Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
         Ok(arg_types
             .into_iter()
             .map(|arg_types| {
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
-                let return_type = udf.return_type(&arg_types).ok().map(|t| t.to_string());
+                let return_type = udf
+                    .return_type(&arg_types)
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .ok();
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| t.to_string())
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, return_type)
             })
-            .collect::<Vec<_>>())
+            .collect::<BTreeSet<_>>())
     }
 }
 
 fn get_udaf_args_and_return_types(
     udaf: &Arc<AggregateUDF>,
-) -> Result<Vec<(Vec<String>, Option<String>)>> {
+) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udaf.signature();
     let arg_types = signature.type_signature.get_example_types();
     if arg_types.is_empty() {
-        Ok(vec![(vec![], None)])
+        Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
         Ok(arg_types
             .into_iter()
             .map(|arg_types| {
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
-                let return_type =
-                    udaf.return_type(&arg_types).ok().map(|t| t.to_string());
+                let return_type = udaf
+                    .return_type(&arg_types)
+                    .ok()
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)));
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| t.to_string())
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, return_type)
             })
-            .collect::<Vec<_>>())
+            .collect::<BTreeSet<_>>())
     }
 }
 
 fn get_udwf_args_and_return_types(
     udwf: &Arc<WindowUDF>,
-) -> Result<Vec<(Vec<String>, Option<String>)>> {
+) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udwf.signature();
     let arg_types = signature.type_signature.get_example_types();
     if arg_types.is_empty() {
-        Ok(vec![(vec![], None)])
+        Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
         Ok(arg_types
             .into_iter()
@@ -462,12 +468,17 @@ fn get_udwf_args_and_return_types(
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| t.to_string())
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, None)
             })
-            .collect::<Vec<_>>())
+            .collect::<BTreeSet<_>>())
     }
+}
+
+#[inline]
+fn remove_native_type_prefix(native_type: NativeType) -> String {
+    format!("{native_type:?}")
 }
 
 #[async_trait]

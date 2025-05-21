@@ -53,9 +53,9 @@ select * from struct_values;
 query TT
 select arrow_typeof(s1), arrow_typeof(s2) from struct_values;
 ----
-Struct([Field { name: "c0", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) Struct([Field { name: "a", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "c0", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) Struct([Field { name: "a", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "c0", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]) Struct([Field { name: "a", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(c0 Int32) Struct(a Int32, b Utf8)
+Struct(c0 Int32) Struct(a Int32, b Utf8)
+Struct(c0 Int32) Struct(a Int32, b Utf8)
 
 
 # struct[i]
@@ -229,12 +229,12 @@ select named_struct('field_a', 1, 'field_b', 2);
 query T
 select arrow_typeof(named_struct('first', 1, 'second', 2, 'third', 3));
 ----
-Struct([Field { name: "first", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "second", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "third", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(first Int64, second Int64, third Int64)
 
 query T
 select arrow_typeof({'first': 1, 'second': 2, 'third': 3});
 ----
-Struct([Field { name: "first", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "second", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "third", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(first Int64, second Int64, third Int64)
 
 # test nested struct literal
 query ?
@@ -286,7 +286,7 @@ drop table struct_values;
 statement ok
 CREATE OR REPLACE VIEW complex_view AS 
 SELECT {
-    'user': {
+    'user_information': {
         'info': {
             'personal': {
                 'name': 'John Doe',
@@ -347,22 +347,22 @@ SELECT {
 } AS complex_data;
 
 query T
-SELECT complex_data.user.info.personal.name FROM complex_view;
+SELECT complex_data.user_information.info.personal.name FROM complex_view;
 ----
 John Doe
 
 query I
-SELECT complex_data.user.info.personal.age FROM complex_view;
+SELECT complex_data.user_information.info.personal.age FROM complex_view;
 ----
 30
 
 query T
-SELECT complex_data.user.info.address.city FROM complex_view;
+SELECT complex_data.user_information.info.address.city FROM complex_view;
 ----
 Anytown
 
 query T
-SELECT complex_data.user.preferences.languages[2] FROM complex_view;
+SELECT complex_data.user_information.preferences.languages[2] FROM complex_view;
 ----
 es
 
@@ -443,12 +443,12 @@ select * from t;
 query T
 select arrow_typeof(c1) from t;
 ----
-Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(r Utf8, b Int32)
 
 query T
 select arrow_typeof(c2) from t;
 ----
-Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(r Utf8, b Float32)
 
 statement ok
 drop table t;
@@ -465,8 +465,8 @@ select * from t;
 query T
 select arrow_typeof(column1) from t;
 ----
-Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(r Utf8, c Float64)
+Struct(r Utf8, c Float64)
 
 statement ok
 drop table t;
@@ -498,9 +498,9 @@ select coalesce(s1) from t;
 query T
 select arrow_typeof(coalesce(s1, s2)) from t;
 ----
-Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(a Float32, b Utf8)
+Struct(a Float32, b Utf8)
+Struct(a Float32, b Utf8)
 
 statement ok
 drop table t;
@@ -525,9 +525,9 @@ select coalesce(s1, s2) from t;
 query T
 select arrow_typeof(coalesce(s1, s2)) from t;
 ----
-Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(a Float32, b Utf8)
+Struct(a Float32, b Utf8)
+Struct(a Float32, b Utf8)
 
 statement ok
 drop table t;
@@ -585,13 +585,13 @@ create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float,
 query T
 select arrow_typeof(a) from t;
 ----
-Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "g", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(r Utf8, c Int32, g Float32)
 
 # type of each column should not coerced but perserve as it is
 query T
 select arrow_typeof(b) from t;
 ----
-Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "g", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct(r Utf8, c Float32, g Int32)
 
 statement ok
 drop table t;

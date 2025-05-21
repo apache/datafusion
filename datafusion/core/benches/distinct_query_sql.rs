@@ -33,8 +33,7 @@ use parking_lot::Mutex;
 use std::{sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
 
-fn query(ctx: Arc<Mutex<SessionContext>>, sql: &str) {
-    let rt = Runtime::new().unwrap();
+fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
@@ -55,6 +54,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
     let array_len = 1 << 26; // 64 M
     let batch_size = 8192;
     let ctx = create_context(partitions_len, array_len, batch_size).unwrap();
+    let rt = Runtime::new().unwrap();
 
     let mut group = c.benchmark_group("custom-measurement-time");
     group.measurement_time(Duration::from_secs(40));
@@ -63,6 +63,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT DISTINCT u64_narrow FROM t GROUP BY u64_narrow LIMIT 10",
             )
         })
@@ -72,6 +73,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT DISTINCT u64_narrow FROM t GROUP BY u64_narrow LIMIT 100",
             )
         })
@@ -81,6 +83,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT DISTINCT u64_narrow FROM t GROUP BY u64_narrow LIMIT 1000",
             )
         })
@@ -90,6 +93,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT DISTINCT u64_narrow FROM t GROUP BY u64_narrow LIMIT 10000",
             )
         })
@@ -99,6 +103,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT u64_narrow, u64_wide, utf8, f64 FROM t GROUP BY 1, 2, 3, 4 LIMIT 10",
             )
         })
@@ -118,12 +123,9 @@ async fn distinct_with_limit(
     Ok(())
 }
 
-fn run(plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>) {
-    let rt = Runtime::new().unwrap();
-    criterion::black_box(
-        rt.block_on(async { distinct_with_limit(plan.clone(), ctx.clone()).await }),
-    )
-    .unwrap();
+fn run(rt: &Runtime, plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>) {
+    criterion::black_box(rt.block_on(distinct_with_limit(plan.clone(), ctx.clone())))
+        .unwrap();
 }
 
 pub async fn create_context_sampled_data(
@@ -131,7 +133,8 @@ pub async fn create_context_sampled_data(
     partition_cnt: i32,
     sample_cnt: i32,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<TaskContext>)> {
-    let (schema, parts) = make_data(partition_cnt, sample_cnt, false /* asc */).unwrap();
+    let (schema, parts) =
+        make_data(partition_cnt, sample_cnt, false /* asc */, false).unwrap();
     let mem_table = Arc::new(MemTable::try_new(schema, parts).unwrap());
 
     // Create the DataFrame
@@ -145,58 +148,47 @@ pub async fn create_context_sampled_data(
 
 fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-
     let limit = 10;
     let partitions = 100;
     let samples = 100_000;
     let sql =
         format!("select DISTINCT trace_id from traces group by trace_id limit {limit};");
-
-    let distinct_trace_id_100_partitions_100_000_samples_limit_100 = rt.block_on(async {
-        create_context_sampled_data(sql.as_str(), partitions, samples)
-            .await
-            .unwrap()
-    });
-
     c.bench_function(
-        format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
-        |b| b.iter(|| run(distinct_trace_id_100_partitions_100_000_samples_limit_100.0.clone(),
-                                   distinct_trace_id_100_partitions_100_000_samples_limit_100.1.clone())),
+        format!("distinct query with {partitions} partitions and {samples} samples per partition with limit {limit}").as_str(),
+        |b| b.iter(|| {
+            let (plan, ctx) = rt.block_on(
+                create_context_sampled_data(sql.as_str(), partitions, samples)
+            ).unwrap();
+            run(&rt, plan.clone(), ctx.clone())
+        }),
     );
 
     let partitions = 10;
     let samples = 1_000_000;
     let sql =
         format!("select DISTINCT trace_id from traces group by trace_id limit {limit};");
-
-    let distinct_trace_id_10_partitions_1_000_000_samples_limit_10 = rt.block_on(async {
-        create_context_sampled_data(sql.as_str(), partitions, samples)
-            .await
-            .unwrap()
-    });
-
     c.bench_function(
-        format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
-        |b| b.iter(|| run(distinct_trace_id_10_partitions_1_000_000_samples_limit_10.0.clone(),
-                                   distinct_trace_id_10_partitions_1_000_000_samples_limit_10.1.clone())),
+        format!("distinct query with {partitions} partitions and {samples} samples per partition with limit {limit}").as_str(),
+        |b| b.iter(|| {
+            let (plan, ctx) = rt.block_on(
+                create_context_sampled_data(sql.as_str(), partitions, samples)
+            ).unwrap();
+            run(&rt, plan.clone(), ctx.clone())
+        }),
     );
 
     let partitions = 1;
     let samples = 10_000_000;
     let sql =
         format!("select DISTINCT trace_id from traces group by trace_id limit {limit};");
-
-    let rt = Runtime::new().unwrap();
-    let distinct_trace_id_1_partition_10_000_000_samples_limit_10 = rt.block_on(async {
-        create_context_sampled_data(sql.as_str(), partitions, samples)
-            .await
-            .unwrap()
-    });
-
     c.bench_function(
-        format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
-        |b| b.iter(|| run(distinct_trace_id_1_partition_10_000_000_samples_limit_10.0.clone(),
-                                   distinct_trace_id_1_partition_10_000_000_samples_limit_10.1.clone())),
+        format!("distinct query with {partitions} partitions and {samples} samples per partition with limit {limit}").as_str(),
+        |b| b.iter(|| {
+            let (plan, ctx) = rt.block_on(
+                create_context_sampled_data(sql.as_str(), partitions, samples)
+            ).unwrap();
+            run(&rt, plan.clone(), ctx.clone())
+        }),
     );
 }
 

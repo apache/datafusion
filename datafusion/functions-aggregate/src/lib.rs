@@ -20,7 +20,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
 //! Aggregate Function packages for [DataFusion].
@@ -219,8 +220,7 @@ mod tests {
             for alias in func.aliases() {
                 assert!(
                     names.insert(alias.to_string().to_lowercase()),
-                    "duplicate function name: {}",
-                    alias
+                    "duplicate function name: {alias}"
                 );
             }
         }

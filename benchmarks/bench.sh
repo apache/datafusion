@@ -43,7 +43,7 @@ usage() {
 Orchestrates running benchmarks against DataFusion checkouts
 
 Usage:
-$0 data [benchmark]
+$0 data [benchmark] [query]
 $0 run [benchmark]
 $0 compare <branch1> <branch2>
 $0 venv
@@ -87,6 +87,9 @@ h2o_big:                h2oai benchmark with large dataset (1e9 rows) for groupb
 h2o_small_join:         h2oai benchmark with small dataset (1e7 rows) for join,  default file format is csv
 h2o_medium_join:        h2oai benchmark with medium dataset (1e8 rows) for join, default file format is csv
 h2o_big_join:           h2oai benchmark with large dataset (1e9 rows) for join,  default file format is csv
+h2o_small_window:       Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
+h2o_medium_window:      Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
+h2o_big_window:         Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
 imdb:                   Join Order Benchmark (JOB) using the IMDB dataset converted to parquet
 
 **********
@@ -98,6 +101,7 @@ DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
 VENV_PATH           Python venv to use for compare and venv commands (default ./venv, override by <your-venv>/bin/activate)
+DATAFUSION_*        Set the given datafusion configuration
 "
     exit 1
 }
@@ -202,6 +206,16 @@ main() {
                     data_h2o_join "MEDIUM" "CSV"
                     ;;
                 h2o_big_join)
+                    data_h2o_join "BIG" "CSV"
+                    ;;
+                # h2o window benchmark uses the same data as the h2o join
+                h2o_small_window)
+                    data_h2o_join "SMALL" "CSV"
+                    ;;
+                h2o_medium_window)
+                    data_h2o_join "MEDIUM" "CSV"
+                    ;;
+                h2o_big_window)
                     data_h2o_join "BIG" "CSV"
                     ;;
                 external_aggr)
@@ -314,6 +328,15 @@ main() {
                 h2o_big_join)
                     run_h2o_join "BIG" "CSV" "join"
                     ;;
+                h2o_small_window)
+                    run_h2o_window "SMALL" "CSV" "window"
+                    ;;
+                h2o_medium_window)
+                    run_h2o_window "MEDIUM" "CSV" "window"
+                    ;;
+                h2o_big_window) 
+                    run_h2o_window "BIG" "CSV" "window"
+                    ;;
                 external_aggr)
                     run_external_aggr
                     ;;
@@ -410,7 +433,12 @@ run_tpch() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch benchmark..."
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}"
+    # Optional query filter to run specific query
+    QUERY=$([ -n "$ARG3" ] && echo "--query $ARG3" || echo "")
+    # debug the target command
+    set -x
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" $QUERY
+    set +x
 }
 
 # Runs the tpch in memory
@@ -425,8 +453,13 @@ run_tpch_mem() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_mem_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
+    # Optional query filter to run specific query
+    QUERY=$([ -n "$ARG3" ] && echo "--query $ARG3" || echo "")
+    # debug the target command
+    set -x
     # -m means in memory
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" $QUERY
+    set +x
 }
 
 # Runs the cancellation benchmark
@@ -790,6 +823,7 @@ data_h2o_join() {
     deactivate
 }
 
+# Runner for h2o groupby benchmark
 run_h2o() {
     # Default values for size and data format
     SIZE=${1:-"SMALL"}
@@ -832,7 +866,8 @@ run_h2o() {
         -o "${RESULTS_FILE}"
 }
 
-run_h2o_join() {
+# Utility function to run h2o join/window benchmark
+h2o_runner() {
     # Default values for size and data format
     SIZE=${1:-"SMALL"}
     DATA_FORMAT=${2:-"CSV"}
@@ -841,10 +876,10 @@ run_h2o_join() {
 
     # Data directory and results file path
     H2O_DIR="${DATA_DIR}/h2o"
-    RESULTS_FILE="${RESULTS_DIR}/h2o_join.json"
+    RESULTS_FILE="${RESULTS_DIR}/h2o_${RUN_Type}.json"
 
     echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running h2o join benchmark..."
+    echo "Running h2o ${RUN_Type} benchmark..."
 
     # Set the file name based on the size
     case "$SIZE" in
@@ -872,7 +907,7 @@ run_h2o_join() {
             ;;
     esac
 
-     # Set the query file name based on the RUN_Type
+    # Set the query file name based on the RUN_Type
     QUERY_FILE="${SCRIPT_DIR}/queries/h2o/${RUN_Type}.sql"
 
     $CARGO_COMMAND --bin dfbench -- h2o \
@@ -880,6 +915,16 @@ run_h2o_join() {
         --join-paths "${H2O_DIR}/${X_TABLE_FILE_NAME},${H2O_DIR}/${SMALL_TABLE_FILE_NAME},${H2O_DIR}/${MEDIUM_TABLE_FILE_NAME},${H2O_DIR}/${LARGE_TABLE_FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}"
+}
+
+# Runners for h2o join benchmark
+run_h2o_join() {
+    h2o_runner "$1" "$2" "join"
+}
+
+# Runners for h2o join benchmark
+run_h2o_window() {
+    h2o_runner "$1" "$2" "window"
 }
 
 # Runs the external aggregation benchmark

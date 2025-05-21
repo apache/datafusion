@@ -235,9 +235,6 @@ jobs:
       #
       - name: Check datafusion-functions (no-default-features)
         run: cargo check --profile ci --no-default-features -p datafusion-functions
-      # Fails due https://github.com/apache/datafusion/issues/15207
-      #- name: Check datafusion-functions (core_expressions)
-      #  run: cargo check --profile ci --no-default-features -p datafusion-functions --features=core_expressions
       - name: Check datafusion-functions (crypto_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion-functions --features=crypto_expressions
       - name: Check datafusion-functions (datetime_expressions)
@@ -407,25 +404,25 @@ jobs:
         run: ci/scripts/rust_docs.sh
 
   linux-wasm-pack:
-    name: build with wasm-pack
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
+    name: build and run with wasm-pack
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+      - name: Setup for wasm32
+        run: |
+          rustup target add wasm32-unknown-unknown
       - name: Install dependencies
         run: |
-          apt-get update -qq
-          apt-get install -y -qq clang
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Build with wasm-pack
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang
+      - name: Setup wasm-pack
+        run: |
+          cargo install wasm-pack
+      - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
-        run: wasm-pack build --dev
+        run: |
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --firefox
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
@@ -745,6 +742,11 @@ jobs:
         run: |
           # If you encounter an error, run './dev/update_function_docs.sh' and commit
           ./dev/update_function_docs.sh
+          git diff --exit-code
+      - name: Check if runtime_configs.md has been modified
+        run: |
+          # If you encounter an error, run './dev/update_runtime_config_docs.sh' and commit
+          ./dev/update_runtime_config_docs.sh
           git diff --exit-code
 
   # Verify MSRV for the crates which are directly used by other projects:

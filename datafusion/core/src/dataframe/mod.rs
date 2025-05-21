@@ -33,8 +33,8 @@ use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
-    Partitioning, TableType,
+    col, ident, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning, TableType,
 };
 use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
@@ -685,6 +685,46 @@ impl DataFrame {
         })
     }
 
+    /// Calculate the union of two [`DataFrame`]s using column names, preserving duplicate rows.
+    ///
+    /// The two [`DataFrame`]s are combined using column names rather than position,
+    /// filling missing columns with null.
+    ///
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone().select_columns(&["b", "c", "a"])?.with_column("d", lit("77"))?;
+    /// let df = df.union_by_name(d2)?;
+    /// let expected = vec![
+    ///     "+---+---+---+----+",
+    ///     "| a | b | c | d  |",
+    ///     "+---+---+---+----+",
+    ///     "| 1 | 2 | 3 |    |",
+    ///     "| 1 | 2 | 3 | 77 |",
+    ///     "+---+---+---+----+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn union_by_name(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .union_by_name(dataframe.plan)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
     /// Calculate the distinct union of two [`DataFrame`]s.
     ///
     /// The two [`DataFrame`]s must have exactly the same schema. Any duplicate
@@ -716,6 +756,45 @@ impl DataFrame {
     pub fn union_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .union_distinct(dataframe.plan)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Calculate the union of two [`DataFrame`]s using column names with all duplicated rows removed.
+    ///
+    /// The two [`DataFrame`]s are combined using column names rather than position,
+    /// filling missing columns with null.
+    ///
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone().select_columns(&["b", "c", "a"])?;
+    /// let df = df.union_by_name_distinct(d2)?;
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn union_by_name_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .union_by_name_distinct(dataframe.plan)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -855,7 +934,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .map(|f| count(col(f.name())).alias(f.name()))
+                    .map(|f| count(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // null_count aggregation
@@ -864,7 +943,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .map(|f| {
-                        sum(case(is_null(col(f.name())))
+                        sum(case(is_null(ident(f.name())))
                             .when(lit(true), lit(1))
                             .otherwise(lit(0))
                             .unwrap())
@@ -878,7 +957,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| avg(col(f.name())).alias(f.name()))
+                    .map(|f| avg(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // std aggregation
@@ -887,7 +966,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| stddev(col(f.name())).alias(f.name()))
+                    .map(|f| stddev(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // min aggregation
@@ -898,7 +977,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| min(col(f.name())).alias(f.name()))
+                    .map(|f| min(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // max aggregation
@@ -909,7 +988,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| max(col(f.name())).alias(f.name()))
+                    .map(|f| max(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // median aggregation
@@ -918,7 +997,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| median(col(f.name())).alias(f.name()))
+                    .map(|f| median(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
         ];
@@ -1287,8 +1366,47 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn show(self) -> Result<()> {
+        println!("{}", self.to_string().await?);
+        Ok(())
+    }
+
+    /// Execute the `DataFrame` and return a string representation of the results.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::execution::SessionStateBuilder;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let cfg = SessionConfig::new()
+    ///     .set_str("datafusion.format.null", "no-value");
+    /// let session_state = SessionStateBuilder::new()
+    ///     .with_config(cfg)
+    ///     .with_default_features()
+    ///     .build();
+    /// let ctx = SessionContext::new_with_state(session_state);
+    /// let df = ctx.sql("select null as 'null-column'").await?;
+    /// let result = df.to_string().await?;
+    /// assert_eq!(result,
+    /// "+-------------+
+    /// | null-column |
+    /// +-------------+
+    /// | no-value    |
+    /// +-------------+"
+    /// );
+    /// # Ok(())
+    /// # }
+    pub async fn to_string(self) -> Result<String> {
+        let options = self.session_state.config().options().format.clone();
+        let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
+
         let results = self.collect().await?;
-        Ok(pretty::print_batches(&results)?)
+        Ok(
+            pretty::pretty_format_batches_with_options(&results, &arrow_options)?
+                .to_string(),
+        )
     }
 
     /// Execute the `DataFrame` and print only the first `num` rows of the

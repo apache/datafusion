@@ -59,6 +59,20 @@ fn init() {
     "batch_size",
     ["--command", "show datafusion.execution.batch_size", "-q", "-b", "1"],
 )]
+#[case::default_explain_plan(
+    "default_explain_plan",
+    // default explain format should be tree
+    ["--command", "EXPLAIN SELECT 123"],
+)]
+#[case::can_see_indent_format(
+    "can_see_indent_format",
+    // can choose the old explain format too
+    ["--command", "EXPLAIN FORMAT indent SELECT 123"],
+)]
+#[case::change_format_version(
+    "change_format_version",
+    ["--file", "tests/sql/types_format.sql", "-q"],
+)]
 #[test]
 fn cli_quick_test<'a>(
     #[case] snapshot_name: &'a str,
@@ -70,6 +84,21 @@ fn cli_quick_test<'a>(
 
     let mut cmd = cli();
     cmd.args(args);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[test]
+fn cli_explain_environment_overrides() {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix("explain_plan_environment_overrides");
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+
+    // should use the environment variable to override the default explain plan
+    cmd.env("DATAFUSION_EXPLAIN_FORMAT", "pgjson")
+        .args(["--command", "EXPLAIN SELECT 123"]);
 
     assert_cmd_snapshot!(cmd);
 }
@@ -132,15 +161,14 @@ async fn test_aws_options() {
 STORED AS CSV
 LOCATION 's3://data/cars.csv'
 OPTIONS(
-    'aws.access_key_id' '{}',
-    'aws.secret_access_key' '{}',
-    'aws.endpoint' '{}',
+    'aws.access_key_id' '{access_key_id}',
+    'aws.secret_access_key' '{secret_access_key}',
+    'aws.endpoint' '{endpoint_url}',
     'aws.allow_http' 'true'
 );
 
 SELECT * FROM CARS limit 1;
-"#,
-        access_key_id, secret_access_key, endpoint_url
+"#
     );
 
     assert_cmd_snapshot!(cli().env_clear().pass_stdin(input));

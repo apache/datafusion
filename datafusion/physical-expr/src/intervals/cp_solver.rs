@@ -148,12 +148,12 @@ use std::sync::Arc;
 use super::utils::{
     convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
 };
-use crate::expressions::Literal;
+use crate::expressions::{BinaryExpr, Literal};
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
 use datafusion_expr::Operator;
 
@@ -645,6 +645,17 @@ impl ExprIntervalGraph {
                 .map(|child| self.graph[*child].interval())
                 .collect::<Vec<_>>();
             let node_interval = self.graph[node].interval();
+            // Special case: true OR could in principle be propagated by 3 interval sets,
+            // (i.e. left true, or right true, or both true) however we do not support this yet.
+            if node_interval == &Interval::CERTAINLY_TRUE
+                && self.graph[node]
+                    .expr
+                    .as_any()
+                    .downcast_ref::<BinaryExpr>()
+                    .is_some_and(|expr| expr.op() == &Operator::Or)
+            {
+                return not_impl_err!("OR operator cannot yet propagate true intervals");
+            }
             let propagated_intervals = self.graph[node]
                 .expr
                 .propagate_constraints(node_interval, &children_intervals)?;
@@ -857,8 +868,8 @@ mod tests {
                 let mut r = StdRng::seed_from_u64(seed);
 
                 let (left_given, right_given, left_expected, right_expected) = if ASC {
-                    let left = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
-                    let right = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
+                    let left = r.random_range((0 as $TYPE)..(1000 as $TYPE));
+                    let right = r.random_range((0 as $TYPE)..(1000 as $TYPE));
                     (
                         (Some(left), None),
                         (Some(right), None),
@@ -866,8 +877,8 @@ mod tests {
                         (Some(<$TYPE>::max(right, left + expr_right)), None),
                     )
                 } else {
-                    let left = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
-                    let right = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
+                    let left = r.random_range((0 as $TYPE)..(1000 as $TYPE));
+                    let right = r.random_range((0 as $TYPE)..(1000 as $TYPE));
                     (
                         (None, Some(left)),
                         (None, Some(right)),

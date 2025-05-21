@@ -1581,14 +1581,18 @@ async fn with_column_join_same_columns() -> Result<()> {
 
     assert_snapshot!(
         df_with_column.logical_plan(),
-        @r###"
+        @r"
     Projection: t1.c1, t2.c1, Boolean(true) AS new_column
       Limit: skip=0, fetch=1
         Sort: t1.c1 ASC NULLS FIRST
           Inner Join: t1.c1 = t2.c1
-            TableScan: t1
-            TableScan: t2
-    "###
+            SubqueryAlias: t1
+              Projection: aggregate_test_100.c1
+                TableScan: aggregate_test_100
+            SubqueryAlias: t2
+              Projection: aggregate_test_100.c1
+                TableScan: aggregate_test_100
+    "
     );
 
     assert_snapshot!(
@@ -1748,14 +1752,18 @@ async fn with_column_renamed_join() -> Result<()> {
 
     assert_snapshot!(
         df_renamed.logical_plan(),
-        @r###"
+        @r"
     Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3
       Limit: skip=0, fetch=1
         Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST
           Inner Join: t1.c1 = t2.c1
-            TableScan: t1
-            TableScan: t2
-    "###
+            SubqueryAlias: t1
+              Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3
+                TableScan: aggregate_test_100
+            SubqueryAlias: t2
+              Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3
+                TableScan: aggregate_test_100
+    "
     );
 
     assert_snapshot!(
@@ -1838,6 +1846,56 @@ async fn with_column_renamed_case_sensitive() -> Result<()> {
     +----+
     | a  |
     +----+
+    "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn describe_lookup_via_quoted_identifier() -> Result<()> {
+    let ctx = SessionContext::new();
+    let name = "aggregate_test_100";
+    register_aggregate_csv(&ctx, name).await?;
+    let df = ctx.table(name);
+
+    let df = df
+        .await?
+        .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
+        .limit(0, Some(1))?
+        .sort(vec![
+            // make the test deterministic
+            col("c1").sort(true, true),
+            col("c2").sort(true, true),
+            col("c3").sort(true, true),
+        ])?
+        .select_columns(&["c1"])?;
+
+    let df_renamed = df.clone().with_column_renamed("c1", "CoLu.Mn[\"1\"]")?;
+
+    let describe_result = df_renamed.describe().await?;
+    describe_result
+        .clone()
+        .sort(vec![
+            col("describe").sort(true, true),
+            col("CoLu.Mn[\"1\"]").sort(true, true),
+        ])?
+        .show()
+        .await?;
+    assert_snapshot!(
+        batches_to_sort_string(&describe_result.clone().collect().await?),
+        @r###"
+        +------------+--------------+
+        | describe   | CoLu.Mn["1"] |
+        +------------+--------------+
+        | count      | 1            |
+        | max        | a            |
+        | mean       | null         |
+        | median     | null         |
+        | min        | a            |
+        | null_count | 0            |
+        | std        | null         |
+        +------------+--------------+
     "###
     );
 
@@ -2566,7 +2624,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r###"
+        @r"
     +---------------+------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                   |
     +---------------+------------------------------------------------------------------------------------------------------------------------+
@@ -2577,14 +2635,14 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]                                                                |
     |               |         TableScan: t2 projection=[]                                                                                    |
     | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |
-    |               |   HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
+    |               |   HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
     |               |     ProjectionExec: expr=[4 as count(*)]                                                                               |
     |               |       PlaceholderRowExec                                                                                               |
     |               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
     |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
     |               |                                                                                                                        |
     +---------------+------------------------------------------------------------------------------------------------------------------------+
-    "###
+    "
     );
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
@@ -2612,7 +2670,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     // make sure sql plan same with df plan
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r###"
+        @r"
     +---------------+------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                   |
     +---------------+------------------------------------------------------------------------------------------------------------------------+
@@ -2622,14 +2680,14 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     |               |     Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]                                                      |
     |               |       TableScan: t2 projection=[]                                                                                      |
     | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |
-    |               |   HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
+    |               |   HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
     |               |     ProjectionExec: expr=[4 as count(*)]                                                                               |
     |               |       PlaceholderRowExec                                                                                               |
     |               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
     |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
     |               |                                                                                                                        |
     +---------------+------------------------------------------------------------------------------------------------------------------------+
-    "###
+    "
     );
 
     Ok(())
@@ -2843,7 +2901,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r###"
+        @r"
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                      |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
@@ -2859,10 +2917,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |
     |               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |
     |               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |
-    |               |       HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
-    |               |         CoalesceBatchesExec: target_batch_size=8192                                                                       |
-    |               |           RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                                |
-    |               |             DataSourceExec: partitions=1, partition_sizes=[1]                                                             |
+    |               |       HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
+    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                 |
     |               |         ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                             |
     |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                    |
     |               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |
@@ -2872,7 +2928,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |
     |               |                                                                                                                           |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
-    "###
+    "
     );
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
@@ -2902,7 +2958,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r###"
+        @r"
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                      |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
@@ -2918,10 +2974,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |
     |               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |
     |               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |
-    |               |       HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
-    |               |         CoalesceBatchesExec: target_batch_size=8192                                                                       |
-    |               |           RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                                |
-    |               |             DataSourceExec: partitions=1, partition_sizes=[1]                                                             |
+    |               |       HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
+    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                 |
     |               |         ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                    |
     |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                           |
     |               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |
@@ -2931,7 +2985,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |
     |               |                                                                                                                           |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
-    "###
+    "
     );
 
     Ok(())
@@ -3566,16 +3620,15 @@ async fn unnest_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +----------+------------------------------------------------+--------------------+
-    | shape_id | points                                         | tags               |
-    +----------+------------------------------------------------+--------------------+
-    | 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | [tag1]             |
-    | 2        |                                                | [tag1, tag2]       |
-    | 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |                    |
-    | 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | [tag1, tag2, tag3] |
-    +----------+------------------------------------------------+--------------------+
-    "###
-    );
+          +----------+---------------------------------+--------------------------+
+          | shape_id | points                          | tags                     |
+          +----------+---------------------------------+--------------------------+
+          | 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | [tag1]                   |
+          | 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | [tag1]                   |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | [tag1, tag2, tag3, tag4] |
+          | 4        |                                 | [tag1, tag2, tag3]       |
+          +----------+---------------------------------+--------------------------+
+        "###);
 
     // Unnest tags
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -3583,19 +3636,20 @@ async fn unnest_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +----------+------------------------------------------------+------+
-    | shape_id | points                                         | tags |
-    +----------+------------------------------------------------+------+
-    | 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | tag1 |
-    | 2        |                                                | tag1 |
-    | 2        |                                                | tag2 |
-    | 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |      |
-    | 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag1 |
-    | 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag2 |
-    | 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag3 |
-    +----------+------------------------------------------------+------+
-    "###
-    );
+          +----------+---------------------------------+------+
+          | shape_id | points                          | tags |
+          +----------+---------------------------------+------+
+          | 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | tag1 |
+          | 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | tag1 |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag1 |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag2 |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag3 |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag4 |
+          | 4        |                                 | tag1 |
+          | 4        |                                 | tag2 |
+          | 4        |                                 | tag3 |
+          +----------+---------------------------------+------+
+        "###);
 
     // Test aggregate results for tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -3608,20 +3662,18 @@ async fn unnest_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +----------+-----------------+--------------------+
-    | shape_id | points          | tags               |
-    +----------+-----------------+--------------------+
-    | 1        | {x: -3, y: -4}  | [tag1]             |
-    | 1        | {x: -3, y: 6}   | [tag1]             |
-    | 1        | {x: 2, y: -2}   | [tag1]             |
-    | 2        |                 | [tag1, tag2]       |
-    | 3        | {x: -10, y: -4} |                    |
-    | 3        | {x: -9, y: 2}   |                    |
-    | 4        | {x: -3, y: 5}   | [tag1, tag2, tag3] |
-    | 4        | {x: 2, y: -1}   | [tag1, tag2, tag3] |
-    +----------+-----------------+--------------------+
-    "###
-    );
+          +----------+----------------+--------------------------+
+          | shape_id | points         | tags                     |
+          +----------+----------------+--------------------------+
+          | 1        | {x: -3, y: -4} | [tag1]                   |
+          | 1        | {x: 5, y: -8}  | [tag1]                   |
+          | 2        | {x: -2, y: -8} | [tag1]                   |
+          | 2        | {x: 6, y: 2}   | [tag1]                   |
+          | 3        | {x: -2, y: 5}  | [tag1, tag2, tag3, tag4] |
+          | 3        | {x: -9, y: -7} | [tag1, tag2, tag3, tag4] |
+          | 4        |                | [tag1, tag2, tag3]       |
+          +----------+----------------+--------------------------+
+        "###);
 
     // Test aggregate results for points.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -3638,25 +3690,26 @@ async fn unnest_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +----------+-----------------+------+
-    | shape_id | points          | tags |
-    +----------+-----------------+------+
-    | 1        | {x: -3, y: -4}  | tag1 |
-    | 1        | {x: -3, y: 6}   | tag1 |
-    | 1        | {x: 2, y: -2}   | tag1 |
-    | 2        |                 | tag1 |
-    | 2        |                 | tag2 |
-    | 3        | {x: -10, y: -4} |      |
-    | 3        | {x: -9, y: 2}   |      |
-    | 4        | {x: -3, y: 5}   | tag1 |
-    | 4        | {x: -3, y: 5}   | tag2 |
-    | 4        | {x: -3, y: 5}   | tag3 |
-    | 4        | {x: 2, y: -1}   | tag1 |
-    | 4        | {x: 2, y: -1}   | tag2 |
-    | 4        | {x: 2, y: -1}   | tag3 |
-    +----------+-----------------+------+
-    "###
-    );
+          +----------+----------------+------+
+          | shape_id | points         | tags |
+          +----------+----------------+------+
+          | 1        | {x: -3, y: -4} | tag1 |
+          | 1        | {x: 5, y: -8}  | tag1 |
+          | 2        | {x: -2, y: -8} | tag1 |
+          | 2        | {x: 6, y: 2}   | tag1 |
+          | 3        | {x: -2, y: 5}  | tag1 |
+          | 3        | {x: -2, y: 5}  | tag2 |
+          | 3        | {x: -2, y: 5}  | tag3 |
+          | 3        | {x: -2, y: 5}  | tag4 |
+          | 3        | {x: -9, y: -7} | tag1 |
+          | 3        | {x: -9, y: -7} | tag2 |
+          | 3        | {x: -9, y: -7} | tag3 |
+          | 3        | {x: -9, y: -7} | tag4 |
+          | 4        |                | tag1 |
+          | 4        |                | tag2 |
+          | 4        |                | tag3 |
+          +----------+----------------+------+
+    "###);
 
     // Test aggregate results for points and tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -3990,15 +4043,15 @@ async fn unnest_aggregate_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +--------------------+
-    | tags               |
-    +--------------------+
-    |                    |
-    | [tag1, tag2, tag3] |
-    | [tag1, tag2, tag3] |
-    | [tag1, tag2]       |
-    | [tag1]             |
-    +--------------------+
+        +--------------------------+
+        | tags                     |
+        +--------------------------+
+        | [tag1, tag2, tag3, tag4] |
+        | [tag1, tag2, tag3]       |
+        | [tag1, tag2]             |
+        | [tag1]                   |
+        | [tag1]                   |
+        +--------------------------+
     "###
     );
 
@@ -4014,7 +4067,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
     +-------------+
     | count(tags) |
     +-------------+
-    | 9           |
+    | 11          |
     +-------------+
     "###
     );
@@ -4263,7 +4316,7 @@ async fn unnest_analyze_metrics() -> Result<()> {
     assert_contains!(&formatted, "elapsed_compute=");
     assert_contains!(&formatted, "input_batches=1");
     assert_contains!(&formatted, "input_rows=5");
-    assert_contains!(&formatted, "output_rows=10");
+    assert_contains!(&formatted, "output_rows=11");
     assert_contains!(&formatted, "output_batches=1");
 
     Ok(())
@@ -4610,7 +4663,7 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
         shape_id_builder.append_value(idx as u32 + 1);
 
         // Add a random number of points
-        let num_points: usize = rng.gen_range(0..4);
+        let num_points: usize = rng.random_range(0..4);
         if num_points > 0 {
             for _ in 0..num_points.max(2) {
                 // Add x value
@@ -4618,13 +4671,13 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
                     .values()
                     .field_builder::<Int32Builder>(0)
                     .unwrap()
-                    .append_value(rng.gen_range(-10..10));
+                    .append_value(rng.random_range(-10..10));
                 // Add y value
                 points_builder
                     .values()
                     .field_builder::<Int32Builder>(1)
                     .unwrap()
-                    .append_value(rng.gen_range(-10..10));
+                    .append_value(rng.random_range(-10..10));
                 points_builder.values().append(true);
             }
         }
@@ -4633,7 +4686,7 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
         points_builder.append(num_points > 0);
 
         // Append tags.
-        let num_tags: usize = rng.gen_range(0..5);
+        let num_tags: usize = rng.random_range(0..5);
         for id in 0..num_tags {
             tags_builder.values().append_value(format!("tag{}", id + 1));
         }
@@ -5075,7 +5128,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
         .await?;
 
     // Explicitly read the parquet file at c2=123 to verify the physical files are partitioned
-    let partitioned_file = format!("{out_dir}/c2=123", out_dir = out_dir);
+    let partitioned_file = format!("{out_dir}/c2=123");
     let filter_df = ctx
         .read_parquet(&partitioned_file, ParquetReadOptions::default())
         .await?;
@@ -5200,6 +5253,40 @@ fn union_fields() -> UnionFields {
     ]
     .into_iter()
     .collect()
+}
+
+#[tokio::test]
+async fn union_literal_is_null_and_not_null() -> Result<()> {
+    let str_array_1 = StringArray::from(vec![None::<String>]);
+    let str_array_2 = StringArray::from(vec![Some("a")]);
+
+    let batch_1 =
+        RecordBatch::try_from_iter(vec![("arr", Arc::new(str_array_1) as ArrayRef)])?;
+    let batch_2 =
+        RecordBatch::try_from_iter(vec![("arr", Arc::new(str_array_2) as ArrayRef)])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("union_batch_1", batch_1)?;
+    ctx.register_batch("union_batch_2", batch_2)?;
+
+    let df1 = ctx.table("union_batch_1").await?;
+    let df2 = ctx.table("union_batch_2").await?;
+
+    let batches = df1.union(df2)?.collect().await?;
+    let schema = batches[0].schema();
+
+    for batch in batches {
+        // Verify schema is the same for all batches
+        if !schema.contains(&batch.schema()) {
+            return Err(DataFusionError::Internal(format!(
+                "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                &schema,
+                batch.schema()
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -5471,6 +5558,64 @@ async fn boolean_dictionary_as_filter() {
     +----------------+
     "###
     );
+}
+
+#[tokio::test]
+async fn test_union_by_name() -> Result<()> {
+    let df = create_test_table("test")
+        .await?
+        .select(vec![col("a"), col("b"), lit(1).alias("c")])?
+        .alias("table_alias")?;
+
+    let df2 = df.clone().select_columns(&["c", "b", "a"])?;
+    let result = df.union_by_name(df2)?.sort_by(vec![col("a"), col("b")])?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&result.collect().await?),
+        @r"
+    +-----------+-----+---+
+    | a         | b   | c |
+    +-----------+-----+---+
+    | 123AbcDef | 100 | 1 |
+    | 123AbcDef | 100 | 1 |
+    | CBAdef    | 10  | 1 |
+    | CBAdef    | 10  | 1 |
+    | abc123    | 10  | 1 |
+    | abc123    | 10  | 1 |
+    | abcDEF    | 1   | 1 |
+    | abcDEF    | 1   | 1 |
+    +-----------+-----+---+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_union_by_name_distinct() -> Result<()> {
+    let df = create_test_table("test")
+        .await?
+        .select(vec![col("a"), col("b"), lit(1).alias("c")])?
+        .alias("table_alias")?;
+
+    let df2 = df.clone().select_columns(&["c", "b", "a"])?;
+    let result = df
+        .union_by_name_distinct(df2)?
+        .sort_by(vec![col("a"), col("b")])?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&result.collect().await?),
+        @r"
+    +-----------+-----+---+
+    | a         | b   | c |
+    +-----------+-----+---+
+    | 123AbcDef | 100 | 1 |
+    | CBAdef    | 10  | 1 |
+    | abc123    | 10  | 1 |
+    | abcDEF    | 1   | 1 |
+    +-----------+-----+---+
+    "
+    );
+    Ok(())
 }
 
 #[tokio::test]

@@ -47,11 +47,13 @@ impl Constraints {
         Constraints::new_unverified(vec![])
     }
 
-    /// Create a new `Constraints` object from the given `constraints`.
-    /// Users should use the `empty` or `new_from_table_constraints` functions
-    /// for constructing `Constraints`. This constructor is for internal
+    /// Create a new [`Constraints`] object from the given `constraints`.
+    /// Users should use the [`Constraints::empty`] or [`SqlToRel::new_constraint_from_table_constraints`] functions
+    /// for constructing [`Constraints`]. This constructor is for internal
     /// purposes only and does not check whether the argument is valid. The user
-    /// is responsible for supplying a valid vector of `Constraint` objects.
+    /// is responsible for supplying a valid vector of [`Constraint`] objects.
+    ///
+    /// [`SqlToRel::new_constraint_from_table_constraints`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/struct.SqlToRel.html#method.new_constraint_from_table_constraints
     pub fn new_unverified(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
     }
@@ -111,7 +113,7 @@ impl Display for Constraints {
         let pk = self
             .inner
             .iter()
-            .map(|c| format!("{:?}", c))
+            .map(|c| format!("{c:?}"))
             .collect::<Vec<_>>();
         let pk = pk.join(", ");
         write!(f, "constraints=[{pk}]")

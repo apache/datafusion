@@ -15,6 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Note: union_table is registered via Rust code in the sqllogictest test harness
+# because there is no way to create a union type in SQL today
+
 ##########
 ## UNION DataType Tests
 ##########
@@ -23,7 +26,8 @@ query ?I
 select union_column, union_extract(union_column, 'int') from union_table;
 ----
 {int=1} 1
-{int=2} 2
+{string=bar} NULL
+{int=3} 3
 
 query error DataFusion error: Execution error: field bool not found on union
 select union_extract(union_column, 'bool') from union_table;
@@ -45,3 +49,19 @@ select union_extract(union_column, 1) from union_table;
 
 query error DataFusion error: Error during planning: The function 'union_extract' expected 2 arguments but received 3
 select union_extract(union_column, 'a', 'b') from union_table;
+
+query ?T
+select union_column, union_tag(union_column) from union_table;
+----
+{int=1} int
+{string=bar} string
+{int=3} int
+
+query error DataFusion error: Error during planning: 'union_tag' does not support zero arguments
+select union_tag() from union_table;
+
+query error DataFusion error: Error during planning: The function 'union_tag' expected 1 arguments but received 2
+select union_tag(union_column, 'int') from union_table;
+
+query error DataFusion error: Execution error: union_tag only support unions, got Utf8
+select union_tag('int') from union_table;

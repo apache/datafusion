@@ -43,7 +43,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name, alias, args, ..
             } => {
                 if let Some(func_args) = args {
-                    let tbl_func_name = name.0.first().unwrap().value.to_string();
+                    let tbl_func_name =
+                        name.0.first().unwrap().as_ident().unwrap().to_string();
                     let args = func_args
                         .args
                         .into_iter()
@@ -91,7 +92,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             .build(),
                             (None, Err(e)) => {
                                 let e = e.with_diagnostic(Diagnostic::new_error(
-                                    format!("table '{}' not found", table_ref),
+                                    format!("table '{table_ref}' not found"),
                                     Span::try_from_sqlparser_span(relation_span),
                                 ));
                                 Err(e)

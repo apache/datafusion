@@ -745,6 +745,7 @@ nvl2(expression1, expression2, expression3)
 - [lpad](#lpad)
 - [ltrim](#ltrim)
 - [octet_length](#octet_length)
+- [overlay](#overlay)
 - [position](#position)
 - [repeat](#repeat)
 - [replace](#replace)
@@ -1281,6 +1282,32 @@ octet_length(str)
 
 - [bit_length](#bit_length)
 - [length](#length)
+
+### `overlay`
+
+Returns the string which is replaced by another string from the specified position and specified count length.
+
+```sql
+overlay(str PLACING substr FROM pos [FOR count])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Substring to replace in str.
+- **pos**: The start position to start the replace in str.
+- **count**: The count of characters to be replaced from start position of str. If not specified, will use substr length instead.
+
+#### Example
+
+```sql
+> select overlay('Txxxxas' placing 'hom' from 2 for 4);
++--------------------------------------------------------+
+| overlay(Utf8("Txxxxas"),Utf8("hom"),Int64(2),Int64(4)) |
++--------------------------------------------------------+
+| Thomas                                                 |
++--------------------------------------------------------+
+```
 
 ### `position`
 
@@ -2106,7 +2133,7 @@ _Alias of [date_trunc](#date_trunc)._
 
 ### `from_unixtime`
 
-Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.
+Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.
 
 ```sql
 from_unixtime(expression[, timezone])
@@ -4377,6 +4404,7 @@ sha512(expression)
 Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator
 
 - [union_extract](#union_extract)
+- [union_tag](#union_tag)
 
 ### `union_extract`
 
@@ -4404,6 +4432,33 @@ union_extract(union, field_name)
 | {b=}         |                                  |                                  |
 | {a=}         |                                  |                                  |
 +--------------+----------------------------------+----------------------------------+
+```
+
+### `union_tag`
+
+Returns the name of the currently selected field in the union
+
+```sql
+union_tag(union_expression)
+```
+
+#### Arguments
+
+- **union**: Union expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+❯ select union_column, union_tag(union_column) from table_with_union;
++--------------+-------------------------+
+| union_column | union_tag(union_column) |
++--------------+-------------------------+
+| {a=1}        | a                       |
+| {b=3.0}      | b                       |
+| {a=4}        | a                       |
+| {b=}         | b                       |
+| {a=}         | a                       |
++--------------+-------------------------+
 ```
 
 ## Other Functions

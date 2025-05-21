@@ -4981,6 +4981,9 @@ impl serde::Serialize for ParquetOptions {
         if self.bloom_filter_ndv_opt.is_some() {
             len += 1;
         }
+        if self.coerce_int96_opt.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetOptions", len)?;
         if self.enable_page_index {
             struct_ser.serialize_field("enablePageIndex", &self.enable_page_index)?;
@@ -5136,6 +5139,13 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.coerce_int96_opt.as_ref() {
+            match v {
+                parquet_options::CoerceInt96Opt::CoerceInt96(v) => {
+                    struct_ser.serialize_field("coerceInt96", v)?;
+                }
+            }
+        }
         struct_ser.end()
     }
 }
@@ -5203,6 +5213,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "bloomFilterFpp",
             "bloom_filter_ndv",
             "bloomFilterNdv",
+            "coerce_int96",
+            "coerceInt96",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5237,6 +5249,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             Encoding,
             BloomFilterFpp,
             BloomFilterNdv,
+            CoerceInt96,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5288,6 +5301,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "encoding" => Ok(GeneratedField::Encoding),
                             "bloomFilterFpp" | "bloom_filter_fpp" => Ok(GeneratedField::BloomFilterFpp),
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
+                            "coerceInt96" | "coerce_int96" => Ok(GeneratedField::CoerceInt96),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5337,6 +5351,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut encoding_opt__ = None;
                 let mut bloom_filter_fpp_opt__ = None;
                 let mut bloom_filter_ndv_opt__ = None;
+                let mut coerce_int96_opt__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EnablePageIndex => {
@@ -5533,6 +5548,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             bloom_filter_ndv_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::BloomFilterNdvOpt::BloomFilterNdv(x.0));
                         }
+                        GeneratedField::CoerceInt96 => {
+                            if coerce_int96_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("coerceInt96"));
+                            }
+                            coerce_int96_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::CoerceInt96Opt::CoerceInt96);
+                        }
                     }
                 }
                 Ok(ParquetOptions {
@@ -5566,6 +5587,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     encoding_opt: encoding_opt__,
                     bloom_filter_fpp_opt: bloom_filter_fpp_opt__,
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
+                    coerce_int96_opt: coerce_int96_opt__,
                 })
             }
         }

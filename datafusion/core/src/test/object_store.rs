@@ -66,7 +66,7 @@ pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta
     ObjectMeta {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-        size: metadata.len() as usize,
+        size: metadata.len(),
         e_tag: None,
         version: None,
     }
@@ -148,7 +148,7 @@ impl ObjectStore for BlockingObjectStore {
                     "{} barrier wait timed out for {location}",
                     BlockingObjectStore::NAME
                 );
-                log::error!("{}", error_message);
+                log::error!("{error_message}");
                 return Err(Error::Generic {
                     store: BlockingObjectStore::NAME,
                     source: error_message.into(),
@@ -166,7 +166,7 @@ impl ObjectStore for BlockingObjectStore {
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
