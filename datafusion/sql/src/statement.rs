@@ -696,7 +696,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statement,
             } => {
                 // Convert parser data types to DataFusion data types
-                let data_types: Vec<DataType> = data_types
+                let mut data_types: Vec<DataType> = data_types
                     .into_iter()
                     .map(|t| self.convert_data_type(&t))
                     .collect::<Result<_>>()?;
@@ -710,6 +710,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     *statement,
                     &mut planner_context,
                 )?;
+
+                if data_types.is_empty() {
+                    let map_types = plan.get_parameter_types()?;
+                    let param_types: Vec<_> = (1..=map_types.len())
+                        .filter_map(|i| {
+                            let key = format!("${i}");
+                            map_types.get(&key).and_then(|opt| opt.clone())
+                        })
+                        .collect();
+                    data_types.extend(param_types.iter().cloned());
+                    planner_context.with_prepare_param_data_types(param_types);
+                }
+
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
                     data_types,
@@ -1794,7 +1807,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
-        let schema = table_source.schema().to_dfschema_ref()?;
+        let schema = DFSchema::try_from_qualified_schema(
+            table_ref.clone(),
+            &table_source.schema(),
+        )?;
         let scan =
             LogicalPlanBuilder::scan(table_ref.clone(), Arc::clone(&table_source), None)?
                 .build()?;
