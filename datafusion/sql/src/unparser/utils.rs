@@ -21,16 +21,18 @@ use super::{
     dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
     rewrite::TableAliasRewriter, Unparser,
 };
+use arrow::array::{Array, Int32Array};
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
     Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
+    expr::{self, AggregateFunction}, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
     LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
 };
 
+use datafusion_functions_aggregate::grouping::grouping_udaf;
 use indexmap::IndexSet;
 use sqlparser::ast;
 use sqlparser::tokenizer::Span;
@@ -195,6 +197,34 @@ pub(crate) fn unproject_agg_exprs(
     agg: &Aggregate,
     windows: Option<&[&Window]>,
 ) -> Result<Expr> {
+    // replace grouping function
+    let expr = expr.transform(|sub_expr| {
+        match sub_expr {
+            Expr::ScalarFunction(grouping) if grouping.name() == "grouping" => {
+                if grouping.args.len() != 1 && grouping.args.len() != 2 {
+                    return internal_err!("Grouping function must have one or two arguments");
+                }
+                let grouping_expr = grouping_set_to_exprlist(&agg.group_expr)?;
+                let args = if grouping.args.len() == 1 {
+                    agg.group_expr.clone()
+                } else {
+                    if let Expr::Literal(ScalarValue::List(list)) = &grouping.args[1] {
+                        if list.len() != 1 {
+                            return internal_err!("The second argument of grouping function must be a list with exactly one element");
+                        }
+                        let values = list.value(0).as_any().downcast_ref::<Int32Array>().unwrap().values().to_vec();
+                        values.iter().map(|i: &i32| grouping_expr[*i as usize].clone()).collect()
+                    } else {
+                        return internal_err!("The second argument of grouping function must be a list");
+                    }
+                };
+                return Ok(Transformed::yes(Expr::AggregateFunction(AggregateFunction::new_udf(
+                    grouping_udaf(), args, false, None, None, None))));
+            }
+            _ => Ok(Transformed::no(sub_expr))
+        }
+    })
+    .map(|e| e.data)?;
     expr.transform(|sub_expr| {
             if let Expr::Column(c) = sub_expr {
                 if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
