@@ -408,6 +408,19 @@ async fn oom_with_tracked_consumer_pool() {
         .await
 }
 
+#[tokio::test]
+async fn oom_grouped_hash_aggregate() {
+    TestCase::new()
+        .with_query("SELECT COUNT(*), SUM(request_bytes) FROM t GROUP BY host")
+        .with_expected_errors(vec![
+            "Failed to allocate additional",
+            "GroupedHashAggregateStream[0] (count(Int64(1)), sum(t.request_bytes))",
+        ])
+        .with_memory_limit(1_000)
+        .run()
+        .await
+}
+
 /// For regression case: if spilled `StringViewArray`'s buffer will be referenced by
 /// other batches which are also need to be spilled, then the spill writer will
 /// repeatedly write out the same buffer, and after reading back, each batch's size
