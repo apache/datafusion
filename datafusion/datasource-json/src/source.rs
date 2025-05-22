@@ -55,7 +55,6 @@ pub struct JsonOpener {
     projected_schema: SchemaRef,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl JsonOpener {
@@ -81,6 +80,7 @@ pub struct JsonSource {
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl JsonSource {
