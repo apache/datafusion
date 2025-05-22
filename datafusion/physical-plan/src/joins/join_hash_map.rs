@@ -272,7 +272,9 @@ pub trait JoinHashMapType {
         // Check if hashmap consists of unique values
         // If so, we can skip the chain traversal
         if self.is_unique() {
-            for (row_idx, &hash_value) in hash_values.iter().enumerate() {
+            let start = offset.0;
+            let end = (start + limit).min(hash_values.len());
+            for (row_idx, &hash_value) in hash_values[start..end].iter().enumerate() {
                 if let Some((_, index)) =
                     hash_map.find(hash_value, |(hash, _)| hash_value == *hash)
                 {
@@ -280,7 +282,11 @@ pub trait JoinHashMapType {
                     match_indices.push(index - 1);
                 }
             }
-            return (input_indices, match_indices, None);
+            if end == hash_values.len() {
+                // No more values to process
+                return (input_indices, match_indices, None);
+            }
+            return (input_indices, match_indices, Some((end, None)));
         }
 
         let mut remaining_output = limit;
