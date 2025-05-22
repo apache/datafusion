@@ -550,7 +550,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
@@ -585,9 +585,9 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
+            .with_session_config_options(config)
     }
 
     async fn get_resolved_schema(
@@ -615,7 +615,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
@@ -643,7 +643,7 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
@@ -669,7 +669,7 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 

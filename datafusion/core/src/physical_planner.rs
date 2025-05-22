@@ -1714,6 +1714,14 @@ impl DefaultPhysicalPlanner {
         let config = &session_state.config_options().explain;
         let explain_format = &e.explain_format;
 
+        if !e.logical_optimization_succeeded {
+            return Ok(Arc::new(ExplainExec::new(
+                Arc::clone(e.schema.inner()),
+                e.stringified_plans.clone(),
+                true,
+            )));
+        }
+
         match explain_format {
             ExplainFormat::Indent => { /* fall through */ }
             ExplainFormat::Tree => {
@@ -2199,7 +2207,9 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
+    use datafusion_common::{
+        assert_contains, DFSchemaRef, TableReference, ToDFSchema as _,
+    };
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{
@@ -2691,6 +2701,54 @@ mod tests {
             assert!(stringified_plans
                 .iter()
                 .any(|p| matches!(p.plan_type, PlanType::FinalPhysicalPlan)));
+        } else {
+            panic!(
+                "Plan was not an explain plan: {}",
+                displayable(plan.as_ref()).indent(true)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_explain_indent_err() {
+        let planner = DefaultPhysicalPlanner::default();
+        let ctx = SessionContext::new();
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+        let plan = Arc::new(
+            scan_empty(Some("employee"), &schema, None)
+                .unwrap()
+                .explain(true, false)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Create a schema
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("plan_type", DataType::Utf8, false),
+            Field::new("plan", DataType::Utf8, false),
+        ]));
+
+        // Create invalid indentation in the plan
+        let stringified_plans =
+            vec![StringifiedPlan::new(PlanType::FinalLogicalPlan, "Test Err")];
+
+        let explain = Explain {
+            verbose: false,
+            explain_format: ExplainFormat::Indent,
+            plan,
+            stringified_plans,
+            schema: schema.to_dfschema_ref().unwrap(),
+            logical_optimization_succeeded: false,
+        };
+        let plan = planner
+            .handle_explain(&explain, &ctx.state())
+            .await
+            .unwrap();
+        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+            let stringified_plans = plan.stringified_plans();
+            assert_eq!(stringified_plans.len(), 1);
+            assert_eq!(stringified_plans[0].plan.as_str(), "Test Err");
         } else {
             panic!(
                 "Plan was not an explain plan: {}",

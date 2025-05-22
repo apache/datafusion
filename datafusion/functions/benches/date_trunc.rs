@@ -32,7 +32,7 @@ use datafusion_functions::datetime::date_trunc;
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
     let mut seconds = vec![];
     for _ in 0..1000 {
-        seconds.push(rng.gen_range(0..1_000_000));
+        seconds.push(rng.random_range(0..1_000_000));
     }
 
     TimestampSecondArray::from(seconds)
@@ -40,7 +40,7 @@ fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("date_trunc_minute_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let timestamps_array = Arc::new(timestamps(&mut rng)) as ArrayRef;
         let batch_len = timestamps_array.len();
         let precision =
