@@ -47,17 +47,18 @@ impl TestSource {
 }
 
 impl FileSource for TestSource {
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
-    }
-
     fn with_schema_adapter_factory(
         &self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Arc<dyn FileSource> {
-        let mut new_source = self.clone();
-        new_source.schema_adapter_factory = Some(schema_adapter_factory);
-        Arc::new(new_source)
+        Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        })
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 
     fn file_type(&self) -> &str {
