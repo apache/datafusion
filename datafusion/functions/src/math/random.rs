@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::array::Float64Array;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
@@ -74,9 +74,9 @@ impl ScalarUDFImpl for RandomFunc {
         if !args.args.is_empty() {
             return internal_err!("{} function does not accept arguments", self.name());
         }
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut values = vec![0.0; args.number_rows];
-        // Equivalent to set each element with rng.gen_range(0.0..1.0), but more efficient
+        // Equivalent to set each element with rng.random_range(0.0..1.0), but more efficient
         rng.fill(&mut values[..]);
         let array = Float64Array::from(values);
 
