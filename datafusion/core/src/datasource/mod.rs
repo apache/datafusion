@@ -52,7 +52,6 @@ pub use datafusion_physical_expr::create_ordering;
 mod tests {
 
     use crate::prelude::SessionContext;
-    use datafusion_datasource::file::FileSource;
     use std::fs;
     use std::sync::Arc;
 
@@ -129,7 +128,7 @@ mod tests {
         let base_conf = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             schema,
-            source,
+            source.into(),
         )
         .with_file(partitioned_file)
         .build();
