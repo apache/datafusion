@@ -1392,12 +1392,15 @@ pub struct TableOptions {
 }
 
 impl ConfigField for TableOptions {
+    /// Visits configuration settings for all available format settings.
     fn visit<V: Visit>(&self, v: &mut V, _key: &str, _description: &'static str) {
         self.csv.visit(v, "csv", "");
         self.parquet.visit(v, "parquet", "");
         self.json.visit(v, "json", "");
     }
 
+    /// Just handles error, since this method should not be called
+    /// before specifying a format.
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (key, _rem) = key.split_once('.').unwrap_or((key, ""));
         if key == "format" {
