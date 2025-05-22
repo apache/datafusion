@@ -306,7 +306,7 @@ pub struct ScalarFunctionArgs {
     pub return_field: FieldRef,
 }
 
-impl<'a, 'b> ScalarFunctionArgs<'a, 'b> {
+impl ScalarFunctionArgs {
     /// The return type of the function. See [`Self::return_field`] for more
     /// details.
     pub fn return_type(&self) -> &DataType {
