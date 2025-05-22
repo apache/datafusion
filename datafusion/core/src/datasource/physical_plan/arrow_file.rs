@@ -48,6 +48,7 @@ impl From<ArrowSource> for Arc<dyn FileSource> {
     fn from(source: ArrowSource) -> Self {
         as_file_source(source)
     }
+}
 
 impl FileSource for ArrowSource {
     fn create_file_opener(
@@ -112,8 +113,6 @@ impl FileSource for ArrowSource {
         self.schema_adapter_factory.clone()
     }
 }
-
-
 
 /// The struct arrow that implements `[FileOpener]` trait
 pub struct ArrowOpener {
