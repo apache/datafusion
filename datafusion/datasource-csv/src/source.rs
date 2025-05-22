@@ -37,6 +37,7 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::{
@@ -91,6 +92,7 @@ pub struct CsvSource {
     comment: Option<u8>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl CsvSource {
@@ -252,6 +254,21 @@ impl FileSource for CsvSource {
         let mut conf = self.clone();
         conf.file_projection = config.file_column_projection_indices();
         Arc::new(conf)
+    }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Arc<dyn FileSource> {
+        // For CSV, we don't have schema adapter factory support yet, so just return self
+        Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        })
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
