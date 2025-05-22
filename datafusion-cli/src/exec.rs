@@ -17,6 +17,11 @@
 
 //! Execution functions
 
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::BufReader;
+
 use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
@@ -26,26 +31,22 @@ use crate::{
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
-use futures::StreamExt;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::BufReader;
 
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
+use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
-use datafusion::execution::memory_pool::MemoryConsumer;
-use datafusion::physical_plan::spill::get_record_batch_memory_size;
-use datafusion::sql::sqlparser;
+use futures::StreamExt;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
@@ -421,7 +422,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     // Clone and modify the default table options based on the provided options
     let mut table_options = ctx.session_state().default_table_options();
     let extensions = if let Some(format) = format {
-        let mut file_table_options = table_options.set_config_format(format);
+        let mut file_table_options = table_options.get_table_format_options(format);
         file_table_options.alter_with_string_hash_map(options)?;
         file_table_options.extensions().clone()
     } else {

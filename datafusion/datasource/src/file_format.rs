@@ -29,9 +29,7 @@ use crate::file_scan_config::FileScanConfig;
 use crate::file_sink_config::FileSinkConfig;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::config::{
-    ConfigFileType, FileSpecificTableOptions, FormatOptions,
-};
+use datafusion_common::config::{ConfigFileType, FormatOptions, TableFormatOptions};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt, Result, Statistics};
 use datafusion_expr::Expr;
@@ -160,8 +158,7 @@ pub trait FileFormatFactory: Sync + Send + GetExt + fmt::Debug {
                 table_options.format_options()
             }
             (Some(options), _) => {
-                let mut table_options =
-                    FileSpecificTableOptions::from_format_options(options);
+                let mut table_options = TableFormatOptions::from_format_options(options);
                 table_options.alter_with_string_hash_map(format_options)?;
                 table_options.format_options()
             }

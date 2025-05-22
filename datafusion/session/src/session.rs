@@ -17,7 +17,7 @@
 
 use async_trait::async_trait;
 use datafusion_common::config::{
-    ConfigFileType, ConfigOptions, FileSpecificTableOptions, TableOptions,
+    ConfigFileType, ConfigOptions, TableFormatOptions, TableOptions,
 };
 use datafusion_common::{DFSchema, Result};
 use datafusion_execution::config::SessionConfig;
@@ -126,36 +126,40 @@ pub trait Session: Send + Sync {
     /// Return the table options
     fn table_options(&self) -> &TableOptions;
 
-    /// return the TableOptions options with its extensions
+    /// Return the TableOptions options with its extensions
     fn default_table_options(&self) -> TableOptions {
         self.table_options()
             .combine_with_session_config(self.config_options())
     }
 
-    /// return the TableOptions for specified file format
-    fn file_table_options(&self, file_type: ConfigFileType) -> FileSpecificTableOptions {
+    /// Return the TableOptions for specified file format
+    fn file_table_options(&self, file_type: ConfigFileType) -> TableFormatOptions {
         let session_table_options = self
             .table_options()
             .combine_with_session_config(self.config_options());
 
         match file_type {
-            ConfigFileType::CSV => FileSpecificTableOptions::Csv {
+            ConfigFileType::CSV => TableFormatOptions::Csv {
                 options: session_table_options.csv,
                 extensions: session_table_options.extensions,
             },
             #[cfg(feature = "parquet")]
-            ConfigFileType::PARQUET => FileSpecificTableOptions::Parquet {
+            ConfigFileType::PARQUET => TableFormatOptions::Parquet {
                 options: session_table_options.parquet,
                 extensions: session_table_options.extensions,
             },
-            ConfigFileType::JSON => FileSpecificTableOptions::Json {
+            #[cfg(not(feature = "parquet"))]
+            ConfigFileType::PARQUET => {
+                unimplemented!("Parquet support is not enabled");
+            }
+            ConfigFileType::JSON => TableFormatOptions::Json {
                 options: session_table_options.json,
                 extensions: session_table_options.extensions,
             },
         }
     }
 
-    /// Returns a mutable reference to [`FileSpecificTableOptions`]
+    /// Returns a mutable reference to [`TableFormatOptions`]
     fn table_options_mut(&mut self) -> &mut TableOptions;
 
     /// Get a new TaskContext to run in this session

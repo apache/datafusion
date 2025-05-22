@@ -31,7 +31,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
-        config::FileSpecificTableOptions,
+        config::TableFormatOptions,
         file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
         parsers::CompressionTypeVariant,
         Result,
@@ -74,9 +74,9 @@ mod tests {
         option_map.insert("format.bloom_filter_fpp".to_owned(), "0.123".to_owned());
         option_map.insert("format.bloom_filter_ndv".to_owned(), "123".to_owned());
 
-        let mut table_config = FileSpecificTableOptions::new_parquet();
+        let mut table_config = TableFormatOptions::new_parquet();
         table_config.alter_with_string_hash_map(&option_map)?;
-        let FileSpecificTableOptions::Parquet { options, .. } = table_config else {
+        let TableFormatOptions::Parquet { options, .. } = table_config else {
             unreachable!()
         };
         let properties =
@@ -181,9 +181,9 @@ mod tests {
             "456".to_owned(),
         );
 
-        let mut table_config = FileSpecificTableOptions::new_parquet();
+        let mut table_config = TableFormatOptions::new_parquet();
         table_config.alter_with_string_hash_map(&option_map)?;
-        let FileSpecificTableOptions::Parquet { options, .. } = table_config else {
+        let TableFormatOptions::Parquet { options, .. } = table_config else {
             unreachable!()
         };
 
@@ -287,9 +287,9 @@ mod tests {
         option_map.insert("format.compression".to_owned(), "gzip".to_owned());
         option_map.insert("format.delimiter".to_owned(), ";".to_owned());
 
-        let mut table_config = FileSpecificTableOptions::new_csv();
+        let mut table_config = TableFormatOptions::new_csv();
         table_config.alter_with_string_hash_map(&option_map)?;
-        let FileSpecificTableOptions::Csv { options, .. } = table_config else {
+        let TableFormatOptions::Csv { options, .. } = table_config else {
             unreachable!()
         };
         let csv_options = CsvWriterOptions::try_from(&options)?;
@@ -311,14 +311,14 @@ mod tests {
         option_map.insert("format.compression".to_owned(), "gzip".to_owned());
 
         // Start with a JSON-based TableOptions variant
-        let mut table_config = FileSpecificTableOptions::new_json();
+        let mut table_config = TableFormatOptions::new_json();
 
         // Apply the config changes
         table_config.alter_with_string_hash_map(&option_map)?;
 
         // Extract updated JsonOptions
         let json_options = match &table_config {
-            FileSpecificTableOptions::Json { options, .. } => {
+            TableFormatOptions::Json { options, .. } => {
                 JsonWriterOptions::try_from(options)?
             }
             _ => panic!("Expected TableOptions to be Json variant"),

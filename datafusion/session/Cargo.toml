@@ -48,5 +48,8 @@ object_store = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
 
+[features]
+parquet = ["datafusion-common/parquet"]
+
 [lints]
 workspace = true
