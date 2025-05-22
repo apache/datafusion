@@ -206,7 +206,7 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         };
     let doc_section_description = doc_section_desc
         .map(|desc| quote! { Some(#desc)})
-        .unwrap_or(quote! { None });
+        .unwrap_or_else(|| quote! { None });
 
     let sql_example = sql_example.map(|ex| {
         quote! {

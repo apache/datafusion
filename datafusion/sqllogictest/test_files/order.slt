@@ -1380,3 +1380,42 @@ physical_plan
 
 statement ok
 drop table table_with_ordered_not_null;
+
+# ORDER BY ALL
+statement ok
+set datafusion.sql_parser.dialect = 'DuckDB';
+
+statement ok
+CREATE OR REPLACE TABLE addresses AS
+    SELECT '123 Quack Blvd' AS address, 'DuckTown' AS city, '11111' AS zip
+    UNION ALL
+    SELECT '111 Duck Duck Goose Ln', 'DuckTown', '11111'
+    UNION ALL
+    SELECT '111 Duck Duck Goose Ln', 'Duck Town', '11111'
+    UNION ALL
+    SELECT '111 Duck Duck Goose Ln', 'Duck Town', '11111-0001';
+
+
+query TTT
+SELECT * FROM addresses ORDER BY ALL;
+----
+111 Duck Duck Goose Ln Duck Town 11111
+111 Duck Duck Goose Ln Duck Town 11111-0001
+111 Duck Duck Goose Ln DuckTown 11111
+123 Quack Blvd DuckTown 11111
+
+query TTT
+SELECT * FROM addresses ORDER BY ALL DESC;
+----
+123 Quack Blvd DuckTown 11111
+111 Duck Duck Goose Ln DuckTown 11111
+111 Duck Duck Goose Ln Duck Town 11111-0001
+111 Duck Duck Goose Ln Duck Town 11111
+
+query TT
+SELECT address, zip FROM addresses ORDER BY ALL;
+----
+111 Duck Duck Goose Ln 11111
+111 Duck Duck Goose Ln 11111
+111 Duck Duck Goose Ln 11111-0001
+123 Quack Blvd 11111

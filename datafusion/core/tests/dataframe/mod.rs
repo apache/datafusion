@@ -1853,6 +1853,56 @@ async fn with_column_renamed_case_sensitive() -> Result<()> {
 }
 
 #[tokio::test]
+async fn describe_lookup_via_quoted_identifier() -> Result<()> {
+    let ctx = SessionContext::new();
+    let name = "aggregate_test_100";
+    register_aggregate_csv(&ctx, name).await?;
+    let df = ctx.table(name);
+
+    let df = df
+        .await?
+        .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
+        .limit(0, Some(1))?
+        .sort(vec![
+            // make the test deterministic
+            col("c1").sort(true, true),
+            col("c2").sort(true, true),
+            col("c3").sort(true, true),
+        ])?
+        .select_columns(&["c1"])?;
+
+    let df_renamed = df.clone().with_column_renamed("c1", "CoLu.Mn[\"1\"]")?;
+
+    let describe_result = df_renamed.describe().await?;
+    describe_result
+        .clone()
+        .sort(vec![
+            col("describe").sort(true, true),
+            col("CoLu.Mn[\"1\"]").sort(true, true),
+        ])?
+        .show()
+        .await?;
+    assert_snapshot!(
+        batches_to_sort_string(&describe_result.clone().collect().await?),
+        @r###"
+        +------------+--------------+
+        | describe   | CoLu.Mn["1"] |
+        +------------+--------------+
+        | count      | 1            |
+        | max        | a            |
+        | mean       | null         |
+        | median     | null         |
+        | min        | a            |
+        | null_count | 0            |
+        | std        | null         |
+        +------------+--------------+
+    "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn cast_expr_test() -> Result<()> {
     let df = test_table()
         .await?
@@ -3570,16 +3620,15 @@ async fn unnest_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +----------+------------------------------------------------+--------------------+
-    | shape_id | points                                         | tags               |
-    +----------+------------------------------------------------+--------------------+
-    | 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | [tag1]             |
-    | 2        |                                                | [tag1, tag2]       |
-    | 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |                    |
-    | 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | [tag1, tag2, tag3] |
-    +----------+------------------------------------------------+--------------------+
-    "###
-    );
+          +----------+---------------------------------+--------------------------+
+          | shape_id | points                          | tags                     |
+          +----------+---------------------------------+--------------------------+
+          | 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | [tag1]                   |
+          | 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | [tag1]                   |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | [tag1, tag2, tag3, tag4] |
+          | 4        |                                 | [tag1, tag2, tag3]       |
+          +----------+---------------------------------+--------------------------+
+        "###);
 
     // Unnest tags
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -3587,19 +3636,20 @@ async fn unnest_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +----------+------------------------------------------------+------+
-    | shape_id | points                                         | tags |
-    +----------+------------------------------------------------+------+
-    | 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | tag1 |
-    | 2        |                                                | tag1 |
-    | 2        |                                                | tag2 |
-    | 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |      |
-    | 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag1 |
-    | 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag2 |
-    | 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag3 |
-    +----------+------------------------------------------------+------+
-    "###
-    );
+          +----------+---------------------------------+------+
+          | shape_id | points                          | tags |
+          +----------+---------------------------------+------+
+          | 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | tag1 |
+          | 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | tag1 |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag1 |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag2 |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag3 |
+          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag4 |
+          | 4        |                                 | tag1 |
+          | 4        |                                 | tag2 |
+          | 4        |                                 | tag3 |
+          +----------+---------------------------------+------+
+        "###);
 
     // Test aggregate results for tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -3612,20 +3662,18 @@ async fn unnest_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +----------+-----------------+--------------------+
-    | shape_id | points          | tags               |
-    +----------+-----------------+--------------------+
-    | 1        | {x: -3, y: -4}  | [tag1]             |
-    | 1        | {x: -3, y: 6}   | [tag1]             |
-    | 1        | {x: 2, y: -2}   | [tag1]             |
-    | 2        |                 | [tag1, tag2]       |
-    | 3        | {x: -10, y: -4} |                    |
-    | 3        | {x: -9, y: 2}   |                    |
-    | 4        | {x: -3, y: 5}   | [tag1, tag2, tag3] |
-    | 4        | {x: 2, y: -1}   | [tag1, tag2, tag3] |
-    +----------+-----------------+--------------------+
-    "###
-    );
+          +----------+----------------+--------------------------+
+          | shape_id | points         | tags                     |
+          +----------+----------------+--------------------------+
+          | 1        | {x: -3, y: -4} | [tag1]                   |
+          | 1        | {x: 5, y: -8}  | [tag1]                   |
+          | 2        | {x: -2, y: -8} | [tag1]                   |
+          | 2        | {x: 6, y: 2}   | [tag1]                   |
+          | 3        | {x: -2, y: 5}  | [tag1, tag2, tag3, tag4] |
+          | 3        | {x: -9, y: -7} | [tag1, tag2, tag3, tag4] |
+          | 4        |                | [tag1, tag2, tag3]       |
+          +----------+----------------+--------------------------+
+        "###);
 
     // Test aggregate results for points.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -3642,25 +3690,26 @@ async fn unnest_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +----------+-----------------+------+
-    | shape_id | points          | tags |
-    +----------+-----------------+------+
-    | 1        | {x: -3, y: -4}  | tag1 |
-    | 1        | {x: -3, y: 6}   | tag1 |
-    | 1        | {x: 2, y: -2}   | tag1 |
-    | 2        |                 | tag1 |
-    | 2        |                 | tag2 |
-    | 3        | {x: -10, y: -4} |      |
-    | 3        | {x: -9, y: 2}   |      |
-    | 4        | {x: -3, y: 5}   | tag1 |
-    | 4        | {x: -3, y: 5}   | tag2 |
-    | 4        | {x: -3, y: 5}   | tag3 |
-    | 4        | {x: 2, y: -1}   | tag1 |
-    | 4        | {x: 2, y: -1}   | tag2 |
-    | 4        | {x: 2, y: -1}   | tag3 |
-    +----------+-----------------+------+
-    "###
-    );
+          +----------+----------------+------+
+          | shape_id | points         | tags |
+          +----------+----------------+------+
+          | 1        | {x: -3, y: -4} | tag1 |
+          | 1        | {x: 5, y: -8}  | tag1 |
+          | 2        | {x: -2, y: -8} | tag1 |
+          | 2        | {x: 6, y: 2}   | tag1 |
+          | 3        | {x: -2, y: 5}  | tag1 |
+          | 3        | {x: -2, y: 5}  | tag2 |
+          | 3        | {x: -2, y: 5}  | tag3 |
+          | 3        | {x: -2, y: 5}  | tag4 |
+          | 3        | {x: -9, y: -7} | tag1 |
+          | 3        | {x: -9, y: -7} | tag2 |
+          | 3        | {x: -9, y: -7} | tag3 |
+          | 3        | {x: -9, y: -7} | tag4 |
+          | 4        |                | tag1 |
+          | 4        |                | tag2 |
+          | 4        |                | tag3 |
+          +----------+----------------+------+
+    "###);
 
     // Test aggregate results for points and tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -3994,15 +4043,15 @@ async fn unnest_aggregate_columns() -> Result<()> {
     assert_snapshot!(
         batches_to_sort_string(&results),
         @r###"
-    +--------------------+
-    | tags               |
-    +--------------------+
-    |                    |
-    | [tag1, tag2, tag3] |
-    | [tag1, tag2, tag3] |
-    | [tag1, tag2]       |
-    | [tag1]             |
-    +--------------------+
+        +--------------------------+
+        | tags                     |
+        +--------------------------+
+        | [tag1, tag2, tag3, tag4] |
+        | [tag1, tag2, tag3]       |
+        | [tag1, tag2]             |
+        | [tag1]                   |
+        | [tag1]                   |
+        +--------------------------+
     "###
     );
 
@@ -4018,7 +4067,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
     +-------------+
     | count(tags) |
     +-------------+
-    | 9           |
+    | 11          |
     +-------------+
     "###
     );
@@ -4267,7 +4316,7 @@ async fn unnest_analyze_metrics() -> Result<()> {
     assert_contains!(&formatted, "elapsed_compute=");
     assert_contains!(&formatted, "input_batches=1");
     assert_contains!(&formatted, "input_rows=5");
-    assert_contains!(&formatted, "output_rows=10");
+    assert_contains!(&formatted, "output_rows=11");
     assert_contains!(&formatted, "output_batches=1");
 
     Ok(())
@@ -4614,7 +4663,7 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
         shape_id_builder.append_value(idx as u32 + 1);
 
         // Add a random number of points
-        let num_points: usize = rng.gen_range(0..4);
+        let num_points: usize = rng.random_range(0..4);
         if num_points > 0 {
             for _ in 0..num_points.max(2) {
                 // Add x value
@@ -4622,13 +4671,13 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
                     .values()
                     .field_builder::<Int32Builder>(0)
                     .unwrap()
-                    .append_value(rng.gen_range(-10..10));
+                    .append_value(rng.random_range(-10..10));
                 // Add y value
                 points_builder
                     .values()
                     .field_builder::<Int32Builder>(1)
                     .unwrap()
-                    .append_value(rng.gen_range(-10..10));
+                    .append_value(rng.random_range(-10..10));
                 points_builder.values().append(true);
             }
         }
@@ -4637,7 +4686,7 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
         points_builder.append(num_points > 0);
 
         // Append tags.
-        let num_tags: usize = rng.gen_range(0..5);
+        let num_tags: usize = rng.random_range(0..5);
         for id in 0..num_tags {
             tags_builder.values().append_value(format!("tag{}", id + 1));
         }
@@ -5079,7 +5128,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
         .await?;
 
     // Explicitly read the parquet file at c2=123 to verify the physical files are partitioned
-    let partitioned_file = format!("{out_dir}/c2=123", out_dir = out_dir);
+    let partitioned_file = format!("{out_dir}/c2=123");
     let filter_df = ctx
         .read_parquet(&partitioned_file, ParquetReadOptions::default())
         .await?;

@@ -218,13 +218,11 @@ mod tests {
             );
             let err_msg =
                 format!("expected: {:?}, actual:{:?}", expected, &join_eq.oeq_class);
-            assert_eq!(join_eq.oeq_class.len(), expected.len(), "{}", err_msg);
+            assert_eq!(join_eq.oeq_class.len(), expected.len(), "{err_msg}");
             for ordering in join_eq.oeq_class {
                 assert!(
                     expected.contains(&ordering),
-                    "{}, ordering: {:?}",
-                    err_msg,
-                    ordering
+                    "{err_msg}, ordering: {ordering:?}"
                 );
             }
         }

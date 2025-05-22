@@ -401,8 +401,8 @@ jobs:
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         run: |
-          wasm-pack test --headless --firefox
-          wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --firefox
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
@@ -692,6 +692,11 @@ jobs:
         run: |
           # If you encounter an error, run './dev/update_function_docs.sh' and commit
           ./dev/update_function_docs.sh
+          git diff --exit-code
+      - name: Check if runtime_configs.md has been modified
+        run: |
+          # If you encounter an error, run './dev/update_runtime_config_docs.sh' and commit
+          ./dev/update_runtime_config_docs.sh
           git diff --exit-code
 
   # Verify MSRV for the crates which are directly used by other projects:

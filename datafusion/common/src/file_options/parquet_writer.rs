@@ -239,6 +239,7 @@ impl ParquetOptions {
             bloom_filter_on_read: _, // reads not used for writer props
             schema_force_view_types: _,
             binary_as_string: _, // not used for writer props
+            coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
         } = self;
 
@@ -329,8 +330,7 @@ fn split_compression_string(str_setting: &str) -> Result<(String, Option<u32>)> 
             let level = &rh[..rh.len() - 1].parse::<u32>().map_err(|_| {
                 DataFusionError::Configuration(format!(
                     "Could not parse compression string. \
-                    Got codec: {} and unknown level from {}",
-                    codec, str_setting
+                    Got codec: {codec} and unknown level from {str_setting}"
                 ))
             })?;
             Ok((codec.to_owned(), Some(*level)))
@@ -516,6 +516,7 @@ mod tests {
             schema_force_view_types: defaults.schema_force_view_types,
             binary_as_string: defaults.binary_as_string,
             skip_arrow_metadata: defaults.skip_arrow_metadata,
+            coerce_int96: None,
         }
     }
 
@@ -622,6 +623,7 @@ mod tests {
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
+                coerce_int96: None,
             },
             column_specific_options,
             key_value_metadata,

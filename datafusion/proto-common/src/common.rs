@@ -17,6 +17,7 @@
 
 use datafusion_common::{internal_datafusion_err, DataFusionError};
 
+/// Return a `DataFusionError::Internal` with the given message
 pub fn proto_error<S: Into<String>>(message: S) -> DataFusionError {
     internal_datafusion_err!("{}", message.into())
 }

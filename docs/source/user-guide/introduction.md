@@ -40,9 +40,9 @@ Arrow](https://arrow.apache.org/).
 ## Features
 
 - Feature-rich [SQL support](https://datafusion.apache.org/user-guide/sql/index.html) and [DataFrame API](https://datafusion.apache.org/user-guide/dataframe.html)
-- Blazingly fast, vectorized, multi-threaded, streaming execution engine.
+- Blazingly fast, vectorized, multithreaded, streaming execution engine.
 - Native support for Parquet, CSV, JSON, and Avro file formats. Support
-  for custom file formats and non file datasources via the `TableProvider` trait.
+  for custom file formats and non-file datasources via the `TableProvider` trait.
 - Many extension points: user defined scalar/aggregate/window functions, DataSources, SQL,
   other query languages, custom plan and execution nodes, optimizer passes, and more.
 - Streaming, asynchronous IO directly from popular object stores, including AWS S3,
@@ -68,14 +68,14 @@ DataFusion can be used without modification as an embedded SQL
 engine or can be customized and used as a foundation for
 building new systems.
 
-While most current usecases are "analytic" or (throughput) some
+While most current use cases are "analytic" or (throughput) some
 components of DataFusion such as the plan representations, are
 suitable for "streaming" and "transaction" style systems (low
 latency).
 
 Here are some example systems built using DataFusion:
 
-- Specialized Analytical Database systems such as [HoraeDB] and more general Apache Spark like system such a [Ballista].
+- Specialized Analytical Database systems such as [HoraeDB] and more general Apache Spark like system such as [Ballista]
 - New query language engines such as [prql-query] and accelerators such as [VegaFusion]
 - Research platform for new Database Systems, such as [Flock]
 - SQL support to another library, such as [dask sql]
@@ -95,15 +95,17 @@ Here are some active projects using DataFusion:
  <!-- "Active" means github repositories that had at least one commit in the last 6 months -->
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
+- [ArkFlow](https://github.com/arkflow-rs/arkflow) High-performance Rust stream processing engine
 - [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
 - [Blaze](https://github.com/kwai/blaze) The Blaze accelerator for Apache Spark leverages native vectorized execution to accelerate query processing
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
-- [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
+- [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust) Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
 - [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
+- [Feldera](https://github.com/feldera/feldera) Fast query engine for incremental computation
 - [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
@@ -118,11 +120,11 @@ Here are some active projects using DataFusion:
 - [Polygon.io](https://polygon.io/) Stock Market API
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
-- [ROAPI](https://github.com/roapi/roapi)
-- [Sail](https://github.com/lakehq/sail) Unifying stream, batch, and AI workloads with Apache Spark compatibility
+- [ROAPI](https://github.com/roapi/roapi) Create full-fledged APIs for slowly moving datasets without writing a single line of code
+- [Sail](https://github.com/lakehq/sail) Unifying stream, batch and AI workloads with Apache Spark compatibility
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
-- [Spice.ai](https://github.com/spiceai/spiceai) Unified SQL query interface & materialization engine
+- [Spice.ai](https://github.com/spiceai/spiceai) Building blocks for data-driven AI applications
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [Telemetry](https://telemetry.sh/) Structured logging made easy
@@ -179,6 +181,20 @@ provide integrations with other systems, some of which are described below:
 ## Why DataFusion?
 
 - _High Performance_: Leveraging Rust and Arrow's memory model, DataFusion is very fast.
-- _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
+- _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet, and Flight), DataFusion works well with the rest of the big data ecosystem
 - _Easy to Embed_: Allowing extension at almost any point in its design, and published regularly as a crate on [crates.io](http://crates.io), DataFusion can be integrated and tailored for your specific usecase.
 - _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can and is used as the foundation for production systems.
+
+## Rust Version Compatibility Policy
+
+The Rust toolchain releases are tracked at [Rust Versions](https://releases.rs) and follow
+[semantic versioning](https://semver.org/). A Rust toolchain release can be identified
+by a version string like `1.80.0`, or more generally `major.minor.patch`.
+
+DataFusion supports the last 4 stable Rust minor versions released and any such versions released within the last 4 months.
+
+For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
+
+Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
+
+DataFusion enforces MSRV policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)

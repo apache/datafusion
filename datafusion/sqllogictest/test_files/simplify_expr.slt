@@ -63,5 +63,47 @@ query T
 select b from t where b !~ '.*'
 ----
 
+query TT
+explain select * from t where a = a;
+----
+logical_plan
+01)Filter: t.a IS NOT NULL OR Boolean(NULL)
+02)--TableScan: t projection=[a, b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: a@0 IS NOT NULL OR NULL
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 drop table t;
+
+# test decimal precision
+query B
+SELECT a * 1.000::DECIMAL(4,3) > 1.2::decimal(2,1) FROM VALUES (1) AS t(a);
+----
+false
+
+query B
+SELECT 1.000::DECIMAL(4,3) * a > 1.2::decimal(2,1) FROM VALUES (1) AS t(a);
+----
+false
+
+query B
+SELECT NULL::DECIMAL(4,3) * a > 1.2::decimal(2,1) FROM VALUES (1) AS t(a);
+----
+NULL
+
+query B
+SELECT a * NULL::DECIMAL(4,3) > 1.2::decimal(2,1) FROM VALUES (1) AS t(a);
+----
+NULL
+
+query B
+SELECT a / 1.000::DECIMAL(4,3) > 1.2::decimal(2,1) FROM VALUES (1) AS t(a);
+----
+false
+
+query B
+SELECT a / NULL::DECIMAL(4,3) > 1.2::decimal(2,1) FROM VALUES (1) AS t(a);
+----
+NULL

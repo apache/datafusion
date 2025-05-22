@@ -33,6 +33,7 @@ use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
+use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
@@ -226,6 +227,7 @@ impl Optimizer {
             Arc::new(EliminateJoin::new()),
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
+            Arc::new(DecorrelateLateralJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
@@ -413,7 +415,7 @@ impl Optimizer {
                 previous_plans.insert(LogicalPlanSignature::new(&new_plan));
             if !plan_is_fresh {
                 // plan did not change, so no need to continue trying to optimize
-                debug!("optimizer pass {} did not make changes", i);
+                debug!("optimizer pass {i} did not make changes");
                 break;
             }
             i += 1;
@@ -506,8 +508,11 @@ mod tests {
         });
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
 
-        // Simplify assert to check the error message contains the expected message, which is only the schema length mismatch
-        assert_contains!(err.strip_backtrace(), "Schema mismatch: the schema length are not same Expected schema length: 3, got: 0");
+        // Simplify assert to check the error message contains the expected message
+        assert_contains!(
+            err.strip_backtrace(),
+            "Failed due to a difference in schemas: original schema: DFSchema"
+        );
     }
 
     #[test]

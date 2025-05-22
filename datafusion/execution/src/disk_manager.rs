@@ -22,7 +22,7 @@ use datafusion_common::{
 };
 use log::debug;
 use parking_lot::Mutex;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -103,8 +103,7 @@ impl DiskManager {
             DiskManagerConfig::NewSpecified(conf_dirs) => {
                 let local_dirs = create_local_dirs(conf_dirs)?;
                 debug!(
-                    "Created local dirs {:?} as DataFusion working directory",
-                    local_dirs
+                    "Created local dirs {local_dirs:?} as DataFusion working directory"
                 );
                 Ok(Arc::new(Self {
                     local_dirs: Mutex::new(Some(local_dirs)),
@@ -120,10 +119,10 @@ impl DiskManager {
         }
     }
 
-    pub fn with_max_temp_directory_size(
-        mut self,
+    pub fn set_max_temp_directory_size(
+        &mut self,
         max_temp_directory_size: u64,
-    ) -> Result<Self> {
+    ) -> Result<()> {
         // If the disk manager is disabled and `max_temp_directory_size` is not 0,
         // this operation is not meaningful, fail early.
         if self.local_dirs.lock().is_none() && max_temp_directory_size != 0 {
@@ -133,6 +132,26 @@ impl DiskManager {
         }
 
         self.max_temp_directory_size = max_temp_directory_size;
+        Ok(())
+    }
+
+    pub fn set_arc_max_temp_directory_size(
+        this: &mut Arc<Self>,
+        max_temp_directory_size: u64,
+    ) -> Result<()> {
+        if let Some(inner) = Arc::get_mut(this) {
+            inner.set_max_temp_directory_size(max_temp_directory_size)?;
+            Ok(())
+        } else {
+            config_err!("DiskManager should be a single instance")
+        }
+    }
+
+    pub fn with_max_temp_directory_size(
+        mut self,
+        max_temp_directory_size: u64,
+    ) -> Result<Self> {
+        self.set_max_temp_directory_size(max_temp_directory_size)?;
         Ok(self)
     }
 
@@ -175,7 +194,7 @@ impl DiskManager {
             local_dirs.push(Arc::new(tempdir));
         }
 
-        let dir_index = thread_rng().gen_range(0..local_dirs.len());
+        let dir_index = rng().random_range(0..local_dirs.len());
         Ok(RefCountedTempFile {
             _parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Builder::new()

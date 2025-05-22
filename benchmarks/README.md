@@ -23,7 +23,6 @@ This crate contains benchmarks based on popular public data sets and
 open source benchmark suites, to help with performance and scalability
 testing of DataFusion.
 
-
 ## Other engines
 
 The benchmarks measure changes to DataFusion itself, rather than
@@ -31,11 +30,11 @@ its performance against other engines. For competitive benchmarking,
 DataFusion is included in the benchmark setups for several popular
 benchmarks that compare performance with other engines. For example:
 
-* [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
-* [H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
+- [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
+- [H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
 
-[ClickBench]: https://github.com/ClickHouse/ClickBench/tree/main
-[H2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
+[clickbench]: https://github.com/ClickHouse/ClickBench/tree/main
+[h2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
 
 # Running the benchmarks
 
@@ -65,30 +64,53 @@ Create / download a specific dataset (TPCH)
 ```shell
 ./bench.sh data tpch
 ```
+
 Data is placed in the `data` subdirectory.
 
 ## Running benchmarks
 
 Run benchmark for TPC-H dataset
+
 ```shell
 ./bench.sh run tpch
 ```
+
 or for TPC-H dataset scale 10
+
 ```shell
 ./bench.sh run tpch10
 ```
 
 To run for specific query, for example Q21
+
 ```shell
 ./bench.sh run tpch10 21
 ```
 
-## Select join algorithm
+## Benchmark with modified configurations
+
+### Select join algorithm
+
 The benchmark runs with `prefer_hash_join == true` by default, which enforces HASH join algorithm.
 To run TPCH benchmarks with join other than HASH:
+
 ```shell
 PREFER_HASH_JOIN=false ./bench.sh run tpch
 ```
+
+### Configure with environment variables
+
+Any [datafusion options](https://datafusion.apache.org/user-guide/configs.html) that are provided environment variables are
+also considered by the benchmarks.
+The following configuration runs the TPCH benchmark with datafusion configured to _not_ repartition join keys.
+
+```shell
+DATAFUSION_OPTIMIZER_REPARTITION_JOINS=false ./bench.sh run tpch
+```
+
+You might want to adjust the results location to avoid overwriting previous results.
+Environment configuration that was picked up by datafusion is logged at `info` level.
+To verify that datafusion picked up your configuration, run the benchmarks with `RUST_LOG=info` or higher.
 
 ## Comparing performance of main and a branch
 
@@ -407,7 +429,7 @@ logs.
 
 Example
 
-dfbench parquet-filter  --path ./data --scale-factor 1.0
+dfbench parquet-filter --path ./data --scale-factor 1.0
 
 generates the synthetic dataset at `./data/logs.parquet`. The size
 of the dataset can be controlled through the `size_factor`
@@ -439,6 +461,7 @@ Iteration 2 returned 1781686 rows in 1947 ms
 ```
 
 ## Sort
+
 Test performance of sorting large datasets
 
 This test sorts a a synthetic dataset generated during the
@@ -462,22 +485,27 @@ Additionally, an optional `--limit` flag is available for the sort benchmark. Wh
 See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
 
 ### Sort TPCH Benchmark Example Runs
+
 1. Run all queries with default setting:
+
 ```bash
  cargo run --release --bin dfbench -- sort-tpch -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
 ```
 
 2. Run a specific query:
+
 ```bash
  cargo run --release --bin dfbench -- sort-tpch -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json' --query 2
 ```
 
 3. Run all queries as TopK queries on presorted data:
+
 ```bash
  cargo run --release --bin dfbench -- sort-tpch --sorted --limit 10 -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
 ```
 
 4. Run all queries with `bench.sh` script:
+
 ```bash
 ./bench.sh run sort_tpch
 ```
@@ -515,59 +543,78 @@ External aggregation benchmarks run several aggregation queries with different m
 This benchmark is inspired by [DuckDB's external aggregation paper](https://hannes.muehleisen.org/publications/icde2024-out-of-core-kuiper-boncz-muehleisen.pdf), specifically Section VI.
 
 ### External Aggregation Example Runs
+
 1. Run all queries with predefined memory limits:
+
 ```bash
 # Under 'benchmarks/' directory
 cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '....../data/tpch_sf1' -o '/tmp/aggr.json'
 ```
 
 2. Run a query with specific memory limit:
+
 ```bash
 cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '....../data/tpch_sf1' -o '/tmp/aggr.json' --query 1 --memory-limit 30M
 ```
 
 3. Run all queries with `bench.sh` script:
+
 ```bash
 ./bench.sh data external_aggr
 ./bench.sh run external_aggr
 ```
 
+## h2o.ai benchmarks
 
-## h2o benchmarks for groupby
+The h2o.ai benchmarks are a set of performance tests for groupby and join operations. Beyond the standard h2o benchmark, there is also an extended benchmark for window functions. These benchmarks use synthetic data with configurable sizes (small: 1e7 rows, medium: 1e8 rows, big: 1e9 rows) to evaluate DataFusion's performance across different data scales.
 
-### Generate data for h2o benchmarks
+Reference:
+
+- [H2O AI Benchmark](https://duckdb.org/2023/04/14/h2oai.html)
+- [Extended window benchmark](https://duckdb.org/2024/06/26/benchmarks-over-time.html#window-functions-benchmark)
+
+### h2o benchmarks for groupby
+
+#### Generate data for h2o benchmarks
+
 There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`. The data is generated in the `data` directory.
 
 1. Generate small data (1e7 rows)
+
 ```bash
 ./bench.sh data h2o_small
 ```
 
-
 2. Generate medium data (1e8 rows)
+
 ```bash
 ./bench.sh data h2o_medium
 ```
 
-
 3. Generate large data (1e9 rows)
+
 ```bash
 ./bench.sh data h2o_big
 ```
 
-### Run h2o benchmarks
+#### Run h2o benchmarks
+
 There are three options for running h2o benchmarks: `small`, `medium`, and `big`.
+
 1. Run small data benchmark
+
 ```bash
 ./bench.sh run h2o_small
 ```
 
 2. Run medium data benchmark
+
 ```bash
 ./bench.sh run h2o_medium
 ```
 
 3. Run large data benchmark
+
 ```bash
 ./bench.sh run h2o_big
 ```
@@ -575,53 +622,53 @@ There are three options for running h2o benchmarks: `small`, `medium`, and `big`
 4. Run a specific query with a specific data path
 
 For example, to run query 1 with the small data generated above:
+
 ```bash
 cargo run --release --bin dfbench -- h2o --path ./benchmarks/data/h2o/G1_1e7_1e7_100_0.csv  --query 1
 ```
 
-## h2o benchmarks for join
+### h2o benchmarks for join
 
-### Generate data for h2o benchmarks
 There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`. The data is generated in the `data` directory.
 
-1. Generate small data (4 table files, the largest is 1e7 rows)
+Here is a example to generate `small` dataset and run the benchmark. To run other
+dataset size configuration, change the command similar to the previous example.
+
 ```bash
+# Generate small data (4 table files, the largest is 1e7 rows)
 ./bench.sh data h2o_small_join
-```
 
-
-2. Generate medium data (4 table files, the largest is 1e8 rows)
-```bash
-./bench.sh data h2o_medium_join
-```
-
-3. Generate large data (4 table files, the largest is 1e9 rows)
-```bash
-./bench.sh data h2o_big_join
-```
-
-### Run h2o benchmarks
-There are three options for running h2o benchmarks: `small`, `medium`, and `big`.
-1. Run small data benchmark
-```bash
+# Run the benchmark
 ./bench.sh run h2o_small_join
 ```
 
-2. Run medium data benchmark
-```bash
-./bench.sh run h2o_medium_join
-```
-
-3. Run large data benchmark
-```bash
-./bench.sh run h2o_big_join
-```
-
-4. Run a specific query with a specific join data paths, the data paths are including 4 table files.
+To run a specific query with a specific join data paths, the data paths are including 4 table files.
 
 For example, to run query 1 with the small data generated above:
+
 ```bash
 cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/join.sql --query 1
 ```
-[1]: http://www.tpc.org/tpch/
-[2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+
+### Extended h2o benchmarks for window
+
+This benchmark extends the h2o benchmark suite to evaluate window function performance. H2o window benchmark uses the same dataset as the h2o join benchmark. There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`.
+
+Here is a example to generate `small` dataset and run the benchmark. To run other
+dataset size configuration, change the command similar to the previous example.
+
+```bash
+# Generate small data
+./bench.sh data h2o_small_window
+
+# Run the benchmark
+./bench.sh run h2o_small_window
+```
+
+To run a specific query with a specific window data paths, the data paths are including 4 table files (the same as h2o-join dataset)
+
+For example, to run query 1 with the small data generated above:
+
+```bash
+cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/window.sql --query 1
+```

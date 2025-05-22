@@ -87,7 +87,7 @@ macro_rules! accumulator_helper {
 /// `is_distinct` is boolean value indicating whether the operation is distinct or not.
 macro_rules! downcast_bitwise_accumulator {
     ($args:ident, $opr:expr, $is_distinct: expr) => {
-        match $args.return_type {
+        match $args.return_field.data_type() {
             DataType::Int8 => accumulator_helper!(Int8Type, $opr, $is_distinct),
             DataType::Int16 => accumulator_helper!(Int16Type, $opr, $is_distinct),
             DataType::Int32 => accumulator_helper!(Int32Type, $opr, $is_distinct),
@@ -101,7 +101,7 @@ macro_rules! downcast_bitwise_accumulator {
                     "{} not supported for {}: {}",
                     stringify!($opr),
                     $args.name,
-                    $args.return_type
+                    $args.return_field.data_type()
                 )
             }
         }
@@ -205,7 +205,7 @@ enum BitwiseOperationType {
 
 impl Display for BitwiseOperationType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -271,13 +271,13 @@ impl AggregateUDFImpl for BitwiseOperation {
                     format!("{} distinct", self.name()).as_str(),
                 ),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.return_type.clone(), true),
+                Field::new_list_field(args.return_field.data_type().clone(), true),
                 false,
             )])
         } else {
             Ok(vec![Field::new(
                 format_state_name(args.name, self.name()),
-                args.return_type.clone(),
+                args.return_field.data_type().clone(),
                 true,
             )])
         }
@@ -291,7 +291,7 @@ impl AggregateUDFImpl for BitwiseOperation {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        let data_type = args.return_type;
+        let data_type = args.return_field.data_type();
         let operation = &self.operation;
         downcast_integer! {
             data_type => (group_accumulator_helper, data_type, operation),

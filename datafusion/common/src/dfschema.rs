@@ -472,7 +472,7 @@ impl DFSchema {
         let matches = self.qualified_fields_with_unqualified_name(name);
         match matches.len() {
             0 => Err(unqualified_field_not_found(name, self)),
-            1 => Ok((matches[0].0, (matches[0].1))),
+            1 => Ok((matches[0].0, matches[0].1)),
             _ => {
                 // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.
                 // Because name may generate from Alias/... . It means that it don't own qualifier.
@@ -513,14 +513,6 @@ impl DFSchema {
             .ok_or_else(|| field_not_found(Some(qualifier.clone()), name, self))?;
 
         Ok(self.field(idx))
-    }
-
-    /// Find the field with the given qualified column
-    pub fn field_from_column(&self, column: &Column) -> Result<&Field> {
-        match &column.relation {
-            Some(r) => self.field_with_qualified_name(r, &column.name),
-            None => self.field_with_unqualified_name(&column.name),
-        }
     }
 
     /// Find the field with the given qualified column
@@ -641,7 +633,7 @@ impl DFSchema {
                         || (!DFSchema::datatype_is_semantically_equal(
                             f1.data_type(),
                             f2.data_type(),
-                        ) && !can_cast_types(f2.data_type(), f1.data_type()))
+                        ))
                     {
                         _plan_err!(
                             "Schema mismatch: Expected field '{}' with type {:?}, \
@@ -659,9 +651,12 @@ impl DFSchema {
     }
 
     /// Checks if two [`DataType`]s are logically equal. This is a notably weaker constraint
-    /// than datatype_is_semantically_equal in that a Dictionary<K,V> type is logically
-    /// equal to a plain V type, but not semantically equal. Dictionary<K1, V1> is also
-    /// logically equal to Dictionary<K2, V1>.
+    /// than datatype_is_semantically_equal in that different representations of same data can be
+    /// logically but not semantically equivalent. Semantically equivalent types are always also
+    /// logically equivalent. For example:
+    /// - a Dictionary<K,V> type is logically equal to a plain V type
+    /// - a Dictionary<K1, V1> is also logically equal to Dictionary<K2, V1>
+    /// - Utf8 and Utf8View are logically equal
     pub fn datatype_is_logically_equal(dt1: &DataType, dt2: &DataType) -> bool {
         // check nested fields
         match (dt1, dt2) {
@@ -711,12 +706,15 @@ impl DFSchema {
                         .zip(iter2)
                         .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_logically_equal(f1, f2))
             }
-            _ => dt1 == dt2,
+            // Utf8 and Utf8View are logically equivalent
+            (DataType::Utf8, DataType::Utf8View) => true,
+            (DataType::Utf8View, DataType::Utf8) => true,
+            _ => Self::datatype_is_semantically_equal(dt1, dt2),
         }
     }
 
     /// Returns true of two [`DataType`]s are semantically equal (same
-    /// name and type), ignoring both metadata and nullability.
+    /// name and type), ignoring both metadata and nullability, and decimal precision/scale.
     ///
     /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
     pub fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
@@ -963,16 +961,28 @@ impl Display for DFSchema {
 /// widely used in the DataFusion codebase.
 pub trait ExprSchema: std::fmt::Debug {
     /// Is this column reference nullable?
-    fn nullable(&self, col: &Column) -> Result<bool>;
+    fn nullable(&self, col: &Column) -> Result<bool> {
+        Ok(self.field_from_column(col)?.is_nullable())
+    }
 
     /// What is the datatype of this column?
-    fn data_type(&self, col: &Column) -> Result<&DataType>;
+    fn data_type(&self, col: &Column) -> Result<&DataType> {
+        Ok(self.field_from_column(col)?.data_type())
+    }
 
     /// Returns the column's optional metadata.
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+        Ok(self.field_from_column(col)?.metadata())
+    }
 
     /// Return the column's datatype and nullability
-    fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)>;
+    fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
+        let field = self.field_from_column(col)?;
+        Ok((field.data_type(), field.is_nullable()))
+    }
+
+    // Return the column's field
+    fn field_from_column(&self, col: &Column) -> Result<&Field>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -992,24 +1002,18 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
         self.as_ref().data_type_and_nullable(col)
     }
+
+    fn field_from_column(&self, col: &Column) -> Result<&Field> {
+        self.as_ref().field_from_column(col)
+    }
 }
 
 impl ExprSchema for DFSchema {
-    fn nullable(&self, col: &Column) -> Result<bool> {
-        Ok(self.field_from_column(col)?.is_nullable())
-    }
-
-    fn data_type(&self, col: &Column) -> Result<&DataType> {
-        Ok(self.field_from_column(col)?.data_type())
-    }
-
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
-        Ok(self.field_from_column(col)?.metadata())
-    }
-
-    fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
-        let field = self.field_from_column(col)?;
-        Ok((field.data_type(), field.is_nullable()))
+    fn field_from_column(&self, col: &Column) -> Result<&Field> {
+        match &col.relation {
+            Some(r) => self.field_with_qualified_name(r, &col.name),
+            None => self.field_with_unqualified_name(&col.name),
+        }
     }
 }
 
@@ -1084,7 +1088,7 @@ impl SchemaExt for Schema {
 
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
     match qualifier {
-        Some(q) => format!("{}.{}", q, name),
+        Some(q) => format!("{q}.{name}"),
         None => name.to_string(),
     }
 }

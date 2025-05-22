@@ -19,7 +19,6 @@
 //!
 //! [`FileSource`]: datafusion_datasource::file::FileSource
 
-#[allow(deprecated)]
 pub use datafusion_datasource_json::source::*;
 
 #[cfg(test)]
@@ -495,7 +494,7 @@ mod tests {
             .write_json(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value d for column 0 at line 4");
+        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'");
         Ok(())
     }
 

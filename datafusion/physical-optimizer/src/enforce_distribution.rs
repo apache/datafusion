@@ -42,7 +42,6 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -950,11 +949,7 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
 
         let new_plan = if should_preserve_ordering {
             Arc::new(SortPreservingMergeExec::new(
-                input
-                    .plan
-                    .output_ordering()
-                    .unwrap_or(&LexOrdering::default())
-                    .clone(),
+                input.plan.output_ordering().cloned().unwrap_or_default(),
                 Arc::clone(&input.plan),
             )) as _
         } else {
@@ -1018,7 +1013,7 @@ fn remove_dist_changing_operators(
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
 /// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
-fn replace_order_preserving_variants(
+pub fn replace_order_preserving_variants(
     mut context: DistributionContext,
 ) -> Result<DistributionContext> {
     context.children = context
@@ -1035,7 +1030,9 @@ fn replace_order_preserving_variants(
 
     if is_sort_preserving_merge(&context.plan) {
         let child_plan = Arc::clone(&context.children[0].plan);
-        context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));
+        context.plan = Arc::new(
+            CoalescePartitionsExec::new(child_plan).with_fetch(context.plan.fetch()),
+        );
         return Ok(context);
     } else if let Some(repartition) =
         context.plan.as_any().downcast_ref::<RepartitionExec>()
@@ -1112,7 +1109,8 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match child.statistics()?.num_rows {
+        let roundrobin_beneficial_stats = match child.partition_statistics(None)?.num_rows
+        {
             Precision::Exact(n_rows) => n_rows > batch_size,
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,
@@ -1155,6 +1153,10 @@ fn get_repartition_requirement_status(
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
 /// exchange operators in other places.
+///
+/// This function is intended to be used in a bottom up traversal, as it
+/// can first repartition (or newly partition) at the datasources -- these
+/// source partitions may be later repartitioned with additional data exchange operators.
 pub fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
@@ -1244,6 +1246,10 @@ pub fn ensure_distribution(
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
+            //
+            // If repartitioning is not possible (a.k.a. None is returned from `ExecutionPlan::repartitioned`)
+            // then no repartitioning will have occurred. As the default implementation returns None, it is only
+            // specific physical plan nodes, such as certain datasources, which are repartitioned.
             if repartition_file_scans && roundrobin_beneficial_stats {
                 if let Some(new_child) =
                     child.plan.repartitioned(target_partitions, config)?
