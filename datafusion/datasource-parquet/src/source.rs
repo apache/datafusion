@@ -26,17 +26,17 @@ use crate::opener::ParquetOpener;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use arrow::datatypes::{SchemaRef, TimeUnit};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::TableParquetOptions;
+use datafusion_common::{DataFusionError, Statistics};
+use datafusion_datasource::file::as_file_source;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
-
-use arrow::datatypes::{SchemaRef, TimeUnit};
-use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{DataFusionError, Statistics};
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -435,7 +435,7 @@ pub(crate) fn parse_coerce_int96_string(
 /// Allows easy conversion from ParquetSource to Arc<dyn FileSource>
 impl From<ParquetSource> for Arc<dyn FileSource> {
     fn from(source: ParquetSource) -> Self {
-        Arc::new(source)
+        as_file_source(source)
     }
 }
 
