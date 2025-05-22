@@ -286,7 +286,7 @@ pub trait JoinHashMapType {
                 // No more values to process
                 return (input_indices, match_indices, None);
             }
-            return (input_indices, match_indices, Some((end, None)));
+            return (input_indices, match_indices, Some((end - 1, None)));
         }
 
         let mut remaining_output = limit;
