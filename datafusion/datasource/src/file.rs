@@ -65,16 +65,15 @@ pub trait FileSource: Send + Sync {
     /// Initialize new instance with projected statistics
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
     /// Initialize new instance with schema adapter factory for schema evolution
+    ///
+    /// This is primarily used by ParquetSource to support schema evolution.
+    /// Other file sources will return an unimplemented error by default.
     fn with_schema_adapter_factory(
         self: Arc<Self>,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    ) -> Arc<dyn FileSource>
-    where
-        Self: Sized,
-    {
-        // Default implementation returns self unchanged
-        // File formats that support schema evolution should override this
-        self
+    ) -> Arc<dyn FileSource> {
+        // By default, sources don't support schema evolution
+        unimplemented!("Schema evolution not implemented for this file format")
     }
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
