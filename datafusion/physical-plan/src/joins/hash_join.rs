@@ -3350,7 +3350,7 @@ mod tests {
 
         // Create hash collisions (same hashes)
         hashmap_left.insert_unique(hashes[0], (hashes[0], 1), |(h, _)| *h);
-        hashmap_left.insert_unique(hashes[1], (hashes[1], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 2), |(h, _)| *h);
 
         let next = vec![2, 0];
 
