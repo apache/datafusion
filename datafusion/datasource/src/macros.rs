@@ -23,6 +23,15 @@
 /// avoid copy-pasting `with_schema_adapter_factory` and
 /// `schema_adapter_factory`.
 ///
+/// # Availability
+///
+/// This macro is exported at the crate root level via `#[macro_export]`, so it can be
+/// imported directly from the crate:
+///
+/// ```rust,no_run
+/// use datafusion_datasource::impl_schema_adapter_methods;
+/// ```
+///
 /// # Note on path resolution
 /// When this macro is used:
 /// - `$crate` expands to `datafusion_datasource` (the crate root)

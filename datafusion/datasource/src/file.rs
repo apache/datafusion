@@ -22,9 +22,6 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-#[allow(unused_imports)]
-use crate::impl_schema_adapter_methods;
-
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
@@ -133,7 +130,7 @@ pub trait FileSource: Send + Sync {
     /// returns the original source.
     ///
     /// Note: You can implement this method and `schema_adapter_factory`
-    /// automatically using the [`impl_schema_adapter_methods`] macro.
+    /// automatically using the [`crate::impl_schema_adapter_methods`] macro.
     fn with_schema_adapter_factory(
         &self,
         factory: Arc<dyn SchemaAdapterFactory>,
@@ -142,6 +139,6 @@ pub trait FileSource: Send + Sync {
     /// Returns the current schema adapter factory if set
     ///
     /// Note: You can implement this method and `with_schema_adapter_factory`
-    /// automatically using the [`impl_schema_adapter_methods`] macro.
+    /// automatically using the [`crate::impl_schema_adapter_methods`] macro.
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>>;
 }
