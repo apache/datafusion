@@ -136,3 +136,31 @@ pub trait FileSource: Send + Sync {
     /// Returns the current schema adapter factory if set
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>>;
 }
+
+/// Helper macro to generate the two schema‐adapter methods
+///
+/// Place this inside *any* `impl FileSource for YourType { … }` to
+/// avoid copy-pasting `with_schema_adapter_factory` and
+/// `schema_adapter_factory`.
+#[macro_export]
+macro_rules! impl_schema_adapter_methods {
+    () => {
+        fn with_schema_adapter_factory(
+            &self,
+            schema_adapter_factory: std::sync::Arc<
+                dyn $crate::schema_adapter::SchemaAdapterFactory,
+            >,
+        ) -> std::sync::Arc<dyn $crate::file::FileSource> {
+            std::sync::Arc::new(Self {
+                schema_adapter_factory: Some(schema_adapter_factory),
+                ..self.clone()
+            })
+        }
+
+        fn schema_adapter_factory(
+            &self,
+        ) -> Option<std::sync::Arc<dyn $crate::schema_adapter::SchemaAdapterFactory>> {
+            self.schema_adapter_factory.clone()
+        }
+    };
+}
