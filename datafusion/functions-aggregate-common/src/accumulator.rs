@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -69,6 +69,13 @@ pub struct AccumulatorArgs<'a> {
 
     /// The physical expression of arguments the aggregate function takes.
     pub exprs: &'a [Arc<dyn PhysicalExpr>],
+}
+
+impl AccumulatorArgs<'_> {
+    /// Returns the return type of the aggregate function.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
 }
 
 /// Factory that returns an accumulator for the given aggregate function.
