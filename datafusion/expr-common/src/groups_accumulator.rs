@@ -111,7 +111,6 @@ pub trait GroupsAccumulator: Send {
     ///
     /// This will be called either right after initialization or after [`Self::state`], [`Self::evaluate`] consumed all the groups.
     ///
-    /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
     fn register_metadata(&mut self, _metadata: GroupsAccumulatorMetadata) -> Result<()> {
         Ok(())
     }
@@ -282,7 +281,7 @@ pub struct GroupsAccumulatorMetadata {
     ///
     /// Possible optimizations you can do in your implementation when the group indices are sorted are:
     /// 1. Only track the current group state
-    /// 2. Have a builder that is ready to be built by call to [`Self::state`]/[`Self::evaluate`]
+    /// 2. Have a builder that is ready to be built by call to [`GroupsAccumulator::state`]/[`GroupsAccumulator::evaluate`]
     ///
     pub group_indices_ordering: InputOrderMode,
 }
