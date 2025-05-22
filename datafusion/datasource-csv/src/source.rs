@@ -28,7 +28,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    calculate_range, FileRange, ListingTableUrl, RangeCalculation,
+    as_file_source, calculate_range, FileRange, ListingTableUrl, RangeCalculation,
 };
 
 use arrow::csv;
@@ -211,6 +211,12 @@ impl CsvOpener {
             file_compression_type,
             object_store,
         }
+    }
+}
+
+impl From<CsvSource> for Arc<dyn FileSource> {
+    fn from(source: CsvSource) -> Self {
+        as_file_source(source)
     }
 }
 
