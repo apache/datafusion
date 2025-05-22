@@ -531,8 +531,8 @@ impl GroupedHashAggregateStream {
 
         let agg_fn_names = aggregate_exprs
             .iter()
-            .map(|expr| expr.name().to_string())
-            .collect::<Vec<String>>()
+            .map(|expr| expr.human_display())
+            .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({})", agg_fn_names);
         let reservation = MemoryConsumer::new(name)
