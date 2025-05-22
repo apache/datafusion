@@ -50,9 +50,10 @@ pub mod test_util;
 pub mod url;
 pub mod write;
 pub use self::file::as_file_source;
-pub use self::macros::impl_schema_adapter_methods;
 pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
+// Re-export the macro_export macro, which is already exported at the crate root
+pub use crate::impl_schema_adapter_methods;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
