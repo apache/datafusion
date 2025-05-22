@@ -20,7 +20,7 @@ use std::{collections::HashMap, sync::Arc};
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result, TableReference};
+use datafusion_common::{plan_err, MacroCatalog, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::WindowUDF;
 use datafusion_expr::{
@@ -30,6 +30,7 @@ use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_sql::{
+    macro_context::MacroContextProvider,
     planner::{ContextProvider, SqlToRel},
     sqlparser::{dialect::GenericDialect, parser::Parser},
 };
@@ -124,6 +125,12 @@ fn create_table_source(fields: Vec<Field>) -> Arc<dyn TableSource> {
     Arc::new(LogicalTableSource::new(Arc::new(
         Schema::new_with_metadata(fields, HashMap::new()),
     )))
+}
+
+impl MacroContextProvider for MyContextProvider {
+    fn macro_catalog(&self) -> Result<Arc<dyn MacroCatalog>> {
+        plan_err!("SQL macros are not supported in this example")
+    }
 }
 
 impl ContextProvider for MyContextProvider {

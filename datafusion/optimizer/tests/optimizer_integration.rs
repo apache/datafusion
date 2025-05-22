@@ -22,6 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::MacroCatalog;
 use datafusion_common::{plan_err, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::test::function_stub::sum_udaf;
@@ -33,6 +34,7 @@ use datafusion_functions_window::planner::WindowFunctionPlanner;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
+use datafusion_sql::macro_context::MacroContextProvider;
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
@@ -524,6 +526,12 @@ impl MyContextProvider {
     fn with_expr_planners(mut self, expr_planners: Vec<Arc<dyn ExprPlanner>>) -> Self {
         self.expr_planners = expr_planners;
         self
+    }
+}
+
+impl MacroContextProvider for MyContextProvider {
+    fn macro_catalog(&self) -> Result<Arc<dyn MacroCatalog>> {
+        plan_err!("SQL macros are not supported in optimizer tests")
     }
 }
 

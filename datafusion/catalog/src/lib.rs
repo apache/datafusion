@@ -43,12 +43,14 @@ pub mod view;
 mod r#async;
 mod catalog;
 mod dynamic_file;
+mod macro_catalog;
 mod schema;
 mod table;
 
 pub use catalog::*;
 pub use datafusion_session::Session;
 pub use dynamic_file::catalog::*;
+pub use macro_catalog::*;
 pub use memory::{
     MemTable, MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
 };

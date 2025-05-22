@@ -27,6 +27,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
+use datafusion_common::MacroCatalog;
 use datafusion_common::{plan_err, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
@@ -38,6 +39,7 @@ use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::GuaranteeRewriter;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
+use datafusion_sql::macro_context::MacroContextProvider;
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
@@ -125,12 +127,64 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
     let statement = &ast[0];
 
+    struct TestMacroProvider {
+        provider: MyContextProvider,
+    }
+
+    impl MacroContextProvider for TestMacroProvider {
+        fn macro_catalog(&self) -> Result<Arc<dyn MacroCatalog>> {
+            plan_err!("SQL macros are not supported in tests")
+        }
+    }
+
+    impl ContextProvider for TestMacroProvider {
+        fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+            self.provider.get_table_source(name)
+        }
+
+        fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+            self.provider.get_function_meta(name)
+        }
+
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            self.provider.get_aggregate_meta(name)
+        }
+
+        fn get_variable_type(&self, var_names: &[String]) -> Option<DataType> {
+            self.provider.get_variable_type(var_names)
+        }
+
+        fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+            self.provider.get_window_meta(name)
+        }
+
+        fn options(&self) -> &ConfigOptions {
+            self.provider.options()
+        }
+
+        fn udf_names(&self) -> Vec<String> {
+            self.provider.udf_names()
+        }
+
+        fn udaf_names(&self) -> Vec<String> {
+            self.provider.udaf_names()
+        }
+
+        fn udwf_names(&self) -> Vec<String> {
+            self.provider.udwf_names()
+        }
+    }
+
     // create a logical query plan
-    let context_provider = MyContextProvider::default()
+    let base_provider = MyContextProvider::default()
         .with_udf(datetime::now())
         .with_udf(datafusion_functions::core::arrow_cast())
         .with_udf(datafusion_functions::string::concat())
         .with_udf(datafusion_functions::string::concat_ws());
+
+    let context_provider = TestMacroProvider {
+        provider: base_provider,
+    };
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
@@ -150,6 +204,12 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 struct MyContextProvider {
     options: ConfigOptions,
     udfs: HashMap<String, Arc<ScalarUDF>>,
+}
+
+impl MacroContextProvider for MyContextProvider {
+    fn macro_catalog(&self) -> Result<Arc<dyn MacroCatalog>> {
+        plan_err!("SQL macros are not supported in core optimizer tests")
+    }
 }
 
 impl MyContextProvider {

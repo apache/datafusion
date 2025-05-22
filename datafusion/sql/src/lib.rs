@@ -42,10 +42,12 @@
 //! [`Expr`]: datafusion_expr::expr::Expr
 
 mod cte;
-mod expr;
+pub mod expr;
+pub mod macro_context;
+pub mod macro_expansion;
 pub mod parser;
 pub mod planner;
-mod query;
+pub mod query;
 mod relation;
 pub mod resolve;
 mod select;

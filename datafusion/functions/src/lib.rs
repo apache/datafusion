@@ -137,6 +137,9 @@ make_stub_package!(crypto, "crypto_expressions");
 pub mod unicode;
 make_stub_package!(unicode, "unicode_expressions");
 
+// SQL Macro support for dynamic column selection
+pub mod scalar;
+
 #[cfg(any(feature = "datetime_expressions", feature = "unicode_expressions"))]
 pub mod planner;
 
@@ -169,6 +172,7 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         .into_iter()
         .chain(datetime::functions())
         .chain(encoding::functions())
+        .chain(scalar::functions())
         .chain(math::functions())
         .chain(regex::functions())
         .chain(crypto::functions())
