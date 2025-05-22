@@ -238,6 +238,8 @@ pub struct FileScanConfigBuilder {
     /// physical file schema will be mapped onto, and the schema that the
     /// [`DataSourceExec`] will return.
     ///
+    /// This is usually the same as the table schema as specified by the `TableProvider` minus any partition columns.
+    ///
     /// This probably would be better named `table_schema`
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
