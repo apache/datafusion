@@ -31,19 +31,19 @@ impl SessionContext {
     /// [`read_table`](Self::read_table) with a [`super::ListingTable`].
     ///
     /// For an example, see [`read_csv`](Self::read_csv)
-    /// 
+    ///
     /// # Note: Statistics
-    /// 
+    ///
     /// NOTE: by default, statistics are not collected when reading the Parquet
     /// files as this can slow down the initial DataFrame creation. However,
-    /// collecting statistics can greatly accelerate queries with certain 
+    /// collecting statistics can greatly accelerate queries with certain
     /// filters.
-    /// 
+    ///
     /// To enable collect statistics, set the [config option]
     /// `datafusion.execution.collect_statistics` to `true`. See
     /// [`ConfigOptions`] and [`ExecutionOptions::collect_statistics`] for more
     /// details.
-    /// 
+    ///
     /// [config option]: https://datafusion.apache.org/user-guide/configs.html
     /// [`ConfigOptions`]: crate::config::ConfigOptions
     /// [`ExecutionOptions::collect_statistics`]: crate::config::ExecutionOptions::collect_statistics
@@ -59,10 +59,10 @@ impl SessionContext {
     /// statements executed against this context.
     ///
     /// # Note: Statistics
-    /// 
+    ///
     /// Statistics are not collected by default. See  [`read_parquet`] for more
     /// details and how to enable them.
-    /// 
+    ///
     /// [`read_parquet`]: Self::read_parquet
     pub async fn register_parquet(
         &self,
