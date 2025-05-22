@@ -417,15 +417,15 @@ impl FileFormat for ParquetFormat {
 
         let mut source = ParquetSource::new(self.options.clone());
 
-        // preserve conf schema adapter factory in source
-        preserve_conf_schema_adapter_factory(&conf, &mut source);
-
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
 
+        // Apply schema adapter factory before building the new config
+        let file_source = apply_schema_adapter(source, &conf);
+
         let conf = FileScanConfigBuilder::from(conf)
-            .with_source(Arc::new(source))
+            .with_source(file_source)
             .build();
         Ok(DataSourceExec::from_data_source(conf))
     }
@@ -1580,24 +1580,26 @@ fn create_max_min_accs(
     (max_values, min_values)
 }
 
-/// Helper function to preserve schema adapter factory when creating a new ParquetSource
+/// Converts a ParquetSource to an Arc<dyn FileSource> and applies the schema adapter factory
+/// from the FileScanConfig if present.
 ///
-/// If the FileScanConfig already has a ParquetSource with a schema_adapter_factory,
-/// we need to preserve that factory when creating a new source.
-/// This is important for schema evolution, allowing the source to map between
-/// different file schemas and the target schema (handling missing columns,
-/// different data types, or nested structures).
-fn preserve_conf_schema_adapter_factory(
+/// # Arguments
+/// * `source` - The ParquetSource to convert
+/// * `conf` - FileScanConfig that may contain a schema adapter factory
+///
+/// # Returns
+/// The converted FileSource with schema adapter factory applied if provided
+fn apply_schema_adapter(
+    source: ParquetSource,
     conf: &FileScanConfig,
-    source: &mut ParquetSource,
-) {
-    let factory = conf
-        .file_source()
-        .as_any()
-        .downcast_ref::<ParquetSource>()
-        .and_then(|parquet_source| parquet_source.schema_adapter_factory().cloned());
+) -> Arc<dyn FileSource> {
+    // Convert the ParquetSource to Arc<dyn FileSource>
+    let file_source: Arc<dyn FileSource> = source.into();
 
-    if let Some(factory) = factory {
-        *source = source.clone().with_schema_adapter_factory(factory);
+    // If the FileScanConfig.file_source() has a schema adapter factory, apply it
+    if let Some(factory) = conf.file_source().schema_adapter_factory() {
+        file_source.with_schema_adapter_factory(factory.clone())
+    } else {
+        file_source
     }
 }

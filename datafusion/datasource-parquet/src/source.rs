@@ -348,20 +348,6 @@ impl ParquetSource {
         self.schema_adapter_factory.as_ref()
     }
 
-    /// Set optional schema adapter factory.
-    ///
-    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
-    /// parquet file get mapped to that of the table schema.  The default schema
-    /// adapter uses arrow's cast library to map the parquet fields to the table
-    /// schema.
-    pub fn with_schema_adapter_factory(
-        mut self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        self.schema_adapter_factory = Some(schema_adapter_factory);
-        self
-    }
-
     /// If true, the predicate will be used during the parquet scan.
     /// Defaults to false
     ///
@@ -443,6 +429,13 @@ pub(crate) fn parse_coerce_int96_string(
             "Unknown or unsupported parquet coerce_int96: \
         {str_setting}. Valid values are: ns, us, ms, and s."
         ))),
+    }
+}
+
+/// Allows easy conversion from ParquetSource to Arc<dyn FileSource>
+impl From<ParquetSource> for Arc<dyn FileSource> {
+    fn from(source: ParquetSource) -> Self {
+        Arc::new(source)
     }
 }
 
@@ -655,5 +648,25 @@ impl FileSource for ParquetSource {
                 .collect(),
         );
         Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
+    }
+
+    /// Set optional schema adapter factory.
+    ///
+    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
+    /// parquet file get mapped to that of the table schema.  The default schema
+    /// adapter uses arrow's cast library to map the parquet fields to the table
+    /// schema.
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        })
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 }

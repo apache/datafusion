@@ -969,7 +969,9 @@ impl TableProvider for ListingTable {
         let mut source = self.options.format.file_source();
 
         // Apply schema adapter to source if available
-        source = source.with_schema_adapter(self.schema_adapter_factory.clone());
+        if let Some(factory) = &self.schema_adapter_factory {
+            source = source.with_schema_adapter_factory(Arc::clone(factory));
+        }
 
         // create the execution plan
         self.options
@@ -1204,31 +1206,6 @@ impl ListingTable {
                 Ok(statistics)
             }
         }
-    }
-}
-
-/// Extension trait for FileSource to allow schema evolution support
-pub trait FileSourceExt {
-    /// Wraps the source in a schema-evolution wrapper if supported.
-    fn with_schema_adapter(
-        self: Arc<Self>,
-        factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    ) -> Arc<dyn FileSource>;
-}
-
-impl FileSourceExt for dyn FileSource {
-    fn with_schema_adapter(
-        self: Arc<Self>,
-        factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    ) -> Arc<dyn FileSource> {
-        #[cfg(feature = "parquet")]
-        if let Some(source) = self.as_any().downcast_ref::<ParquetSource>() {
-            if let Some(f) = factory {
-                return Arc::new(source.clone().with_schema_adapter_factory(f));
-            }
-            return self;
-        }
-        self
     }
 }
 
