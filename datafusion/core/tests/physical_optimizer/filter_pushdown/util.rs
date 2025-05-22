@@ -31,6 +31,7 @@ use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, Statistics};
 use datafusion_common::{internal_err, Result};
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
 };
@@ -40,9 +41,6 @@ use datafusion_datasource::{
 use datafusion_datasource::{
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     source::DataSourceExec,
-};
-use datafusion_datasource::{
-    file_scan_config::FileScanConfigBuilder, schema_adapter::SchemaAdapterFactory,
 };
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
