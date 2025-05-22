@@ -39,7 +39,7 @@ pub struct Filter {
 impl FromStr for Filter {
     type Err = String;
 
-    fn from_str(s: &str) -> datafusion::common::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.rsplitn(2, ':').collect();
         if parts.len() == 2 {
             match parts[0].parse::<u32>() {
@@ -108,29 +108,8 @@ pub fn should_skip_record<D: AsyncDB>(
         return false;
     };
 
-    if matches!(statement, Statement::CreateExternalTable(_)) {
-        // Cannot skip CREATE EXTERNAL TABLE statements, as they crate tables
-        // used in the next tests.
+    if !statement_is_skippable(&statement) {
         return false;
-    } else if let Statement::Statement(sql_stmt) = statement {
-        // Cannot skip SELECT INTO statements, as they can also create tables
-        // that further test cases will use.
-        if let SqlStatement::Query(v) = sql_stmt.as_ref() {
-            if let SetExpr::Select(v) = v.body.as_ref() {
-                if v.into.is_some() {
-                    return false;
-                }
-            }
-        }
-
-        // Only SELECT and EXPLAIN statements can be skipped, as any other
-        // statement might be populating tables that future test cases will use.
-        if !matches!(
-            sql_stmt.as_ref(),
-            SqlStatement::Query(_) | SqlStatement::Explain { .. }
-        ) {
-            return false;
-        }
     }
 
     for filter in filters {
@@ -149,6 +128,30 @@ pub fn should_skip_record<D: AsyncDB>(
     }
 
     true
+}
+
+fn statement_is_skippable(statement: &Statement) -> bool {
+    // Only SQL statements can be skipped.
+    let Statement::Statement(sql_stmt) = statement else {
+        return false;
+    };
+
+    // Cannot skip SELECT INTO statements, as they can also create tables
+    // that further test cases will use.
+    if let SqlStatement::Query(v) = sql_stmt.as_ref() {
+        if let SetExpr::Select(v) = v.body.as_ref() {
+            if v.into.is_some() {
+                return false;
+            }
+        }
+    }
+
+    // Only SELECT and EXPLAIN statements can be skipped, as any other
+    // statement might be populating tables that future test cases will use.
+    matches!(
+        sql_stmt.as_ref(),
+        SqlStatement::Query(_) | SqlStatement::Explain { .. }
+    )
 }
 
 fn parse_or_none(sql: &str, dialect: &str) -> Option<Statement> {
