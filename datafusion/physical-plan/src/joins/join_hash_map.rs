@@ -279,7 +279,7 @@ pub trait JoinHashMapType {
                     hash_map.find(hash_value, |(hash, _)| hash_value == *hash)
                 {
                     input_indices.push(start as u32 + row_idx as u32);
-                    match_indices.push(*index  - 1);
+                    match_indices.push(*index - 1);
                 }
             }
             if end == hash_values.len() {
