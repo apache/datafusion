@@ -32,6 +32,7 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
+use datafusion_execution::config::SessionConfig;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -195,7 +196,8 @@ impl ListingTableConfig {
 
         let listing_options = ListingOptions::new(file_format)
             .with_file_extension(listing_file_extension)
-            .with_target_partitions(state.config().target_partitions());
+            .with_target_partitions(state.config().target_partitions())
+            .with_collect_stat(state.config().collect_statistics());
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -313,16 +315,27 @@ impl ListingOptions {
     /// - use default file extension filter
     /// - no input partition to discover
     /// - one target partition
-    /// - stat collection
+    /// - do not collect statistics
     pub fn new(format: Arc<dyn FileFormat>) -> Self {
         Self {
             file_extension: format.get_ext(),
             format,
             table_partition_cols: vec![],
-            collect_stat: true,
+            collect_stat: false,
             target_partitions: 1,
             file_sort_order: vec![],
         }
+    }
+
+    /// Set options from [`SessionConfig`] and returns self.
+    ///
+    /// Currently this sets `target_partitions` and `collect_stat`
+    /// but if more options are added in the future that need to be coordinated
+    /// they will be synchronized thorugh this method.
+    pub fn with_session_config_options(mut self, config: &SessionConfig) -> Self {
+        self = self.with_target_partitions(config.target_partitions());
+        self = self.with_collect_stat(config.collect_statistics());
+        self
     }
 
     /// Set file extension on [`ListingOptions`] and returns self.
@@ -1282,7 +1295,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_collect_statistics(true),
+        );
 
         let table = load_table(&ctx, "alltypes_plain.parquet").await?;
         let projection = None;
@@ -1309,7 +1324,7 @@ mod tests {
 
     #[cfg(feature = "parquet")]
     #[tokio::test]
-    async fn load_table_stats_by_default() -> Result<()> {
+    async fn do_not_load_table_stats_by_default() -> Result<()> {
         use crate::datasource::file_format::parquet::ParquetFormat;
 
         let testdata = crate::test_util::parquet_test_data();
@@ -1320,6 +1335,22 @@ mod tests {
         let state = ctx.state();
 
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema = opt.infer_schema(&state, &table_path).await?;
+        let config = ListingTableConfig::new(table_path.clone())
+            .with_listing_options(opt)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config)?;
+
+        let exec = table.scan(&state, None, &[], None).await?;
+        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
+
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_collect_stat(true);
         let schema = opt.infer_schema(&state, &table_path).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)

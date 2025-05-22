@@ -33,8 +33,8 @@ benchmarks that compare performance with other engines. For example:
 - [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
 - [H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
 
-[ClickBench]: https://github.com/ClickHouse/ClickBench/tree/main
-[H2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
+[clickbench]: https://github.com/ClickHouse/ClickBench/tree/main
+[h2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
 
 # Running the benchmarks
 
