@@ -278,15 +278,15 @@ pub trait JoinHashMapType {
                 if let Some((_, index)) =
                     hash_map.find(hash_value, |(hash, _)| hash_value == *hash)
                 {
-                    input_indices.push(row_idx as u32);
-                    match_indices.push(index - 1);
+                    input_indices.push(start as u32 + row_idx as u32);
+                    match_indices.push(*index  - 1);
                 }
             }
             if end == hash_values.len() {
                 // No more values to process
                 return (input_indices, match_indices, None);
             }
-            return (input_indices, match_indices, Some((end - 1, None)));
+            return (input_indices, match_indices, Some((end, None)));
         }
 
         let mut remaining_output = limit;
