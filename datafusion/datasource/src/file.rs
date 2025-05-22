@@ -68,7 +68,10 @@ pub trait FileSource: Send + Sync {
     fn with_schema_adapter_factory(
         self: Arc<Self>,
         factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    ) -> Arc<dyn FileSource> {
+    ) -> Arc<dyn FileSource>
+    where
+        Self: Sized,
+    {
         // Default implementation returns self unchanged
         // File formats that support schema evolution should override this
         self
