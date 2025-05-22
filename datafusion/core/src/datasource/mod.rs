@@ -69,9 +69,10 @@ mod tests {
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::collect;
+    use object_store::{path::Path, ObjectMeta};
     use std::{fs, sync::Arc};
     use tempfile::TempDir;
-    use ::{object_store::path::Path, object_store::ObjectMeta};
+
     #[tokio::test]
     async fn can_override_schema_adapter() {
         // Test shows that SchemaAdapter can add a column that doesn't existing in the
