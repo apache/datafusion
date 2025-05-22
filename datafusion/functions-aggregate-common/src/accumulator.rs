@@ -100,3 +100,10 @@ pub struct StateFieldsArgs<'a> {
     /// Whether the aggregate function is distinct.
     pub is_distinct: bool,
 }
+
+impl StateFieldsArgs<'_> {
+    /// The return type of the aggregate function.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
+}
