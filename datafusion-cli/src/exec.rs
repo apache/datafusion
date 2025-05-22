@@ -26,7 +26,7 @@ use crate::{
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
-use datafusion::sql::planner::PlannerContext;
+use datafusion::logical_expr::planner_context::PlannerContext;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::fs::File;

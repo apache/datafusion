@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
 use datafusion_expr::expr::{Exists, InSubquery};
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::ast::{Query, SelectItem, SetExpr};

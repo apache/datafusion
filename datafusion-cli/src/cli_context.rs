@@ -21,9 +21,8 @@ use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
     execution::{context::SessionState, TaskContext},
-    logical_expr::LogicalPlan,
+    logical_expr::{planner_context::PlannerContext, LogicalPlan},
     prelude::SessionContext,
-    sql::planner::PlannerContext,
 };
 use object_store::ObjectStore;
 

@@ -52,6 +52,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::{ExprPlanner, TypePlanner};
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
@@ -70,7 +71,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 use datafusion_sql::parser::{DFParserBuilder, Statement};
-use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -356,8 +357,11 @@ impl SessionState {
     }
 
     /// Set the planner_context.
-    pub fn set_planner_context(&mut self, planner_context: Option<PlannerContext>) {
-        self.planner_context = planner_context;
+    pub fn set_planner_context_in_execution_props(
+        &mut self,
+        planner_context: Option<PlannerContext>,
+    ) {
+        self.execution_props.set_planner_context(planner_context);
     }
 
     /// Get the table factories
@@ -1991,11 +1995,12 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::planner_context::PlannerContext;
     use datafusion_expr::Expr;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_optimizer::Optimizer;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
-    use datafusion_sql::planner::{PlannerContext, SqlToRel};
+    use datafusion_sql::planner::SqlToRel;
     use std::collections::HashMap;
     use std::sync::Arc;
 

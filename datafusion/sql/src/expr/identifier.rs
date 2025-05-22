@@ -21,10 +21,11 @@ use datafusion_common::{
     DataFusionError, Result, Span, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {

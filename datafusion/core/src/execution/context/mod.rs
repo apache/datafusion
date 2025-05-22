@@ -74,6 +74,7 @@ pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
@@ -87,7 +88,6 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_sql::planner::PlannerContext;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -1665,7 +1665,7 @@ impl SessionContext {
         planner_context: Option<PlannerContext>,
     ) -> SessionState {
         let mut state = self.state.read().clone();
-        state.set_planner_context(planner_context);
+        state.set_planner_context_in_execution_props(planner_context);
         state.execution_props_mut().start_execution();
         state
     }
