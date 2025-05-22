@@ -131,10 +131,3 @@ pub trait FileSource: Send + Sync {
     /// Returns the current schema adapter factory if set
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>>;
 }
-
-/// Allows easy conversion from any type implementing FileSource to Arc<dyn FileSource>
-impl<T: FileSource + 'static> From<T> for Arc<dyn FileSource> {
-    fn from(source: T) -> Self {
-        Arc::new(source)
-    }
-}
