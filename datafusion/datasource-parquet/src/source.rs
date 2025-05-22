@@ -446,6 +446,13 @@ pub(crate) fn parse_coerce_int96_string(
     }
 }
 
+/// Allows easy conversion from ParquetSource to Arc<dyn FileSource>
+impl From<ParquetSource> for Arc<dyn FileSource> {
+    fn from(source: ParquetSource) -> Self {
+        as_file_source(source)
+    }
+}
+
 impl FileSource for ParquetSource {
     fn create_file_opener(
         &self,
@@ -655,5 +662,19 @@ impl FileSource for ParquetSource {
                 .collect(),
         );
         Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
+    }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        })
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 }

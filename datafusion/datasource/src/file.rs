@@ -35,6 +35,11 @@ use datafusion_physical_plan::DisplayFormatType;
 
 use object_store::ObjectStore;
 
+/// Helper function to convert any type implementing FileSource to Arc<dyn FileSource>
+pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
+    Arc::new(source)
+}
+
 /// file format specific behaviors for elements in [`DataSource`]
 ///
 /// See more details on specific implementations:
@@ -116,4 +121,17 @@ pub trait FileSource: Send + Sync {
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         Ok(FilterPushdownPropagation::unsupported(filters))
     }
+
+    /// Set optional schema adapter factory.
+    ///
+    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
+    /// file get mapped to that of the table schema. The default implementation
+    /// returns the original source.
+    fn with_schema_adapter_factory(
+        &self,
+        factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Arc<dyn FileSource>;
+
+    /// Returns the current schema adapter factory if set
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>>;
 }
