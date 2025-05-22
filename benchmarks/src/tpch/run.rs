@@ -109,9 +109,19 @@ impl RunOpt {
         };
 
         let mut benchmark_run = BenchmarkRun::new();
+        let mut config = self
+            .common
+            .config()?
+            .with_collect_statistics(!self.disable_statistics);
+        config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
+        let rt_builder = self.common.runtime_env_builder()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+        // register tables
+        self.register_tables(&ctx).await?;
+
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let query_run = self.benchmark_query(query_id).await?;
+            let query_run = self.benchmark_query(query_id, &ctx).await?;
             for iter in query_run {
                 benchmark_run.write_iter(iter.elapsed, iter.row_count);
             }
@@ -120,18 +130,11 @@ impl RunOpt {
         Ok(())
     }
 
-    async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
-        let mut config = self
-            .common
-            .config()?
-            .with_collect_statistics(!self.disable_statistics);
-        config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
-        let rt_builder = self.common.runtime_env_builder()?;
-        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
-
-        // register tables
-        self.register_tables(&ctx).await?;
-
+    async fn benchmark_query(
+        &self,
+        query_id: usize,
+        ctx: &SessionContext,
+    ) -> Result<Vec<QueryResult>> {
         let mut millis = vec![];
         // run benchmark
         let mut query_results = vec![];
