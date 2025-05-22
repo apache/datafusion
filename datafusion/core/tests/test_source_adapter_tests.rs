@@ -41,13 +41,16 @@ struct TestFilterPushdownAdapter {
 }
 
 impl SchemaAdapter for TestFilterPushdownAdapter {
-    fn adapt(&self, record_batch: arrow::record_batch::RecordBatch) -> Result<arrow::record_batch::RecordBatch> {
+    fn adapt(
+        &self,
+        record_batch: arrow::record_batch::RecordBatch,
+    ) -> Result<arrow::record_batch::RecordBatch> {
         Ok(record_batch)
     }
 
     fn output_schema(&self) -> SchemaRef {
         // Add a suffix to column names
-        let fields = self
+        let fields: Vec<_> = self
             .input_schema
             .fields()
             .iter()
@@ -71,29 +74,29 @@ fn test_test_source_schema_adapter_factory() {
         Field::new("id", DataType::Int32, false),
         Field::new("value", DataType::Utf8, true),
     ]));
-    
+
     let batches = vec![]; // Empty for this test
     let source = TestSource::new(true, batches);
-    
+
     // Verify initial state has no adapter
     assert!(source.schema_adapter_factory().is_none());
-    
+
     // Apply an adapter factory
     let factory = Arc::new(TestFilterPushdownAdapterFactory {});
     let source_with_adapter = source.with_schema_adapter_factory(factory);
-    
+
     // Verify adapter was set
     assert!(source_with_adapter.schema_adapter_factory().is_some());
-    
+
     // Create an adapter and validate the output schema
     let adapter_factory = source_with_adapter.schema_adapter_factory().unwrap();
     let adapter = adapter_factory.create(&schema).unwrap();
     let output_schema = adapter.output_schema();
-    
+
     // Check modified column names
     assert_eq!(output_schema.field(0).name(), "id_modified");
     assert_eq!(output_schema.field(1).name(), "value_modified");
-    
+
     // Check file type remains unchanged
     assert_eq!(source_with_adapter.file_type(), "test");
 }
@@ -103,7 +106,7 @@ fn test_test_source_default() {
     // Create a TestSource with default values for other fields
     let batches = vec![];
     let source = TestSource::new(false, batches);
-    
+
     // Ensure schema_adapter_factory is None by default
     assert!(source.schema_adapter_factory().is_none());
 }
