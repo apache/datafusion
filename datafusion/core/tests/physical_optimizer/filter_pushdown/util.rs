@@ -128,12 +128,10 @@ pub struct TestSource {
 
 impl TestSource {
     fn new(support: bool, batches: Vec<RecordBatch>) -> Self {
-        fn new(support: bool, batches: Vec<RecordBatch>) -> Self {
-            Self {
-                support,
-                batches,
-                ..Default::default()
-            }
+        Self {
+            support,
+            batches,
+            ..Default::default()
         }
     }
 }
