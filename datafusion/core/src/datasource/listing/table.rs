@@ -30,12 +30,9 @@ use crate::datasource::{
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
-use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-#[cfg(feature = "parquet")]
-use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
