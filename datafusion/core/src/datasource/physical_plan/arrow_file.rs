@@ -25,8 +25,10 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
 use datafusion_common::Statistics;
+use datafusion_datasource::as_file_source;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use futures::StreamExt;
@@ -39,6 +41,12 @@ use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 pub struct ArrowSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+}
+impl From<ArrowSource> for Arc<dyn FileSource> {
+    fn from(source: ArrowSource) -> Self {
+        as_file_source(source)
+    }
 }
 
 impl FileSource for ArrowSource {
@@ -88,6 +96,20 @@ impl FileSource for ArrowSource {
 
     fn file_type(&self) -> &str {
         "arrow"
+    }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        })
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 }
 
