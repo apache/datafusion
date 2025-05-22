@@ -15,54 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    fmt::{Display, Formatter},
-};
-use std::{
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
-
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::{config::ConfigOptions, Statistics};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
 use datafusion_datasource::{
-    file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
-};
-use datafusion_datasource::{
-    file_meta::FileMeta, schema_adapter::DefaultSchemaAdapterFactory, PartitionedFile,
-};
-use datafusion_datasource::{
+    file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
-    source::DataSourceExec,
-};
-use datafusion_datasource::{
-    impl_schema_adapter_methods, schema_adapter::SchemaAdapterFactory,
+    file_stream::FileOpener, impl_schema_adapter_methods,
+    schema_adapter::DefaultSchemaAdapterFactory, schema_adapter::SchemaAdapterFactory,
+    source::DataSourceExec, PartitionedFile,
 };
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::{
-    displayable, metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
-};
-use datafusion_physical_plan::{
+    displayable,
     filter::FilterExec,
     filter_pushdown::{
         ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
         PredicateSupport, PredicateSupports,
     },
-    DisplayAs, PlanProperties,
+    metrics::ExecutionPlanMetricsSet,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
-
 use futures::stream::BoxStream;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
-
+use std::{
+    any::Any,
+    fmt::{Display, Formatter},
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 pub struct TestOpener {
     batches: Vec<RecordBatch>,
     batch_size: Option<usize>,
