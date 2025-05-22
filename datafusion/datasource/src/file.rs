@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
+use crate::schema_adapter::SchemaAdapterFactory;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, Statistics};
@@ -63,6 +64,15 @@ pub trait FileSource: Send + Sync {
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
     /// Initialize new instance with projected statistics
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
+    /// Initialize new instance with schema adapter factory for schema evolution
+    fn with_schema_adapter_factory(
+        self: Arc<Self>,
+        factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    ) -> Arc<dyn FileSource> {
+        // Default implementation returns self unchanged
+        // File formats that support schema evolution should override this
+        self
+    }
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics
