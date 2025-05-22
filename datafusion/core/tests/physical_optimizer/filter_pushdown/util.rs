@@ -31,7 +31,6 @@ use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, Statistics};
 use datafusion_common::{internal_err, Result};
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::file_stream::FileOpenFuture;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::{
@@ -39,6 +38,9 @@ use datafusion_datasource::{
 };
 use datafusion_datasource::{
     file_meta::FileMeta, schema_adapter::DefaultSchemaAdapterFactory, PartitionedFile,
+};
+use datafusion_datasource::{
+    file_scan_config::FileScanConfigBuilder, schema_adapter::SchemaAdapterFactory,
 };
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -119,6 +121,7 @@ pub struct TestSource {
     schema: Option<SchemaRef>,
     metrics: ExecutionPlanMetricsSet,
     projection: Option<Vec<usize>>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl TestSource {
@@ -132,6 +135,7 @@ impl TestSource {
             projection: None,
             metrics: ExecutionPlanMetricsSet::new(),
             batches,
+            schema_adapter_factory: None,
         }
     }
 }
@@ -242,6 +246,20 @@ impl FileSource for TestSource {
         } else {
             Ok(FilterPushdownPropagation::unsupported(filters))
         }
+    }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        })
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 }
 
