@@ -20,6 +20,7 @@ use datafusion_common::{ColumnStatistics, DataFusionError, Result, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
+use datafusion_datasource::impl_schema_adapter_methods;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
@@ -47,20 +48,6 @@ impl TestSource {
 }
 
 impl FileSource for TestSource {
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Arc<dyn FileSource> {
-        Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        })
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
-    }
-
     fn file_type(&self) -> &str {
         "test"
     }
@@ -101,6 +88,8 @@ impl FileSource for TestSource {
     fn statistics(&self) -> Result<Statistics, DataFusionError> {
         Ok(Statistics::default())
     }
+
+    impl_schema_adapter_methods!();
 }
 
 impl DisplayAs for TestSource {
