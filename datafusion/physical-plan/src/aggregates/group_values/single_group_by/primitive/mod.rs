@@ -98,6 +98,8 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     values: Vec<T::Native>,
     /// The random state used to generate hashes
     random_state: RandomState,
+
+    append_row_indices: Vec<u32>,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
@@ -109,6 +111,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             values: Vec::with_capacity(128),
             null_group: None,
             random_state: Default::default(),
+            append_row_indices: Vec::new(),
         }
     }
 }
@@ -119,13 +122,18 @@ where
 {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         assert_eq!(cols.len(), 1);
-        groups.clear();
+        let col = cols[0].as_primitive::<T>();
 
-        for v in cols[0].as_primitive::<T>() {
+        groups.clear();
+        self.append_row_indices.clear();
+
+        let mut num_total_groups = self.values.len();
+        for (row_index, v) in col.iter().enumerate() {
             let group_id = match v {
                 None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(Default::default());
+                    let group_id = num_total_groups;
+                    self.append_row_indices.push(row_index as u32);
+                    num_total_groups += 1;
                     group_id
                 }),
                 Some(key) => {
@@ -140,9 +148,10 @@ where
                     match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
                         hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.values.len();
+                            let g = num_total_groups;
                             v.insert((g, key));
-                            self.values.push(key);
+                            self.append_row_indices.push(row_index as u32);
+                            num_total_groups += 1;
                             g
                         }
                     }
@@ -150,6 +159,17 @@ where
             };
             groups.push(group_id)
         }
+
+        // If all are new groups, we just extend it
+        if self.append_row_indices.len() == col.len() {
+            self.values.extend_from_slice(col.values());
+        } else {
+            let col_values = col.values();
+            for &row_index in self.append_row_indices.iter() {
+                self.values.push(col_values[row_index as usize]);
+            }
+        }
+
         Ok(())
     }
 
