@@ -168,8 +168,8 @@ pub trait JoinHashMapType {
     /// Returns a reference to the next.
     fn get_list(&self) -> &Self::NextType;
 
-    // Whether values in the hashmap are unique
-    fn is_unique(&self) -> bool;
+    // Whether values in the hashmap are distinct (no duplicate keys)
+    fn is_distinct(&self) -> bool;
 
     /// Updates hashmap from iterator of row indices & row hashes pairs.
     fn update_from_iter<'a>(
@@ -271,7 +271,7 @@ pub trait JoinHashMapType {
         let next_chain = self.get_list();
         // Check if hashmap consists of unique values
         // If so, we can skip the chain traversal
-        if self.is_unique() {
+        if self.is_distinct() {
             let start = offset.0;
             let end = (start + limit).min(hash_values.len());
             for (row_idx, &hash_value) in hash_values[start..end].iter().enumerate() {
@@ -362,8 +362,8 @@ impl JoinHashMapType for JoinHashMap {
         &self.next
     }
 
-    // /// Check if the values in the hashmap are unique.
-    fn is_unique(&self) -> bool {
+    // /// Check if the values in the hashmap are distinct.
+    fn is_distinct(&self) -> bool {
         self.map.len() == self.next.len()
     }
 }

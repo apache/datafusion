@@ -69,7 +69,7 @@ impl JoinHashMapType for PruningJoinHashMap {
         &self.next
     }
 
-    fn is_unique(&self) -> bool {
+    fn is_distinct(&self) -> bool {
         // TODO
         false
     }
