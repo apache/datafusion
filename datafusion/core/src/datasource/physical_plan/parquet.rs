@@ -241,7 +241,7 @@ mod tests {
                 false,
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
-                    Arc::clone(&table_schema),
+                    Arc::clone(table_schema),
                     file_group.clone(),
                     self.build_file_source(Arc::clone(table_schema)),
                 ),
