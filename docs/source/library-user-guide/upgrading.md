@@ -21,6 +21,21 @@
 
 ## DataFusion `48.0.0`
 
+### `ListingOptions` default for `collect_stat` changed from `true` to `false`
+
+This makes it agree with the default for `SessionConfig`.
+Most users won't be impacted by this change but if you were using `ListingOptions` directly
+and relied on the default value of `collect_stat` being `true`, you will need to
+explicitly set it to `true` in your code.
+
+```rust
+# /* comment to avoid running
+ListingOptions::new(Arc::new(ParquetFormat::default()))
+    .with_collect_stat(true)
+    // other options
+# */
+```
+
 ### Processing `Field` instead of `DataType` for user defined functions
 
 In order to support metadata handling and extension types, user defined functions are
@@ -37,6 +52,21 @@ has been removed, so you will need to remove all references to it.
 
 `ScalarFunctionArgs` now contains a field called `arg_fields`. You can use this
 to access the metadata associated with the columnar values during invocation.
+
+To upgrade user defined aggregate functions, there is now a function
+`return_field` that will allow you to specify both metadata and nullability of
+your function. You are not required to implement this if you do not need to
+handle metatdata.
+
+The largest change to aggregate functions happens in the accumulator arguments.
+Both the `AccumulatorArgs` and `StateFieldsArgs` now contain `Field` rather
+than `DataType`.
+
+To upgrade window functions, `ExpressionArgs` now contains input fields instead
+of input data types. When setting these fields, the name of the field is
+not important since this gets overwritten during the planning stage. All you
+should need to do is wrap your existing data types in fields with nullability
+set depending on your use case.
 
 ### Physical Expression return `Field`
 

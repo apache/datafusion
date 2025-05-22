@@ -49,7 +49,7 @@ jobs:
         uses: actions/labeler@v5.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          configuration-path: .github/workflows/dev_pr/labeler.yml
+          configuration-path: .github/workflows/labeler/labeler-config.yml
           sync-labels: true
 
       # TODO: Enable this when eps1lon/actions-label-merge-conflict is available.

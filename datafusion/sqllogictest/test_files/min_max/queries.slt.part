@@ -1,0 +1,112 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+## 1. Min/Max List over integers
+query ??
+SELECT MIN(column1), MAX(column1) FROM min_max_int;
+----
+[1, 2] [1, 2, 3, 4]
+
+## 2. Min/Max List over strings
+query ??
+SELECT MIN(column1), MAX(column1) FROM min_max_string;
+----
+[a, b] [a, b, c]
+
+## 3. Min/Max List over booleans
+query ??
+SELECT MIN(column1), MAX(column1) FROM min_max_bool;
+----
+[true, false] [true, false, true]
+
+## 4. Min/Max List over nullable integers
+query ??
+SELECT MIN(column1), MAX(column1) FROM min_max_nullable_int;
+----
+[1, 2] [NULL, 1, 2]
+
+## 5. Min/Max List with mixed lengths and nulls
+query ??
+SELECT MIN(column1), MAX(column1) FROM min_max_mixed_lengths_nulls;
+----
+[1, 2] [1, NULL, 3]
+
+## 6. Min/Max List with only NULLs
+query ??
+SELECT MIN(column1), MAX(column1) FROM min_max_all_nulls;
+----
+[NULL] [NULL, NULL]
+
+## 7. Min/Max List with partial NULLs
+query ??
+SELECT MIN(column1), MAX(column1) FROM min_max_null_variants;
+----
+[1, 2, 3] [NULL, 2, 3]
+
+## 8. Min/Max List grouped by key with NULLs and differing lengths
+query I??
+SELECT column1, MIN(column2), MAX(column2) FROM min_max_grouped_nulls GROUP BY column1 ORDER BY column1;
+----
+0 [1, 2, 3, 4] [1, NULL, 3]
+1 [] [NULL, 5]
+
+## 9. Min/Max List grouped by key with only NULLs
+query I??
+SELECT column1, MIN(column2), MAX(column2) FROM min_max_grouped_all_null GROUP BY column1 ORDER BY column1;
+----
+0 [NULL] [NULL, NULL]
+1 [NULL] [NULL]
+
+## 10. Min/Max grouped List with simple sizes
+query I??
+SELECT column1, MIN(column2), MAX(column2) FROM min_max_grouped_simple GROUP BY column1 ORDER BY column1;
+----
+0 [] [1]
+1 [] [5, 6]
+
+## 11. Min over List with window function
+query ?
+SELECT MIN(column1) OVER (ORDER BY column1) FROM min_window_simple;
+----
+[1, 2, 3]
+[1, 2, 3]
+[1, 2, 3]
+
+## 12. Min over List with window + NULLs
+query ?
+SELECT MIN(column1) OVER (ORDER BY column1) FROM min_window_with_null;
+----
+[2, 3]
+[2, 3]
+[2, 3]
+
+## 13. Min over List with ROWS BETWEEN clause
+query ?
+SELECT MIN(column1) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM min_window_rows_between;
+----
+[2, 3]
+[2, 3]
+[4, 5]
+
+## 14. Max over List using different order column
+query ?
+SELECT MAX(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM max_window_different_column;
+----
+[4, 5]
+[4, 5]
+[2, 3]

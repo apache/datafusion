@@ -19,7 +19,7 @@ use crate::array_gen::StringArrayGenerator;
 use crate::stagger_batch;
 use arrow::record_batch::RecordBatch;
 use rand::rngs::StdRng;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{rng, Rng, SeedableRng};
 
 /// Randomly generate strings
 pub struct StringBatchGenerator(StringArrayGenerator);
@@ -56,18 +56,18 @@ impl StringBatchGenerator {
         stagger_batch(batch)
     }
 
-    /// Return an set of `BatchGenerator`s that cover a range of interesting
+    /// Return a set of `BatchGenerator`s that cover a range of interesting
     /// cases
     pub fn interesting_cases() -> Vec<Self> {
         let mut cases = vec![];
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for null_pct in [0.0, 0.01, 0.1, 0.5] {
             for _ in 0..10 {
                 // max length of generated strings
-                let max_len = rng.gen_range(1..50);
-                let num_strings = rng.gen_range(1..100);
+                let max_len = rng.random_range(1..50);
+                let num_strings = rng.random_range(1..100);
                 let num_distinct_strings = if num_strings > 1 {
-                    rng.gen_range(1..num_strings)
+                    rng.random_range(1..num_strings)
                 } else {
                     num_strings
                 };
@@ -76,7 +76,7 @@ impl StringBatchGenerator {
                     num_strings,
                     num_distinct_strings,
                     null_pct,
-                    rng: StdRng::from_seed(rng.gen()),
+                    rng: StdRng::from_seed(rng.random()),
                 }))
             }
         }

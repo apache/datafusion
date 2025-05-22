@@ -92,6 +92,11 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]
 harness = false
+name = "ascii"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "concat"
 required-features = ["string_expressions"]
 

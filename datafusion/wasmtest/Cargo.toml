@@ -52,14 +52,13 @@ datafusion-expr = { workspace = true }
 datafusion-optimizer = { workspace = true, default-features = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
-# getrandom must be compiled with js feature
-getrandom = { version = "0.2.8", features = ["js"] }
-
+getrandom = { version = "0.3", features = ["wasm_js"] }
 wasm-bindgen = "0.2.99"
 
 [dev-dependencies]
 insta = { workspace = true }
 object_store = { workspace = true }
+# needs to be compiled
 tokio = { workspace = true }
 url = { workspace = true }
 wasm-bindgen-test = "0.3.49"

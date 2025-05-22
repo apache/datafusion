@@ -213,7 +213,7 @@ impl SelectBuilder {
         value: &ast::Expr,
     ) -> &mut Self {
         if let Some(selection) = &mut self.selection {
-            visit_expressions_mut(selection, |expr| {
+            let _ = visit_expressions_mut(selection, |expr| {
                 if expr == existing_expr {
                     *expr = value.clone();
                 }
@@ -398,6 +398,7 @@ pub struct RelationBuilder {
 
 #[allow(dead_code)]
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),

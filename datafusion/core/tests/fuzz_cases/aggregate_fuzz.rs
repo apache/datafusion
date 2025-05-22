@@ -55,7 +55,7 @@ use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::MetricValue;
 use rand::rngs::StdRng;
-use rand::{random, thread_rng, Rng, SeedableRng};
+use rand::{random, rng, Rng, SeedableRng};
 
 use super::record_batch_generator::get_supported_types_columns;
 
@@ -241,8 +241,8 @@ async fn test_median() {
 /// 1. Floating point numbers
 /// 1. structured types
 fn baseline_config() -> DatasetGeneratorConfig {
-    let mut rng = thread_rng();
-    let columns = get_supported_types_columns(rng.gen());
+    let mut rng = rng();
+    let columns = get_supported_types_columns(rng.random());
 
     let min_num_rows = 512;
     let max_num_rows = 1024;
@@ -431,13 +431,13 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut input4: Vec<i64> = vec![0; len];
     input123.iter_mut().for_each(|v| {
         *v = (
-            rng.gen_range(0..n_distinct) as i64,
-            rng.gen_range(0..n_distinct) as i64,
-            rng.gen_range(0..n_distinct) as i64,
+            rng.random_range(0..n_distinct) as i64,
+            rng.random_range(0..n_distinct) as i64,
+            rng.random_range(0..n_distinct) as i64,
         )
     });
     input4.iter_mut().for_each(|v| {
-        *v = rng.gen_range(0..n_distinct) as i64;
+        *v = rng.random_range(0..n_distinct) as i64;
     });
     input123.sort();
     let input1 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
@@ -457,7 +457,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut batches = vec![];
     if STREAM {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..50);
+            let batch_size = rng.random_range(0..50);
             if remainder.num_rows() < batch_size {
                 break;
             }
@@ -466,7 +466,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
         }
     } else {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
+            let batch_size = rng.random_range(0..remainder.num_rows() + 1);
             batches.push(remainder.slice(0, batch_size));
             remainder = remainder.slice(batch_size, remainder.num_rows() - batch_size);
         }
@@ -692,8 +692,8 @@ async fn test_single_mode_aggregate_with_spill() -> Result<()> {
         Arc::new(StringArray::from(
             (0..1024)
                 .map(|_| -> String {
-                    thread_rng()
-                        .sample_iter::<char, _>(rand::distributions::Standard)
+                    rng()
+                        .sample_iter::<char, _>(rand::distr::StandardUniform)
                         .take(5)
                         .collect()
                 })

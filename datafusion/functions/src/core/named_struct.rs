@@ -150,7 +150,7 @@ impl ScalarUDFImpl for NamedStructFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let DataType::Struct(fields) = args.return_field.data_type() else {
+        let DataType::Struct(fields) = args.return_type() else {
             return internal_err!("incorrect named_struct return type");
         };
 

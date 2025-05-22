@@ -26,12 +26,8 @@ use criterion::{
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
-use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
+use rand::{distr::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fmt, sync::Arc};
-
-pub fn seedable_rng() -> StdRng {
-    StdRng::seed_from_u64(42)
-}
 
 #[derive(Clone, Copy)]
 pub enum StringArrayType {
@@ -58,14 +54,14 @@ pub fn create_string_array_and_characters(
     remaining_len: usize,
     string_array_type: StringArrayType,
 ) -> (ArrayRef, ScalarValue) {
-    let rng = &mut seedable_rng();
+    let rng = &mut StdRng::seed_from_u64(42);
 
     // Create `size` rows:
     //   - 10% rows will be `None`
     //   - Other 90% will be strings with same `remaining_len` lengths
     // We will build the string array on it later.
     let string_iter = (0..size).map(|_| {
-        if rng.gen::<f32>() < 0.1 {
+        if rng.random::<f32>() < 0.1 {
             None
         } else {
             let mut value = trimmed.as_bytes().to_vec();

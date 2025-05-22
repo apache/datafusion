@@ -17,13 +17,16 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
+use datafusion::execution::memory_pool::{
+    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::DiskManager;
 use datafusion::prelude::SessionContext;
@@ -120,6 +123,13 @@ struct Args {
 
     #[clap(
         long,
+        help = "The number of top memory consumers to display when query fails due to memory exhaustion. To disable memory consumer tracking, set this value to 0",
+        default_value = "3"
+    )]
+    top_memory_consumers: usize,
+
+    #[clap(
+        long,
         help = "The max number of rows to display for 'Table' format\n[possible values: numbers(0/10/...), inf(no limit)]",
         default_value = "40"
     )]
@@ -169,9 +179,22 @@ async fn main_inner() -> Result<()> {
     if let Some(memory_limit) = args.memory_limit {
         // set memory pool type
         let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
-            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
+            PoolType::Fair if args.top_memory_consumers == 0 => {
+                Arc::new(FairSpillPool::new(memory_limit))
+            }
+            PoolType::Fair => Arc::new(TrackConsumersPool::new(
+                FairSpillPool::new(memory_limit),
+                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+            )),
+            PoolType::Greedy if args.top_memory_consumers == 0 => {
+                Arc::new(GreedyMemoryPool::new(memory_limit))
+            }
+            PoolType::Greedy => Arc::new(TrackConsumersPool::new(
+                GreedyMemoryPool::new(memory_limit),
+                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+            )),
         };
+
         rt_builder = rt_builder.with_memory_pool(pool)
     }
 

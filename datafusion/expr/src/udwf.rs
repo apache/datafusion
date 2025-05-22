@@ -280,7 +280,7 @@ where
 ///        unimplemented!()
 ///    }
 ///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-///      if let Some(DataType::Int32) = field_args.get_input_type(0) {
+///      if let Some(DataType::Int32) = field_args.get_input_field(0).map(|f| f.data_type().clone()) {
 ///        Ok(Field::new(field_args.name(), DataType::Int32, false))
 ///      } else {
 ///        plan_err!("smooth_it only accepts Int32 arguments")

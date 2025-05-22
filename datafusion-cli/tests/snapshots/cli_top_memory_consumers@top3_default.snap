@@ -1,0 +1,23 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "--memory-limit"
+    - 10M
+    - "--command"
+    - "select * from generate_series(1,500000) as t1(v1) order by v1;"
+---
+success: false
+exit_code: 1
+----- stdout -----
+[CLI_VERSION]
+Error: Not enough memory to continue external sort. Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes
+caused by
+Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
+  Consumer(can spill: bool) consumed XB,
+  Consumer(can spill: bool) consumed XB,
+  Consumer(can spill: bool) consumed XB.
+Error: Failed to allocate 
+
+----- stderr -----

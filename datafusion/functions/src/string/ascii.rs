@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
+use arrow::array::{ArrayRef, AsArray, Int32Array, StringArrayType};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
@@ -103,19 +103,22 @@ impl ScalarUDFImpl for AsciiFunc {
 
 fn calculate_ascii<'a, V>(array: V) -> Result<ArrayRef, ArrowError>
 where
-    V: ArrayAccessor<Item = &'a str>,
+    V: StringArrayType<'a, Item = &'a str>,
 {
-    let iter = ArrayIter::new(array);
-    let result = iter
-        .map(|string| {
-            string.map(|s| {
-                let mut chars = s.chars();
-                chars.next().map_or(0, |v| v as i32)
-            })
+    let values: Vec<_> = (0..array.len())
+        .map(|i| {
+            if array.is_null(i) {
+                0
+            } else {
+                let s = array.value(i);
+                s.chars().next().map_or(0, |c| c as i32)
+            }
         })
-        .collect::<Int32Array>();
+        .collect();
 
-    Ok(Arc::new(result) as ArrayRef)
+    let array = Int32Array::new(values.into(), array.nulls().cloned());
+
+    Ok(Arc::new(array))
 }
 
 /// Returns the numeric code of the first character of the argument.
@@ -182,6 +185,7 @@ mod tests {
         test_ascii!(Some(String::from("x")), Ok(Some(120)));
         test_ascii!(Some(String::from("a")), Ok(Some(97)));
         test_ascii!(Some(String::from("")), Ok(Some(0)));
+        test_ascii!(Some(String::from("🚀")), Ok(Some(128640)));
         test_ascii!(None, Ok(None));
         Ok(())
     }

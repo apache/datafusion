@@ -168,7 +168,7 @@ impl AggregateUDFImpl for NthValueAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new_list_field(args.input_types[0].clone(), true),
+            Field::new_list_field(args.input_fields[0].data_type().clone(), true),
             false,
         )];
         let orderings = args.ordering_fields.to_vec();

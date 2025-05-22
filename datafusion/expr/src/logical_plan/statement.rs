@@ -110,7 +110,7 @@ impl Statement {
                     Statement::Prepare(Prepare {
                         name, data_types, ..
                     }) => {
-                        write!(f, "Prepare: {name:?} {data_types:?} ")
+                        write!(f, "Prepare: {name:?} {data_types:?}")
                     }
                     Statement::Execute(Execute {
                         name, parameters, ..
