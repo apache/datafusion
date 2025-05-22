@@ -51,7 +51,6 @@ use datafusion_physical_plan::DisplayFormatType;
 
 use itertools::Itertools;
 use object_store::ObjectStore;
-
 /// Execution plan for reading one or more Parquet files.
 ///
 /// ```text
@@ -342,25 +341,6 @@ impl ParquetSource {
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     ) -> Self {
         self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
-        self
-    }
-
-    /// return the optional schema adapter factory
-    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.as_ref()
-    }
-
-    /// Set optional schema adapter factory.
-    ///
-    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
-    /// parquet file get mapped to that of the table schema.  The default schema
-    /// adapter uses arrow's cast library to map the parquet fields to the table
-    /// schema.
-    pub fn with_schema_adapter_factory(
-        mut self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        self.schema_adapter_factory = Some(schema_adapter_factory);
         self
     }
 
