@@ -496,11 +496,34 @@ fn eliminate_self_join_using_unique_index() {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-    Projection: a.id
-      SubqueryAlias: a
-        Projection: employees.id
-          Filter: employees.department = Utf8("HR")
-            TableScan: employees projection=[id, department]
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_self_join_using_unique_index_with_right_alias() {
+    let sql = r#"
+        SELECT
+            b.id
+        FROM
+            employees a
+            JOIN employees b USING (id)
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
     "#
     );
 }
@@ -521,11 +544,10 @@ fn eliminate_self_join_on_unique_index() {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-    Projection: a.id
-      SubqueryAlias: a
-        Projection: employees.id
-          Filter: employees.department = Utf8("HR")
-            TableScan: employees projection=[id, department]
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
     "#
     );
 }
@@ -542,11 +564,10 @@ fn eliminate_self_join_using_unique_index_subquery() {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-    Projection: a.id
-      SubqueryAlias: a
-        Projection: employees.id
-          Filter: employees.department = Utf8("HR")
-            TableScan: employees projection=[id, department]
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
     "#
     );
 }
@@ -557,6 +578,26 @@ fn eliminate_self_join_on_unique_index_subquery() {
         SELECT a.id
         FROM employees a
         JOIN (SELECT id FROM employees WHERE department = 'HR') b ON a.id = b.id;
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_self_join_on_unique_index_subquery_with_column_alias() {
+    let sql = r#"
+        SELECT a.id
+        FROM employees a
+        JOIN (SELECT id as key FROM employees WHERE department = 'HR') b ON a.id = b.key;
     "#;
     let plan = test_sql(sql).unwrap();
 
