@@ -122,6 +122,42 @@ fn test_cli_format<'a>(#[case] format: &'a str) {
     assert_cmd_snapshot!(cmd);
 }
 
+#[rstest]
+#[case("no_track", ["--top-memory-consumers", "0"])]
+#[case("top2", ["--top-memory-consumers", "2"])]
+#[case("top3_default", [])]
+#[test]
+fn test_cli_top_memory_consumers<'a>(
+    #[case] snapshot_name: &str,
+    #[case] top_memory_consumers: impl IntoIterator<Item = &'a str>,
+) {
+    let mut settings = make_settings();
+
+    settings.set_snapshot_suffix(snapshot_name);
+
+    settings.add_filter(
+        r"[^\s]+\#\d+\(can spill: (true|false)\) consumed .*?B",
+        "Consumer(can spill: bool) consumed XB",
+    );
+    settings.add_filter(
+        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        "Error: Failed to allocate ",
+    );
+    settings.add_filter(
+        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        "Resources exhausted: Failed to allocate",
+    );
+
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
+    cmd.args(["--memory-limit", "10M", "--command", sql]);
+    cmd.args(top_memory_consumers);
+
+    assert_cmd_snapshot!(cmd);
+}
+
 #[tokio::test]
 async fn test_cli() {
     if env::var("TEST_STORAGE_INTEGRATION").is_err() {
