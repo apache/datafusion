@@ -22,6 +22,9 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+#[allow(unused_imports)]
+use crate::impl_schema_adapter_methods;
+
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
@@ -128,39 +131,17 @@ pub trait FileSource: Send + Sync {
     /// [`SchemaAdapterFactory`] allows user to specify how fields from the
     /// file get mapped to that of the table schema. The default implementation
     /// returns the original source.
+    ///
+    /// Note: You can implement this method and `schema_adapter_factory`
+    /// automatically using the [`impl_schema_adapter_methods`] macro.
     fn with_schema_adapter_factory(
         &self,
         factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Arc<dyn FileSource>;
 
     /// Returns the current schema adapter factory if set
+    ///
+    /// Note: You can implement this method and `with_schema_adapter_factory`
+    /// automatically using the [`impl_schema_adapter_methods`] macro.
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>>;
-}
-
-/// Helper macro to generate the two schema‐adapter methods
-///
-/// Place this inside *any* `impl FileSource for YourType { … }` to
-/// avoid copy-pasting `with_schema_adapter_factory` and
-/// `schema_adapter_factory`.
-#[macro_export]
-macro_rules! impl_schema_adapter_methods {
-    () => {
-        fn with_schema_adapter_factory(
-            &self,
-            schema_adapter_factory: std::sync::Arc<
-                dyn $crate::schema_adapter::SchemaAdapterFactory,
-            >,
-        ) -> std::sync::Arc<dyn $crate::file::FileSource> {
-            std::sync::Arc::new(Self {
-                schema_adapter_factory: Some(schema_adapter_factory),
-                ..self.clone()
-            })
-        }
-
-        fn schema_adapter_factory(
-            &self,
-        ) -> Option<std::sync::Arc<dyn $crate::schema_adapter::SchemaAdapterFactory>> {
-            self.schema_adapter_factory.clone()
-        }
-    };
 }
