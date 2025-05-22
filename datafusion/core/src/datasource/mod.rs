@@ -52,7 +52,7 @@ pub use datafusion_physical_expr::create_ordering;
 mod tests {
 
     use crate::prelude::SessionContext;
-
+    use datafusion_datasource::file::FileSource;
     use std::fs;
     use std::sync::Arc;
 
@@ -124,10 +124,8 @@ mod tests {
         let f2 = Field::new("extra_column", DataType::Utf8, true);
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
-        let source = Arc::new(
-            ParquetSource::default()
-                .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
-        );
+        let source = ParquetSource::default()
+            .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}));
         let base_conf = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             schema,
