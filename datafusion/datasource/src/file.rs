@@ -25,7 +25,6 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
-use crate::schema_adapter::SchemaAdapterFactory;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, Statistics};
@@ -64,17 +63,6 @@ pub trait FileSource: Send + Sync {
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
     /// Initialize new instance with projected statistics
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
-    /// Initialize new instance with schema adapter factory for schema evolution
-    ///
-    /// This is primarily used by ParquetSource to support schema evolution.
-    /// Other file sources will return an unimplemented error by default.
-    fn with_schema_adapter_factory(
-        self: Arc<Self>,
-        factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    ) -> Arc<dyn FileSource> {
-        // By default, sources don't support schema evolution
-        unimplemented!("Schema evolution not implemented for this file format")
-    }
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics

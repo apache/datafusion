@@ -522,21 +522,6 @@ impl FileSource for ParquetSource {
         Arc::new(Self { ..self.clone() })
     }
 
-    fn with_schema_adapter_factory(
-        self: Arc<Self>,
-        factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    ) -> Arc<dyn FileSource> {
-        if let Some(f) = factory {
-            // Create a new ParquetSource with the schema adapter factory
-            let mut source = self.as_ref().clone();
-            source.schema_adapter_factory = Some(f);
-            Arc::new(source)
-        } else {
-            // No factory provided, return self unchanged
-            self
-        }
-    }
-
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
