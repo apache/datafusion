@@ -40,7 +40,6 @@
 //! functions using a fluent style. For example:
 //!
 //![`Expr`]: datafusion_expr::Expr
-extern crate core;
 
 pub mod function;
 
