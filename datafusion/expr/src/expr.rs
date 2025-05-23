@@ -17,6 +17,7 @@
 
 //! Logical Expressions: [`Expr`]
 
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
@@ -51,7 +52,7 @@ use sqlparser::ast::{
 ///  BinaryExpr {
 ///    left: Expr::Column("A"),
 ///    op: Operator::Plus,
-///    right: Expr::Literal(ScalarValue::Int32(Some(1)))
+///    right: Expr::Literal(ScalarValue::Int32(Some(1)), None)
 /// }
 /// ```
 ///
@@ -113,10 +114,10 @@ use sqlparser::ast::{
 /// # use datafusion_expr::{lit, col, Expr};
 /// // All literals are strongly typed in DataFusion. To make an `i64` 42:
 /// let expr = lit(42i64);
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42)), None));
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42)), None));
 /// // To make a (typed) NULL:
-/// let expr = Expr::Literal(ScalarValue::Int64(None));
+/// let expr = Expr::Literal(ScalarValue::Int64(None), None);
 /// // to make an (untyped) NULL (the optimizer will coerce this to the correct type):
 /// let expr = lit(ScalarValue::Null);
 /// ```
@@ -150,7 +151,7 @@ use sqlparser::ast::{
 /// if let Expr::BinaryExpr(binary_expr) = expr {
 ///   assert_eq!(*binary_expr.left, col("c1"));
 ///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
+///   assert_eq!(*binary_expr.right, Expr::Literal(scalar, None));
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
@@ -240,7 +241,7 @@ use sqlparser::ast::{
 /// let mut scalars = HashSet::new();
 /// // apply recursively visits all nodes in the expression tree
 /// expr.apply(|e| {
-///    if let Expr::Literal(scalar) = e {
+///    if let Expr::Literal(scalar, _) = e {
 ///       scalars.insert(scalar);
 ///    }
 ///    // The return value controls whether to continue visiting the tree
@@ -275,7 +276,7 @@ use sqlparser::ast::{
 /// assert!(rewritten.transformed);
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
@@ -284,7 +285,10 @@ pub enum Expr {
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
     /// A constant value.
-    Literal(ScalarValue),
+    Literal(
+        ScalarValue,
+        Option<std::collections::HashMap<String, String>>,
+    ),
     /// A binary expression such as "age > 21"
     BinaryExpr(BinaryExpr),
     /// LIKE expression
@@ -368,7 +372,177 @@ pub enum Expr {
 
 impl Default for Expr {
     fn default() -> Self {
-        Expr::Literal(ScalarValue::Null)
+        Expr::Literal(ScalarValue::Null, None)
+    }
+}
+
+impl PartialOrd for Expr {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Expr::Alias(s), Expr::Alias(o)) => s.partial_cmp(o),
+            (Expr::Column(s), Expr::Column(o)) => s.partial_cmp(o),
+            (Expr::ScalarVariable(sd, ss), Expr::ScalarVariable(od, os)) => {
+                let cmp = sd.partial_cmp(od);
+                let Some(Ordering::Equal) = cmp else {
+                    return cmp;
+                };
+                ss.partial_cmp(os)
+            }
+            (Expr::Literal(sv, sh), Expr::Literal(ov, oh)) => {
+                let cmp = sv.partial_cmp(ov);
+                let Some(Ordering::Equal) = cmp else {
+                    return cmp;
+                };
+
+                match (sh, oh) {
+                    (Some(_), None) => Some(Ordering::Greater),
+                    (None, Some(_)) => Some(Ordering::Less),
+                    (None, None) => Some(Ordering::Equal),
+                    (Some(sh), Some(oh)) => {
+                        let cmp = sh.len().partial_cmp(&oh.len());
+                        let Some(Ordering::Equal) = cmp else {
+                            return cmp;
+                        };
+
+                        let mut s_keys = sh.keys().collect::<Vec<_>>();
+                        let mut o_keys = sh.keys().collect::<Vec<_>>();
+                        s_keys.sort();
+                        o_keys.sort();
+
+                        for (sk, ok) in s_keys.into_iter().zip(o_keys) {
+                            let cmp = sk.partial_cmp(ok);
+                            let Some(Ordering::Equal) = cmp else {
+                                return cmp;
+                            };
+                        }
+
+                        for (sk, sv) in sh {
+                            let ov = oh.get(sk).unwrap();
+                            let cmp = sv.partial_cmp(ov);
+                            let Some(Ordering::Equal) = cmp else {
+                                return cmp;
+                            };
+                        }
+
+                        Some(Ordering::Equal)
+                    }
+                }
+            }
+            (Expr::BinaryExpr(s), Expr::BinaryExpr(o)) => s.partial_cmp(o),
+            (Expr::Like(s), Expr::Like(o)) => s.partial_cmp(o),
+            (Expr::SimilarTo(s), Expr::SimilarTo(o)) => s.partial_cmp(o),
+            (Expr::Not(s), Expr::Not(o)) => s.partial_cmp(o),
+            (Expr::IsNotNull(s), Expr::IsNotNull(o)) => s.partial_cmp(o),
+            (Expr::IsNull(s), Expr::IsNull(o)) => s.partial_cmp(o),
+            (Expr::IsTrue(s), Expr::IsTrue(o)) => s.partial_cmp(o),
+            (Expr::IsFalse(s), Expr::IsFalse(o)) => s.partial_cmp(o),
+            (Expr::IsUnknown(s), Expr::IsUnknown(o)) => s.partial_cmp(o),
+            (Expr::IsNotTrue(s), Expr::IsNotTrue(o)) => s.partial_cmp(o),
+            (Expr::IsNotFalse(s), Expr::IsNotFalse(o)) => s.partial_cmp(o),
+            (Expr::IsNotUnknown(s), Expr::IsNotUnknown(o)) => s.partial_cmp(o),
+            (Expr::Negative(s), Expr::Negative(o)) => s.partial_cmp(o),
+            (Expr::Between(s), Expr::Between(o)) => s.partial_cmp(o),
+            (Expr::Case(s), Expr::Case(o)) => s.partial_cmp(o),
+            (Expr::Cast(s), Expr::Cast(o)) => s.partial_cmp(o),
+            (Expr::TryCast(s), Expr::TryCast(o)) => s.partial_cmp(o),
+            (Expr::ScalarFunction(s), Expr::ScalarFunction(o)) => s.partial_cmp(o),
+            (Expr::AggregateFunction(s), Expr::AggregateFunction(o)) => s.partial_cmp(o),
+            (Expr::WindowFunction(s), Expr::WindowFunction(o)) => s.partial_cmp(o),
+            (Expr::InList(s), Expr::InList(o)) => s.partial_cmp(o),
+            (Expr::Exists(s), Expr::Exists(o)) => s.partial_cmp(o),
+            (Expr::InSubquery(s), Expr::InSubquery(o)) => s.partial_cmp(o),
+            (Expr::ScalarSubquery(s), Expr::ScalarSubquery(o)) => s.partial_cmp(o),
+            #[expect(deprecated)]
+            (
+                Expr::Wildcard {
+                    qualifier: sq,
+                    options: so,
+                },
+                Expr::Wildcard {
+                    qualifier: oq,
+                    options: oo,
+                },
+            ) => {
+                let cmp = sq.partial_cmp(oq);
+                let Some(Ordering::Equal) = cmp else {
+                    return cmp;
+                };
+                so.partial_cmp(oo)
+            }
+            (Expr::GroupingSet(s), Expr::GroupingSet(o)) => s.partial_cmp(o),
+            (Expr::Placeholder(s), Expr::Placeholder(o)) => s.partial_cmp(o),
+            (Expr::OuterReferenceColumn(sd, sc), Expr::OuterReferenceColumn(od, oc)) => {
+                let cmp = sd.partial_cmp(od);
+                let Some(Ordering::Equal) = cmp else {
+                    return cmp;
+                };
+                sc.partial_cmp(oc)
+            }
+            (Expr::Unnest(s), Expr::Unnest(o)) => s.partial_cmp(o),
+            _ => None,
+        }
+    }
+}
+
+impl Hash for Expr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        #[expect(deprecated)]
+        match self {
+            Expr::Alias(e) => e.hash(state),
+            Expr::Column(e) => e.hash(state),
+            Expr::ScalarVariable(d, s) => {
+                d.hash(state);
+                s.hash(state);
+            }
+            Expr::Literal(v, h) => {
+                v.hash(state);
+
+                if let Some(h) = &h {
+                    let mut keys = h.keys().collect::<Vec<_>>();
+                    keys.sort();
+
+                    for k in keys {
+                        k.hash(state);
+                        h.get(k).unwrap().hash(state);
+                    }
+                }
+            }
+            Expr::BinaryExpr(e) => e.hash(state),
+            Expr::Like(e) => e.hash(state),
+            Expr::SimilarTo(e) => e.hash(state),
+            Expr::Not(e) => e.hash(state),
+            Expr::IsNotNull(e) => e.hash(state),
+            Expr::IsNull(e) => e.hash(state),
+            Expr::IsTrue(e) => e.hash(state),
+            Expr::IsFalse(e) => e.hash(state),
+            Expr::IsUnknown(e) => e.hash(state),
+            Expr::IsNotTrue(e) => e.hash(state),
+            Expr::IsNotFalse(e) => e.hash(state),
+            Expr::IsNotUnknown(e) => e.hash(state),
+            Expr::Negative(e) => e.hash(state),
+            Expr::Between(e) => e.hash(state),
+            Expr::Case(e) => e.hash(state),
+            Expr::Cast(e) => e.hash(state),
+            Expr::TryCast(e) => e.hash(state),
+            Expr::ScalarFunction(e) => e.hash(state),
+            Expr::AggregateFunction(e) => e.hash(state),
+            Expr::WindowFunction(e) => e.hash(state),
+            Expr::InList(e) => e.hash(state),
+            Expr::Exists(e) => e.hash(state),
+            Expr::InSubquery(e) => e.hash(state),
+            Expr::ScalarSubquery(e) => e.hash(state),
+            Expr::Wildcard { qualifier, options } => {
+                qualifier.hash(state);
+                options.hash(state);
+            }
+            Expr::GroupingSet(e) => e.hash(state),
+            Expr::Placeholder(e) => e.hash(state),
+            Expr::OuterReferenceColumn(d, c) => {
+                d.hash(state);
+                c.hash(state);
+            }
+            Expr::Unnest(e) => e.hash(state),
+        }
     }
 }
 
@@ -450,13 +624,13 @@ impl Hash for Alias {
 }
 
 impl PartialOrd for Alias {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let cmp = self.expr.partial_cmp(&other.expr);
-        let Some(std::cmp::Ordering::Equal) = cmp else {
+        let Some(Ordering::Equal) = cmp else {
             return cmp;
         };
         let cmp = self.relation.partial_cmp(&other.relation);
-        let Some(std::cmp::Ordering::Equal) = cmp else {
+        let Some(Ordering::Equal) = cmp else {
             return cmp;
         };
         self.name.partial_cmp(&other.name)
@@ -1537,8 +1711,16 @@ impl Expr {
             |expr| {
                 // f_up: unalias on up so we can remove nested aliases like
                 // `(x as foo) as bar`
-                if let Expr::Alias(Alias { expr, .. }) = expr {
-                    Ok(Transformed::yes(*expr))
+                if let Expr::Alias(alias) = expr {
+                    match alias
+                        .metadata
+                        .as_ref()
+                        .map(|h| h.is_empty())
+                        .unwrap_or(true)
+                    {
+                        true => Ok(Transformed::yes(*alias.expr)),
+                        false => Ok(Transformed::no(Expr::Alias(alias))),
+                    }
                 } else {
                     Ok(Transformed::no(expr))
                 }
@@ -2299,7 +2481,7 @@ impl HashNode for Expr {
                 data_type.hash(state);
                 name.hash(state);
             }
-            Expr::Literal(scalar_value) => {
+            Expr::Literal(scalar_value, _) => {
                 scalar_value.hash(state);
             }
             Expr::BinaryExpr(BinaryExpr {
@@ -2479,7 +2661,7 @@ impl Display for SchemaDisplay<'_> {
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
             Expr::Column(_)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::ScalarVariable(..)
             | Expr::OuterReferenceColumn(..)
             | Expr::Placeholder(_)
@@ -2738,7 +2920,7 @@ struct SqlDisplay<'a>(&'a Expr);
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
-            Expr::Literal(scalar) => scalar.fmt(f),
+            Expr::Literal(scalar, _) => scalar.fmt(f),
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -3005,7 +3187,7 @@ impl Display for Expr {
                 write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
-            Expr::Literal(v) => write!(f, "{v:?}"),
+            Expr::Literal(v, _) => write!(f, "{v:?}"),
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {
@@ -3376,7 +3558,7 @@ mod test {
     #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
+            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";

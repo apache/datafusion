@@ -477,7 +477,7 @@ impl TreeNodeRewriter for Canonicalizer {
                 })))
             }
             // <literal> <op> <col>
-            (Expr::Literal(_a), Expr::Column(_b), Some(swapped_op)) => {
+            (Expr::Literal(_a, _), Expr::Column(_b), Some(swapped_op)) => {
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
                     left: right,
                     op: swapped_op,
@@ -568,10 +568,10 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
             // so that normal evaluation can occur
             Some(true) => match self.evaluate_to_scalar(expr) {
                 ConstSimplifyResult::Simplified(s) => {
-                    Ok(Transformed::yes(Expr::Literal(s)))
+                    Ok(Transformed::yes(Expr::Literal(s, None)))
                 }
                 ConstSimplifyResult::NotSimplified(s) => {
-                    Ok(Transformed::no(Expr::Literal(s)))
+                    Ok(Transformed::no(Expr::Literal(s, None)))
                 }
                 ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
                     Ok(Transformed::yes(expr))
@@ -640,7 +640,7 @@ impl<'a> ConstEvaluator<'a> {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
-            Expr::Literal(_)
+            Expr::Literal(_, _)
             | Expr::Alias(..)
             | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
@@ -666,7 +666,7 @@ impl<'a> ConstEvaluator<'a> {
 
     /// Internal helper to evaluates an Expr
     pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
-        if let Expr::Literal(s) = expr {
+        if let Expr::Literal(s, _) = expr {
             return ConstSimplifyResult::NotSimplified(s);
         }
 
@@ -1138,9 +1138,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_one(&right) =>
             {
-                Transformed::yes(Expr::Literal(ScalarValue::new_zero(
-                    &info.get_data_type(&left)?,
-                )?))
+                Transformed::yes(Expr::Literal(
+                    ScalarValue::new_zero(&info.get_data_type(&left)?)?,
+                    None,
+                ))
             }
 
             //
@@ -1181,9 +1182,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: BitwiseAnd,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_zero(
-                    &info.get_data_type(&left)?,
-                )?))
+                Transformed::yes(Expr::Literal(
+                    ScalarValue::new_zero(&info.get_data_type(&left)?)?,
+                    None,
+                ))
             }
 
             // A & !A -> 0 (if A not nullable)
@@ -1192,9 +1194,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: BitwiseAnd,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_zero(
-                    &info.get_data_type(&left)?,
-                )?))
+                Transformed::yes(Expr::Literal(
+                    ScalarValue::new_zero(&info.get_data_type(&left)?)?,
+                    None,
+                ))
             }
 
             // (..A..) & A --> (..A..)
@@ -1267,9 +1270,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: BitwiseOr,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_negative_one(
-                    &info.get_data_type(&left)?,
-                )?))
+                Transformed::yes(Expr::Literal(
+                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
+                    None,
+                ))
             }
 
             // A | !A -> -1 (if A not nullable)
@@ -1278,9 +1282,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: BitwiseOr,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_negative_one(
-                    &info.get_data_type(&left)?,
-                )?))
+                Transformed::yes(Expr::Literal(
+                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
+                    None,
+                ))
             }
 
             // (..A..) | A --> (..A..)
@@ -1353,9 +1358,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: BitwiseXor,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_negative_one(
-                    &info.get_data_type(&left)?,
-                )?))
+                Transformed::yes(Expr::Literal(
+                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
+                    None,
+                ))
             }
 
             // A ^ !A -> -1 (if A not nullable)
@@ -1364,9 +1370,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: BitwiseXor,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_negative_one(
-                    &info.get_data_type(&left)?,
-                )?))
+                Transformed::yes(Expr::Literal(
+                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
+                    None,
+                ))
             }
 
             // (..A..) ^ A --> (the expression without A, if number of A is odd, otherwise one A)
@@ -1377,7 +1384,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             }) if expr_contains(&left, &right, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 Transformed::yes(if expr == *right {
-                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&right)?)?)
+                    Expr::Literal(
+                        ScalarValue::new_zero(&info.get_data_type(&right)?)?,
+                        None,
+                    )
                 } else {
                     expr
                 })
@@ -1391,7 +1401,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             }) if expr_contains(&right, &left, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 Transformed::yes(if expr == *left {
-                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
+                    Expr::Literal(
+                        ScalarValue::new_zero(&info.get_data_type(&left)?)?,
+                        None,
+                    )
                 } else {
                     expr
                 })
@@ -1642,7 +1655,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 expr,
                 list,
                 negated,
-            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
+            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null, None) => {
                 Transformed::yes(lit(negated))
             }
 
@@ -1868,7 +1881,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     .into_iter()
                     .map(|right| {
                         match right {
-                            Expr::Literal(right_lit_value) => {
+                            Expr::Literal(right_lit_value, _) => {
                                 // if the right_lit_value can be casted to the type of internal_left_expr
                                 // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
                                 let Some(value) = try_cast_literal_to_type(&right_lit_value, &expr_type) else {
@@ -1902,18 +1915,18 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
 
 fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
     match expr {
-        Expr::Literal(ScalarValue::Utf8(s)) => Some((DataType::Utf8, s)),
-        Expr::Literal(ScalarValue::LargeUtf8(s)) => Some((DataType::LargeUtf8, s)),
-        Expr::Literal(ScalarValue::Utf8View(s)) => Some((DataType::Utf8View, s)),
+        Expr::Literal(ScalarValue::Utf8(s), _) => Some((DataType::Utf8, s)),
+        Expr::Literal(ScalarValue::LargeUtf8(s), _) => Some((DataType::LargeUtf8, s)),
+        Expr::Literal(ScalarValue::Utf8View(s), _) => Some((DataType::Utf8View, s)),
         _ => None,
     }
 }
 
 fn to_string_scalar(data_type: DataType, value: Option<String>) -> Expr {
     match data_type {
-        DataType::Utf8 => Expr::Literal(ScalarValue::Utf8(value)),
-        DataType::LargeUtf8 => Expr::Literal(ScalarValue::LargeUtf8(value)),
-        DataType::Utf8View => Expr::Literal(ScalarValue::Utf8View(value)),
+        DataType::Utf8 => Expr::Literal(ScalarValue::Utf8(value), None),
+        DataType::LargeUtf8 => Expr::Literal(ScalarValue::LargeUtf8(value), None),
+        DataType::Utf8View => Expr::Literal(ScalarValue::Utf8View(value), None),
         _ => unreachable!(),
     }
 }
@@ -1959,12 +1972,12 @@ fn as_inlist(expr: &Expr) -> Option<Cow<InList>> {
         Expr::InList(inlist) => Some(Cow::Borrowed(inlist)),
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
             match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(_), Expr::Literal(_)) => Some(Cow::Owned(InList {
+                (Expr::Column(_), Expr::Literal(_, _)) => Some(Cow::Owned(InList {
                     expr: left.clone(),
                     list: vec![*right.clone()],
                     negated: false,
                 })),
-                (Expr::Literal(_), Expr::Column(_)) => Some(Cow::Owned(InList {
+                (Expr::Literal(_, _), Expr::Column(_)) => Some(Cow::Owned(InList {
                     expr: right.clone(),
                     list: vec![*left.clone()],
                     negated: false,
@@ -1984,12 +1997,12 @@ fn to_inlist(expr: Expr) -> Option<InList> {
             op: Operator::Eq,
             right,
         }) => match (left.as_ref(), right.as_ref()) {
-            (Expr::Column(_), Expr::Literal(_)) => Some(InList {
+            (Expr::Column(_), Expr::Literal(_, _)) => Some(InList {
                 expr: left,
                 list: vec![*right],
                 negated: false,
             }),
-            (Expr::Literal(_), Expr::Column(_)) => Some(InList {
+            (Expr::Literal(_, _), Expr::Column(_)) => Some(InList {
                 expr: right,
                 list: vec![*left],
                 negated: false,
@@ -2408,7 +2421,7 @@ mod tests {
 
     #[test]
     fn test_simplify_multiply_by_null() {
-        let null = Expr::Literal(ScalarValue::Null);
+        let null = Expr::Literal(ScalarValue::Null, None);
         // A * null --> null
         {
             let expr = col("c2") * null.clone();
@@ -4543,10 +4556,10 @@ mod tests {
         // The simplifier removes the cast.
         assert_eq!(
             simplify(coerced),
-            col("c5").eq(Expr::Literal(ScalarValue::FixedSizeBinary(
-                3,
-                Some(bytes.to_vec()),
-            )))
+            col("c5").eq(Expr::Literal(
+                ScalarValue::FixedSizeBinary(3, Some(bytes.to_vec()),),
+                None
+            ))
         );
     }
 
