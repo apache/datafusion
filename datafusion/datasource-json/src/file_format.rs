@@ -30,7 +30,9 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
-use datafusion_common::config::{ConfigFileType, FormatOptions, JsonOptions};
+use datafusion_common::config::{
+    ConfigFileType, JsonOptions, OutputFormat,
+};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{
     not_impl_err, GetExt, Result, Statistics, DEFAULT_JSON_EXTENSION,
@@ -82,18 +84,17 @@ impl JsonFormatFactory {
 }
 
 impl FileFormatFactory for JsonFormatFactory {
-    fn options(&self) -> (Option<FormatOptions>, ConfigFileType) {
+    fn options(&self) -> (Option<OutputFormat>, ConfigFileType) {
         match self.options.clone() {
             None => (None, ConfigFileType::JSON),
-            Some(json_options) => (
-                Some(FormatOptions::JSON(json_options)),
-                ConfigFileType::JSON,
-            ),
+            Some(json_options) => {
+                (Some(OutputFormat::JSON(json_options)), ConfigFileType::JSON)
+            }
         }
     }
-    fn default_from_options(&self, options: FormatOptions) -> Arc<dyn FileFormat> {
+    fn default_from_output_format(&self, options: OutputFormat) -> Arc<dyn FileFormat> {
         Arc::new(match options {
-            FormatOptions::JSON(options) => JsonFormat::default().with_options(options),
+            OutputFormat::JSON(options) => JsonFormat::default().with_options(options),
             _ => JsonFormat::default(),
         })
     }

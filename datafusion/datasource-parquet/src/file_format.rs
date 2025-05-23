@@ -36,7 +36,9 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::config::{ConfigFileType, FormatOptions, TableParquetOptions};
+use datafusion_common::config::{
+    ConfigFileType, OutputFormat, TableParquetOptions,
+};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -115,19 +117,19 @@ impl ParquetFormatFactory {
 }
 
 impl FileFormatFactory for ParquetFormatFactory {
-    fn options(&self) -> (Option<FormatOptions>, ConfigFileType) {
+    fn options(&self) -> (Option<OutputFormat>, ConfigFileType) {
         match self.options.clone() {
             None => (None, ConfigFileType::PARQUET),
             Some(parquet_options) => (
-                Some(FormatOptions::PARQUET(parquet_options)),
+                Some(OutputFormat::PARQUET(parquet_options)),
                 ConfigFileType::PARQUET,
             ),
         }
     }
 
-    fn default_from_options(&self, options: FormatOptions) -> Arc<dyn FileFormat> {
+    fn default_from_output_format(&self, options: OutputFormat) -> Arc<dyn FileFormat> {
         Arc::new(match options {
-            FormatOptions::PARQUET(options) => {
+            OutputFormat::PARQUET(options) => {
                 ParquetFormat::default().with_options(options)
             }
             _ => ParquetFormat::default(),

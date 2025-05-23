@@ -1752,33 +1752,31 @@ impl TableFormatOptions {
         }
     }
 
-    pub fn format_options(&self) -> FormatOptions {
+    pub fn output_format(&self) -> OutputFormat {
         match self {
             TableFormatOptions::Json { options, .. } => {
-                FormatOptions::JSON(options.clone())
+                OutputFormat::JSON(options.clone())
             }
-            TableFormatOptions::Csv { options, .. } => {
-                FormatOptions::CSV(options.clone())
-            }
+            TableFormatOptions::Csv { options, .. } => OutputFormat::CSV(options.clone()),
             #[cfg(feature = "parquet")]
             TableFormatOptions::Parquet { options, .. } => {
-                FormatOptions::PARQUET(options.clone())
+                OutputFormat::PARQUET(options.clone())
             }
         }
     }
 
-    pub fn from_format_options(options: FormatOptions) -> Self {
+    pub fn from_output_format(options: OutputFormat) -> Self {
         match options {
-            FormatOptions::JSON(options) => TableFormatOptions::Json {
+            OutputFormat::JSON(options) => TableFormatOptions::Json {
                 options,
                 extensions: Default::default(),
             },
-            FormatOptions::CSV(options) => TableFormatOptions::Csv {
+            OutputFormat::CSV(options) => TableFormatOptions::Csv {
                 options,
                 extensions: Default::default(),
             },
             #[cfg(feature = "parquet")]
-            FormatOptions::PARQUET(options) => TableFormatOptions::Parquet {
+            OutputFormat::PARQUET(options) => TableFormatOptions::Parquet {
                 options,
                 extensions: Default::default(),
             },

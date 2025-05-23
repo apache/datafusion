@@ -28,7 +28,9 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::error::ArrowError;
-use datafusion_common::config::{ConfigFileType, CsvOptions, FormatOptions};
+use datafusion_common::config::{
+    ConfigFileType, CsvOptions, OutputFormat,
+};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
     exec_err, not_impl_err, DataFusionError, GetExt, Result, Statistics,
@@ -92,17 +94,17 @@ impl Debug for CsvFormatFactory {
 }
 
 impl FileFormatFactory for CsvFormatFactory {
-    fn options(&self) -> (Option<FormatOptions>, ConfigFileType) {
+    fn options(&self) -> (Option<OutputFormat>, ConfigFileType) {
         match self.options.clone() {
             None => (None, ConfigFileType::CSV),
             Some(csv_options) => {
-                (Some(FormatOptions::CSV(csv_options)), ConfigFileType::CSV)
+                (Some(OutputFormat::CSV(csv_options)), ConfigFileType::CSV)
             }
         }
     }
-    fn default_from_options(&self, options: FormatOptions) -> Arc<dyn FileFormat> {
+    fn default_from_output_format(&self, options: OutputFormat) -> Arc<dyn FileFormat> {
         Arc::new(match options {
-            FormatOptions::CSV(options) => CsvFormat::default().with_options(options),
+            OutputFormat::CSV(options) => CsvFormat::default().with_options(options),
             _ => CsvFormat::default(),
         })
     }

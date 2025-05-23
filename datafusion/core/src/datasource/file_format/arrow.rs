@@ -42,7 +42,7 @@ use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{root_as_message, CompressionType};
 use datafusion_catalog::Session;
-use datafusion_common::config::{ConfigFileType, FormatOptions};
+use datafusion_common::config::{ConfigFileType, OutputFormat};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
@@ -84,11 +84,11 @@ impl ArrowFormatFactory {
 }
 
 impl FileFormatFactory for ArrowFormatFactory {
-    fn options(&self) -> (Option<FormatOptions>, ConfigFileType) {
+    fn options(&self) -> (Option<OutputFormat>, ConfigFileType) {
         todo!()
     }
 
-    fn default_from_options(&self, _options: FormatOptions) -> Arc<dyn FileFormat> {
+    fn default_from_output_format(&self, _options: OutputFormat) -> Arc<dyn FileFormat> {
         Arc::new(ArrowFormat)
     }
 
