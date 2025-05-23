@@ -195,7 +195,7 @@ fn test_schema_adapter_preservation() {
     let config_builder = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("file:///path/to/parquet").unwrap(),
         schema.clone(),
-        file_source.clone().into(),
+        file_source.clone(),
     );
 
     let config = config_builder.build();

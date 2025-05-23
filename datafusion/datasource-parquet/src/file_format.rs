@@ -50,6 +50,7 @@ use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -1745,7 +1746,8 @@ fn apply_schema_adapter(
 
     // If the FileScanConfig.file_source() has a schema adapter factory, apply it
     if let Some(factory) = conf.file_source().schema_adapter_factory() {
-        file_source.with_schema_adapter_factory(factory.clone())
+        file_source
+            .with_schema_adapter_factory(Arc::<dyn SchemaAdapterFactory>::clone(&factory))
     } else {
         file_source
     }

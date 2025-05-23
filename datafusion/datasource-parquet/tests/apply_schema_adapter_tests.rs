@@ -164,7 +164,7 @@ mod parquet_adapter_tests {
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             schema.clone(),
-            file_source.into(), // Pass file_source as the third parameter
+            file_source,
         )
         .build();
 

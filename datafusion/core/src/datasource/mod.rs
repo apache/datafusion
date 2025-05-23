@@ -126,7 +126,7 @@ mod tests {
         let base_conf = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             schema,
-            source.into(),
+            source,
         )
         .with_file(partitioned_file)
         .build();
