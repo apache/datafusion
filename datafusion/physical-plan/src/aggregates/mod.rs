@@ -57,6 +57,10 @@ mod row_hash;
 mod topk;
 mod topk_stream;
 
+/// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
+const AGGREGATION_HASH_SEED: ahash::RandomState =
+    ahash::RandomState::with_seeds('A' as u64, 'G' as u64, 'G' as u64, 'R' as u64);
+
 /// Aggregation modes
 ///
 /// See [`Accumulator::state`] for background information on multi-phase
