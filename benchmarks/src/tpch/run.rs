@@ -151,7 +151,7 @@ impl RunOpt {
                     if n == 1 {
                         result = self.execute_query(ctx, query).await?;
                     } else {
-                        self.execute_query(&ctx, query).await?;
+                        self.execute_query(ctx, query).await?;
                     }
                 }
             } else {
