@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result, TableReference};
+use datafusion_common::{plan_err, Constraint, Constraints, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -480,6 +480,195 @@ fn select_correlated_predicate_subquery_with_uppercase_ident() {
     );
 }
 
+#[test]
+fn eliminate_self_join_using_unique_index() {
+    let sql = r#"
+        SELECT
+            a.id
+        FROM
+            employees a
+            JOIN employees b USING (id)
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_self_join_using_unique_index_with_right_alias() {
+    let sql = r#"
+        SELECT
+            b.id
+        FROM
+            employees a
+            JOIN employees b USING (id)
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_self_join_on_unique_index() {
+    let sql = r#"
+        SELECT
+            a.id
+        FROM
+            employees a
+            JOIN employees b ON a.id = b.id
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_self_join_using_unique_index_subquery() {
+    let sql = r#"
+        SELECT a.id
+        FROM employees a
+        JOIN (SELECT id FROM employees WHERE department = 'HR') b USING (id);
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_self_join_on_unique_index_subquery() {
+    let sql = r#"
+        SELECT a.id
+        FROM employees a
+        JOIN (SELECT id FROM employees WHERE department = 'HR') b ON a.id = b.id;
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_self_join_on_unique_index_subquery_with_column_alias() {
+    let sql = r#"
+        SELECT a.id
+        FROM employees a
+        JOIN (SELECT id as key FROM employees WHERE department = 'HR') b ON a.id = b.key;
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    Projection: a.id
+      SubqueryAlias: a
+        Projection: employees.id
+          Filter: employees.department = Utf8("HR")
+            TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_self_join_on_non_unique_index() {
+    let sql = r#"
+        SELECT
+            a.id
+        FROM
+            employees a
+            JOIN employees b USING (name)
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    Projection: a.id
+      Inner Join: a.name = b.name
+        SubqueryAlias: a
+          TableScan: employees projection=[id, name]
+        SubqueryAlias: b
+          Projection: employees.name
+            Filter: employees.department = Utf8("HR")
+              TableScan: employees projection=[name, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_self_join_on_non_matching_unique_index() {
+    let sql = r#"
+        SELECT
+            a.id
+        FROM
+            employees a
+            JOIN employees b ON a.id = b.external_id
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    Projection: a.id
+      Inner Join: a.id = b.external_id
+        SubqueryAlias: a
+          TableScan: employees projection=[id]
+        SubqueryAlias: b
+          Projection: employees.external_id
+            Filter: employees.department = Utf8("HR")
+              TableScan: employees projection=[department, external_id]
+    "#
+    );
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -492,46 +681,10 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         .with_expr_planners(vec![
             Arc::new(AggregateFunctionPlanner),
             Arc::new(WindowFunctionPlanner),
-        ]);
-
-    let sql_to_rel = SqlToRel::new(&context_provider);
-    let plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
-
-    let config = OptimizerContext::new().with_skip_failing_rules(false);
-    let analyzer = Analyzer::new();
-    let optimizer = Optimizer::new();
-    // analyze and optimize the logical plan
-    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
-    optimizer.optimize(plan, &config, observe)
-}
-
-fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
-
-#[derive(Default)]
-struct MyContextProvider {
-    options: ConfigOptions,
-    udafs: HashMap<String, Arc<AggregateUDF>>,
-    expr_planners: Vec<Arc<dyn ExprPlanner>>,
-}
-
-impl MyContextProvider {
-    fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
-        // TODO: change to to_string() if all the function name is converted to lowercase
-        self.udafs.insert(udaf.name().to_lowercase(), udaf);
-        self
-    }
-
-    fn with_expr_planners(mut self, expr_planners: Vec<Arc<dyn ExprPlanner>>) -> Self {
-        self.expr_planners = expr_planners;
-        self
-    }
-}
-
-impl ContextProvider for MyContextProvider {
-    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
-        let table_name = name.table();
-        if table_name.starts_with("test") {
-            let schema = Schema::new_with_metadata(
+        ])
+        .with_schema(
+            "test",
+            Schema::new_with_metadata(
                 vec![
                     Field::new("col_int32", DataType::Int32, true),
                     Field::new("col_uint32", DataType::UInt32, true),
@@ -552,11 +705,93 @@ impl ContextProvider for MyContextProvider {
                     ),
                 ],
                 HashMap::new(),
-            );
+            ),
+        )
+        .with_schema_constraints(
+            "employees",
+            Schema::new_with_metadata(
+                vec![
+                    Field::new("id", DataType::UInt32, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("department", DataType::Utf8, false),
+                    Field::new("salary", DataType::UInt32, false),
+                    Field::new("hire_date", DataType::Date64, false),
+                    Field::new("external_id", DataType::UInt32, false),
+                ],
+                HashMap::new(),
+            ),
+            Constraints::new_unverified(vec![
+                Constraint::PrimaryKey(vec![0]),
+                Constraint::Unique(vec![5]),
+            ]),
+        );
 
-            Ok(Arc::new(MyTableSource {
-                schema: Arc::new(schema),
-            }))
+    let sql_to_rel = SqlToRel::new(&context_provider);
+    let plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
+
+    let config = OptimizerContext::new().with_skip_failing_rules(false);
+    let analyzer = Analyzer::new();
+    let optimizer = Optimizer::new();
+    // analyze and optimize the logical plan
+    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
+    optimizer.optimize(plan, &config, observe)
+}
+
+fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+
+#[derive(Default)]
+struct MyContextProvider {
+    options: ConfigOptions,
+    tables: HashMap<String, Arc<dyn TableSource>>,
+    udafs: HashMap<String, Arc<AggregateUDF>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
+}
+
+impl MyContextProvider {
+    fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
+        // TODO: change to to_string() if all the function name is converted to lowercase
+        self.udafs.insert(udaf.name().to_lowercase(), udaf);
+        self
+    }
+
+    fn with_expr_planners(mut self, expr_planners: Vec<Arc<dyn ExprPlanner>>) -> Self {
+        self.expr_planners = expr_planners;
+        self
+    }
+
+    fn with_schema(mut self, name: impl Into<String>, schema: Schema) -> Self {
+        self.tables.insert(
+            name.into(),
+            Arc::new(MyTableSource {
+                schema: schema.into(),
+                constraints: None,
+            }),
+        );
+        self
+    }
+
+    fn with_schema_constraints(
+        mut self,
+        name: impl Into<String>,
+        schema: Schema,
+        constraints: Constraints,
+    ) -> Self {
+        self.tables.insert(
+            name.into(),
+            Arc::new(MyTableSource {
+                schema: schema.into(),
+                constraints: Some(constraints),
+            }),
+        );
+        self
+    }
+}
+
+impl ContextProvider for MyContextProvider {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        let table_name = name.table();
+        if let Some(table) = self.tables.get(table_name) {
+            Ok(table.clone())
         } else {
             plan_err!("table does not exist")
         }
@@ -601,6 +836,7 @@ impl ContextProvider for MyContextProvider {
 
 struct MyTableSource {
     schema: SchemaRef,
+    constraints: Option<Constraints>,
 }
 
 impl TableSource for MyTableSource {
@@ -610,5 +846,9 @@ impl TableSource for MyTableSource {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
     }
 }
