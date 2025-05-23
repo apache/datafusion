@@ -612,10 +612,9 @@ impl FileSource for ParquetSource {
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
         let mut source = self.clone();
-        let filters = PredicateSupports::new_with_supported_check(
-            filters,
-            |filter| pushdown_filters && can_expr_be_pushed_down_with_schemas(filter, &file_schema),
-        );
+        let filters = PredicateSupports::new_with_supported_check(filters, |filter| {
+            pushdown_filters && can_expr_be_pushed_down_with_schemas(filter, &file_schema)
+        });
         if filters.is_all_unsupported() {
             // No filters can be pushed down, so we can just return the remaining filters
             // and avoid replacing the source in the physical plan.
