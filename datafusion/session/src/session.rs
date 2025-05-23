@@ -143,15 +143,10 @@ pub trait Session: Send + Sync {
                 options: session_table_options.csv,
                 extensions: session_table_options.extensions,
             },
-            #[cfg(feature = "parquet")]
             ConfigFileType::PARQUET => TableFormatOptions::Parquet {
                 options: session_table_options.parquet,
                 extensions: session_table_options.extensions,
             },
-            #[cfg(not(feature = "parquet"))]
-            ConfigFileType::PARQUET => {
-                unimplemented!("Parquet support is not enabled");
-            }
             ConfigFileType::JSON => TableFormatOptions::Json {
                 options: session_table_options.json,
                 extensions: session_table_options.extensions,
