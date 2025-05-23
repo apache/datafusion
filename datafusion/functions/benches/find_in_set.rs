@@ -25,7 +25,7 @@ use arrow::util::bench_util::{
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;
@@ -51,7 +51,7 @@ fn gen_args_array(
     let mut output_set_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     let mut output_element_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     for _ in 0..n_rows {
-        let rand_num = rng_ref.gen::<f32>(); // [0.0, 1.0)
+        let rand_num = rng_ref.random::<f32>(); // [0.0, 1.0)
         if rand_num < null_density {
             output_element_vec.push(None);
             output_set_vec.push(None);
@@ -60,7 +60,7 @@ fn gen_args_array(
             let mut generated_string = String::with_capacity(str_len_chars);
             for i in 0..num_elements {
                 for _ in 0..str_len_chars {
-                    let idx = rng_ref.gen_range(0..corpus_char_count);
+                    let idx = rng_ref.random_range(0..corpus_char_count);
                     let char = utf8.chars().nth(idx).unwrap();
                     generated_string.push(char);
                 }
@@ -112,7 +112,7 @@ fn random_element_in_set(string: &str) -> String {
     }
 
     let mut rng = StdRng::seed_from_u64(44);
-    let random_index = rng.gen_range(0..elements.len());
+    let random_index = rng.random_range(0..elements.len());
 
     elements[random_index].to_string()
 }

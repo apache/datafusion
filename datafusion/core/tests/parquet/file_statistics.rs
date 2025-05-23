@@ -50,7 +50,8 @@ async fn check_stats_precision_with_filter_pushdown() {
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
     let table_path = ListingTableUrl::parse(filename).unwrap();
 
-    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+    let opt =
+        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
     let table = get_listing_table(&table_path, None, &opt).await;
 
     let (_, _, state) = get_cache_runtime_state();
@@ -109,7 +110,8 @@ async fn load_table_stats_with_session_level_cache() {
     // Create a separate DefaultFileStatisticsCache
     let (cache2, _, state2) = get_cache_runtime_state();
 
-    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+    let opt =
+        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
 
     let table1 = get_listing_table(&table_path, Some(cache1), &opt).await;
     let table2 = get_listing_table(&table_path, Some(cache2), &opt).await;
@@ -167,20 +169,12 @@ async fn list_files_with_session_level_cache() {
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{testdata}/{p_name}");
 
-    let temp_path1 = tempdir()
-        .unwrap()
-        .into_path()
-        .into_os_string()
-        .into_string()
-        .unwrap();
+    let temp_dir1 = tempdir().unwrap();
+    let temp_path1 = temp_dir1.path().to_str().unwrap();
     let temp_filename1 = format!("{temp_path1}/{p_name}");
 
-    let temp_path2 = tempdir()
-        .unwrap()
-        .into_path()
-        .into_os_string()
-        .into_string()
-        .unwrap();
+    let temp_dir2 = tempdir().unwrap();
+    let temp_path2 = temp_dir2.path().to_str().unwrap();
     let temp_filename2 = format!("{temp_path2}/{p_name}");
 
     fs::copy(filename.clone(), temp_filename1).expect("panic");
