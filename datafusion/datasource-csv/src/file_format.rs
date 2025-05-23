@@ -28,9 +28,7 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::error::ArrowError;
-use datafusion_common::config::{
-    ConfigFileType, CsvOptions, OutputFormat,
-};
+use datafusion_common::config::{ConfigFileType, CsvOptions, OutputFormat};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
     exec_err, not_impl_err, DataFusionError, GetExt, Result, Statistics,

@@ -36,9 +36,7 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::config::{
-    ConfigFileType, OutputFormat, TableParquetOptions,
-};
+use datafusion_common::config::{ConfigFileType, OutputFormat, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
