@@ -118,7 +118,9 @@ pub enum DataFusionError {
     /// [`JoinError`] during execution of the query.
     ///
     /// This error can't occur for unjoined tasks, such as execution shutdown.
-    ExecutionJoin(JoinError),
+    ///
+    /// 2nd argument is for optional backtrace
+    ExecutionJoin(JoinError, Option<String>),
     /// Error when resources (such as memory of scratch disk space) are exhausted.
     ///
     /// This error is thrown when a consumer cannot acquire additional memory
@@ -280,6 +282,12 @@ impl From<ArrowError> for DataFusionError {
     }
 }
 
+impl From<JoinError> for DataFusionError {
+    fn from(e: JoinError) -> Self {
+        DataFusionError::ExecutionJoin(e, None)
+    }
+}
+
 impl From<DataFusionError> for ArrowError {
     fn from(e: DataFusionError) -> Self {
         match e {
@@ -376,7 +384,7 @@ impl Error for DataFusionError {
             DataFusionError::Plan(_) => None,
             DataFusionError::SchemaError(e, _) => Some(e),
             DataFusionError::Execution(_) => None,
-            DataFusionError::ExecutionJoin(e) => Some(e),
+            DataFusionError::ExecutionJoin(e, _) => Some(e),
             DataFusionError::ResourcesExhausted(_) => None,
             DataFusionError::External(e) => Some(e.as_ref()),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
@@ -508,7 +516,7 @@ impl DataFusionError {
             }
             DataFusionError::SchemaError(_, _) => "Schema error: ",
             DataFusionError::Execution(_) => "Execution error: ",
-            DataFusionError::ExecutionJoin(_) => "ExecutionJoin error: ",
+            DataFusionError::ExecutionJoin(_, _) => "ExecutionJoin error: ",
             DataFusionError::ResourcesExhausted(_) => {
                 "Resources exhausted: "
             }
@@ -552,7 +560,10 @@ impl DataFusionError {
                 Cow::Owned(format!("{desc}{backtrace}"))
             }
             DataFusionError::Execution(ref desc) => Cow::Owned(desc.to_string()),
-            DataFusionError::ExecutionJoin(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::ExecutionJoin(ref desc, ref backtrace) => {
+                let backtrace = backtrace.clone().unwrap_or_else(|| "".to_owned());
+                Cow::Owned(format!("{desc}{backtrace}"))
+            }
             DataFusionError::ResourcesExhausted(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::External(ref desc) => Cow::Owned(desc.to_string()),
             #[cfg(feature = "object_store")]
@@ -900,8 +911,58 @@ macro_rules! schema_err {
             let err = err.with_diagnostic($DIAG);
         )?
         Err(err)
-    }
-    };
+    }};
+}
+
+// Exposes a macro to create `DataFusionError::External` with optional backtrace
+#[macro_export]
+macro_rules! external_datafusion_err {
+    ($CONVERTIBLE_TO_ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = $crate::error::DataFusionError::External($crate::error::GenericError::from($CONVERTIBLE_TO_ERR)).context($crate::error::DataFusionError::get_back_trace());
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        err
+    }};
+}
+
+// Exposes a macro to create `Err(DataFusionError::External)` with optional backtrace
+#[macro_export]
+macro_rules! external_err {
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = $crate::external_datafusion_err!($ERR);
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        Err(err)
+    }};
+}
+
+// Exposes a macro to create `DataFusionError::ExecutionJoin` with optional backtrace
+#[macro_export]
+macro_rules! execution_join_datafusion_err {
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = $crate::error::DataFusionError::ExecutionJoin(
+            $ERR,
+            Some($crate::error::DataFusionError::get_back_trace())
+        );
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        err
+    }};
+}
+
+// Exposes a macro to create `Err(DataFusionError::ExecutionJoin)` with optional backtrace
+#[macro_export]
+macro_rules! execution_join_err {
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = $crate::execution_join_datafusion_err!($ERR);
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        Err(err)
+    }};
 }
 
 // To avoid compiler error when using macro in the same crate:

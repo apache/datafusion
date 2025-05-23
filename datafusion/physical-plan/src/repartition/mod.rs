@@ -45,7 +45,7 @@ use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
-use datafusion_common::HashMap;
+use datafusion_common::{external_datafusion_err, HashMap};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -948,10 +948,8 @@ impl RepartitionExec {
                 let e = Arc::new(e);
 
                 for (_, tx) in txs {
-                    let err = Err(DataFusionError::Context(
-                        "Join Error".to_string(),
-                        Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
-                    ));
+                    let err = Err(external_datafusion_err!(Arc::clone(&e))
+                        .context("Join Error".to_string()));
                     tx.send(Some(err)).await.ok();
                 }
             }
