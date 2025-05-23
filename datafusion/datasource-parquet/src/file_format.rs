@@ -1729,6 +1729,28 @@ fn create_max_min_accs(
     (max_values, min_values)
 }
 
+/// Converts a ParquetSource to an Arc<dyn FileSource> and applies the schema adapter factory
+/// from the FileScanConfig if present.
+///
+/// # Arguments
+/// * `source` - The ParquetSource to convert
+/// * `conf` - FileScanConfig that may contain a schema adapter factory
+/// # Returns
+/// The converted FileSource with schema adapter factory applied if provided
+fn apply_schema_adapter(
+    source: ParquetSource,
+    conf: &FileScanConfig,
+) -> Arc<dyn FileSource> {
+    let file_source: Arc<dyn FileSource> = source.into();
+
+    // If the FileScanConfig.file_source() has a schema adapter factory, apply it
+    if let Some(factory) = conf.file_source().schema_adapter_factory() {
+        file_source.with_schema_adapter_factory(factory.clone())
+    } else {
+        file_source
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1943,28 +1965,5 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
-    }
-}
-
-/// Converts a ParquetSource to an Arc<dyn FileSource> and applies the schema adapter factory
-/// from the FileScanConfig if present.
-///
-/// # Arguments
-/// * `source` - The ParquetSource to convert
-/// * `conf` - FileScanConfig that may contain a schema adapter factory
-/// # Returns
-/// The converted FileSource with schema adapter factory applied if provided
-fn apply_schema_adapter(
-    source: ParquetSource,
-    conf: &FileScanConfig,
-) -> Arc<dyn FileSource> {
-    // Convert the ParquetSource to Arc<dyn FileSource>
-    let file_source: Arc<dyn FileSource> = source.into();
-
-    // If the FileScanConfig.file_source() has a schema adapter factory, apply it
-    if let Some(factory) = conf.file_source().schema_adapter_factory() {
-        file_source.with_schema_adapter_factory(factory.clone())
-    } else {
-        file_source
     }
 }
