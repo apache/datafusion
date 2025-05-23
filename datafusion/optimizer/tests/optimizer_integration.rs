@@ -641,6 +641,34 @@ fn eliminate_unique_keyed_self_join_on_non_unique_index() {
     );
 }
 
+#[test]
+fn eliminate_self_join_on_non_matching_unique_index() {
+    let sql = r#"
+        SELECT
+            a.id
+        FROM
+            employees a
+            JOIN employees b ON a.id = b.external_id
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    Projection: a.id
+      Inner Join: a.id = b.external_id
+        SubqueryAlias: a
+          TableScan: employees projection=[id]
+        SubqueryAlias: b
+          Projection: employees.external_id
+            Filter: employees.department = Utf8("HR")
+              TableScan: employees projection=[department, external_id]
+    "#
+    );
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -688,10 +716,14 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
                     Field::new("department", DataType::Utf8, false),
                     Field::new("salary", DataType::UInt32, false),
                     Field::new("hire_date", DataType::Date64, false),
+                    Field::new("external_id", DataType::UInt32, false),
                 ],
                 HashMap::new(),
             ),
-            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]),
+            Constraints::new_unverified(vec![
+                Constraint::PrimaryKey(vec![0]),
+                Constraint::Unique(vec![5]),
+            ]),
         );
 
     let sql_to_rel = SqlToRel::new(&context_provider);

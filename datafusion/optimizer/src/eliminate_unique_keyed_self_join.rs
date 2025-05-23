@@ -269,23 +269,19 @@ fn is_join_on_unique_index(join: &Join) -> bool {
         return false;
     }
 
-    let mut left_contains_unique_index = false;
-    for unique in &left_unique {
-        if left_resolved.column_indexes.is_superset(&unique) {
-            left_contains_unique_index = true;
-            break;
+    let left_unique_index = left_unique
+        .iter()
+        .find(|unique| left_resolved.column_indexes.is_superset(unique));
+    let right_unique_index = right_unique
+        .iter()
+        .find(|unique| right_resolved.column_indexes.is_superset(unique));
+
+    match (left_unique_index, right_unique_index) {
+        (Some(left_unique_index), Some(right_unique_index)) => {
+            left_unique_index == right_unique_index
         }
+        _ => false,
     }
-    // TODO: Again this should be redundant due to equality of schema
-    let mut right_contains_unique_index = false;
-    for unique in &right_unique {
-        if right_resolved.column_indexes.is_superset(&unique) {
-            right_contains_unique_index = true;
-            break;
-        }
-    }
-    assert_eq!(left_contains_unique_index, right_contains_unique_index);
-    left_contains_unique_index
 }
 
 impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
