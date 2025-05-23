@@ -35,13 +35,13 @@ make_udaf_expr_and_func!(
     Grouping,
     grouping,
     expression,
-    "Returns the level of grouping, equals to (grouping(c1) << (n-1)) + (grouping(c2) << (n-2)) + … + grouping(cn)",
+    "Returns the level of grouping, equals to (grouping(c1) << (n-1)) + (grouping(c2) << (n-2)) + … + grouping(cn).",
     grouping_udaf
 );
 
 #[user_doc(
     doc_section(label = "General Functions"),
-    description = "Returns the level of grouping, equals to (grouping(c1) << (n-1)) + (grouping(c2) << (n-2)) + … + grouping(cn)",
+    description = "Returns the level of grouping, equals to (grouping(c1) << (n-1)) + (grouping(c2) << (n-2)) + … + grouping(cn).",
     syntax_example = "grouping(expression)",
     sql_example = r#"```sql
 > SELECT column_name, GROUPING(column_name) AS group_column
