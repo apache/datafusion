@@ -30,6 +30,10 @@ use std::str::FromStr;
 ///
 /// If a [`Filter`] matches a specific test case, then the record is executed, if there's
 /// no match, the record is skipped.
+///
+/// Filters can be parsed from strings of the form `<file_name>:line_number`. For example,
+/// `foo.slt:100` matches any test whose name contains `foo.slt` and the test starts on line
+/// number 100.
 #[derive(Debug, Clone)]
 pub struct Filter {
     file_substring: String,
