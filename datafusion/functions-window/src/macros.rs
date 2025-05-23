@@ -286,7 +286,7 @@ macro_rules! get_or_init_udwf {
 /// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
 /// #         Ok(Field::new(
 /// #             field_args.name(),
-/// #             field_args.get_input_type(0).unwrap(),
+/// #             field_args.get_input_field(0).unwrap().data_type().clone(),
 /// #             false,
 /// #         ))
 /// #     }
@@ -557,7 +557,7 @@ macro_rules! create_udwf_expr {
 /// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
 /// #         Ok(Field::new(
 /// #             field_args.name(),
-/// #             field_args.get_input_type(0).unwrap(),
+/// #             field_args.get_input_field(0).unwrap().data_type().clone(),
 /// #             false,
 /// #         ))
 /// #     }
@@ -646,7 +646,7 @@ macro_rules! create_udwf_expr {
 /// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
 /// #         Ok(Field::new(
 /// #             field_args.name(),
-/// #             field_args.get_input_type(0).unwrap(),
+/// #             field_args.get_input_field(0).unwrap().data_type().clone(),
 /// #             false,
 /// #         ))
 /// #     }

@@ -33,8 +33,8 @@ use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
-    Partitioning, TableType,
+    col, ident, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning, TableType,
 };
 use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
@@ -934,7 +934,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .map(|f| count(col(f.name())).alias(f.name()))
+                    .map(|f| count(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // null_count aggregation
@@ -943,7 +943,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .map(|f| {
-                        sum(case(is_null(col(f.name())))
+                        sum(case(is_null(ident(f.name())))
                             .when(lit(true), lit(1))
                             .otherwise(lit(0))
                             .unwrap())
@@ -957,7 +957,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| avg(col(f.name())).alias(f.name()))
+                    .map(|f| avg(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // std aggregation
@@ -966,7 +966,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| stddev(col(f.name())).alias(f.name()))
+                    .map(|f| stddev(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // min aggregation
@@ -977,7 +977,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| min(col(f.name())).alias(f.name()))
+                    .map(|f| min(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // max aggregation
@@ -988,7 +988,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| max(col(f.name())).alias(f.name()))
+                    .map(|f| max(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // median aggregation
@@ -997,7 +997,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| median(col(f.name())).alias(f.name()))
+                    .map(|f| median(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
         ];
