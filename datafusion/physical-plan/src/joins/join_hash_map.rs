@@ -169,7 +169,9 @@ pub trait JoinHashMapType {
     fn get_list(&self) -> &Self::NextType;
 
     // Whether values in the hashmap are distinct (no duplicate keys)
-    fn is_distinct(&self) -> bool;
+    fn is_distinct(&self) -> bool {
+        false
+    }
 
     /// Updates hashmap from iterator of row indices & row hashes pairs.
     fn update_from_iter<'a>(
