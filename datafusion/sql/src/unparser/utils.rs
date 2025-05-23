@@ -206,7 +206,7 @@ pub(crate) fn unproject_agg_exprs(
                 }
                 let grouping_expr = grouping_set_to_exprlist(&agg.group_expr)?;
                 let args = if grouping.args.len() == 1 {
-                    agg.group_expr.clone()
+                    grouping_expr.iter().map(|e| (*e).clone()).collect()
                 } else {
                     if let Expr::Literal(ScalarValue::List(list)) = &grouping.args[1] {
                         if list.len() != 1 {
