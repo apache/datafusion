@@ -18,7 +18,7 @@
 //! Expression simplification API
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 
 use arrow::{
@@ -523,9 +523,9 @@ struct ConstEvaluator<'a> {
 #[allow(clippy::large_enum_variant)]
 enum ConstSimplifyResult {
     // Expr was simplified and contains the new expression
-    Simplified(ScalarValue),
+    Simplified(ScalarValue, Option<HashMap<String, String>>),
     // Expr was not simplified and original value is returned
-    NotSimplified(ScalarValue),
+    NotSimplified(ScalarValue, Option<HashMap<String, String>>),
     // Evaluation encountered an error, contains the original expression
     SimplifyRuntimeError(DataFusionError, Expr),
 }
@@ -567,11 +567,11 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
             // any error is countered during simplification, return the original
             // so that normal evaluation can occur
             Some(true) => match self.evaluate_to_scalar(expr) {
-                ConstSimplifyResult::Simplified(s) => {
-                    Ok(Transformed::yes(Expr::Literal(s, None)))
+                ConstSimplifyResult::Simplified(s, m) => {
+                    Ok(Transformed::yes(Expr::Literal(s, m)))
                 }
-                ConstSimplifyResult::NotSimplified(s) => {
-                    Ok(Transformed::no(Expr::Literal(s, None)))
+                ConstSimplifyResult::NotSimplified(s, m) => {
+                    Ok(Transformed::no(Expr::Literal(s, m)))
                 }
                 ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
                     Ok(Transformed::yes(expr))
@@ -666,8 +666,8 @@ impl<'a> ConstEvaluator<'a> {
 
     /// Internal helper to evaluates an Expr
     pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
-        if let Expr::Literal(s, _) = expr {
-            return ConstSimplifyResult::NotSimplified(s);
+        if let Expr::Literal(s, m) = expr {
+            return ConstSimplifyResult::NotSimplified(s, m);
         }
 
         let phys_expr =
@@ -675,6 +675,16 @@ impl<'a> ConstEvaluator<'a> {
                 Ok(e) => e,
                 Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
             };
+        let metadata = phys_expr
+            .return_field(self.input_batch.schema_ref())
+            .ok()
+            .and_then(|f| {
+                let m = f.metadata();
+                match m.is_empty() {
+                    true => None,
+                    false => Some(m.clone()),
+                }
+            });
         let col_val = match phys_expr.evaluate(&self.input_batch) {
             Ok(v) => v,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
@@ -687,13 +697,15 @@ impl<'a> ConstEvaluator<'a> {
                         expr,
                     )
                 } else if as_list_array(&a).is_ok() {
-                    ConstSimplifyResult::Simplified(ScalarValue::List(
-                        a.as_list::<i32>().to_owned().into(),
-                    ))
+                    ConstSimplifyResult::Simplified(
+                        ScalarValue::List(a.as_list::<i32>().to_owned().into()),
+                        metadata,
+                    )
                 } else if as_large_list_array(&a).is_ok() {
-                    ConstSimplifyResult::Simplified(ScalarValue::LargeList(
-                        a.as_list::<i64>().to_owned().into(),
-                    ))
+                    ConstSimplifyResult::Simplified(
+                        ScalarValue::LargeList(a.as_list::<i64>().to_owned().into()),
+                        metadata,
+                    )
                 } else {
                     // Non-ListArray
                     match ScalarValue::try_from_array(&a, 0) {
@@ -705,7 +717,7 @@ impl<'a> ConstEvaluator<'a> {
                                     expr,
                                 )
                             } else {
-                                ConstSimplifyResult::Simplified(s)
+                                ConstSimplifyResult::Simplified(s, metadata)
                             }
                         }
                         Err(err) => ConstSimplifyResult::SimplifyRuntimeError(err, expr),
@@ -723,7 +735,7 @@ impl<'a> ConstEvaluator<'a> {
                         expr,
                     )
                 } else {
-                    ConstSimplifyResult::Simplified(s)
+                    ConstSimplifyResult::Simplified(s, metadata)
                 }
             }
         }
