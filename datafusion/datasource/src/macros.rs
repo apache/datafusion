@@ -58,7 +58,7 @@
 ///     impl_schema_adapter_methods!();
 /// }
 /// ```
-#[macro_export]
+#[macro_export(local_inner_macros)]
 macro_rules! impl_schema_adapter_methods {
     () => {
         fn with_schema_adapter_factory(
