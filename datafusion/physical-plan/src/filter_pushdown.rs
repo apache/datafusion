@@ -60,6 +60,25 @@ impl PredicateSupports {
         Self::new(pushdowns)
     }
 
+    /// Create a new [`PredicateSupport`] with filterrs marked as supported if
+    /// `f` returns true and unsupported otherwise.
+    pub fn new_with_supported_check(
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        check: impl Fn(&Arc<dyn PhysicalExpr>) -> bool,
+    ) -> Self {
+        let pushdowns = filters
+            .into_iter()
+            .map(|f| {
+                if check(&f) {
+                    PredicateSupport::Supported(f)
+                } else {
+                    PredicateSupport::Unsupported(f)
+                }
+            })
+            .collect();
+        Self::new(pushdowns)
+    }
+
     /// Transform all filters to supported, returning a new [`PredicateSupports`]
     /// with all filters as [`PredicateSupport::Supported`].
     /// This does not modify the original [`PredicateSupport`].
@@ -102,6 +121,18 @@ impl PredicateSupports {
             .collect()
     }
 
+    /// Collect supported filters into a Vec, without removing them from the original
+    /// [`PredicateSupport`].
+    pub fn collect_supported(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.0
+            .iter()
+            .filter_map(|f| match f {
+                PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Unsupported(_) => None,
+            })
+            .collect()
+    }
+
     /// Collect all filters into a Vec, without removing them from the original
     /// FilterPushdowns.
     pub fn collect_all(self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -131,6 +162,16 @@ impl PredicateSupports {
     /// Check if the inner `Vec<FilterPushdown>` is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Check if all filters are supported.
+    pub fn is_all_supported(&self) -> bool {
+        self.0.iter().all(|f| matches!(f, PredicateSupport::Supported(_)))
+    }
+
+    /// Check if all filters are unsupported.
+    pub fn is_all_unsupported(&self) -> bool {
+        self.0.iter().all(|f| matches!(f, PredicateSupport::Unsupported(_)))
     }
 }
 
