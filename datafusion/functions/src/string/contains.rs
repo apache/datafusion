@@ -150,10 +150,11 @@ fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 #[cfg(test)]
 mod test {
     use super::ContainsFunc;
+    use crate::expr_fn::contains;
     use arrow::array::{BooleanArray, StringArray};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
@@ -184,6 +185,18 @@ mod test {
         assert_eq!(
             *actual.into_array(2).unwrap(),
             *expect.into_array(2).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_contains_api() {
+        let expr = contains(
+            Expr::Literal(ScalarValue::Utf8(Some("the quick brown fox".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("row".to_string()))),
+        );
+        assert_eq!(
+            expr.to_string(),
+            "contains(Utf8(\"the quick brown fox\"), Utf8(\"row\"))"
         );
     }
 }

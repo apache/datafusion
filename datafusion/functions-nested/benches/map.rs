@@ -36,7 +36,7 @@ fn keys(rng: &mut ThreadRng) -> Vec<String> {
     let mut keys = HashSet::with_capacity(1000);
 
     while keys.len() < 1000 {
-        keys.insert(rng.gen_range(0..10000).to_string());
+        keys.insert(rng.random_range(0..10000).to_string());
     }
 
     keys.into_iter().collect()
@@ -46,14 +46,14 @@ fn values(rng: &mut ThreadRng) -> Vec<i32> {
     let mut values = HashSet::with_capacity(1000);
 
     while values.len() < 1000 {
-        values.insert(rng.gen_range(0..10000));
+        values.insert(rng.random_range(0..10000));
     }
     values.into_iter().collect()
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("make_map_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let keys = keys(&mut rng);
         let values = values(&mut rng);
         let mut buffer = Vec::new();
@@ -74,7 +74,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("map_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
         let key_list = ListArray::new(
