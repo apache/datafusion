@@ -1818,12 +1818,12 @@ impl LogicalPlan {
                         Ok(())
                     }
                     LogicalPlan::Projection(Projection { ref expr, .. }) => {
-                        write!(f, "Projection: ")?;
+                        write!(f, "Projection:")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
-                                write!(f, ", ")?;
+                                write!(f, ",")?;
                             }
-                            write!(f, "{expr_item}")?;
+                            write!(f, " {expr_item}")?;
                         }
                         Ok(())
                     }
