@@ -57,12 +57,11 @@ use datafusion_common::{
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     case,
-    Projection,
     dml::InsertOp,
     expr::{Alias, ScalarFunction},
     is_null, lit,
     utils::COUNT_STAR_EXPANSION,
-    SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
+    Projection, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
@@ -2037,10 +2036,12 @@ impl DataFrame {
                 .iter()
                 .map(|(qualifier, field)| {
                     if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                        (col(Column::from((qualifier, field)))
-                            .alias_qualified(qualifier.cloned(), new_name),
-                    false,
-                    )} else {
+                        (
+                            col(Column::from((qualifier, field)))
+                                .alias_qualified(qualifier.cloned(), new_name),
+                            false,
+                        )
+                    } else {
                         (col(Column::from((qualifier, field))), false)
                     }
                 })
