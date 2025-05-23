@@ -60,7 +60,7 @@ pub async fn from_substrait_agg_func(
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
     let args = if udaf.name() == "count" && args.is_empty() {
-        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+        vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {
         args
     };

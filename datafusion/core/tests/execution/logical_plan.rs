@@ -47,9 +47,9 @@ async fn count_only_nulls() -> Result<()> {
     let input = Arc::new(LogicalPlan::Values(Values {
         schema: input_schema,
         values: vec![
-            vec![Expr::Literal(ScalarValue::Null)],
-            vec![Expr::Literal(ScalarValue::Null)],
-            vec![Expr::Literal(ScalarValue::Null)],
+            vec![Expr::Literal(ScalarValue::Null, None)],
+            vec![Expr::Literal(ScalarValue::Null, None)],
+            vec![Expr::Literal(ScalarValue::Null, None)],
         ],
     }));
     let input_col_ref = Expr::Column(Column {
