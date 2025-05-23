@@ -149,14 +149,14 @@ impl RunOpt {
             if query_id == 15 {
                 for (n, query) in sql.iter().enumerate() {
                     if n == 1 {
-                        result = self.execute_query(&ctx, query).await?;
+                        result = self.execute_query(ctx, query).await?;
                     } else {
                         self.execute_query(&ctx, query).await?;
                     }
                 }
             } else {
                 for query in sql {
-                    result = self.execute_query(&ctx, query).await?;
+                    result = self.execute_query(ctx, query).await?;
                 }
             }
 
