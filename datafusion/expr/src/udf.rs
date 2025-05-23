@@ -306,6 +306,14 @@ pub struct ScalarFunctionArgs<'a, 'b> {
     pub return_field: &'b Field,
 }
 
+impl<'a, 'b> ScalarFunctionArgs<'a, 'b> {
+    /// The return type of the function. See [`Self::return_field`] for more
+    /// details.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
+}
+
 /// Information about arguments passed to the function
 ///
 /// This structure contains metadata about how the function was called
