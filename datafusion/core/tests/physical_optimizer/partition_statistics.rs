@@ -629,8 +629,37 @@ mod test {
         )
         .await?;
 
+        // agg on empty_table && !group_by.is_empty()
         let empty_table =
             Arc::new(EmptyExec::new(scan_schema.clone()).with_partitions(2));
+
+        let agg_partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggr_expr.clone(),
+            vec![None],
+            empty_table.clone(),
+            scan_schema.clone(),
+        )?);
+
+        let empty_stat = Statistics {
+            num_rows: Precision::Exact(0),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+
+        assert_eq!(&empty_stat, &agg_partial.partition_statistics(Some(0))?);
+        assert_eq!(&empty_stat, &agg_partial.partition_statistics(Some(1))?);
+        validate_statistics_with_data(
+            agg_partial.clone(),
+            vec![ExpectedStatistics::Empty, ExpectedStatistics::Empty],
+            0,
+        )
+        .await?;
 
         let agg_partial = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
@@ -650,15 +679,6 @@ mod test {
             agg_partial.schema(),
         )?);
 
-        let empty_stat = Statistics {
-            num_rows: Precision::Exact(0),
-            total_byte_size: Precision::Absent,
-            column_statistics: vec![
-                ColumnStatistics::new_unknown(),
-                ColumnStatistics::new_unknown(),
-                ColumnStatistics::new_unknown(),
-            ],
-        };
         assert_eq!(&empty_stat, &agg_final.partition_statistics(Some(0))?);
         assert_eq!(&empty_stat, &agg_final.partition_statistics(Some(1))?);
 
