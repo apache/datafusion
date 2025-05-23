@@ -172,7 +172,7 @@ impl AggregateUDFImpl for FirstValue {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let mut fields = vec![Field::new(
             format_state_name(args.name, "first_value"),
-            args.return_field.data_type().clone(),
+            args.return_type().clone(),
             true,
         )
         .into()];
