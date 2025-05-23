@@ -68,11 +68,6 @@ impl JoinHashMapType for PruningJoinHashMap {
     fn get_list(&self) -> &Self::NextType {
         &self.next
     }
-
-    fn is_distinct(&self) -> bool {
-        // TODO
-        false
-    }
 }
 
 /// The `PruningJoinHashMap` is similar to a regular `JoinHashMap`, but with
