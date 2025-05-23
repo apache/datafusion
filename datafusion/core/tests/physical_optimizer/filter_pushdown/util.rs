@@ -117,6 +117,7 @@ impl TestSource {
     fn new(support: bool, batches: Vec<RecordBatch>) -> Self {
         Self {
             support,
+            metrics: ExecutionPlanMetricsSet::new(),
             batches,
             ..Default::default()
         }
