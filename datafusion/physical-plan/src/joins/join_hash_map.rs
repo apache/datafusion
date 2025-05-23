@@ -116,20 +116,11 @@ pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
 macro_rules! chain_traverse {
     (
         $input_indices:ident, $match_indices:ident, $hash_values:ident, $next_chain:ident,
-        $input_idx:ident, $chain_idx:ident, $deleted_offset:ident, $remaining_output:ident
+        $input_idx:ident, $chain_idx:ident, $remaining_output:ident
     ) => {
         let mut i = $chain_idx - 1;
         loop {
-            let match_row_idx = if let Some(offset) = $deleted_offset {
-                // This arguments means that we prune the next index way before here.
-                if i < offset as u64 {
-                    // End of the list due to pruning
-                    break;
-                }
-                i - offset as u64
-            } else {
-                i
-            };
+            let match_row_idx = i;
             $match_indices.push(match_row_idx);
             $input_indices.push($input_idx as u32);
             $remaining_output -= 1;
@@ -260,7 +251,6 @@ pub trait JoinHashMapType {
     fn get_matched_indices_with_limit_offset(
         &self,
         hash_values: &[u64],
-        deleted_offset: Option<usize>,
         limit: usize,
         offset: JoinHashMapOffset,
     ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
@@ -308,7 +298,6 @@ pub trait JoinHashMapType {
                     next_chain,
                     initial_idx,
                     initial_next_idx,
-                    deleted_offset,
                     remaining_output
                 );
 
@@ -329,7 +318,6 @@ pub trait JoinHashMapType {
                     next_chain,
                     row_idx,
                     index,
-                    deleted_offset,
                     remaining_output
                 );
             }
