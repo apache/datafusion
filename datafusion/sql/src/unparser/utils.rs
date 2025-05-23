@@ -28,8 +28,10 @@ use datafusion_common::{
     Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr::{self, AggregateFunction}, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
+    expr::{self, AggregateFunction},
+    utils::grouping_set_to_exprlist,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Unnest,
+    Window,
 };
 
 use datafusion_functions_aggregate::grouping::grouping_udaf;
@@ -207,19 +209,17 @@ pub(crate) fn unproject_agg_exprs(
                 let grouping_expr = grouping_set_to_exprlist(&agg.group_expr)?;
                 let args = if grouping.args.len() == 1 {
                     grouping_expr.iter().map(|e| (*e).clone()).collect()
-                } else {
-                    if let Expr::Literal(ScalarValue::List(list)) = &grouping.args[1] {
-                        if list.len() != 1 {
-                            return internal_err!("The second argument of grouping function must be a list with exactly one element");
-                        }
-                        let values = list.value(0).as_any().downcast_ref::<Int32Array>().unwrap().values().to_vec();
-                        values.iter().map(|i: &i32| grouping_expr[*i as usize].clone()).collect()
-                    } else {
-                        return internal_err!("The second argument of grouping function must be a list");
+                } else if let Expr::Literal(ScalarValue::List(list)) = &grouping.args[1] {
+                    if list.len() != 1 {
+                        return internal_err!("The second argument of grouping function must be a list with exactly one element");
                     }
+                    let values = list.value(0).as_any().downcast_ref::<Int32Array>().unwrap().values().to_vec();
+                    values.iter().map(|i: &i32| grouping_expr[*i as usize].clone()).collect()
+                } else {
+                    return internal_err!("The second argument of grouping function must be a list");
                 };
-                return Ok(Transformed::yes(Expr::AggregateFunction(AggregateFunction::new_udf(
-                    grouping_udaf(), args, false, None, None, None))));
+                Ok(Transformed::yes(Expr::AggregateFunction(AggregateFunction::new_udf(
+                    grouping_udaf(), args, false, None, None, None))))
             }
             _ => Ok(Transformed::no(sub_expr))
         }

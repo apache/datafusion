@@ -18,16 +18,19 @@
 use arrow::array::ListArray;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use datafusion_common::{
-    assert_contains, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference
+    assert_contains, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
-    cast, col, lit, table_scan, wildcard, Aggregate, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore
+    cast, col, lit, table_scan, wildcard, Aggregate, EmptyRelation, Expr, Extension,
+    LogicalPlan, LogicalPlanBuilder, Union, UserDefinedLogicalNode,
+    UserDefinedLogicalNodeCore,
 };
-use datafusion_functions::unicode;
 use datafusion_functions::core::grouping;
+use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_nested::map::map_udf;
@@ -2526,35 +2529,44 @@ fn test_grouping() -> Result<()> {
     ]);
     let table_scan = table_scan(Some("test"), &schema, Some(vec![0, 1, 2]))?.build()?;
     let plan = LogicalPlanBuilder::from(table_scan)
-    .aggregate(
-        vec![
-            Expr::GroupingSet(datafusion_expr::GroupingSet::GroupingSets(vec![
-                vec![col("c1"), col("c2")],
-                vec![col("c1")],
-                vec![col("c2")],
-                vec![],
-            ]))
-        ],
-        vec![
-            sum(col("c3"))
-        ])?
-    .build()?;
+        .aggregate(
+            vec![Expr::GroupingSet(
+                datafusion_expr::GroupingSet::GroupingSets(vec![
+                    vec![col("c1"), col("c2")],
+                    vec![col("c1")],
+                    vec![col("c2")],
+                    vec![],
+                ]),
+            )],
+            vec![sum(col("c3"))],
+        )?
+        .build()?;
 
-    let group1 = ScalarValue::List(Arc::new(
-        ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(0)])]),
-    ));
-    let group2 = ScalarValue::List(Arc::new(
-        ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1)])]),
-    ));
-    let group3 = ScalarValue::List(Arc::new(
-        ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(0), Some(1)])]),
-    ));
+    let group1 =
+        ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(0)])],
+        )));
+    let group2 =
+        ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(1)])],
+        )));
+    let group3 =
+        ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(0), Some(1)])],
+        )));
     let project = LogicalPlanBuilder::from(plan)
-    .project(vec![
-        grouping().call(vec![col(Aggregate::INTERNAL_GROUPING_ID), lit(group1)]).alias("grouping(test.c1)"),
-        grouping().call(vec![col(Aggregate::INTERNAL_GROUPING_ID), lit(group2)]).alias("grouping(test.c2)"),
-        grouping().call(vec![col(Aggregate::INTERNAL_GROUPING_ID), lit(group3)]).alias("grouping(test.c1,test.c2)"),
-    ])?.build()?;
+        .project(vec![
+            grouping()
+                .call(vec![col(Aggregate::INTERNAL_GROUPING_ID), lit(group1)])
+                .alias("grouping(test.c1)"),
+            grouping()
+                .call(vec![col(Aggregate::INTERNAL_GROUPING_ID), lit(group2)])
+                .alias("grouping(test.c2)"),
+            grouping()
+                .call(vec![col(Aggregate::INTERNAL_GROUPING_ID), lit(group3)])
+                .alias("grouping(test.c1,test.c2)"),
+        ])?
+        .build()?;
     let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
     let sql = unparser.plan_to_sql(&project)?;
     assert_snapshot!(
