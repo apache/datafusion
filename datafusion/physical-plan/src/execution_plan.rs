@@ -535,11 +535,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// and [`ChildPushdownResult::self_filters`] is discarded.
     ///
     /// The default implementation is a no-op that passes the result of pushdown from the children to its parent.
-    /// 
+    ///
     /// When returning filters via [`FilterPushdownPropagation`] the order of the filters need not match
     /// the order they were passed in via `child_pushdown_result`, but preserving the order may be beneficial
     /// for debugging and reasoning about the resulting plans so it is recommended to preserve the order.
-    /// 
+    ///
     /// There are various helper methods to make implementing this method easier, see:
     /// - [`FilterPushdownPropagation::unsupported`]: to indicate that the node does not support filter pushdown at all.
     /// - [`FilterPushdownPropagation::transparent`]: to indicate that the node supports filter pushdown but does not involve itself in it,

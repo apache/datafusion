@@ -166,12 +166,16 @@ impl PredicateSupports {
 
     /// Check if all filters are supported.
     pub fn is_all_supported(&self) -> bool {
-        self.0.iter().all(|f| matches!(f, PredicateSupport::Supported(_)))
+        self.0
+            .iter()
+            .all(|f| matches!(f, PredicateSupport::Supported(_)))
     }
 
     /// Check if all filters are unsupported.
     pub fn is_all_unsupported(&self) -> bool {
-        self.0.iter().all(|f| matches!(f, PredicateSupport::Unsupported(_)))
+        self.0
+            .iter()
+            .all(|f| matches!(f, PredicateSupport::Unsupported(_)))
     }
 }
 
