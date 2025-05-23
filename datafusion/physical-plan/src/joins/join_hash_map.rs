@@ -362,7 +362,7 @@ impl JoinHashMapType for JoinHashMap {
         &self.next
     }
 
-    // /// Check if the values in the hashmap are distinct.
+    /// Check if the values in the hashmap are distinct.
     fn is_distinct(&self) -> bool {
         self.map.len() == self.next.len()
     }
