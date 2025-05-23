@@ -115,10 +115,10 @@ pub fn from_values(
             let fields = row
                 .iter()
                 .map(|v| match v {
-                    Expr::Literal(sv) => to_substrait_literal(producer, sv),
+                    Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
                     Expr::Alias(alias) => match alias.expr.as_ref() {
                         // The schema gives us the names, so we can skip aliases
-                        Expr::Literal(sv) => to_substrait_literal(producer, sv),
+                        Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
                         _ => Err(substrait_datafusion_err!(
                                     "Only literal types can be aliased in Virtual Tables, got: {}", alias.expr.variant_name()
                                 )),

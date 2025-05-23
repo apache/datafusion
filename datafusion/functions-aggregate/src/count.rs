@@ -100,7 +100,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
 /// let expr = col(expr.schema_name().to_string());
 /// ```
 pub fn count_all() -> Expr {
-    count(Expr::Literal(COUNT_STAR_EXPANSION)).alias("count(*)")
+    count(Expr::Literal(COUNT_STAR_EXPANSION, None)).alias("count(*)")
 }
 
 /// Creates window aggregation to count all rows.
@@ -125,7 +125,7 @@ pub fn count_all() -> Expr {
 pub fn count_all_window() -> Expr {
     Expr::WindowFunction(WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
-        vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+        vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
     ))
 }
 

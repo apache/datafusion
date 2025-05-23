@@ -1214,7 +1214,7 @@ impl SessionContext {
         let mut params: Vec<ScalarValue> = parameters
             .into_iter()
             .map(|e| match e {
-                Expr::Literal(scalar) => Ok(scalar),
+                Expr::Literal(scalar, _) => Ok(scalar),
                 _ => not_impl_err!("Unsupported parameter type: {}", e),
             })
             .collect::<Result<_>>()?;

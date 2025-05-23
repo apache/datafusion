@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     let expr2 = Expr::BinaryExpr(BinaryExpr::new(
         Box::new(col("a")),
         Operator::Plus,
-        Box::new(Expr::Literal(ScalarValue::Int32(Some(5)))),
+        Box::new(Expr::Literal(ScalarValue::Int32(Some(5)), None)),
     ));
     assert_eq!(expr, expr2);
 

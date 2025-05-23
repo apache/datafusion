@@ -163,7 +163,11 @@ mod tests {
             (Expr::IsNotNull(Box::new(col("a"))), true),
             // a = NULL
             (
-                binary_expr(col("a"), Operator::Eq, Expr::Literal(ScalarValue::Null)),
+                binary_expr(
+                    col("a"),
+                    Operator::Eq,
+                    Expr::Literal(ScalarValue::Null, None),
+                ),
                 true,
             ),
             // a > 8
@@ -226,12 +230,16 @@ mod tests {
             ),
             // a IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], false),
+                in_list(
+                    col("a"),
+                    vec![Expr::Literal(ScalarValue::Null, None)],
+                    false,
+                ),
                 true,
             ),
             // a NOT IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], true),
+                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null, None)], true),
                 true,
             ),
         ];

@@ -214,7 +214,7 @@ mod tests {
             let args = args
                 .iter()
                 .map(|arg| {
-                    if let Expr::Literal(scalar) = arg {
+                    if let Expr::Literal(scalar, _) = arg {
                         Ok(scalar)
                     } else {
                         exec_err!("Expected only literal arguments to table udf")
