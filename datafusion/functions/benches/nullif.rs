@@ -17,10 +17,11 @@
 
 extern crate criterion;
 
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::core::nullif;
 use std::sync::Arc;
 
@@ -32,10 +33,25 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("abcd".to_string()))),
             ColumnarValue::Array(array),
         ];
-        c.bench_function(&format!("nullif scalar array: {}", size), |b| {
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
+        c.bench_function(&format!("nullif scalar array: {size}"), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                black_box(nullif.invoke_batch(&args, size).unwrap())
+                black_box(
+                    nullif
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            arg_fields: arg_fields.clone(),
+                            number_rows: size,
+                            return_field: &Field::new("f", DataType::Utf8, true),
+                        })
+                        .unwrap(),
+                )
             })
         });
     }

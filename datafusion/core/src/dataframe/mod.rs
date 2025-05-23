@@ -33,7 +33,8 @@ use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning, TableType,
+    col, ident, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning, TableType,
 };
 use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
@@ -50,14 +51,20 @@ use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
-    SchemaError, UnnestOptions,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
+    DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
 };
-use datafusion_expr::dml::InsertOp;
-use datafusion_expr::{case, is_null, lit, Projection, SortExpr};
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
+    case,
+    Projection,
+    dml::InsertOp,
+    expr::{Alias, ScalarFunction},
+    is_null, lit,
+    utils::COUNT_STAR_EXPANSION,
+    SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
+use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
@@ -183,6 +190,22 @@ pub struct DataFrame {
     // Box the (large) SessionState to reduce the size of DataFrame on the stack
     session_state: Box<SessionState>,
     plan: LogicalPlan,
+    // Whether projection ops can skip validation or not. This flag if false
+    // allows for an optimization in `with_column` and `with_column_renamed` functions
+    // where the recursive work required to columnize and normalize expressions can
+    // be skipped if set to false. Since these function calls are often chained or
+    // called many times in dataframe operations this can result in a significant
+    // performance gain.
+    //
+    // The conditions where this can be set to false is when the dataframe function
+    // call results in the last operation being a
+    // `LogicalPlanBuilder::from(plan).project(fields)?.build()` or
+    // `LogicalPlanBuilder::from(plan).project_with_validation(fields)?.build()`
+    // call. This requirement guarantees that the plan has had all columnization
+    // and normalization applied to existing expressions and only new expressions
+    // will require that work. Any operation that update the plan in any way
+    // via anything other than a `project` call should set this to true.
+    projection_requires_validation: bool,
 }
 
 impl DataFrame {
@@ -195,6 +218,7 @@ impl DataFrame {
         Self {
             session_state: Box::new(session_state),
             plan,
+            projection_requires_validation: true,
         }
     }
 
@@ -320,18 +344,34 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn select(self, expr_list: Vec<Expr>) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(&expr_list);
+    pub fn select(
+        self,
+        expr_list: impl IntoIterator<Item = impl Into<SelectExpr>>,
+    ) -> Result<DataFrame> {
+        let expr_list: Vec<SelectExpr> =
+            expr_list.into_iter().map(|e| e.into()).collect::<Vec<_>>();
+
+        let expressions = expr_list
+            .iter()
+            .filter_map(|e| match e {
+                SelectExpr::Expression(expr) => Some(expr.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let window_func_exprs = find_window_exprs(&expressions);
         let plan = if window_func_exprs.is_empty() {
             self.plan
         } else {
             LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
+
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
         Ok(DataFrame {
             session_state: self.session_state,
             plan: project_plan,
+            projection_requires_validation: false,
         })
     }
 
@@ -437,6 +477,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -477,6 +518,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -526,7 +568,10 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
         let aggr_expr_len = aggr_expr.len();
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
         let plan = LogicalPlanBuilder::from(self.plan)
+            .with_options(options)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
         let plan = if is_grouping_set {
@@ -547,6 +592,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: !is_grouping_set,
         })
     }
 
@@ -559,6 +605,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -597,6 +644,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -634,6 +682,47 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Calculate the union of two [`DataFrame`]s using column names, preserving duplicate rows.
+    ///
+    /// The two [`DataFrame`]s are combined using column names rather than position,
+    /// filling missing columns with null.
+    ///
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone().select_columns(&["b", "c", "a"])?.with_column("d", lit("77"))?;
+    /// let df = df.union_by_name(d2)?;
+    /// let expected = vec![
+    ///     "+---+---+---+----+",
+    ///     "| a | b | c | d  |",
+    ///     "+---+---+---+----+",
+    ///     "| 1 | 2 | 3 |    |",
+    ///     "| 1 | 2 | 3 | 77 |",
+    ///     "+---+---+---+----+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn union_by_name(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .union_by_name(dataframe.plan)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -672,6 +761,46 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Calculate the union of two [`DataFrame`]s using column names with all duplicated rows removed.
+    ///
+    /// The two [`DataFrame`]s are combined using column names rather than position,
+    /// filling missing columns with null.
+    ///
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone().select_columns(&["b", "c", "a"])?;
+    /// let df = df.union_by_name_distinct(d2)?;
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn union_by_name_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .union_by_name_distinct(dataframe.plan)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -703,6 +832,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -744,6 +874,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -804,7 +935,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .map(|f| count(col(f.name())).alias(f.name()))
+                    .map(|f| count(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // null_count aggregation
@@ -813,7 +944,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .map(|f| {
-                        sum(case(is_null(col(f.name())))
+                        sum(case(is_null(ident(f.name())))
                             .when(lit(true), lit(1))
                             .otherwise(lit(0))
                             .unwrap())
@@ -827,7 +958,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| avg(col(f.name())).alias(f.name()))
+                    .map(|f| avg(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // std aggregation
@@ -836,7 +967,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| stddev(col(f.name())).alias(f.name()))
+                    .map(|f| stddev(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // min aggregation
@@ -847,7 +978,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| min(col(f.name())).alias(f.name()))
+                    .map(|f| min(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // max aggregation
@@ -858,7 +989,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| max(col(f.name())).alias(f.name()))
+                    .map(|f| max(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // median aggregation
@@ -867,7 +998,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| median(col(f.name())).alias(f.name()))
+                    .map(|f| median(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
         ];
@@ -944,6 +1075,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -993,6 +1125,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -1060,6 +1193,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1119,6 +1253,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1154,6 +1289,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1231,8 +1367,47 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn show(self) -> Result<()> {
+        println!("{}", self.to_string().await?);
+        Ok(())
+    }
+
+    /// Execute the `DataFrame` and return a string representation of the results.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::execution::SessionStateBuilder;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let cfg = SessionConfig::new()
+    ///     .set_str("datafusion.format.null", "no-value");
+    /// let session_state = SessionStateBuilder::new()
+    ///     .with_config(cfg)
+    ///     .with_default_features()
+    ///     .build();
+    /// let ctx = SessionContext::new_with_state(session_state);
+    /// let df = ctx.sql("select null as 'null-column'").await?;
+    /// let result = df.to_string().await?;
+    /// assert_eq!(result,
+    /// "+-------------+
+    /// | null-column |
+    /// +-------------+
+    /// | no-value    |
+    /// +-------------+"
+    /// );
+    /// # Ok(())
+    /// # }
+    pub async fn to_string(self) -> Result<String> {
+        let options = self.session_state.config().options().format.clone();
+        let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
+
         let results = self.collect().await?;
-        Ok(pretty::print_batches(&results)?)
+        Ok(
+            pretty::pretty_format_batches_with_options(&results, &arrow_options)?
+                .to_string(),
+        )
     }
 
     /// Execute the `DataFrame` and print only the first `num` rows of the
@@ -1425,6 +1600,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -1477,6 +1653,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1512,6 +1689,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1557,6 +1735,7 @@ impl DataFrame {
         DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         }
         .collect()
         .await
@@ -1626,6 +1805,7 @@ impl DataFrame {
         DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         }
         .collect()
         .await
@@ -1695,12 +1875,13 @@ impl DataFrame {
         DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         }
         .collect()
         .await
     }
 
-    /// Add an additional column to the DataFrame.
+    /// Add or replace a column in the DataFrame.
     ///
     /// # Example
     /// ```
@@ -1728,33 +1909,36 @@ impl DataFrame {
 
         let mut col_exists = false;
         let new_column = expr.alias(name);
-        let mut fields: Vec<Expr> = plan
+        let mut fields: Vec<(Expr, bool)> = plan
             .schema()
             .iter()
             .filter_map(|(qualifier, field)| {
                 if field.name() == name {
                     col_exists = true;
-                    Some(new_column.clone())
+                    Some((new_column.clone(), true))
                 } else {
                     let e = col(Column::from((qualifier, field)));
                     window_fn_str
                         .as_ref()
                         .filter(|s| *s == &e.to_string())
                         .is_none()
-                        .then_some(e)
+                        .then_some((e, self.projection_requires_validation))
                 }
             })
             .collect();
 
         if !col_exists {
-            fields.push(new_column);
+            fields.push((new_column, true));
         }
 
-        let project_plan = LogicalPlanBuilder::from(plan).project(fields)?.build()?;
+        let project_plan = LogicalPlanBuilder::from(plan)
+            .project_with_validation(fields)?
+            .build()?;
 
         Ok(DataFrame {
             session_state: self.session_state,
             plan: project_plan,
+            projection_requires_validation: false,
         })
     }
 
@@ -1853,21 +2037,23 @@ impl DataFrame {
                 .iter()
                 .map(|(qualifier, field)| {
                     if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                        col(Column::from((qualifier, field)))
-                            .alias_qualified(qualifier.cloned(), new_name)
-                    } else {
-                        col(Column::from((qualifier, field)))
+                        (col(Column::from((qualifier, field)))
+                            .alias_qualified(qualifier.cloned(), new_name),
+                    false,
+                    )} else {
+                        (col(Column::from((qualifier, field))), false)
                     }
                 })
                 .collect::<Vec<_>>();
 
             LogicalPlanBuilder::from(self.plan)
-                .project(projection)?
+                .project_with_validation(projection)?
                 .build()?
         };
         Ok(DataFrame {
             session_state: self.session_state,
             plan: project_plan,
+            projection_requires_validation: false,
         })
     }
 
@@ -1933,6 +2119,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -1968,7 +2155,92 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
+    }
+
+    /// Fill null values in specified columns with a given value
+    /// If no columns are specified (empty vector), applies to all columns
+    /// Only fills if the value can be cast to the column's type
+    ///
+    /// # Arguments
+    /// * `value` - Value to fill nulls with
+    /// * `columns` - List of column names to fill. If empty, fills all columns.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// // Fill nulls in only columns "a" and "c":
+    /// let df = df.fill_null(ScalarValue::from(0), vec!["a".to_owned(), "c".to_owned()])?;
+    /// // Fill nulls across all columns:
+    /// let df = df.fill_null(ScalarValue::from(0), vec![])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn fill_null(
+        &self,
+        value: ScalarValue,
+        columns: Vec<String>,
+    ) -> Result<DataFrame> {
+        let cols = if columns.is_empty() {
+            self.logical_plan()
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect()
+        } else {
+            self.find_columns(&columns)?
+        };
+
+        // Create projections for each column
+        let projections = self
+            .logical_plan()
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| {
+                if cols.contains(field) {
+                    // Try to cast fill value to column type. If the cast fails, fallback to the original column.
+                    match value.clone().cast_to(field.data_type()) {
+                        Ok(fill_value) => Expr::Alias(Alias {
+                            expr: Box::new(Expr::ScalarFunction(ScalarFunction {
+                                func: coalesce(),
+                                args: vec![col(field.name()), lit(fill_value)],
+                            })),
+                            relation: None,
+                            name: field.name().to_string(),
+                            metadata: None,
+                        }),
+                        Err(_) => col(field.name()),
+                    }
+                } else {
+                    col(field.name())
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.clone().select(projections)
+    }
+
+    // Helper to find columns from names
+    fn find_columns(&self, names: &[String]) -> Result<Vec<Field>> {
+        let schema = self.logical_plan().schema();
+        names
+            .iter()
+            .map(|name| {
+                schema
+                    .field_with_name(None, name)
+                    .cloned()
+                    .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
+            })
+            .collect()
     }
 }
 

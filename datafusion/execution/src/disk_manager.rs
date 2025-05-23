@@ -17,13 +17,20 @@
 
 //! [`DiskManager`]: Manages files generated during query execution
 
-use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
+use datafusion_common::{
+    config_err, resources_datafusion_err, resources_err, DataFusionError, Result,
+};
 use log::debug;
 use parking_lot::Mutex;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tempfile::{Builder, NamedTempFile, TempDir};
+
+use crate::memory_pool::human_readable_size;
+
+const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 
 /// Configuration for temporary disk access
 #[derive(Debug, Clone)]
@@ -75,6 +82,12 @@ pub struct DiskManager {
     /// If `Some(vec![])` a new OS specified temporary directory will be created
     /// If `None` an error will be returned (configured not to spill)
     local_dirs: Mutex<Option<Vec<Arc<TempDir>>>>,
+    /// The maximum amount of data (in bytes) stored inside the temporary directories.
+    /// Default to 100GB
+    max_temp_directory_size: u64,
+    /// Used disk space in the temporary directories. Now only spilled data for
+    /// external executors are counted.
+    used_disk_space: Arc<AtomicU64>,
 }
 
 impl DiskManager {
@@ -84,21 +97,66 @@ impl DiskManager {
             DiskManagerConfig::Existing(manager) => Ok(manager),
             DiskManagerConfig::NewOs => Ok(Arc::new(Self {
                 local_dirs: Mutex::new(Some(vec![])),
+                max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                used_disk_space: Arc::new(AtomicU64::new(0)),
             })),
             DiskManagerConfig::NewSpecified(conf_dirs) => {
                 let local_dirs = create_local_dirs(conf_dirs)?;
                 debug!(
-                    "Created local dirs {:?} as DataFusion working directory",
-                    local_dirs
+                    "Created local dirs {local_dirs:?} as DataFusion working directory"
                 );
                 Ok(Arc::new(Self {
                     local_dirs: Mutex::new(Some(local_dirs)),
+                    max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                    used_disk_space: Arc::new(AtomicU64::new(0)),
                 }))
             }
             DiskManagerConfig::Disabled => Ok(Arc::new(Self {
                 local_dirs: Mutex::new(None),
+                max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                used_disk_space: Arc::new(AtomicU64::new(0)),
             })),
         }
+    }
+
+    pub fn set_max_temp_directory_size(
+        &mut self,
+        max_temp_directory_size: u64,
+    ) -> Result<()> {
+        // If the disk manager is disabled and `max_temp_directory_size` is not 0,
+        // this operation is not meaningful, fail early.
+        if self.local_dirs.lock().is_none() && max_temp_directory_size != 0 {
+            return config_err!(
+                "Cannot set max temp directory size for a disk manager that spilling is disabled"
+            );
+        }
+
+        self.max_temp_directory_size = max_temp_directory_size;
+        Ok(())
+    }
+
+    pub fn set_arc_max_temp_directory_size(
+        this: &mut Arc<Self>,
+        max_temp_directory_size: u64,
+    ) -> Result<()> {
+        if let Some(inner) = Arc::get_mut(this) {
+            inner.set_max_temp_directory_size(max_temp_directory_size)?;
+            Ok(())
+        } else {
+            config_err!("DiskManager should be a single instance")
+        }
+    }
+
+    pub fn with_max_temp_directory_size(
+        mut self,
+        max_temp_directory_size: u64,
+    ) -> Result<Self> {
+        self.set_max_temp_directory_size(max_temp_directory_size)?;
+        Ok(self)
+    }
+
+    pub fn used_disk_space(&self) -> u64 {
+        self.used_disk_space.load(Ordering::Relaxed)
     }
 
     /// Return true if this disk manager supports creating temporary
@@ -113,7 +171,7 @@ impl DiskManager {
     /// If the file can not be created for some reason, returns an
     /// error message referencing the request description
     pub fn create_tmp_file(
-        &self,
+        self: &Arc<Self>,
         request_description: &str,
     ) -> Result<RefCountedTempFile> {
         let mut guard = self.local_dirs.lock();
@@ -136,24 +194,37 @@ impl DiskManager {
             local_dirs.push(Arc::new(tempdir));
         }
 
-        let dir_index = thread_rng().gen_range(0..local_dirs.len());
+        let dir_index = rng().random_range(0..local_dirs.len());
         Ok(RefCountedTempFile {
             _parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Builder::new()
                 .tempfile_in(local_dirs[dir_index].as_ref())
                 .map_err(DataFusionError::IoError)?,
+            current_file_disk_usage: 0,
+            disk_manager: Arc::clone(self),
         })
     }
 }
 
 /// A wrapper around a [`NamedTempFile`] that also contains
-/// a reference to its parent temporary directory
+/// a reference to its parent temporary directory.
+///
+/// # Note
+/// After any modification to the underlying file (e.g., writing data to it), the caller
+/// must invoke [`Self::update_disk_usage`] to update the global disk usage counter.
+/// This ensures the disk manager can properly enforce usage limits configured by
+/// [`DiskManager::with_max_temp_directory_size`].
 #[derive(Debug)]
 pub struct RefCountedTempFile {
     /// The reference to the directory in which temporary files are created to ensure
     /// it is not cleaned up prior to the NamedTempFile
     _parent_temp_dir: Arc<TempDir>,
     tempfile: NamedTempFile,
+    /// Tracks the current disk usage of this temporary file. See
+    /// [`Self::update_disk_usage`] for more details.
+    current_file_disk_usage: u64,
+    /// The disk manager that created and manages this temporary file
+    disk_manager: Arc<DiskManager>,
 }
 
 impl RefCountedTempFile {
@@ -163,6 +234,50 @@ impl RefCountedTempFile {
 
     pub fn inner(&self) -> &NamedTempFile {
         &self.tempfile
+    }
+
+    /// Updates the global disk usage counter after modifications to the underlying file.
+    ///
+    /// # Errors
+    /// - Returns an error if the global disk usage exceeds the configured limit.
+    pub fn update_disk_usage(&mut self) -> Result<()> {
+        // Get new file size from OS
+        let metadata = self.tempfile.as_file().metadata()?;
+        let new_disk_usage = metadata.len();
+
+        // Update the global disk usage by:
+        // 1. Subtracting the old file size from the global counter
+        self.disk_manager
+            .used_disk_space
+            .fetch_sub(self.current_file_disk_usage, Ordering::Relaxed);
+        // 2. Adding the new file size to the global counter
+        self.disk_manager
+            .used_disk_space
+            .fetch_add(new_disk_usage, Ordering::Relaxed);
+
+        // 3. Check if the updated global disk usage exceeds the configured limit
+        let global_disk_usage = self.disk_manager.used_disk_space.load(Ordering::Relaxed);
+        if global_disk_usage > self.disk_manager.max_temp_directory_size {
+            return resources_err!(
+                "The used disk space during the spilling process has exceeded the allowable limit of {}. Try increasing the `max_temp_directory_size` in the disk manager configuration.",
+                human_readable_size(self.disk_manager.max_temp_directory_size as usize)
+            );
+        }
+
+        // 4. Update the local file size tracking
+        self.current_file_disk_usage = new_disk_usage;
+
+        Ok(())
+    }
+}
+
+/// When the temporary file is dropped, subtract its disk usage from the disk manager's total
+impl Drop for RefCountedTempFile {
+    fn drop(&mut self) {
+        // Subtract the current file's disk usage from the global counter
+        self.disk_manager
+            .used_disk_space
+            .fetch_sub(self.current_file_disk_usage, Ordering::Relaxed);
     }
 }
 
@@ -250,7 +365,8 @@ mod tests {
 
     #[test]
     fn test_disk_manager_create_spill_folder() {
-        let config = DiskManagerConfig::new_specified(vec!["DOESNT_EXIST".into()]);
+        let dir = TempDir::new().unwrap();
+        let config = DiskManagerConfig::new_specified(vec![dir.path().to_owned()]);
 
         DiskManager::try_new(config)
             .unwrap()

@@ -25,9 +25,12 @@ use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
+    Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -61,7 +64,12 @@ impl Default for InitcapFunc {
 impl InitcapFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -87,11 +95,11 @@ impl ScalarUDFImpl for InitcapFunc {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(initcap::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(initcap::<i64>, vec![])(args),

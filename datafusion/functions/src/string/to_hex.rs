@@ -30,7 +30,7 @@ use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 
 use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 /// Converts the number to its equivalent hexadecimal representation.
@@ -127,14 +127,14 @@ impl ScalarUDFImpl for ToHexFunc {
         })
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
-            DataType::Int32 => make_scalar_function(to_hex::<Int32Type>, vec![])(args),
-            DataType::Int64 => make_scalar_function(to_hex::<Int64Type>, vec![])(args),
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
+            DataType::Int32 => {
+                make_scalar_function(to_hex::<Int32Type>, vec![])(&args.args)
+            }
+            DataType::Int64 => {
+                make_scalar_function(to_hex::<Int64Type>, vec![])(&args.args)
+            }
             other => exec_err!("Unsupported data type {other:?} for function to_hex"),
         }
     }

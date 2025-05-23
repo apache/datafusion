@@ -30,23 +30,22 @@ async fn test_list_query_parameters() -> Result<()> {
         .with_param_values(vec![ScalarValue::from(3i32)])?
         .collect()
         .await?;
-    let expected = vec![
-        "+----+----+-------+",
-        "| c1 | c2 | c3    |",
-        "+----+----+-------+",
-        "| 3  | 1  | false |",
-        "| 3  | 10 | true  |",
-        "| 3  | 2  | true  |",
-        "| 3  | 3  | false |",
-        "| 3  | 4  | true  |",
-        "| 3  | 5  | false |",
-        "| 3  | 6  | true  |",
-        "| 3  | 7  | false |",
-        "| 3  | 8  | true  |",
-        "| 3  | 9  | false |",
-        "+----+----+-------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +----+----+-------+
+    | c1 | c2 | c3    |
+    +----+----+-------+
+    | 3  | 1  | false |
+    | 3  | 10 | true  |
+    | 3  | 2  | true  |
+    | 3  | 3  | false |
+    | 3  | 4  | true  |
+    | 3  | 5  | false |
+    | 3  | 6  | true  |
+    | 3  | 7  | false |
+    | 3  | 8  | true  |
+    | 3  | 9  | false |
+    +----+----+-------+
+    ");
     Ok(())
 }
 
@@ -66,33 +65,32 @@ async fn test_named_query_parameters() -> Result<()> {
         ])?
         .collect()
         .await?;
-    let expected = vec![
-        "+----+----+",
-        "| c1 | c2 |",
-        "+----+----+",
-        "| 1  | 1  |",
-        "| 1  | 2  |",
-        "| 1  | 3  |",
-        "| 1  | 4  |",
-        "| 1  | 5  |",
-        "| 1  | 6  |",
-        "| 1  | 7  |",
-        "| 1  | 8  |",
-        "| 1  | 9  |",
-        "| 1  | 10 |",
-        "| 2  | 1  |",
-        "| 2  | 2  |",
-        "| 2  | 3  |",
-        "| 2  | 4  |",
-        "| 2  | 5  |",
-        "| 2  | 6  |",
-        "| 2  | 7  |",
-        "| 2  | 8  |",
-        "| 2  | 9  |",
-        "| 2  | 10 |",
-        "+----+----+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +----+----+
+    | c1 | c2 |
+    +----+----+
+    | 1  | 1  |
+    | 1  | 10 |
+    | 1  | 2  |
+    | 1  | 3  |
+    | 1  | 4  |
+    | 1  | 5  |
+    | 1  | 6  |
+    | 1  | 7  |
+    | 1  | 8  |
+    | 1  | 9  |
+    | 2  | 1  |
+    | 2  | 10 |
+    | 2  | 2  |
+    | 2  | 3  |
+    | 2  | 4  |
+    | 2  | 5  |
+    | 2  | 6  |
+    | 2  | 7  |
+    | 2  | 8  |
+    | 2  | 9  |
+    +----+----+
+    ");
     Ok(())
 }
 
@@ -114,33 +112,32 @@ async fn test_prepare_statement() -> Result<()> {
     let dataframe = dataframe.with_param_values(param_values)?;
     let results = dataframe.collect().await?;
 
-    let expected = vec![
-        "+----+----+",
-        "| c1 | c2 |",
-        "+----+----+",
-        "| 1  | 1  |",
-        "| 1  | 10 |",
-        "| 1  | 2  |",
-        "| 1  | 3  |",
-        "| 1  | 4  |",
-        "| 1  | 5  |",
-        "| 1  | 6  |",
-        "| 1  | 7  |",
-        "| 1  | 8  |",
-        "| 1  | 9  |",
-        "| 2  | 1  |",
-        "| 2  | 10 |",
-        "| 2  | 2  |",
-        "| 2  | 3  |",
-        "| 2  | 4  |",
-        "| 2  | 5  |",
-        "| 2  | 6  |",
-        "| 2  | 7  |",
-        "| 2  | 8  |",
-        "| 2  | 9  |",
-        "+----+----+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +----+----+
+    | c1 | c2 |
+    +----+----+
+    | 1  | 1  |
+    | 1  | 10 |
+    | 1  | 2  |
+    | 1  | 3  |
+    | 1  | 4  |
+    | 1  | 5  |
+    | 1  | 6  |
+    | 1  | 7  |
+    | 1  | 8  |
+    | 1  | 9  |
+    | 2  | 1  |
+    | 2  | 10 |
+    | 2  | 2  |
+    | 2  | 3  |
+    | 2  | 4  |
+    | 2  | 5  |
+    | 2  | 6  |
+    | 2  | 7  |
+    | 2  | 8  |
+    | 2  | 9  |
+    +----+----+
+    ");
 
     Ok(())
 }
@@ -164,14 +161,13 @@ async fn prepared_statement_type_coercion() -> Result<()> {
         ])?
         .collect()
         .await?;
-    let expected = [
-        "+--------+----------+",
-        "| signed | unsigned |",
-        "+--------+----------+",
-        "| -1     | 1        |",
-        "+--------+----------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +--------+----------+
+    | signed | unsigned |
+    +--------+----------+
+    | -1     | 1        |
+    +--------+----------+
+    ");
     Ok(())
 }
 
@@ -194,14 +190,13 @@ async fn test_parameter_type_coercion() -> Result<()> {
             ("str", ScalarValue::from("1")),
         ])?
         .collect().await?;
-    let expected = [
-        "+--------+----------+",
-        "| signed | unsigned |",
-        "+--------+----------+",
-        "| -1     | 1        |",
-        "+--------+----------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +--------+----------+
+    | signed | unsigned |
+    +--------+----------+
+    | -1     | 1        |
+    +--------+----------+
+    ");
     Ok(())
 }
 
@@ -263,14 +258,13 @@ async fn test_positional_parameter_not_bound() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+--------+----------+",
-        "| signed | unsigned |",
-        "+--------+----------+",
-        "| -1     | 1        |",
-        "+--------+----------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +--------+----------+
+    | signed | unsigned |
+    +--------+----------+
+    | -1     | 1        |
+    +--------+----------+
+    ");
 
     Ok(())
 }
@@ -309,14 +303,13 @@ async fn test_named_parameter_not_bound() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+--------+----------+",
-        "| signed | unsigned |",
-        "+--------+----------+",
-        "| -1     | 1        |",
-        "+--------+----------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +--------+----------+
+    | signed | unsigned |
+    +--------+----------+
+    | -1     | 1        |
+    +--------+----------+
+    ");
 
     Ok(())
 }

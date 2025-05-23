@@ -26,9 +26,9 @@ use datafusion_functions::regex::regexpcount::regexp_count_func;
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
 use datafusion_functions::regex::regexpreplace::regexp_replace;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
+use rand::prelude::IndexedRandom;
 use rand::rngs::ThreadRng;
-use rand::seq::SliceRandom;
 use rand::Rng;
 use std::iter;
 use std::sync::Arc;
@@ -65,7 +65,7 @@ fn regex(rng: &mut ThreadRng) -> StringArray {
 fn start(rng: &mut ThreadRng) -> Int64Array {
     let mut data: Vec<i64> = vec![];
     for _ in 0..1000 {
-        data.push(rng.gen_range(1..5));
+        data.push(rng.random_range(1..5));
     }
 
     Int64Array::from(data)
@@ -88,7 +88,7 @@ fn flags(rng: &mut ThreadRng) -> StringArray {
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("regexp_count_1000 string", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let start = Arc::new(start(&mut rng)) as ArrayRef;
@@ -108,7 +108,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_count_1000 utf8view", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let start = Arc::new(start(&mut rng)) as ArrayRef;
@@ -128,7 +128,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_like_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let flags = Arc::new(flags(&mut rng)) as ArrayRef;
@@ -142,7 +142,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_like_1000 utf8view", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
@@ -156,7 +156,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_match_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let flags = Arc::new(flags(&mut rng)) as ArrayRef;
@@ -174,7 +174,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_match_1000 utf8view", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
@@ -192,12 +192,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_replace_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let flags = Arc::new(flags(&mut rng)) as ArrayRef;
         let replacement =
-            Arc::new(StringArray::from_iter_values(iter::repeat("XX").take(1000)))
+            Arc::new(StringArray::from_iter_values(iter::repeat_n("XX", 1000)))
                 as ArrayRef;
 
         b.iter(|| {
@@ -214,14 +214,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_replace_1000 utf8view", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         // flags are not allowed to be utf8view according to the function
         let flags = Arc::new(flags(&mut rng)) as ArrayRef;
-        let replacement = Arc::new(StringViewArray::from_iter_values(
-            iter::repeat("XX").take(1000),
-        ));
+        let replacement = Arc::new(StringViewArray::from_iter_values(iter::repeat_n(
+            "XX", 1000,
+        )));
 
         b.iter(|| {
             black_box(

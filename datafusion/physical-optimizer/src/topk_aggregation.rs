@@ -56,7 +56,11 @@ impl TopKAggregation {
         }
         let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
         let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
-        if !kt.is_primitive() && kt != DataType::Utf8 {
+        if !kt.is_primitive()
+            && kt != DataType::Utf8
+            && kt != DataType::Utf8View
+            && kt != DataType::LargeUtf8
+        {
             return None;
         }
         if aggr.filter_expr().iter().any(|e| e.is_some()) {

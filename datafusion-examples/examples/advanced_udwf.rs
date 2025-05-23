@@ -26,7 +26,7 @@ use arrow::{
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg_udaf;
-use datafusion::logical_expr::expr::WindowFunction;
+use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion::logical_expr::function::{
     PartitionEvaluatorArgs, WindowFunctionSimplification, WindowUDFFieldArgs,
 };
@@ -192,11 +192,13 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         let simplify = |window_function: WindowFunction, _: &dyn SimplifyInfo| {
             Ok(Expr::WindowFunction(WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(avg_udaf()),
-                args: window_function.args,
-                partition_by: window_function.partition_by,
-                order_by: window_function.order_by,
-                window_frame: window_function.window_frame,
-                null_treatment: window_function.null_treatment,
+                params: WindowFunctionParams {
+                    args: window_function.params.args,
+                    partition_by: window_function.params.partition_by,
+                    order_by: window_function.params.order_by,
+                    window_frame: window_function.params.window_frame,
+                    null_treatment: window_function.params.null_treatment,
+                },
             }))
         };
 

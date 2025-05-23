@@ -103,12 +103,11 @@ impl ScalarUDFImpl for EncodeFunc {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        encode(args)
+        encode(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -183,12 +182,11 @@ impl ScalarUDFImpl for DecodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        decode(args)
+        decode(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -312,7 +310,7 @@ fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
     let out_len = input.len() / 2;
     let buf = &mut buf[..out_len];
     hex::decode_to_slice(input, buf).map_err(|e| {
-        DataFusionError::Internal(format!("Failed to decode from hex: {}", e))
+        DataFusionError::Internal(format!("Failed to decode from hex: {e}"))
     })?;
     Ok(out_len)
 }
@@ -321,7 +319,7 @@ fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
     general_purpose::STANDARD_NO_PAD
         .decode_slice(input, buf)
         .map_err(|e| {
-            DataFusionError::Internal(format!("Failed to decode from base64: {}", e))
+            DataFusionError::Internal(format!("Failed to decode from base64: {e}"))
         })
 }
 
@@ -421,15 +419,13 @@ impl Encoding {
                     .decode(value)
                     .map_err(|e| {
                         DataFusionError::Internal(format!(
-                            "Failed to decode value using base64: {}",
-                            e
+                            "Failed to decode value using base64: {e}"
                         ))
                     })?
             }
             Self::Hex => hex::decode(value).map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "Failed to decode value using hex: {}",
-                    e
+                    "Failed to decode value using hex: {e}"
                 ))
             })?,
         };
@@ -449,15 +445,13 @@ impl Encoding {
                     .decode(value)
                     .map_err(|e| {
                         DataFusionError::Internal(format!(
-                            "Failed to decode value using base64: {}",
-                            e
+                            "Failed to decode value using base64: {e}"
                         ))
                     })?
             }
             Self::Hex => hex::decode(value).map_err(|e| {
                 DataFusionError::Internal(format!(
-                    "Failed to decode value using hex: {}",
-                    e
+                    "Failed to decode value using hex: {e}"
                 ))
             })?,
         };

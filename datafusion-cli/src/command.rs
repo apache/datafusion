@@ -62,21 +62,30 @@ impl Command {
             Self::Help => {
                 let now = Instant::now();
                 let command_batch = all_commands_info();
-                print_options.print_batches(command_batch.schema(), &[command_batch], now)
+                let schema = command_batch.schema();
+                let num_rows = command_batch.num_rows();
+                let task_ctx = ctx.task_ctx();
+                let config = &task_ctx.session_config().options().format;
+                print_options.print_batches(
+                    schema,
+                    &[command_batch],
+                    now,
+                    num_rows,
+                    config,
+                )
             }
             Self::ListTables => {
                 exec_and_print(ctx, print_options, "SHOW TABLES".into()).await
             }
             Self::DescribeTableStmt(name) => {
-                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {}", name))
+                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {name}"))
                     .await
             }
             Self::Include(filename) => {
                 if let Some(filename) = filename {
                     let file = File::open(filename).map_err(|e| {
                         DataFusionError::Execution(format!(
-                            "Error opening {:?} {}",
-                            filename, e
+                            "Error opening {filename:?} {e}"
                         ))
                     })?;
                     exec_from_lines(ctx, &mut BufReader::new(file), print_options)
@@ -106,7 +115,7 @@ impl Command {
             Self::SearchFunctions(function) => {
                 if let Ok(func) = function.parse::<Function>() {
                     let details = func.function_details()?;
-                    println!("{}", details);
+                    println!("{details}");
                     Ok(())
                 } else {
                     exec_err!("{function} is not a supported function")

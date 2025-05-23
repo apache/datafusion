@@ -95,12 +95,11 @@ impl ScalarUDFImpl for TranslateFunc {
         utf8_to_str_type(&arg_types[0], "translate")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(invoke_translate, vec![])(args)
+        make_scalar_function(invoke_translate, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

@@ -30,7 +30,9 @@ use datafusion_common::{
     HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
-use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
+use datafusion_expr::expr::{
+    Alias, GroupingSet, Unnest, WindowFunction, WindowFunctionParams,
+};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
@@ -100,10 +102,10 @@ impl CheckColumnsSatisfyExprsPurpose {
     fn message_prefix(&self) -> &'static str {
         match self {
             CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate => {
-                "Projection references non-aggregate values"
+                "Column in SELECT must be in GROUP BY or an aggregate function"
             }
             CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate => {
-                "HAVING clause references non-aggregate values"
+                "Column in HAVING must be in GROUP BY or an aggregate function"
             }
         }
     }
@@ -156,20 +158,19 @@ fn check_column_satisfies_expr(
     purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
     if !columns.contains(expr) {
+        let diagnostic = Diagnostic::new_error(
+            purpose.diagnostic_message(expr),
+            expr.spans().and_then(|spans| spans.first()),
+        )
+        .with_help(format!("Either add '{expr}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({expr})"), None);
+
         return plan_err!(
-            "{}: Expression {} could not be resolved from available columns: {}",
+            "{}: While expanding wildcard, column \"{}\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"{}\" appears in the SELECT clause satisfies this requirement",
             purpose.message_prefix(),
             expr,
-            expr_vec_fmt!(columns)
-        )
-        .map_err(|err| {
-            let diagnostic = Diagnostic::new_error(
-                purpose.diagnostic_message(expr),
-                expr.spans().and_then(|spans| spans.first()),
-            )
-            .with_help(format!("add '{expr}' to GROUP BY clause"), None);
-            err.with_diagnostic(diagnostic)
-        });
+            expr_vec_fmt!(columns);
+            diagnostic=diagnostic
+        );
     }
     Ok(())
 }
@@ -240,11 +241,15 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {
-            Expr::WindowFunction(WindowFunction { partition_by, .. }) => Ok(partition_by),
+            Expr::WindowFunction(WindowFunction {
+                params: WindowFunctionParams { partition_by, .. },
+                ..
+            }) => Ok(partition_by),
             Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
-                Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
-                    Ok(partition_by)
-                }
+                Expr::WindowFunction(WindowFunction {
+                    params: WindowFunctionParams { partition_by, .. },
+                    ..
+                }) => Ok(partition_by),
                 expr => exec_err!("Impossibly got non-window expr {expr:?}"),
             },
             expr => exec_err!("Impossibly got non-window expr {expr:?}"),
@@ -393,9 +398,9 @@ impl RecursiveUnnestRewriter<'_> {
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
         // inside unnest execution, each column inside the inner projection
         // will be transformed into new columns. Thus we need to keep track of these placeholding column names
-        let placeholder_name = format!("{UNNEST_PLACEHOLDER}({})", inner_expr_name);
+        let placeholder_name = format!("{UNNEST_PLACEHOLDER}({inner_expr_name})");
         let post_unnest_name =
-            format!("{UNNEST_PLACEHOLDER}({},depth={})", inner_expr_name, level);
+            format!("{UNNEST_PLACEHOLDER}({inner_expr_name},depth={level})");
         // This is due to the fact that unnest transformation should keep the original
         // column name as is, to comply with group by and order by
         let placeholder_column = Column::from_name(placeholder_name.clone());
@@ -490,30 +495,30 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     ///
     /// For example an expr of **unnest(unnest(column1)) + unnest(unnest(unnest(column2)))**
     /// ```text
-    ///                         ┌──────────────────┐           
-    ///                         │    binaryexpr    │           
-    ///                         │                  │           
-    ///                         └──────────────────┘           
-    ///                f_down  / /            │ │              
-    ///                       / / f_up        │ │              
-    ///                      / /        f_down│ │f_up          
-    ///                  unnest               │ │              
-    ///                                       │ │              
-    ///       f_down  / / f_up(rewriting)     │ │              
-    ///              / /                                       
-    ///             / /                      unnest            
-    ///         unnest                                         
-    ///                           f_down  / / f_up(rewriting)  
-    /// f_down / /f_up                   / /                   
-    ///       / /                       / /                    
-    ///      / /                    unnest                     
-    ///   column1                                              
-    ///                     f_down / /f_up                     
-    ///                           / /                          
-    ///                          / /                           
-    ///                       column2                          
+    ///                         ┌──────────────────┐
+    ///                         │    binaryexpr    │
+    ///                         │                  │
+    ///                         └──────────────────┘
+    ///                f_down  / /            │ │
+    ///                       / / f_up        │ │
+    ///                      / /        f_down│ │f_up
+    ///                  unnest               │ │
+    ///                                       │ │
+    ///       f_down  / / f_up(rewriting)     │ │
+    ///              / /
+    ///             / /                      unnest
+    ///         unnest
+    ///                           f_down  / / f_up(rewriting)
+    /// f_down / /f_up                   / /
+    ///       / /                       / /
+    ///      / /                    unnest
+    ///   column1
+    ///                     f_down / /f_up
+    ///                           / /
+    ///                          / /
+    ///                       column2
     /// ```
-    ///         
+    ///
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref traversing_unnest) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
@@ -626,6 +631,8 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         if matches!(&transformed_expr, Expr::Column(_))
             || matches!(&transformed_expr, Expr::Wildcard { .. })
         {
@@ -673,7 +680,7 @@ mod tests {
                     "{}=>[{}]",
                     i.0,
                     vec.iter()
-                        .map(|i| format!("{}", i))
+                        .map(|i| format!("{i}"))
                         .collect::<Vec<String>>()
                         .join(", ")
                 ),

@@ -226,6 +226,23 @@ impl BoundedWindowAggExec {
                 .unwrap_or_else(Vec::new)
         }
     }
+
+    fn statistics_helper(&self, statistics: Statistics) -> Result<Statistics> {
+        let win_cols = self.window_expr.len();
+        let input_cols = self.input.schema().fields().len();
+        // TODO stats: some windowing function will maintain invariants such as min, max...
+        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
+        // copy stats of the input to the beginning of the schema.
+        column_statistics.extend(statistics.column_statistics);
+        for _ in 0..win_cols {
+            column_statistics.push(ColumnStatistics::new_unknown())
+        }
+        Ok(Statistics {
+            num_rows: statistics.num_rows,
+            column_statistics,
+            total_byte_size: Precision::Absent,
+        })
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -251,6 +268,17 @@ impl DisplayAs for BoundedWindowAggExec {
                     .collect();
                 let mode = &self.input_order_mode;
                 write!(f, "wdw=[{}], mode=[{:?}]", g.join(", "), mode)?;
+            }
+            DisplayFormatType::TreeRender => {
+                let g: Vec<String> = self
+                    .window_expr
+                    .iter()
+                    .map(|e| e.name().to_owned().to_string())
+                    .collect();
+                writeln!(f, "select_list={}", g.join(", "))?;
+
+                let mode = &self.input_order_mode;
+                writeln!(f, "mode={mode:?}")?;
             }
         }
         Ok(())
@@ -332,21 +360,12 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        let input_stat = self.input.statistics()?;
-        let win_cols = self.window_expr.len();
-        let input_cols = self.input.schema().fields().len();
-        // TODO stats: some windowing function will maintain invariants such as min, max...
-        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
-        // copy stats of the input to the beginning of the schema.
-        column_statistics.extend(input_stat.column_statistics);
-        for _ in 0..win_cols {
-            column_statistics.push(ColumnStatistics::new_unknown())
-        }
-        Ok(Statistics {
-            num_rows: input_stat.num_rows,
-            column_statistics,
-            total_byte_size: Precision::Absent,
-        })
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        let input_stat = self.input.partition_statistics(partition)?;
+        self.statistics_helper(input_stat)
     }
 }
 
@@ -998,8 +1017,13 @@ impl BoundedWindowAggStream {
             return Poll::Ready(None);
         }
 
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
+                // Start the timer for compute time within this operator. It will be
+                // stopped when dropped.
+                let _timer = elapsed_compute.timer();
+
                 self.search_mode.update_partition_batch(
                     &mut self.input_buffer,
                     batch,
@@ -1013,6 +1037,8 @@ impl BoundedWindowAggStream {
             }
             Some(Err(e)) => Poll::Ready(Some(Err(e))),
             None => {
+                let _timer = elapsed_compute.timer();
+
                 self.finished = true;
                 for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;
@@ -1190,9 +1216,9 @@ mod tests {
 
     use crate::common::collect;
     use crate::expressions::PhysicalSortExpr;
-    use crate::memory::MemorySourceConfig;
     use crate::projection::ProjectionExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
+    use crate::test::TestMemoryExec;
     use crate::windows::{
         create_udwf_window_expr, create_window_expr, BoundedWindowAggExec, InputOrderMode,
     };
@@ -1204,9 +1230,8 @@ mod tests {
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{
-        assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
-    };
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::{
         RecordBatchStream, SendableRecordBatchStream, TaskContext,
@@ -1223,6 +1248,7 @@ mod tests {
 
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
+    use insta::assert_snapshot;
     use itertools::Itertools;
     use tokio::time::timeout;
 
@@ -1331,8 +1357,7 @@ mod tests {
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n_future_range as u64))),
         );
         let fn_name = format!(
-            "{}({:?}) PARTITION BY: [{:?}], ORDER BY: [{:?}]",
-            window_fn, args, partitionby_exprs, orderby_exprs
+            "{window_fn}({args:?}) PARTITION BY: [{partitionby_exprs:?}], ORDER BY: [{orderby_exprs:?}]"
         );
         let input_order_mode = InputOrderMode::Linear;
         Ok(Arc::new(BoundedWindowAggExec::try_new(
@@ -1551,7 +1576,7 @@ mod tests {
             vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
-        let memory_exec = MemorySourceConfig::try_new_exec(
+        let memory_exec = TestMemoryExec::try_new_exec(
             &[vec![batch.clone(), batch.clone(), batch.clone()]],
             Arc::clone(&schema),
             None,
@@ -1646,22 +1671,21 @@ mod tests {
             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
-        let expected = [
-            "+---+------+---------------+---------------+",
-            "| a | last | nth_value(-1) | nth_value(-2) |",
-            "+---+------+---------------+---------------+",
-            "| 1 | 1    | 1             |               |",
-            "| 2 | 2    | 2             | 1             |",
-            "| 3 | 3    | 3             | 2             |",
-            "| 1 | 1    | 1             | 3             |",
-            "| 2 | 2    | 2             | 1             |",
-            "| 3 | 3    | 3             | 2             |",
-            "| 1 | 1    | 1             | 3             |",
-            "| 2 | 2    | 2             | 1             |",
-            "| 3 | 3    | 3             | 2             |",
-            "+---+------+---------------+---------------+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +---+------+---------------+---------------+
+            | a | last | nth_value(-1) | nth_value(-2) |
+            +---+------+---------------+---------------+
+            | 1 | 1    | 1             |               |
+            | 2 | 2    | 2             | 1             |
+            | 3 | 3    | 3             | 2             |
+            | 1 | 1    | 1             | 3             |
+            | 2 | 2    | 2             | 1             |
+            | 3 | 3    | 3             | 2             |
+            | 1 | 1    | 1             | 3             |
+            | 2 | 2    | 2             | 1             |
+            | 3 | 3    | 3             | 2             |
+            +---+------+---------------+---------------+
+            "#);
         Ok(())
     }
 
@@ -1774,21 +1798,20 @@ mod tests {
         let task_ctx = task_context();
         let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
 
-        let expected = [
-            "+----+------+-------+",
-            "| sn | hash | col_2 |",
-            "+----+------+-------+",
-            "| 0  | 2    | 2     |",
-            "| 1  | 2    | 2     |",
-            "| 2  | 2    | 2     |",
-            "| 3  | 2    | 1     |",
-            "| 4  | 1    | 2     |",
-            "| 5  | 1    | 2     |",
-            "| 6  | 1    | 2     |",
-            "| 7  | 1    | 1     |",
-            "+----+------+-------+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+------+-------+
+            | sn | hash | col_2 |
+            +----+------+-------+
+            | 0  | 2    | 2     |
+            | 1  | 2    | 2     |
+            | 2  | 2    | 2     |
+            | 3  | 2    | 1     |
+            | 4  | 1    | 2     |
+            | 5  | 1    | 2     |
+            | 6  | 1    | 2     |
+            | 7  | 1    | 1     |
+            +----+------+-------+
+            "#);
 
         Ok(())
     }

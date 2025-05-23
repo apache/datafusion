@@ -23,7 +23,7 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Range;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -127,54 +127,127 @@ impl NthValue {
     }
 }
 
-static FIRST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_ANALYTICAL,
+        "Returns value evaluated at the row that is the first row of the window \
+            frame.",
+        "first_value(expression)",
+    )
+    .with_argument("expression", "Expression to operate on")
+        .with_sql_example(r#"```sql
+    --Example usage of the first_value window function:
+    SELECT department,
+           employee_id,
+           salary,
+           first_value(salary) OVER (PARTITION BY department ORDER BY salary DESC) AS top_salary
+    FROM employees;
+```
+
+```sql
++-------------+-------------+--------+------------+
+| department  | employee_id | salary | top_salary |
++-------------+-------------+--------+------------+
+| Sales       | 1           | 70000  | 70000      |
+| Sales       | 2           | 50000  | 70000      |
+| Sales       | 3           | 30000  | 70000      |
+| Engineering | 4           | 90000  | 90000      |
+| Engineering | 5           | 80000  | 90000      |
++-------------+-------------+--------+------------+
+```"#)
+    .build()
+});
 
 fn get_first_value_doc() -> &'static Documentation {
-    FIRST_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ANALYTICAL,
-            "Returns value evaluated at the row that is the first row of the window \
-                frame.",
-            "first_value(expression)",
-        )
-        .with_argument("expression", "Expression to operate on")
-        .build()
-    })
+    &FIRST_VALUE_DOCUMENTATION
 }
 
-static LAST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static LAST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_ANALYTICAL,
+        "Returns value evaluated at the row that is the last row of the window \
+            frame.",
+        "last_value(expression)",
+    )
+    .with_argument("expression", "Expression to operate on")
+        .with_sql_example(r#"```sql
+-- SQL example of last_value:
+SELECT department,
+       employee_id,
+       salary,
+       last_value(salary) OVER (PARTITION BY department ORDER BY salary) AS running_last_salary
+FROM employees;
+```
+
+```sql
++-------------+-------------+--------+---------------------+
+| department  | employee_id | salary | running_last_salary |
++-------------+-------------+--------+---------------------+
+| Sales       | 1           | 30000  | 30000               |
+| Sales       | 2           | 50000  | 50000               |
+| Sales       | 3           | 70000  | 70000               |
+| Engineering | 4           | 40000  | 40000               |
+| Engineering | 5           | 60000  | 60000               |
++-------------+-------------+--------+---------------------+
+```"#)
+    .build()
+});
 
 fn get_last_value_doc() -> &'static Documentation {
-    LAST_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ANALYTICAL,
-            "Returns value evaluated at the row that is the last row of the window \
-                frame.",
-            "last_value(expression)",
-        )
-        .with_argument("expression", "Expression to operate on")
-        .build()
-    })
+    &LAST_VALUE_DOCUMENTATION
 }
 
-static NTH_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static NTH_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_ANALYTICAL,
+        "Returns the value evaluated at the nth row of the window frame \
+         (counting from 1). Returns NULL if no such row exists.",
+        "nth_value(expression, n)",
+    )
+    .with_argument(
+        "expression",
+        "The column from which to retrieve the nth value.",
+    )
+    .with_argument(
+        "n",
+        "Integer. Specifies the row number (starting from 1) in the window frame.",
+    )
+    .with_sql_example(
+        r#"```sql
+-- Sample employees table:
+CREATE TABLE employees (id INT, salary INT);
+INSERT INTO employees (id, salary) VALUES
+(1, 30000),
+(2, 40000),
+(3, 50000),
+(4, 60000),
+(5, 70000);
+
+-- Example usage of nth_value:
+SELECT nth_value(salary, 2) OVER (
+  ORDER BY salary
+  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+) AS nth_value
+FROM employees;
+```
+
+```text
++-----------+
+| nth_value |
++-----------+
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
++-----------+
+```"#,
+    )
+    .build()
+});
 
 fn get_nth_value_doc() -> &'static Documentation {
-    NTH_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ANALYTICAL,
-            "Returns value evaluated at the row that is the nth row of the window \
-                frame (counting from 1); null if no such row.",
-            "nth_value(expression, n)",
-        )
-        .with_argument(
-            "expression",
-            "The name the column of which nth \
-            value to retrieve",
-        )
-        .with_argument("n", "Integer. Specifies the n in nth")
-        .build()
-    })
+    &NTH_VALUE_DOCUMENTATION
 }
 
 impl WindowUDFImpl for NthValue {
@@ -237,10 +310,14 @@ impl WindowUDFImpl for NthValue {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        let nullable = true;
-        let return_type = field_args.input_types().first().unwrap_or(&DataType::Null);
+        let return_type = field_args
+            .input_fields()
+            .first()
+            .map(|f| f.data_type())
+            .cloned()
+            .unwrap_or(DataType::Null);
 
-        Ok(Field::new(field_args.name(), return_type.clone(), nullable))
+        Ok(Field::new(field_args.name(), return_type, true))
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
@@ -478,7 +555,12 @@ mod tests {
         let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         test_i32_result(
             NthValue::first(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true)],
+                false,
+                false,
+            ),
             Int32Array::from(vec![1; 8]).iter().collect::<Int32Array>(),
         )
     }
@@ -488,7 +570,12 @@ mod tests {
         let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         test_i32_result(
             NthValue::last(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true)],
+                false,
+                false,
+            ),
             Int32Array::from(vec![
                 Some(1),
                 Some(-2),
@@ -512,7 +599,7 @@ mod tests {
             NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
-                &[DataType::Int32],
+                &[Field::new("f", DataType::Int32, true)],
                 false,
                 false,
             ),
@@ -531,7 +618,7 @@ mod tests {
             NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
-                &[DataType::Int32],
+                &[Field::new("f", DataType::Int32, true)],
                 false,
                 false,
             ),

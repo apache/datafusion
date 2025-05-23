@@ -132,10 +132,18 @@ impl OutputRequirementExec {
 impl DisplayAs for OutputRequirementExec {
     fn fmt_as(
         &self,
-        _t: DisplayFormatType,
+        t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(f, "OutputRequirementExec")
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "OutputRequirementExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
+        }
     }
 }
 
@@ -192,7 +200,11 @@ impl ExecutionPlan for OutputRequirementExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)
     }
 
     fn try_swapping_with_projection(

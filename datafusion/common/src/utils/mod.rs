@@ -82,6 +82,23 @@ pub fn project_schema(
     Ok(schema)
 }
 
+/// Extracts a row at the specified index from a set of columns and stores it in the provided buffer.
+pub fn extract_row_at_idx_to_buf(
+    columns: &[ArrayRef],
+    idx: usize,
+    buf: &mut Vec<ScalarValue>,
+) -> Result<()> {
+    buf.clear();
+
+    let iter = columns
+        .iter()
+        .map(|arr| ScalarValue::try_from_array(arr, idx));
+    for v in iter.into_iter() {
+        buf.push(v?);
+    }
+
+    Ok(())
+}
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
     columns

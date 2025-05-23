@@ -147,8 +147,45 @@ query error DataFusion error: Error during planning: Cannot infer common argumen
 SELECT column1, column1 = arrow_cast(X'0102', 'FixedSizeBinary(2)') FROM t
 
 # Comparison to different sized Binary
-query error DataFusion error: Error during planning: Cannot infer common argument type for comparison operation FixedSizeBinary\(3\) = Binary
+query ?B
 SELECT column1, column1 = X'0102' FROM t
+----
+000102 false
+003102 false
+NULL NULL
+ff0102 false
+000102 false
+
+query ?B
+SELECT column1, column1 = X'000102' FROM t
+----
+000102 true
+003102 false
+NULL NULL
+ff0102 false
+000102 true
+
+query ?B
+SELECT arrow_cast(column1, 'FixedSizeBinary(3)'), arrow_cast(column1, 'FixedSizeBinary(3)') = arrow_cast(arrow_cast(X'000102', 'FixedSizeBinary(3)'), 'BinaryView') FROM t;
+----
+000102 true
+003102 false
+NULL NULL
+ff0102 false
+000102 true
+
+# Plan should not have a cast of the column (should have casted the literal
+# to FixedSizeBinary as that is much faster)
+
+query TT
+explain SELECT column1, column1 = X'000102' FROM t
+----
+logical_plan
+01)Projection: t.column1, t.column1 = FixedSizeBinary(3, "0,1,2") AS t.column1 = Binary("0,1,2")
+02)--TableScan: t projection=[column1]
+physical_plan
+01)ProjectionExec: expr=[column1@0 as column1, column1@0 = 000102 as t.column1 = Binary("0,1,2")]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t_source

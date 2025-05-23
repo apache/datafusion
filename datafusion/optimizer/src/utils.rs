@@ -19,8 +19,6 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::{OptimizerConfig, OptimizerRule};
-
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use arrow::array::{new_null_array, Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -37,44 +35,6 @@ use std::sync::Arc;
 /// Re-export of `NamesPreserver` for backwards compatibility,
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
-
-/// Convenience rule for writing optimizers: recursively invoke
-/// optimize on plan's children and then return a node of the same
-/// type. Useful for optimizer rules which want to leave the type
-/// of plan unchanged but still apply to the children.
-/// This also handles the case when the `plan` is a [`LogicalPlan::Explain`].
-///
-/// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
-#[deprecated(
-    since = "40.0.0",
-    note = "please use OptimizerRule::apply_order with ApplyOrder::BottomUp instead"
-)]
-pub fn optimize_children(
-    optimizer: &impl OptimizerRule,
-    plan: &LogicalPlan,
-    config: &dyn OptimizerConfig,
-) -> Result<Option<LogicalPlan>> {
-    let mut new_inputs = Vec::with_capacity(plan.inputs().len());
-    let mut plan_is_changed = false;
-    for input in plan.inputs() {
-        if optimizer.supports_rewrite() {
-            let new_input = optimizer.rewrite(input.clone(), config)?;
-            plan_is_changed = plan_is_changed || new_input.transformed;
-            new_inputs.push(new_input.data);
-        } else {
-            #[allow(deprecated)]
-            let new_input = optimizer.try_optimize(input, config)?;
-            plan_is_changed = plan_is_changed || new_input.is_some();
-            new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
-        }
-    }
-    if plan_is_changed {
-        let exprs = plan.expressions();
-        plan.with_new_exprs(exprs, new_inputs).map(Some)
-    } else {
-        Ok(None)
-    }
-}
 
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
@@ -119,6 +79,50 @@ pub fn is_restrict_null_predicate<'a>(
         return Ok(true);
     }
 
+    // If result is single `true`, return false;
+    // If result is single `NULL` or `false`, return true;
+    Ok(
+        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
+            ColumnarValue::Array(array) => {
+                if array.len() == 1 {
+                    let boolean_array = as_boolean_array(&array)?;
+                    boolean_array.is_null(0) || !boolean_array.value(0)
+                } else {
+                    false
+                }
+            }
+            ColumnarValue::Scalar(scalar) => matches!(
+                scalar,
+                ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
+            ),
+        },
+    )
+}
+
+/// Determines if an expression will always evaluate to null.
+/// `c0 + 8` return true
+/// `c0 IS NULL` return false
+/// `CASE WHEN c0 > 1 then 0 else 1` return false
+pub fn evaluates_to_null<'a>(
+    predicate: Expr,
+    null_columns: impl IntoIterator<Item = &'a Column>,
+) -> Result<bool> {
+    if matches!(predicate, Expr::Column(_)) {
+        return Ok(true);
+    }
+
+    Ok(
+        match evaluate_expr_with_null_column(predicate, null_columns)? {
+            ColumnarValue::Array(_) => false,
+            ColumnarValue::Scalar(scalar) => scalar.is_null(),
+        },
+    )
+}
+
+fn evaluate_expr_with_null_column<'a>(
+    predicate: Expr,
+    null_columns: impl IntoIterator<Item = &'a Column>,
+) -> Result<ColumnarValue> {
     static DUMMY_COL_NAME: &str = "?";
     let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
     let input_schema = DFSchema::try_from(schema.clone())?;
@@ -127,37 +131,15 @@ pub fn is_restrict_null_predicate<'a>(
     let execution_props = ExecutionProps::default();
     let null_column = Column::from_name(DUMMY_COL_NAME);
 
-    let join_cols_to_replace = join_cols_of_predicate
+    let join_cols_to_replace = null_columns
         .into_iter()
         .map(|column| (column, &null_column))
         .collect::<HashMap<_, _>>();
 
     let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
     let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
-    let phys_expr =
-        create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?;
-
-    let result_type = phys_expr.data_type(&schema)?;
-    if !matches!(&result_type, DataType::Boolean) {
-        return Ok(false);
-    }
-
-    // If result is single `true`, return false;
-    // If result is single `NULL` or `false`, return true;
-    Ok(match phys_expr.evaluate(&input_batch)? {
-        ColumnarValue::Array(array) => {
-            if array.len() == 1 {
-                let boolean_array = as_boolean_array(&array)?;
-                boolean_array.is_null(0) || !boolean_array.value(0)
-            } else {
-                false
-            }
-        }
-        ColumnarValue::Scalar(scalar) => matches!(
-            scalar,
-            ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
-        ),
-    })
+    create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?
+        .evaluate(&input_batch)
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
@@ -259,7 +241,7 @@ mod tests {
             let join_cols_of_predicate = std::iter::once(&column_a);
             let actual =
                 is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
-            assert_eq!(actual, expected, "{}", predicate);
+            assert_eq!(actual, expected, "{predicate}");
         }
 
         Ok(())

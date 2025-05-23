@@ -92,7 +92,7 @@ DEALLOCATE my_plan
 statement ok
 PREPARE my_plan AS SELECT * FROM person WHERE id < $1;
 
-statement error No value found for placeholder with id \$1
+statement error Prepared statement 'my_plan' expects 1 parameters, but 0 provided
 EXECUTE my_plan
 
 statement ok
@@ -312,3 +312,18 @@ SET datafusion.explain.logical_plan_only=false;
 
 statement ok
 DROP TABLE person;
+
+statement ok
+SET datafusion.explain.logical_plan_only=true;
+
+statement count 0
+PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+statement count 5
+explain PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+query IT
+EXECUTE my_plan('a', 'b');
+----
+1 a
+2 b

@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
 #[allow(rustdoc::broken_intra_doc_links)]
 /// Documentation for use by [`ScalarUDFImpl`](ScalarUDFImpl),
 /// [`AggregateUDFImpl`](AggregateUDFImpl) and [`WindowUDFImpl`](WindowUDFImpl) functions.
@@ -87,7 +93,7 @@ impl Documentation {
                 self.doc_section.label,
                 self.doc_section
                     .description
-                    .map(|s| format!(", description = \"{}\"", s))
+                    .map(|s| format!(", description = \"{s}\""))
                     .unwrap_or_default(),
             )
             .as_ref(),
@@ -104,7 +110,7 @@ impl Documentation {
             &self
                 .sql_example
                 .clone()
-                .map(|s| format!("\n    sql_example = r#\"{}\"#,", s))
+                .map(|s| format!("\n    sql_example = r#\"{s}\"#,"))
                 .unwrap_or_default(),
         );
 
@@ -114,7 +120,7 @@ impl Documentation {
             args.iter().for_each(|(name, value)| {
                 if value.contains(st_arg_token) {
                     if name.starts_with("The ") {
-                        result.push_str(format!("\n    standard_argument(\n        name = \"{}\"),", name).as_ref());
+                        result.push_str(format!("\n    standard_argument(\n        name = \"{name}\"),").as_ref());
                     } else {
                         result.push_str(format!("\n    standard_argument(\n        name = \"{}\",\n        prefix = \"{}\"\n    ),", name, value.replace(st_arg_token, "")).as_ref());
                     }
@@ -126,7 +132,7 @@ impl Documentation {
         if let Some(args) = self.arguments.clone() {
             args.iter().for_each(|(name, value)| {
                 if !value.contains(st_arg_token) {
-                    result.push_str(format!("\n    argument(\n        name = \"{}\",\n        description = \"{}\"\n    ),", name, value).as_ref());
+                    result.push_str(format!("\n    argument(\n        name = \"{name}\",\n        description = \"{value}\"\n    ),").as_ref());
                 }
             });
         }
@@ -134,7 +140,7 @@ impl Documentation {
         if let Some(alt_syntax) = self.alternative_syntax.clone() {
             alt_syntax.iter().for_each(|syntax| {
                 result.push_str(
-                    format!("\n    alternative_syntax = \"{}\",", syntax).as_ref(),
+                    format!("\n    alternative_syntax = \"{syntax}\",").as_ref(),
                 );
             });
         }
@@ -142,8 +148,7 @@ impl Documentation {
         // Related UDFs
         if let Some(related_udf) = self.related_udfs.clone() {
             related_udf.iter().for_each(|udf| {
-                result
-                    .push_str(format!("\n    related_udf(name = \"{}\"),", udf).as_ref());
+                result.push_str(format!("\n    related_udf(name = \"{udf}\"),").as_ref());
             });
         }
 

@@ -21,7 +21,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, TableReference,
+    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -43,7 +43,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name, alias, args, ..
             } => {
                 if let Some(func_args) = args {
-                    let tbl_func_name = name.0.first().unwrap().value.to_string();
+                    let tbl_func_name =
+                        name.0.first().unwrap().as_ident().unwrap().to_string();
                     let args = func_args
                         .args
                         .into_iter()
@@ -91,7 +92,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             .build(),
                             (None, Err(e)) => {
                                 let e = e.with_diagnostic(Diagnostic::new_error(
-                                    format!("table '{}' not found", table_ref),
+                                    format!("table '{table_ref}' not found"),
                                     Span::try_from_sqlparser_span(relation_span),
                                 ));
                                 Err(e)
@@ -211,6 +212,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     LogicalPlan::Subquery(Subquery {
                         subquery: input,
                         outer_ref_columns,
+                        spans: Spans::new(),
                     }),
                     alias,
                 )
@@ -218,6 +220,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan => Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(plan),
                 outer_ref_columns,
+                spans: Spans::new(),
             })),
         }
     }

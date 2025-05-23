@@ -32,27 +32,34 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
-    WindowFunctionDefinition,
+    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
+    Operator, Volatility, WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery, WindowFunction},
     utils::{iter_conjunction, iter_conjunction_owned},
 };
+use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
-use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::SimplifyInfo;
-use indexmap::IndexSet;
-use regex::Regex;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::unwrap_cast::{
+    is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
+    is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
+    unwrap_cast_in_comparison_for_binary,
+};
+use crate::simplify_expressions::SimplifyInfo;
+use crate::{
+    analyzer::type_coercion::TypeCoercionRewriter,
+    simplify_expressions::unwrap_cast::try_cast_literal_to_type,
+};
+use indexmap::IndexSet;
+use regex::Regex;
 
 /// This structure handles API for expression simplification
 ///
@@ -181,7 +188,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// assert_eq!(expr, b_lt_2);
     /// ```
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
-        Ok(self.simplify_with_cycle_count(expr)?.0)
+        Ok(self.simplify_with_cycle_count_transformed(expr)?.0.data)
     }
 
     /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
@@ -191,7 +198,34 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// See [Self::simplify] for details and usage examples.
     ///
+    #[deprecated(
+        since = "48.0.0",
+        note = "Use `simplify_with_cycle_count_transformed` instead"
+    )]
+    #[allow(unused_mut)]
     pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
+        let (transformed, cycle_count) =
+            self.simplify_with_cycle_count_transformed(expr)?;
+        Ok((transformed.data, cycle_count))
+    }
+
+    /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
+    /// constants and applying algebraic simplifications. Additionally returns a `u32`
+    /// representing the number of simplification cycles performed, which can be useful for testing
+    /// optimizations.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// - The simplified expression wrapped in a `Transformed<Expr>` indicating if changes were made
+    /// - The number of simplification cycles that were performed
+    ///
+    /// See [Self::simplify] for details and usage examples.
+    ///
+    pub fn simplify_with_cycle_count_transformed(
+        &self,
+        mut expr: Expr,
+    ) -> Result<(Transformed<Expr>, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
@@ -205,6 +239,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // simplifications can enable new constant evaluation
         // see `Self::with_max_cycles`
         let mut num_cycles = 0;
+        let mut has_transformed = false;
         loop {
             let Transformed {
                 data, transformed, ..
@@ -214,13 +249,18 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
                 .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
             expr = data;
             num_cycles += 1;
+            // Track if any transformation occurred
+            has_transformed = has_transformed || transformed;
             if !transformed || num_cycles >= self.max_simplifier_cycles {
                 break;
             }
         }
         // shorten inlist should be started after other inlist rules are applied
         expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
-        Ok((expr, num_cycles))
+        Ok((
+            Transformed::new_transformed(expr, has_transformed),
+            num_cycles,
+        ))
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
@@ -385,15 +425,15 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// let expr = col("a").is_not_null();
     ///
     /// // When using default maximum cycles, 2 cycles will be performed.
-    /// let (simplified_expr, count) = simplifier.simplify_with_cycle_count(expr.clone()).unwrap();
-    /// assert_eq!(simplified_expr, lit(true));
+    /// let (simplified_expr, count) = simplifier.simplify_with_cycle_count_transformed(expr.clone()).unwrap();
+    /// assert_eq!(simplified_expr.data, lit(true));
     /// // 2 cycles were executed, but only 1 was needed
     /// assert_eq!(count, 2);
     ///
     /// // Only 1 simplification pass is necessary here, so we can set the maximum cycles to 1.
-    /// let (simplified_expr, count) = simplifier.with_max_cycles(1).simplify_with_cycle_count(expr.clone()).unwrap();
+    /// let (simplified_expr, count) = simplifier.with_max_cycles(1).simplify_with_cycle_count_transformed(expr.clone()).unwrap();
     /// // Expression has been rewritten to: (c = a AND b = 1)
-    /// assert_eq!(simplified_expr, lit(true));
+    /// assert_eq!(simplified_expr.data, lit(true));
     /// // Only 1 cycle was executed
     /// assert_eq!(count, 1);
     ///
@@ -480,6 +520,7 @@ struct ConstEvaluator<'a> {
 
 #[allow(dead_code)]
 /// The simplify result of ConstEvaluator
+#[allow(clippy::large_enum_variant)]
 enum ConstSimplifyResult {
     // Expr was simplified and contains the new expression
     Simplified(ScalarValue),
@@ -515,30 +556,27 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
 
         // NB: do not short circuit recursion even if we find a non
         // evaluatable node (so we can fold other children, args to
-        // functions, etc)
+        // functions, etc.)
         Ok(Transformed::no(expr))
     }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match self.can_evaluate.pop() {
-            // Certain expressions such as `CASE` and `COALESCE` are short circuiting
-            // and may not evaluate all their sub expressions. Thus if
-            // if any error is countered during simplification, return the original
+            // Certain expressions such as `CASE` and `COALESCE` are short-circuiting
+            // and may not evaluate all their sub expressions. Thus, if
+            // any error is countered during simplification, return the original
             // so that normal evaluation can occur
-            Some(true) => {
-                let result = self.evaluate_to_scalar(expr);
-                match result {
-                    ConstSimplifyResult::Simplified(s) => {
-                        Ok(Transformed::yes(Expr::Literal(s)))
-                    }
-                    ConstSimplifyResult::NotSimplified(s) => {
-                        Ok(Transformed::no(Expr::Literal(s)))
-                    }
-                    ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
-                        Ok(Transformed::yes(expr))
-                    }
+            Some(true) => match self.evaluate_to_scalar(expr) {
+                ConstSimplifyResult::Simplified(s) => {
+                    Ok(Transformed::yes(Expr::Literal(s)))
                 }
-            }
+                ConstSimplifyResult::NotSimplified(s) => {
+                    Ok(Transformed::no(Expr::Literal(s)))
+                }
+                ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
+                    Ok(Transformed::yes(expr))
+                }
+            },
             Some(false) => Ok(Transformed::no(expr)),
             _ => internal_err!("Failed to pop can_evaluate"),
         }
@@ -586,9 +624,9 @@ impl<'a> ConstEvaluator<'a> {
         // added they can be checked for their ability to be evaluated
         // at plan time
         match expr {
-            // Has no runtime cost, but needed during planning
-            Expr::Alias(..)
-            | Expr::AggregateFunction { .. }
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
+            Expr::AggregateFunction { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
@@ -603,6 +641,7 @@ impl<'a> ConstEvaluator<'a> {
                 Self::volatility_ok(func.signature().volatility)
             }
             Expr::Literal(_)
+            | Expr::Alias(..)
             | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
@@ -755,6 +794,25 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     None => lit_bool_null(),
                 })
             }
+            // According to SQL's null semantics, NULL = NULL evaluates to NULL
+            // Both sides are the same expression (A = A) and A is non-volatile expression
+            // A = A --> A IS NOT NULL OR NULL
+            // A = A --> true (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Eq,
+                right,
+            }) if (left == right) & !left.is_volatile() => {
+                Transformed::yes(match !info.nullable(&left)? {
+                    true => lit(true),
+                    false => Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(Expr::IsNotNull(left)),
+                        op: Or,
+                        right: Box::new(lit_bool_null()),
+                    }),
+                })
+            }
+
             // Rules for NotEq
             //
 
@@ -945,35 +1003,65 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: And,
                 right,
             }) if is_op_with(Or, &left, &right) => Transformed::yes(*right),
+            // A >= constant AND constant <= A --> A = constant
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if can_reduce_to_equal_statement(&left, &right) => {
+                if let Expr::BinaryExpr(BinaryExpr {
+                    left: left_left,
+                    right: left_right,
+                    ..
+                }) = *left
+                {
+                    Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                        left: left_left,
+                        op: Eq,
+                        right: left_right,
+                    }))
+                } else {
+                    return internal_err!("can_reduce_to_equal_statement should only be called with a BinaryExpr");
+                }
+            }
 
             //
             // Rules for Multiply
             //
 
-            // A * 1 --> A
+            // A * 1 --> A (with type coercion if needed)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_one(&right) => Transformed::yes(*left),
+            }) if is_one(&right) => {
+                simplify_right_is_one_case(info, left, &Multiply, &right)?
+            }
+            // A * null --> null
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            }) if is_null(&right) => {
+                simplify_right_is_null_case(info, &left, &Multiply, right)?
+            }
             // 1 * A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_one(&left) => Transformed::yes(*right),
-            // A * null --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: Multiply,
-                right,
-            }) if is_null(&right) => Transformed::yes(*right),
+            }) if is_one(&left) => {
+                // 1 * A is equivalent to A * 1
+                simplify_right_is_one_case(info, right, &Multiply, &left)?
+            }
             // null * A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
+                right,
+            }) if is_null(&left) => {
+                simplify_right_is_null_case(info, &right, &Multiply, left)?
+            }
 
             // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
             Expr::BinaryExpr(BinaryExpr {
@@ -1007,19 +1095,23 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 left,
                 op: Divide,
                 right,
-            }) if is_one(&right) => Transformed::yes(*left),
+            }) if is_one(&right) => {
+                simplify_right_is_one_case(info, left, &Divide, &right)?
+            }
+            // A / null --> null
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Divide,
+                right,
+            }) if is_null(&right) => {
+                simplify_right_is_null_case(info, &left, &Divide, right)?
+            }
             // null / A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
-            // A / null --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: Divide,
                 right,
-            }) if is_null(&right) => Transformed::yes(*right),
+            }) if is_null(&left) => simplify_null_div_other_case(info, left, &right)?,
 
             //
             // Rules for Modulo
@@ -1515,8 +1607,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                 }))
                             }
                             Some(pattern_str)
-                                if !pattern_str
-                                    .contains(['%', '_', escape_char].as_ref()) =>
+                                if !like.case_insensitive
+                                    && !pattern_str
+                                        .contains(['%', '_', escape_char].as_ref()) =>
                             {
                                 // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
                                 // TODO: handle escape characters
@@ -1724,6 +1817,86 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 }
             }
 
+            // =======================================
+            // unwrap_cast_in_comparison
+            // =======================================
+            //
+            // For case:
+            // try_cast/cast(expr as data_type) op literal
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
+                    info, &left, op, &right,
+                ) && op.supports_propagation() =>
+            {
+                unwrap_cast_in_comparison_for_binary(info, left, right, op)?
+            }
+            // literal op try_cast/cast(expr as data_type)
+            // -->
+            // try_cast/cast(expr as data_type) op_swap literal
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
+                    info, &right, op, &left,
+                ) && op.supports_propagation()
+                    && op.swap().is_some() =>
+            {
+                unwrap_cast_in_comparison_for_binary(
+                    info,
+                    right,
+                    left,
+                    op.swap().unwrap(),
+                )?
+            }
+            // For case:
+            // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
+            Expr::InList(InList {
+                expr: mut left,
+                list,
+                negated,
+            }) if is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
+                info, &left, &list,
+            ) =>
+            {
+                let (Expr::TryCast(TryCast {
+                    expr: left_expr, ..
+                })
+                | Expr::Cast(Cast {
+                    expr: left_expr, ..
+                })) = left.as_mut()
+                else {
+                    return internal_err!("Expect cast expr, but got {:?}", left)?;
+                };
+
+                let expr_type = info.get_data_type(left_expr)?;
+                let right_exprs = list
+                    .into_iter()
+                    .map(|right| {
+                        match right {
+                            Expr::Literal(right_lit_value) => {
+                                // if the right_lit_value can be casted to the type of internal_left_expr
+                                // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
+                                let Some(value) = try_cast_literal_to_type(&right_lit_value, &expr_type) else {
+                                    internal_err!(
+                                        "Can't cast the list expr {:?} to type {:?}",
+                                        right_lit_value, &expr_type
+                                    )?
+                                };
+                                Ok(lit(value))
+                            }
+                            other_expr => internal_err!(
+                                "Only support literal expr to optimize, but the expr is {:?}",
+                                &other_expr
+                            ),
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Transformed::yes(Expr::InList(InList {
+                    expr: std::mem::take(left_expr),
+                    list: right_exprs,
+                    negated,
+                }))
+            }
+
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
@@ -1891,6 +2064,84 @@ fn is_exactly_true(expr: Expr, info: &impl SimplifyInfo) -> Result<Expr> {
     }
 }
 
+// A * 1 -> A
+// A / 1 -> A
+//
+// Move this function body out of the large match branch avoid stack overflow
+fn simplify_right_is_one_case<S: SimplifyInfo>(
+    info: &S,
+    left: Box<Expr>,
+    op: &Operator,
+    right: &Expr,
+) -> Result<Transformed<Expr>> {
+    // Check if resulting type would be different due to coercion
+    let left_type = info.get_data_type(&left)?;
+    let right_type = info.get_data_type(right)?;
+    match BinaryTypeCoercer::new(&left_type, op, &right_type).get_result_type() {
+        Ok(result_type) => {
+            // Only cast if the types differ
+            if left_type != result_type {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
+            } else {
+                Ok(Transformed::yes(*left))
+            }
+        }
+        Err(_) => Ok(Transformed::yes(*left)),
+    }
+}
+
+// A * null -> null
+// A / null -> null
+//
+// Move this function body out of the large match branch avoid stack overflow
+fn simplify_right_is_null_case<S: SimplifyInfo>(
+    info: &S,
+    left: &Expr,
+    op: &Operator,
+    right: Box<Expr>,
+) -> Result<Transformed<Expr>> {
+    // Check if resulting type would be different due to coercion
+    let left_type = info.get_data_type(left)?;
+    let right_type = info.get_data_type(&right)?;
+    match BinaryTypeCoercer::new(&left_type, op, &right_type).get_result_type() {
+        Ok(result_type) => {
+            // Only cast if the types differ
+            if right_type != result_type {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(right, result_type))))
+            } else {
+                Ok(Transformed::yes(*right))
+            }
+        }
+        Err(_) => Ok(Transformed::yes(*right)),
+    }
+}
+
+// null / A --> null
+//
+// Move this function body out of the large match branch avoid stack overflow
+fn simplify_null_div_other_case<S: SimplifyInfo>(
+    info: &S,
+    left: Box<Expr>,
+    right: &Expr,
+) -> Result<Transformed<Expr>> {
+    // Check if resulting type would be different due to coercion
+    let left_type = info.get_data_type(&left)?;
+    let right_type = info.get_data_type(right)?;
+    match BinaryTypeCoercer::new(&left_type, &Operator::Divide, &right_type)
+        .get_result_type()
+    {
+        Ok(result_type) => {
+            // Only cast if the types differ
+            if left_type != result_type {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
+            } else {
+                Ok(Transformed::yes(*left))
+            }
+        }
+        Err(_) => Ok(Transformed::yes(*left)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::simplify_expressions::SimplifyContext;
@@ -2044,6 +2295,21 @@ mod tests {
             let expected = col("c2").lt(col("c1"));
             assert_eq!(simplify(expr), expected);
         }
+    }
+
+    #[test]
+    fn test_simplify_eq_not_self() {
+        // `expr_a`: column `c2` is nullable, so `c2 = c2` simplifies to `c2 IS NOT NULL OR NULL`
+        // This ensures the expression is only true when `c2` is not NULL, accounting for SQL's NULL semantics.
+        let expr_a = col("c2").eq(col("c2"));
+        let expected_a = col("c2").is_not_null().or(lit_bool_null());
+
+        // `expr_b`: column `c2_non_null` is explicitly non-nullable, so `c2_non_null = c2_non_null` is always true
+        let expr_b = col("c2_non_null").eq(col("c2_non_null"));
+        let expected_b = lit(true);
+
+        assert_eq!(simplify(expr_a), expected_a);
+        assert_eq!(simplify(expr_b), expected_b);
     }
 
     #[test]
@@ -2210,12 +2476,12 @@ mod tests {
         // A / null --> null
         let null = lit(ScalarValue::Null);
         {
-            let expr = col("c") / null.clone();
+            let expr = col("c1") / null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null / A --> null
         {
-            let expr = null.clone() / col("c");
+            let expr = null.clone() / col("c1");
             assert_eq!(simplify(expr), null);
         }
     }
@@ -3079,6 +3345,15 @@ mod tests {
         simplifier.simplify(expr)
     }
 
+    fn coerce(expr: Expr) -> Expr {
+        let schema = expr_test_schema();
+        let execution_props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&execution_props).with_schema(Arc::clone(&schema)),
+        );
+        simplifier.coerce(expr, schema.as_ref()).unwrap()
+    }
+
     fn simplify(expr: Expr) -> Expr {
         try_simplify(expr).unwrap()
     }
@@ -3089,7 +3364,8 @@ mod tests {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        simplifier.simplify_with_cycle_count(expr)
+        let (expr, count) = simplifier.simplify_with_cycle_count_transformed(expr)?;
+        Ok((expr.data, count))
     }
 
     fn simplify_with_cycle_count(expr: Expr) -> (Expr, u32) {
@@ -3121,6 +3397,7 @@ mod tests {
                     Field::new("c2_non_null", DataType::Boolean, false),
                     Field::new("c3_non_null", DataType::Int64, false),
                     Field::new("c4_non_null", DataType::UInt32, false),
+                    Field::new("c5", DataType::FixedSizeBinary(3), true),
                 ]
                 .into(),
                 HashMap::new(),
@@ -3827,6 +4104,11 @@ mod tests {
         assert_eq!(simplify(expr), col("c1").like(lit("a_")));
         let expr = col("c1").not_like(lit("a_"));
         assert_eq!(simplify(expr), col("c1").not_like(lit("a_")));
+
+        let expr = col("c1").ilike(lit("a"));
+        assert_eq!(simplify(expr), col("c1").ilike(lit("a")));
+        let expr = col("c1").not_ilike(lit("a"));
+        assert_eq!(simplify(expr), col("c1").not_ilike(lit("a")));
     }
 
     #[test]
@@ -4201,6 +4483,10 @@ mod tests {
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int16)
         }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
+        }
     }
 
     #[test]
@@ -4238,6 +4524,34 @@ mod tests {
                     .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
             );
         }
+    }
+
+    #[test]
+    fn simplify_fixed_size_binary_eq_lit() {
+        let bytes = [1u8, 2, 3].as_slice();
+
+        // The expression starts simple.
+        let expr = col("c5").eq(lit(bytes));
+
+        // The type coercer introduces a cast.
+        let coerced = coerce(expr.clone());
+        let schema = expr_test_schema();
+        assert_eq!(
+            coerced,
+            col("c5")
+                .cast_to(&DataType::Binary, schema.as_ref())
+                .unwrap()
+                .eq(lit(bytes))
+        );
+
+        // The simplifier removes the cast.
+        assert_eq!(
+            simplify(coerced),
+            col("c5").eq(Expr::Literal(ScalarValue::FixedSizeBinary(
+                3,
+                Some(bytes.to_vec()),
+            )))
+        );
     }
 
     fn if_not_null(expr: Expr, then: bool) -> Expr {

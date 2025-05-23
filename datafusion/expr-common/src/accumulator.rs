@@ -42,7 +42,6 @@ use std::fmt::Debug;
 ///   [`state`] and combine the state from multiple accumulators
 ///   via [`merge_batch`], as part of efficient multi-phase grouping.
 ///
-/// [`GroupsAccumulator`]: crate::GroupsAccumulator
 /// [`update_batch`]: Self::update_batch
 /// [`retract_batch`]: Self::retract_batch
 /// [`state`]: Self::state
@@ -109,6 +108,7 @@ pub trait Accumulator: Send + Sync + Debug {
     ///                  │(AggregateMode::Final)   │      state() is called for each
     ///                  │                         │      group and the resulting
     ///                  └─────────────────────────┘      RecordBatches passed to the
+    ///                                                   Final GroupBy via merge_batch()
     ///                               ▲
     ///                               │
     ///              ┌────────────────┴───────────────┐

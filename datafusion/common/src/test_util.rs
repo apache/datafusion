@@ -17,7 +17,20 @@
 
 //! Utility functions to make testing DataFusion based crates easier
 
+use crate::arrow::util::pretty::pretty_format_batches_with_options;
+use arrow::array::RecordBatch;
+use arrow::error::ArrowError;
+use std::fmt::Display;
 use std::{error::Error, path::PathBuf};
+
+pub fn format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowError> {
+    let datafusion_format_options = crate::config::FormatOptions::default();
+
+    let arrow_format_options: arrow::util::display::FormatOptions =
+        (&datafusion_format_options).try_into().unwrap();
+
+    pretty_format_batches_with_options(results, &arrow_format_options)
+}
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -28,7 +41,7 @@ use std::{error::Error, path::PathBuf};
 ///
 /// Expects to be called about like this:
 ///
-/// `assert_batch_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
+/// `assert_batches_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
 ///
 /// # Example
 /// ```
@@ -56,12 +69,9 @@ macro_rules! assert_batches_eq {
         let expected_lines: Vec<String> =
             $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
 
-        let formatted = $crate::arrow::util::pretty::pretty_format_batches_with_options(
-            $CHUNKS,
-            &$crate::format::DEFAULT_FORMAT_OPTIONS,
-        )
-        .unwrap()
-        .to_string();
+        let formatted = $crate::test_util::format_batches($CHUNKS)
+            .unwrap()
+            .to_string();
 
         let actual_lines: Vec<&str> = formatted.trim().lines().collect();
 
@@ -71,6 +81,26 @@ macro_rules! assert_batches_eq {
             expected_lines, actual_lines
         );
     };
+}
+
+pub fn batches_to_string(batches: &[RecordBatch]) -> String {
+    let actual = format_batches(batches).unwrap().to_string();
+
+    actual.trim().to_string()
+}
+
+pub fn batches_to_sort_string(batches: &[RecordBatch]) -> String {
+    let actual_lines = format_batches(batches).unwrap().to_string();
+
+    let mut actual_lines: Vec<&str> = actual_lines.trim().lines().collect();
+
+    // sort except for header + footer
+    let num_lines = actual_lines.len();
+    if num_lines > 3 {
+        actual_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
+    }
+
+    actual_lines.join("\n")
 }
 
 /// Compares formatted output of a record batch with an expected
@@ -94,12 +124,9 @@ macro_rules! assert_batches_sorted_eq {
             expected_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
         }
 
-        let formatted = $crate::arrow::util::pretty::pretty_format_batches_with_options(
-            $CHUNKS,
-            &$crate::format::DEFAULT_FORMAT_OPTIONS,
-        )
-        .unwrap()
-        .to_string();
+        let formatted = $crate::test_util::format_batches($CHUNKS)
+            .unwrap()
+            .to_string();
         // fix for windows: \r\n -->
 
         let mut actual_lines: Vec<&str> = formatted.trim().lines().collect();

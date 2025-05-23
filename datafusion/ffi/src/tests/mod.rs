@@ -25,8 +25,11 @@ use abi_stable::{
     sabi_types::VersionStrings,
     StableAbi,
 };
+use catalog::create_catalog_provider;
 
-use super::table_provider::FFI_TableProvider;
+use crate::{catalog_provider::FFI_CatalogProvider, udtf::FFI_TableFunction};
+
+use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
 use arrow::array::RecordBatch;
 use async_provider::create_async_table_provider;
 use datafusion::{
@@ -34,27 +37,39 @@ use datafusion::{
     common::record_batch,
 };
 use sync_provider::create_sync_table_provider;
+use udf_udaf_udwf::{create_ffi_abs_func, create_ffi_random_func, create_ffi_table_func};
 
 mod async_provider;
+pub mod catalog;
 mod sync_provider;
+mod udf_udaf_udwf;
+pub mod utils;
 
 #[repr(C)]
 #[derive(StableAbi)]
-#[sabi(kind(Prefix(prefix_ref = TableProviderModuleRef)))]
+#[sabi(kind(Prefix(prefix_ref = ForeignLibraryModuleRef)))]
 /// This struct defines the module interfaces. It is to be shared by
 /// both the module loading program and library that implements the
-/// module. It is possible to move this definition into the loading
-/// program and reference it in the modules, but this example shows
-/// how a user may wish to separate these concerns.
-pub struct TableProviderModule {
+/// module.
+pub struct ForeignLibraryModule {
+    /// Construct an opinionated catalog provider
+    pub create_catalog: extern "C" fn() -> FFI_CatalogProvider,
+
     /// Constructs the table provider
     pub create_table: extern "C" fn(synchronous: bool) -> FFI_TableProvider,
+
+    /// Create a scalar UDF
+    pub create_scalar_udf: extern "C" fn() -> FFI_ScalarUDF,
+
+    pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
+
+    pub create_table_function: extern "C" fn() -> FFI_TableFunction,
 
     pub version: extern "C" fn() -> u64,
 }
 
-impl RootModule for TableProviderModuleRef {
-    declare_root_module_statics! {TableProviderModuleRef}
+impl RootModule for ForeignLibraryModuleRef {
+    declare_root_module_statics! {ForeignLibraryModuleRef}
     const BASE_NAME: &'static str = "datafusion_ffi";
     const NAME: &'static str = "datafusion_ffi";
     const VERSION_STRINGS: VersionStrings = package_version_strings!();
@@ -64,7 +79,7 @@ impl RootModule for TableProviderModuleRef {
     }
 }
 
-fn create_test_schema() -> Arc<Schema> {
+pub fn create_test_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Float64, true),
@@ -90,9 +105,13 @@ extern "C" fn construct_table_provider(synchronous: bool) -> FFI_TableProvider {
 
 #[export_root_module]
 /// This defines the entry point for using the module.
-pub fn get_simple_memory_table() -> TableProviderModuleRef {
-    TableProviderModule {
+pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
+    ForeignLibraryModule {
+        create_catalog: create_catalog_provider,
         create_table: construct_table_provider,
+        create_scalar_udf: create_ffi_abs_func,
+        create_nullary_udf: create_ffi_random_func,
+        create_table_function: create_ffi_table_func,
         version: super::version,
     }
     .leak_into_prefix()

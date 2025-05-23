@@ -56,15 +56,24 @@ pub struct PullUpCorrelatedExpr {
     /// Indicates if we encounter any correlated expression that can not be pulled up
     /// above a aggregation without changing the meaning of the query.
     can_pull_over_aggregation: bool,
-    /// Do we need to handle [the Count bug] during the pull up process.
-    /// TODO this parameter should be removed or renamed semantically
+    /// Do we need to handle [the count bug] during the pull up process.
     ///
-    /// [the Count bug]: https://github.com/apache/datafusion/issues/10553
+    /// The "count bug" was described in [Optimization of Nested SQL
+    /// Queries Revisited](https://dl.acm.org/doi/pdf/10.1145/38714.38723). This bug is
+    /// not specific to the COUNT function, and it can occur with any aggregate function,
+    /// such as SUM, AVG, etc. The anomaly arises because aggregates fail to distinguish
+    /// between an empty set and null values when optimizing a correlated query as a join.
+    /// Here, we use "the count bug" to refer to all such cases.
+    ///
+    /// [the count bug]: https://github.com/apache/datafusion/issues/10553
     pub need_handle_count_bug: bool,
     /// mapping from the plan to its expressions' evaluation result on empty batch
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
+    /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
+    /// lateral joins, we need to produce a left outer join in such cases.
+    pub pulled_up_scalar_agg: bool,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -85,13 +94,13 @@ impl PullUpCorrelatedExpr {
             need_handle_count_bug: false,
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
+            pulled_up_scalar_agg: false,
         }
     }
 
-    /// Set if we need to handle [the Count bug] during the pull up process
-    /// TODO this should be removed or renamed semantically
+    /// Set if we need to handle [the count bug] during the pull up process
     ///
-    /// [the Count bug]: https://github.com/apache/datafusion/issues/10553
+    /// [the count bug]: https://github.com/apache/datafusion/issues/10553
     pub fn with_need_handle_count_bug(mut self, need_handle_count_bug: bool) -> Self {
         self.need_handle_count_bug = need_handle_count_bug;
         self
@@ -308,6 +317,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         missing_exprs.push(un_matched_row);
                     }
                 }
+                if aggregate.group_expr.is_empty() {
+                    // TODO: how do we handle the case where we have pulled multiple aggregations? For example,
+                    // a group agg with a scalar agg as child.
+                    self.pulled_up_scalar_agg = true;
+                }
                 let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
                     .aggregate(missing_exprs, aggregate.aggr_expr.to_vec())?
                     .build()?;
@@ -496,10 +510,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
-        if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
-            expr_result_map_for_count_bug
-                .insert(e.schema_name().to_string(), result_expr);
-        }
+        expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
     }
     Ok(())
 }

@@ -21,13 +21,13 @@ use arrow::{
     array::{AsArray, RecordBatch, StringArray, UInt8Array},
     datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type},
 };
-use datafusion::datasource::data_source::FileSource;
-use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr::LexRequirement;
-use datafusion::physical_expr::PhysicalExpr;
 use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
+};
+use datafusion::{
+    datasource::physical_plan::FileSource, execution::session_state::SessionStateBuilder,
 };
 use datafusion::{
     datasource::{
@@ -111,11 +111,8 @@ impl FileFormat for TSVFileFormat {
         &self,
         state: &dyn Session,
         conf: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.csv_file_format
-            .create_physical_plan(state, conf, filters)
-            .await
+        self.csv_file_format.create_physical_plan(state, conf).await
     }
 
     async fn create_writer_physical_plan(

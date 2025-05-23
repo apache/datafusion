@@ -678,6 +678,8 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         let is_normal_minus_aggregates = matches!(
             node,
             Expr::Literal(..)
@@ -795,29 +797,45 @@ mod test {
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
         grouping_set, is_null, not, AccumulatorFactoryFunction, AggregateUDF,
-        ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
-        Volatility,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        SimpleAggregateUDF, Volatility,
     };
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
 
     use super::*;
+    use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::OptimizerContext;
     use crate::test::*;
-    use crate::Optimizer;
     use datafusion_expr::test::function_stub::{avg, sum};
 
-    fn assert_optimized_plan_eq(
-        expected: &str,
-        plan: LogicalPlan,
-        config: Option<&dyn OptimizerConfig>,
-    ) {
-        let optimizer =
-            Optimizer::with_rules(vec![Arc::new(CommonSubexprEliminate::new())]);
-        let default_config = OptimizerContext::new();
-        let config = config.unwrap_or(&default_config);
-        let optimized_plan = optimizer.optimize(plan, config, |_, _| ()).unwrap();
-        let formatted_plan = format!("{optimized_plan}");
-        assert_eq!(expected, formatted_plan);
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $config:expr,
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(CommonSubexprEliminate::new())];
+            assert_optimized_plan_eq_snapshot!(
+                $config,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
+
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(CommonSubexprEliminate::new())];
+            let optimizer_ctx = OptimizerContext::new();
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[test]
@@ -842,13 +860,14 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * Int32(1) - test.b), sum(__common_expr_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]\
-        \n  Projection: test.a * (Int32(1) - test.b) AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * Int32(1) - test.b), sum(__common_expr_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]
+          Projection: test.a * (Int32(1) - test.b) AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -862,13 +881,14 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 - test.c AS alias1 * __common_expr_1 AS test.a + test.b, __common_expr_1 AS test.a + test.b\
-        \n  Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 - test.c AS alias1 * __common_expr_1 AS test.a + test.b, __common_expr_1 AS test.a + test.b
+          Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -915,11 +935,14 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 AS col1, __common_expr_1 AS col2, col3, __common_expr_3 AS avg(test.c), __common_expr_2 AS col4, __common_expr_2 AS col5, col6, __common_expr_4 AS my_agg(test.c)\
-        \n  Aggregate: groupBy=[[]], aggr=[[avg(test.a) AS __common_expr_1, my_agg(test.a) AS __common_expr_2, avg(test.b) AS col3, avg(test.c) AS __common_expr_3, my_agg(test.b) AS col6, my_agg(test.c) AS __common_expr_4]]\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS col1, __common_expr_1 AS col2, col3, __common_expr_3 AS avg(test.c), __common_expr_2 AS col4, __common_expr_2 AS col5, col6, __common_expr_4 AS my_agg(test.c)
+          Aggregate: groupBy=[[]], aggr=[[avg(test.a) AS __common_expr_1, my_agg(test.a) AS __common_expr_2, avg(test.b) AS col3, avg(test.c) AS __common_expr_3, my_agg(test.b) AS col6, my_agg(test.c) AS __common_expr_4]]
+            TableScan: test
+        "
+        )?;
 
         // test: trafo after aggregate
         let plan = LogicalPlanBuilder::from(table_scan.clone())
@@ -934,11 +957,14 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: Int32(1) + __common_expr_1 AS avg(test.a), Int32(1) - __common_expr_1 AS avg(test.a), Int32(1) + __common_expr_2 AS my_agg(test.a), Int32(1) - __common_expr_2 AS my_agg(test.a)\
-        \n  Aggregate: groupBy=[[]], aggr=[[avg(test.a) AS __common_expr_1, my_agg(test.a) AS __common_expr_2]]\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: Int32(1) + __common_expr_1 AS avg(test.a), Int32(1) - __common_expr_1 AS avg(test.a), Int32(1) + __common_expr_2 AS my_agg(test.a), Int32(1) - __common_expr_2 AS my_agg(test.a)
+          Aggregate: groupBy=[[]], aggr=[[avg(test.a) AS __common_expr_1, my_agg(test.a) AS __common_expr_2]]
+            TableScan: test
+        "
+        )?;
 
         // test: transformation before aggregate
         let plan = LogicalPlanBuilder::from(table_scan.clone())
@@ -951,11 +977,14 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]\
-        \n  Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Aggregate: groupBy=[[]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]
+          Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )?;
 
         // test: common between agg and group
         let plan = LogicalPlanBuilder::from(table_scan.clone())
@@ -968,11 +997,14 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]\
-        \n  Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]
+          Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )?;
 
         // test: all mixed
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -989,14 +1021,15 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: UInt32(1) + test.a, UInt32(1) + __common_expr_2 AS col1, UInt32(1) - __common_expr_2 AS col2, __common_expr_4 AS avg(UInt32(1) + test.a), UInt32(1) + __common_expr_3 AS col3, UInt32(1) - __common_expr_3 AS col4, __common_expr_5 AS my_agg(UInt32(1) + test.a)\
-        \n  Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[avg(__common_expr_1) AS __common_expr_2, my_agg(__common_expr_1) AS __common_expr_3, avg(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_4, my_agg(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_5]]\
-        \n    Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: UInt32(1) + test.a, UInt32(1) + __common_expr_2 AS col1, UInt32(1) - __common_expr_2 AS col2, __common_expr_4 AS avg(UInt32(1) + test.a), UInt32(1) + __common_expr_3 AS col3, UInt32(1) - __common_expr_3 AS col4, __common_expr_5 AS my_agg(UInt32(1) + test.a)
+          Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[avg(__common_expr_1) AS __common_expr_2, my_agg(__common_expr_1) AS __common_expr_3, avg(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_4, my_agg(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_5]]
+            Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1016,14 +1049,15 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Projection: table.test.col.a, UInt32(1) + __common_expr_2 AS avg(UInt32(1) + table.test.col.a), __common_expr_2 AS avg(UInt32(1) + table.test.col.a)\
-        \n  Aggregate: groupBy=[[table.test.col.a]], aggr=[[avg(__common_expr_1 AS UInt32(1) + table.test.col.a) AS __common_expr_2]]\
-        \n    Projection: UInt32(1) + table.test.col.a AS __common_expr_1, table.test.col.a\
-        \n      TableScan: table.test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: table.test.col.a, UInt32(1) + __common_expr_2 AS avg(UInt32(1) + table.test.col.a), __common_expr_2 AS avg(UInt32(1) + table.test.col.a)
+          Aggregate: groupBy=[[table.test.col.a]], aggr=[[avg(__common_expr_1 AS UInt32(1) + table.test.col.a) AS __common_expr_2]]
+            Projection: UInt32(1) + table.test.col.a AS __common_expr_1, table.test.col.a
+              TableScan: table.test
+        "
+        )
     }
 
     #[test]
@@ -1037,13 +1071,14 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 AS first, __common_expr_1 AS second\
-        \n  Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS first, __common_expr_1 AS second
+          Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1054,13 +1089,14 @@ mod test {
             .project(vec![lit(1) + col("a"), col("a") + lit(1)])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 AS Int32(1) + test.a, __common_expr_1 AS test.a + Int32(1)\
-        \n  Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS Int32(1) + test.a, __common_expr_1 AS test.a + Int32(1)
+          Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1072,12 +1108,14 @@ mod test {
             .project(vec![lit(1) + col("a")])?
             .build()?;
 
-        let expected = "Projection: Int32(1) + test.a\
-        \n  Projection: Int32(1) + test.a, test.a\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: Int32(1) + test.a
+          Projection: Int32(1) + test.a, test.a
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1191,14 +1229,15 @@ mod test {
             .filter((lit(1) + col("a") - lit(10)).gt(lit(1) + col("a")))?
             .build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 - Int32(10) > __common_expr_1\
-        \n    Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 - Int32(10) > __common_expr_1
+            Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1224,7 +1263,7 @@ mod test {
     fn test_alias_collision() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let config = &OptimizerContext::new();
+        let config = OptimizerContext::new();
         let common_expr_1 = config.alias_generator().next(CSE_PREFIX);
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .project(vec![
@@ -1239,14 +1278,18 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 AS c3, __common_expr_2 AS c4\
-        \n  Projection: test.c + Int32(2) AS __common_expr_2, __common_expr_1, test.c\
-        \n    Projection: test.a + test.b AS __common_expr_1, test.c\
-        \n      TableScan: test";
+        assert_optimized_plan_equal!(
+            config,
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 AS c3, __common_expr_2 AS c4
+          Projection: test.c + Int32(2) AS __common_expr_2, __common_expr_1, test.c
+            Projection: test.a + test.b AS __common_expr_1, test.c
+              TableScan: test
+        "
+        )?;
 
-        assert_optimized_plan_eq(expected, plan, Some(config));
-
-        let config = &OptimizerContext::new();
+        let config = OptimizerContext::new();
         let _common_expr_1 = config.alias_generator().next(CSE_PREFIX);
         let common_expr_2 = config.alias_generator().next(CSE_PREFIX);
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -1262,12 +1305,16 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_2 AS c1, __common_expr_2 AS c2, __common_expr_3 AS c3, __common_expr_3 AS c4\
-        \n  Projection: test.c + Int32(2) AS __common_expr_3, __common_expr_2, test.c\
-        \n    Projection: test.a + test.b AS __common_expr_2, test.c\
-        \n      TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, Some(config));
+        assert_optimized_plan_equal!(
+            config,
+            plan,
+            @ r"
+        Projection: __common_expr_2 AS c1, __common_expr_2 AS c2, __common_expr_3 AS c3, __common_expr_3 AS c4
+          Projection: test.c + Int32(2) AS __common_expr_3, __common_expr_2, test.c
+            Projection: test.a + test.b AS __common_expr_2, test.c
+              TableScan: test
+        "
+        )?;
 
         Ok(())
     }
@@ -1306,13 +1353,14 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 OR test.a - test.b = Int32(0) AS c3, __common_expr_2 AND test.a - test.b = Int32(0) AS c4, __common_expr_3 OR __common_expr_3 AS c5\
-        \n  Projection: test.a = Int32(0) OR test.b = Int32(0) AS __common_expr_1, test.a + test.b = Int32(0) AS __common_expr_2, test.a * test.b = Int32(0) AS __common_expr_3, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 OR test.a - test.b = Int32(0) AS c3, __common_expr_2 AND test.a - test.b = Int32(0) AS c4, __common_expr_3 OR __common_expr_3 AS c5
+          Projection: test.a = Int32(0) OR test.b = Int32(0) AS __common_expr_1, test.a + test.b = Int32(0) AS __common_expr_2, test.a * test.b = Int32(0) AS __common_expr_3, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1329,13 +1377,14 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 + random() AS c1, __common_expr_1 + random() AS c2\
-        \n  Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 + random() AS c1, __common_expr_1 + random() AS c2
+          Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1358,13 +1407,14 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 OR random() = Int32(0) AS c1, __common_expr_1 OR random() = Int32(0) AS c2, random() = Int32(0) OR test.b = Int32(0) AS c3, random() = Int32(0) OR test.b = Int32(0) AS c4\
-        \n  Projection: test.a = Int32(0) AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 OR random() = Int32(0) AS c1, __common_expr_1 OR random() = Int32(0) AS c2, random() = Int32(0) OR test.b = Int32(0) AS c3, random() = Int32(0) OR test.b = Int32(0) AS c4
+          Projection: test.a = Int32(0) AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1380,14 +1430,15 @@ mod test {
             .project(vec![col("c1"), col("c2")])?
             .build()?;
 
-        let expected = "Projection: c1, c2\
-        \n  Projection: __common_expr_1 AS c1, __common_expr_1 AS c2\
-        \n    Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: c1, c2
+          Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
+            Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1403,14 +1454,15 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2\
-        \n  Projection: __common_expr_2 * __common_expr_2 AS __common_expr_1, test.a, test.b, test.c\
-        \n    Projection: test.a + test.b AS __common_expr_2, test.a, test.b, test.c\
-        \n      TableScan: test";
-
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
+          Projection: __common_expr_2 * __common_expr_2 AS __common_expr_1, test.a, test.b, test.c
+            Projection: test.a + test.b AS __common_expr_2, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1420,13 +1472,15 @@ mod test {
         let expr = ((col("a") + col("b")) * (col("b") + col("a"))).eq(lit(30));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 * __common_expr_1 = Int32(30)\
-        \n    Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 * __common_expr_1 = Int32(30)
+            Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1436,13 +1490,15 @@ mod test {
         let expr = ((col("a") * col("b")) + (col("b") * col("a"))).eq(lit(30));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 + __common_expr_1 = Int32(30)\
-        \n    Projection: test.a * test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
+            Projection: test.a * test.b AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1452,13 +1508,15 @@ mod test {
         let expr = ((col("a") & col("b")) + (col("b") & col("a"))).eq(lit(30));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 + __common_expr_1 = Int32(30)\
-        \n    Projection: test.a & test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
+            Projection: test.a & test.b AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1468,13 +1526,15 @@ mod test {
         let expr = ((col("a") | col("b")) + (col("b") | col("a"))).eq(lit(30));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 + __common_expr_1 = Int32(30)\
-        \n    Projection: test.a | test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
+            Projection: test.a | test.b AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1484,13 +1544,15 @@ mod test {
         let expr = ((col("a") ^ col("b")) + (col("b") ^ col("a"))).eq(lit(30));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 + __common_expr_1 = Int32(30)\
-        \n    Projection: test.a BIT_XOR test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
+            Projection: test.a BIT_XOR test.b AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1500,13 +1562,15 @@ mod test {
         let expr = (col("a").eq(col("b"))).and(col("b").eq(col("a")));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 AND __common_expr_1\
-        \n    Projection: test.a = test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 AND __common_expr_1
+            Projection: test.a = test.b AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1516,13 +1580,15 @@ mod test {
         let expr = (col("a").not_eq(col("b"))).and(col("b").not_eq(col("a")));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 AND __common_expr_1\
-        \n    Projection: test.a != test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
-
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 AND __common_expr_1
+            Projection: test.a != test.b AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1533,11 +1599,15 @@ mod test {
             .eq(lit(30));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
 
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 - __common_expr_1 = Int32(30)\
-        \n    Projection: test.a + test.b * test.c AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 - __common_expr_1 = Int32(30)
+            Projection: test.a + test.b * test.c AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )?;
 
         // ((c1 + c2 / c3) * c3 <=> c3 * (c2 / c3 + c1))
         let table_scan = test_table_scan()?;
@@ -1546,11 +1616,16 @@ mod test {
             + col("a"))
         .eq(lit(30));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 / __common_expr_1 + test.a = Int32(30)\
-        \n    Projection: (test.a + test.b / test.c) * test.c AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 / __common_expr_1 + test.a = Int32(30)
+            Projection: (test.a + test.b / test.c) * test.c AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )?;
 
         // c2 / (c1 + c3) <=> c2 / (c3 + c1)
         let table_scan = test_table_scan()?;
@@ -1558,11 +1633,15 @@ mod test {
             * (col("b") / (col("c") + col("a"))))
         .eq(lit(30));
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
-        let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 * __common_expr_1 = Int32(30)\
-        \n    Projection: test.b / (test.a + test.c) AS __common_expr_1, test.a, test.b, test.c\
-        \n      TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.b, test.c
+          Filter: __common_expr_1 * __common_expr_1 = Int32(30)
+            Projection: test.b / (test.a + test.c) AS __common_expr_1, test.a, test.b, test.c
+              TableScan: test
+        "
+        )?;
 
         Ok(())
     }
@@ -1596,7 +1675,7 @@ mod test {
             Ok(DataType::Int32)
         }
 
-        fn invoke(&self, _: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             panic!("not implemented")
         }
     }
@@ -1610,10 +1689,14 @@ mod test {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![expr1, expr2])?
             .build()?;
-        let expected = "Projection: __common_expr_1 AS NOT test.a = test.b, __common_expr_1 AS NOT test.b = test.a\
-        \n  Projection: NOT test.a = test.b AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS NOT test.a = test.b, __common_expr_1 AS NOT test.b = test.a
+          Projection: NOT test.a = test.b AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )?;
 
         // is_null(a == b) <=> is_null(b == a)
         let table_scan = test_table_scan()?;
@@ -1622,10 +1705,14 @@ mod test {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![expr1, expr2])?
             .build()?;
-        let expected = "Projection: __common_expr_1 AS test.a = test.b IS NULL, __common_expr_1 AS test.b = test.a IS NULL\
-        \n  Projection: test.a = test.b IS NULL AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS test.a = test.b IS NULL, __common_expr_1 AS test.b = test.a IS NULL
+          Projection: test.a = test.b IS NULL AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )?;
 
         // a + b between 0 and 10 <=> b + a between 0 and 10
         let table_scan = test_table_scan()?;
@@ -1634,10 +1721,14 @@ mod test {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![expr1, expr2])?
             .build()?;
-        let expected = "Projection: __common_expr_1 AS test.a + test.b BETWEEN Int32(0) AND Int32(10), __common_expr_1 AS test.b + test.a BETWEEN Int32(0) AND Int32(10)\
-        \n  Projection: test.a + test.b BETWEEN Int32(0) AND Int32(10) AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS test.a + test.b BETWEEN Int32(0) AND Int32(10), __common_expr_1 AS test.b + test.a BETWEEN Int32(0) AND Int32(10)
+          Projection: test.a + test.b BETWEEN Int32(0) AND Int32(10) AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )?;
 
         // c between a + b and 10 <=> c between b + a and 10
         let table_scan = test_table_scan()?;
@@ -1646,10 +1737,14 @@ mod test {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![expr1, expr2])?
             .build()?;
-        let expected = "Projection: __common_expr_1 AS test.c BETWEEN test.a + test.b AND Int32(10), __common_expr_1 AS test.c BETWEEN test.b + test.a AND Int32(10)\
-        \n  Projection: test.c BETWEEN test.a + test.b AND Int32(10) AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS test.c BETWEEN test.a + test.b AND Int32(10), __common_expr_1 AS test.c BETWEEN test.b + test.a AND Int32(10)
+          Projection: test.c BETWEEN test.a + test.b AND Int32(10) AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )?;
 
         // function call with argument <=> function call with argument
         let udf = ScalarUDF::from(TestUdf::new());
@@ -1659,11 +1754,14 @@ mod test {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![expr1, expr2])?
             .build()?;
-        let expected = "Projection: __common_expr_1 AS my_udf(test.a + test.b), __common_expr_1 AS my_udf(test.b + test.a)\
-        \n  Projection: my_udf(test.a + test.b) AS __common_expr_1, test.a, test.b, test.c\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(expected, plan, None);
-        Ok(())
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: __common_expr_1 AS my_udf(test.a + test.b), __common_expr_1 AS my_udf(test.b + test.a)
+          Projection: my_udf(test.a + test.b) AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 
     /// returns a "random" function that is marked volatile (aka each invocation
@@ -1702,6 +1800,10 @@ mod test {
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Float64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
         }
     }
 }

@@ -28,13 +28,15 @@ use datafusion_common::error::Result;
 use datafusion_physical_plan::SendableRecordBatchStream;
 
 use arrow::array::{
-    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, RecordBatch,
-    StringArray, StructArray,
+    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, ArrayAccessor,
+    RecordBatch, StringArray, StructArray,
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::{
-    as_boolean_array, as_date32_array, as_date64_array, as_int32_array, as_int64_array,
-    as_string_array, as_string_view_array,
+    as_boolean_array, as_date32_array, as_date64_array, as_float16_array,
+    as_float32_array, as_float64_array, as_int16_array, as_int32_array, as_int64_array,
+    as_int8_array, as_string_array, as_string_view_array, as_uint16_array,
+    as_uint32_array, as_uint64_array, as_uint8_array,
 };
 use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
 use datafusion_common_runtime::SpawnedTask;
@@ -43,7 +45,7 @@ use datafusion_execution::TaskContext;
 use chrono::NaiveDate;
 use futures::StreamExt;
 use object_store::path::Path;
-use rand::distributions::DistString;
+use rand::distr::SampleString;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 type RecordBatchReceiver = Receiver<RecordBatch>;
@@ -149,8 +151,7 @@ async fn row_count_demuxer(
     let max_buffered_batches = exec_options.max_buffered_batches_per_output_file;
     let minimum_parallel_files = exec_options.minimum_parallel_output_files;
     let mut part_idx = 0;
-    let write_id =
-        rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
 
     let mut open_file_streams = Vec::with_capacity(minimum_parallel_files);
 
@@ -223,7 +224,7 @@ fn generate_file_path(
     if !single_file_output {
         base_output_path
             .prefix()
-            .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
+            .child(format!("{write_id}_{part_idx}.{file_extension}"))
     } else {
         base_output_path.prefix().to_owned()
     }
@@ -265,8 +266,7 @@ async fn hive_style_partitions_demuxer(
     file_extension: String,
     keep_partition_by_columns: bool,
 ) -> Result<()> {
-    let write_id =
-        rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
 
     let exec_options = &context.session_config().options().execution;
     let max_buffered_recordbatches = exec_options.max_buffered_batches_per_output_file;
@@ -407,6 +407,18 @@ fn compute_partition_keys_by_row<'a>(
                     partition_values.push(Cow::from(date));
                 }
             }
+            DataType::Int8 => {
+                let array = as_int8_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Int16 => {
+                let array = as_int16_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
             DataType::Int32 => {
                 let array = as_int32_array(col_array)?;
                 for i in 0..rb.num_rows() {
@@ -419,6 +431,48 @@ fn compute_partition_keys_by_row<'a>(
                     partition_values.push(Cow::from(array.value(i).to_string()));
                 }
             }
+            DataType::UInt8 => {
+                let array = as_uint8_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::UInt16 => {
+                let array = as_uint16_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::UInt32 => {
+                let array = as_uint32_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::UInt64 => {
+                let array = as_uint64_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Float16 => {
+                let array = as_float16_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Float32 => {
+                let array = as_float32_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Float64 => {
+                let array = as_float64_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
             DataType::Dictionary(_, _) => {
                 downcast_dictionary_array!(
                     col_array =>  {
@@ -426,10 +480,8 @@ fn compute_partition_keys_by_row<'a>(
                             .ok_or(exec_datafusion_err!("it is not yet supported to write to hive partitions with datatype {}",
                             dtype))?;
 
-                        for val in array.values() {
-                            partition_values.push(
-                                Cow::from(val.ok_or(exec_datafusion_err!("Cannot partition by null value for column {}", col))?),
-                            );
+                        for i in 0..rb.num_rows() {
+                            partition_values.push(Cow::from(array.value(i)));
                         }
                     },
                     _ => unreachable!(),
@@ -459,7 +511,7 @@ fn compute_take_arrays(
         for vals in all_partition_values.iter() {
             part_key.push(vals[i].clone().into());
         }
-        let builder = take_map.entry(part_key).or_insert(UInt64Builder::new());
+        let builder = take_map.entry(part_key).or_insert_with(UInt64Builder::new);
         builder.append_value(i as u64);
     }
     take_map
@@ -502,5 +554,5 @@ fn compute_hive_style_file_path(
         file_path = file_path.child(format!("{}={}", partition_by[j].0, part_key[j]));
     }
 
-    file_path.child(format!("{}.{}", write_id, file_extension))
+    file_path.child(format!("{write_id}.{file_extension}"))
 }

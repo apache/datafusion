@@ -23,9 +23,15 @@ use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::type_coercion::binary::{
+    binary_to_string_coercion, string_coercion,
+};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -60,7 +66,14 @@ impl Default for ReplaceFunc {
 impl ReplaceFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(3, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -79,21 +92,64 @@ impl ScalarUDFImpl for ReplaceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "replace")
+        if let Some(coercion_data_type) = string_coercion(&arg_types[0], &arg_types[1])
+            .and_then(|dt| string_coercion(&dt, &arg_types[2]))
+            .or_else(|| {
+                binary_to_string_coercion(&arg_types[0], &arg_types[1])
+                    .and_then(|dt| binary_to_string_coercion(&dt, &arg_types[2]))
+            })
+        {
+            utf8_to_str_type(&coercion_data_type, "replace")
+        } else {
+            exec_err!("Unsupported data types for replace. Expected Utf8, LargeUtf8 or Utf8View")
+        }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(replace::<i32>, vec![])(args),
-            DataType::LargeUtf8 => make_scalar_function(replace::<i64>, vec![])(args),
-            DataType::Utf8View => make_scalar_function(replace_view, vec![])(args),
-            other => {
-                exec_err!("Unsupported data type {other:?} for function replace")
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let data_types = args
+            .args
+            .iter()
+            .map(|arg| arg.data_type())
+            .collect::<Vec<_>>();
+
+        if let Some(coercion_type) = string_coercion(&data_types[0], &data_types[1])
+            .and_then(|dt| string_coercion(&dt, &data_types[2]))
+            .or_else(|| {
+                binary_to_string_coercion(&data_types[0], &data_types[1])
+                    .and_then(|dt| binary_to_string_coercion(&dt, &data_types[2]))
+            })
+        {
+            let mut converted_args = Vec::with_capacity(args.args.len());
+            for arg in &args.args {
+                if arg.data_type() == coercion_type {
+                    converted_args.push(arg.clone());
+                } else {
+                    let converted = arg.cast_to(&coercion_type, None)?;
+                    converted_args.push(converted);
+                }
             }
+
+            match coercion_type {
+                DataType::Utf8 => {
+                    make_scalar_function(replace::<i32>, vec![])(&converted_args)
+                }
+                DataType::LargeUtf8 => {
+                    make_scalar_function(replace::<i64>, vec![])(&converted_args)
+                }
+                DataType::Utf8View => {
+                    make_scalar_function(replace_view, vec![])(&converted_args)
+                }
+                other => exec_err!(
+                    "Unsupported coercion data type {other:?} for function replace"
+                ),
+            }
+        } else {
+            exec_err!(
+                "Unsupported data type {:?}, {:?}, {:?} for function replace.",
+                data_types[0],
+                data_types[1],
+                data_types[2]
+            )
         }
     }
 
@@ -119,6 +175,7 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(result) as ArrayRef)
 }
+
 /// Replaces all occurrences in string of substring from with substring to.
 /// replace('abcdefabcdef', 'cd', 'XX') = 'abXXefabXXef'
 fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {

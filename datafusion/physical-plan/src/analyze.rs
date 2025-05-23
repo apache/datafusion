@@ -108,6 +108,10 @@ impl DisplayAs for AnalyzeExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "AnalyzeExec verbose={}", self.verbose)
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

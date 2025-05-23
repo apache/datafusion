@@ -19,16 +19,17 @@
 
 use std::sync::Arc;
 
-use crate::datasource::file_format::arrow::ArrowFormat;
-use crate::datasource::file_format::file_compression_type::FileCompressionType;
+#[cfg(feature = "avro")]
+use crate::datasource::file_format::avro::AvroFormat;
+
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
+
+use crate::datasource::file_format::arrow::ArrowFormat;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::listing::ListingTableUrl;
-use crate::datasource::{
-    file_format::{avro::AvroFormat, csv::CsvFormat, json::JsonFormat},
-    listing::ListingOptions,
-};
+use crate::datasource::{file_format::csv::CsvFormat, listing::ListingOptions};
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 
@@ -40,6 +41,7 @@ use datafusion_common::{
 };
 
 use async_trait::async_trait;
+use datafusion_datasource_json::file_format::JsonFormat;
 use datafusion_expr::SortExpr;
 
 /// Options that control the reading of CSV files.
@@ -548,7 +550,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
@@ -583,9 +585,9 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
+            .with_session_config_options(config)
     }
 
     async fn get_resolved_schema(
@@ -613,7 +615,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
@@ -629,6 +631,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
     }
 }
 
+#[cfg(feature = "avro")]
 #[async_trait]
 impl ReadOptions<'_> for AvroReadOptions<'_> {
     fn to_listing_options(
@@ -640,7 +643,7 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
@@ -666,7 +669,7 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 

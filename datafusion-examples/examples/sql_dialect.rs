@@ -17,10 +17,10 @@
 
 use std::fmt::Display;
 
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::sql::{
-    parser::{CopyToSource, CopyToStatement, DFParser, Statement},
-    sqlparser::{keywords::Keyword, parser::ParserError, tokenizer::Token},
+    parser::{CopyToSource, CopyToStatement, DFParser, DFParserBuilder, Statement},
+    sqlparser::{keywords::Keyword, tokenizer::Token},
 };
 
 /// This example demonstrates how to use the DFParser to parse a statement in a custom way
@@ -34,8 +34,8 @@ async fn main() -> Result<()> {
     let my_statement = my_parser.parse_statement()?;
 
     match my_statement {
-        MyStatement::DFStatement(s) => println!("df: {}", s),
-        MyStatement::MyCopyTo(s) => println!("my_copy: {}", s),
+        MyStatement::DFStatement(s) => println!("df: {s}"),
+        MyStatement::MyCopyTo(s) => println!("my_copy: {s}"),
     }
 
     Ok(())
@@ -46,9 +46,9 @@ struct MyParser<'a> {
     df_parser: DFParser<'a>,
 }
 
-impl MyParser<'_> {
-    fn new(sql: &str) -> Result<Self> {
-        let df_parser = DFParser::new(sql)?;
+impl<'a> MyParser<'a> {
+    fn new(sql: &'a str) -> Result<Self> {
+        let df_parser = DFParserBuilder::new(sql).build()?;
         Ok(Self { df_parser })
     }
 
@@ -62,7 +62,7 @@ impl MyParser<'_> {
 
     /// This is the entry point to our parser -- it handles `COPY` statements specially
     /// but otherwise delegates to the existing DataFusion parser.
-    pub fn parse_statement(&mut self) -> Result<MyStatement, ParserError> {
+    pub fn parse_statement(&mut self) -> Result<MyStatement, DataFusionError> {
         if self.is_copy() {
             self.df_parser.parser.next_token(); // COPY
             let df_statement = self.df_parser.parse_copy()?;
@@ -87,8 +87,8 @@ enum MyStatement {
 impl Display for MyStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MyStatement::DFStatement(s) => write!(f, "{}", s),
-            MyStatement::MyCopyTo(s) => write!(f, "{}", s),
+            MyStatement::DFStatement(s) => write!(f, "{s}"),
+            MyStatement::MyCopyTo(s) => write!(f, "{s}"),
         }
     }
 }

@@ -27,7 +27,8 @@ use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{exec_err, Result};
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 
 use futures::stream::BoxStream;
@@ -35,7 +36,6 @@ use futures::{Future, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::task::JoinSet;
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
 ///
@@ -128,7 +128,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                             // the JoinSet were aborted, which in turn
                             // would imply that the receiver has been
                             // dropped and this code is not running
-                            return Some(internal_err!("Non Panic Task error: {e}"));
+                            return Some(exec_err!("Non Panic Task error: {e}"));
                         }
                     }
                 }
@@ -223,6 +223,10 @@ impl RecordBatchReceiverStreamBuilder {
     }
 
     /// Get a handle for sending [`RecordBatch`] to the output
+    ///
+    /// If the stream is dropped / canceled, the sender will be closed and
+    /// calling `tx().send()` will return an error. Producers should stop
+    /// producing in this case and return control.
     pub fn tx(&self) -> Sender<Result<RecordBatch>> {
         self.inner.tx()
     }
@@ -241,8 +245,21 @@ impl RecordBatchReceiverStreamBuilder {
         self.inner.spawn(task)
     }
 
-    /// Spawn a blocking task that will be aborted if this builder (or the stream
-    /// built from it) are dropped
+    /// Spawn a blocking task tied to the builder and stream.
+    ///
+    /// # Drop / Cancel Behavior
+    ///
+    /// If this builder (or the stream built from it) is dropped **before** the
+    /// task starts, the task is also dropped and will never start execute.
+    ///
+    /// **Note:** Once the blocking task has started, it **will not** be
+    /// forcibly stopped on drop as Rust does not allow forcing a running thread
+    /// to terminate. The task will continue running until it completes or
+    /// encounters an error.
+    ///
+    /// Users should ensure that their blocking function periodically checks for
+    /// errors calling `tx.blocking_send`. An error signals that the stream has
+    /// been dropped / cancelled and the blocking task should exit.
     ///
     /// This is often used to spawn tasks that write to the sender
     /// retrieved from [`Self::tx`], for examples, see the document
