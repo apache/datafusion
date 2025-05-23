@@ -1137,12 +1137,24 @@ impl LogicalPlanBuilder {
         for (l, r) in &on {
             if self.plan.schema().has_column(l)
                 && right.schema().has_column(r)
-                && can_hash(self.plan.schema().field_from_column(l)?.data_type())
+                && can_hash(
+                    datafusion_common::ExprSchema::field_from_column(
+                        self.plan.schema(),
+                        l,
+                    )?
+                    .data_type(),
+                )
             {
                 join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
             } else if self.plan.schema().has_column(l)
                 && right.schema().has_column(r)
-                && can_hash(self.plan.schema().field_from_column(r)?.data_type())
+                && can_hash(
+                    datafusion_common::ExprSchema::field_from_column(
+                        self.plan.schema(),
+                        r,
+                    )?
+                    .data_type(),
+                )
             {
                 join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));
             } else {
@@ -1501,7 +1513,7 @@ pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
             // Loop until we find a name that hasn't been used
             while seen.contains(&new_name) {
                 *count += 1;
-                new_name = format!("{}:{}", base_name, count);
+                new_name = format!("{base_name}:{count}");
             }
 
             seen.insert(new_name.clone());
@@ -2612,7 +2624,7 @@ mod tests {
             // Check unnested struct field is a scalar
             let field = plan
                 .schema()
-                .field_with_name(None, &format!("struct_singular.{}", field_name))
+                .field_with_name(None, &format!("struct_singular.{field_name}"))
                 .unwrap();
             assert_eq!(&DataType::UInt32, field.data_type());
         }
@@ -2695,7 +2707,7 @@ mod tests {
         for field_name in &["a", "b"] {
             let field = plan
                 .schema()
-                .field_with_name(None, &format!("struct_singular.{}", field_name))
+                .field_with_name(None, &format!("struct_singular.{field_name}"))
                 .unwrap();
             assert_eq!(&DataType::UInt32, field.data_type());
         }

@@ -567,9 +567,16 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
+            self.left.partition_statistics(None)?,
+            self.right.partition_statistics(None)?,
             vec![],
             &self.join_type,
             &self.join_schema,
@@ -1506,7 +1513,7 @@ pub(crate) mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]"
             );
         }
 
@@ -1663,11 +1670,7 @@ pub(crate) mod tests {
                         .into_iter()
                         .zip(prev_values)
                         .all(|(current, prev)| current >= prev),
-                    "batch_index: {} row: {} current: {:?}, prev: {:?}",
-                    batch_index,
-                    row,
-                    current_values,
-                    prev_values
+                    "batch_index: {batch_index} row: {row} current: {current_values:?}, prev: {prev_values:?}"
                 );
                 prev_values = current_values;
             }

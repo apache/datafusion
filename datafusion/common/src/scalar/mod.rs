@@ -506,7 +506,7 @@ impl PartialOrd for ScalarValue {
             }
             (List(_), _) | (LargeList(_), _) | (FixedSizeList(_), _) => None,
             (Struct(struct_arr1), Struct(struct_arr2)) => {
-                partial_cmp_struct(struct_arr1, struct_arr2)
+                partial_cmp_struct(struct_arr1.as_ref(), struct_arr2.as_ref())
             }
             (Struct(_), _) => None,
             (Map(map_arr1), Map(map_arr2)) => partial_cmp_map(map_arr1, map_arr2),
@@ -605,6 +605,20 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     let eq_res = arrow::compute::kernels::cmp::eq(&arr1_trimmed, &arr2_trimmed).ok()?;
 
     for j in 0..lt_res.len() {
+        // In Postgres, NULL values in lists are always considered to be greater than non-NULL values:
+        //
+        // $ SELECT ARRAY[NULL]::integer[] > ARRAY[1]
+        // true
+        //
+        // These next two if statements are introduced for replicating Postgres behavior, as
+        // arrow::compute does not account for this.
+        if arr1_trimmed.is_null(j) && !arr2_trimmed.is_null(j) {
+            return Some(Ordering::Greater);
+        }
+        if !arr1_trimmed.is_null(j) && arr2_trimmed.is_null(j) {
+            return Some(Ordering::Less);
+        }
+
         if lt_res.is_valid(j) && lt_res.value(j) {
             return Some(Ordering::Less);
         }
@@ -616,7 +630,20 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     Some(arr1.len().cmp(&arr2.len()))
 }
 
-fn partial_cmp_struct(s1: &Arc<StructArray>, s2: &Arc<StructArray>) -> Option<Ordering> {
+fn flatten<'a>(array: &'a StructArray, columns: &mut Vec<&'a ArrayRef>) {
+    for i in 0..array.num_columns() {
+        let column = array.column(i);
+        if let Some(nested_struct) = column.as_any().downcast_ref::<StructArray>() {
+            // If it's a nested struct, recursively expand
+            flatten(nested_struct, columns);
+        } else {
+            // If it's a primitive type, add directly
+            columns.push(column);
+        }
+    }
+}
+
+pub fn partial_cmp_struct(s1: &StructArray, s2: &StructArray) -> Option<Ordering> {
     if s1.len() != s2.len() {
         return None;
     }
@@ -625,9 +652,15 @@ fn partial_cmp_struct(s1: &Arc<StructArray>, s2: &Arc<StructArray>) -> Option<Or
         return None;
     }
 
-    for col_index in 0..s1.num_columns() {
-        let arr1 = s1.column(col_index);
-        let arr2 = s2.column(col_index);
+    let mut expanded_columns1 = Vec::with_capacity(s1.num_columns());
+    let mut expanded_columns2 = Vec::with_capacity(s2.num_columns());
+
+    flatten(s1, &mut expanded_columns1);
+    flatten(s2, &mut expanded_columns2);
+
+    for col_index in 0..expanded_columns1.len() {
+        let arr1 = expanded_columns1[col_index];
+        let arr2 = expanded_columns2[col_index];
 
         let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
         let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
@@ -3415,6 +3448,89 @@ impl ScalarValue {
                 .map(|sv| sv.size() - size_of_val(sv))
                 .sum::<usize>()
     }
+
+    /// Compacts the allocation referenced by `self` to the minimum, copying the data if
+    /// necessary.
+    ///
+    /// This can be relevant when `self` is a list or contains a list as a nested value, as
+    /// a single list holds an Arc to its entire original array buffer.
+    pub fn compact(&mut self) {
+        match self {
+            ScalarValue::Null
+            | ScalarValue::Boolean(_)
+            | ScalarValue::Float16(_)
+            | ScalarValue::Float32(_)
+            | ScalarValue::Float64(_)
+            | ScalarValue::Decimal128(_, _, _)
+            | ScalarValue::Decimal256(_, _, _)
+            | ScalarValue::Int8(_)
+            | ScalarValue::Int16(_)
+            | ScalarValue::Int32(_)
+            | ScalarValue::Int64(_)
+            | ScalarValue::UInt8(_)
+            | ScalarValue::UInt16(_)
+            | ScalarValue::UInt32(_)
+            | ScalarValue::UInt64(_)
+            | ScalarValue::Date32(_)
+            | ScalarValue::Date64(_)
+            | ScalarValue::Time32Second(_)
+            | ScalarValue::Time32Millisecond(_)
+            | ScalarValue::Time64Microsecond(_)
+            | ScalarValue::Time64Nanosecond(_)
+            | ScalarValue::IntervalYearMonth(_)
+            | ScalarValue::IntervalDayTime(_)
+            | ScalarValue::IntervalMonthDayNano(_)
+            | ScalarValue::DurationSecond(_)
+            | ScalarValue::DurationMillisecond(_)
+            | ScalarValue::DurationMicrosecond(_)
+            | ScalarValue::DurationNanosecond(_)
+            | ScalarValue::Utf8(_)
+            | ScalarValue::LargeUtf8(_)
+            | ScalarValue::Utf8View(_)
+            | ScalarValue::TimestampSecond(_, _)
+            | ScalarValue::TimestampMillisecond(_, _)
+            | ScalarValue::TimestampMicrosecond(_, _)
+            | ScalarValue::TimestampNanosecond(_, _)
+            | ScalarValue::Binary(_)
+            | ScalarValue::FixedSizeBinary(_, _)
+            | ScalarValue::LargeBinary(_)
+            | ScalarValue::BinaryView(_) => (),
+            ScalarValue::FixedSizeList(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                *Arc::make_mut(arr) = FixedSizeListArray::from(array);
+            }
+            ScalarValue::List(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                *Arc::make_mut(arr) = ListArray::from(array);
+            }
+            ScalarValue::LargeList(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                *Arc::make_mut(arr) = LargeListArray::from(array)
+            }
+            ScalarValue::Struct(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                *Arc::make_mut(arr) = StructArray::from(array);
+            }
+            ScalarValue::Map(arr) => {
+                let array = copy_array_data(&arr.to_data());
+                *Arc::make_mut(arr) = MapArray::from(array);
+            }
+            ScalarValue::Union(val, _, _) => {
+                if let Some((_, value)) = val.as_mut() {
+                    value.compact();
+                }
+            }
+            ScalarValue::Dictionary(_, value) => {
+                value.compact();
+            }
+        }
+    }
+}
+
+pub fn copy_array_data(data: &ArrayData) -> ArrayData {
+    let mut copy = MutableArrayData::new(vec![&data], true, data.len());
+    copy.extend(0, 0, data.len());
+    copy.freeze()
 }
 
 macro_rules! impl_scalar {
@@ -3743,7 +3859,7 @@ impl fmt::Display for ScalarValue {
                                         array_value_to_string(arr.column(0), i).unwrap();
                                     let value =
                                         array_value_to_string(arr.column(1), i).unwrap();
-                                    buffer.push_back(format!("{}:{}", key, value));
+                                    buffer.push_back(format!("{key}:{value}"));
                                 }
                                 format!(
                                     "{{{}}}",
@@ -3762,7 +3878,7 @@ impl fmt::Display for ScalarValue {
                 )?
             }
             ScalarValue::Union(val, _fields, _mode) => match val {
-                Some((id, val)) => write!(f, "{}:{}", id, val)?,
+                Some((id, val)) => write!(f, "{id}:{val}")?,
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
@@ -3939,7 +4055,7 @@ impl fmt::Debug for ScalarValue {
                 write!(f, "DurationNanosecond(\"{self}\")")
             }
             ScalarValue::Union(val, _fields, _mode) => match val {
-                Some((id, val)) => write!(f, "Union {}:{}", id, val),
+                Some((id, val)) => write!(f, "Union {id}:{val}"),
                 None => write!(f, "Union(NULL)"),
             },
             ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
@@ -4804,6 +4920,24 @@ mod tests {
                 ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
                     Some(1),
                     Some(2),
+                ])]),
+            ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    None,
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
                 ])]),
             ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));

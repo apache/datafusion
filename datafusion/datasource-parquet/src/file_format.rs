@@ -27,11 +27,11 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
-
-use datafusion_datasource::file_format::{
-    FileFormat, FileFormatFactory, FilePushdownSupport,
+use datafusion_datasource::write::{
+    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
+
+use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::compute::sum;
@@ -52,15 +52,12 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::Accumulator;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
-use crate::can_expr_be_pushed_down_with_schemas;
 use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -404,28 +401,15 @@ impl FileFormat for ParquetFormat {
         &self,
         _state: &dyn Session,
         conf: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut predicate = None;
         let mut metadata_size_hint = None;
 
-        // If enable pruning then combine the filters to build the predicate.
-        // If disable pruning then set the predicate to None, thus readers
-        // will not prune data based on the statistics.
-        if self.enable_pruning() {
-            if let Some(pred) = filters.cloned() {
-                predicate = Some(pred);
-            }
-        }
         if let Some(metadata) = self.metadata_size_hint() {
             metadata_size_hint = Some(metadata);
         }
 
         let mut source = ParquetSource::new(self.options.clone());
 
-        if let Some(predicate) = predicate {
-            source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
-        }
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
@@ -450,27 +434,6 @@ impl FileFormat for ParquetFormat {
         let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
-    }
-
-    fn supports_filters_pushdown(
-        &self,
-        file_schema: &Schema,
-        table_schema: &Schema,
-        filters: &[&Expr],
-    ) -> Result<FilePushdownSupport> {
-        if !self.options().global.pushdown_filters {
-            return Ok(FilePushdownSupport::NoSupport);
-        }
-
-        let all_supported = filters.iter().all(|filter| {
-            can_expr_be_pushed_down_with_schemas(filter, file_schema, table_schema)
-        });
-
-        Ok(if all_supported {
-            FilePushdownSupport::Supported
-        } else {
-            FilePushdownSupport::NotSupportedForFilter
-        })
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {
@@ -943,7 +906,7 @@ pub fn statistics_from_parquet_meta_calc(
                         .ok();
                     }
                     Err(e) => {
-                        debug!("Failed to create statistics converter: {}", e);
+                        debug!("Failed to create statistics converter: {e}");
                         null_counts_array[idx] = Precision::Exact(num_rows);
                     }
                 }
@@ -1095,9 +1058,18 @@ impl ParquetSink {
         &self,
         location: &Path,
         object_store: Arc<dyn ObjectStore>,
+        context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
     ) -> Result<AsyncArrowWriter<BufWriter>> {
-        let buf_writer = BufWriter::new(object_store, location.clone());
+        let buf_writer = BufWriter::with_capacity(
+            object_store,
+            location.clone(),
+            context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size,
+        );
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
@@ -1153,12 +1125,12 @@ impl FileSink for ParquetSink {
                     .create_async_arrow_writer(
                         &path,
                         Arc::clone(&object_store),
+                        context,
                         parquet_props.clone(),
                     )
                     .await?;
-                let mut reservation =
-                    MemoryConsumer::new(format!("ParquetSink[{}]", path))
-                        .register(context.memory_pool());
+                let mut reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
+                    .register(context.memory_pool());
                 file_write_tasks.spawn(async move {
                     while let Some(batch) = rx.recv().await {
                         writer.write(&batch).await?;
@@ -1171,14 +1143,21 @@ impl FileSink for ParquetSink {
                     Ok((path, file_metadata))
                 });
             } else {
-                let writer = create_writer(
+                let writer = ObjectWriterBuilder::new(
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
                     &path,
                     Arc::clone(&object_store),
                 )
-                .await?;
+                .with_buffer_size(Some(
+                    context
+                        .session_config()
+                        .options()
+                        .execution
+                        .objectstore_writer_buffer_size,
+                ))
+                .build()?;
                 let schema = get_writer_schema(&self.config);
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();

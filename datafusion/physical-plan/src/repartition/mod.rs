@@ -54,7 +54,7 @@ use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use crate::filter_pushdown::{
-    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
 };
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
@@ -121,7 +121,7 @@ impl RepartitionExecState {
         let mut channels = HashMap::with_capacity(txs.len());
         for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
             let reservation = Arc::new(Mutex::new(
-                MemoryConsumer::new(format!("{}[{partition}]", name))
+                MemoryConsumer::new(format!("{name}[{partition}]"))
                     .register(context.memory_pool()),
             ));
             channels.insert(partition, (tx, rx, reservation));
@@ -517,11 +517,10 @@ impl DisplayAs for RepartitionExec {
                     self.input.output_partitioning().partition_count();
                 let output_partition_count = self.partitioning().partition_count();
                 let input_to_output_partition_str =
-                    format!("{} -> {}", input_partition_count, output_partition_count);
+                    format!("{input_partition_count} -> {output_partition_count}");
                 writeln!(
                     f,
-                    "partition_count(in->out)={}",
-                    input_to_output_partition_str
+                    "partition_count(in->out)={input_to_output_partition_str}"
                 )?;
 
                 if self.preserve_order {
@@ -632,9 +631,7 @@ impl ExecutionPlan for RepartitionExec {
             };
 
             trace!(
-                "Before returning stream in {}::execute for partition: {}",
-                name,
-                partition
+                "Before returning stream in {name}::execute for partition: {partition}"
             );
 
             if preserve_order {
@@ -656,7 +653,7 @@ impl ExecutionPlan for RepartitionExec {
                 // input partitions to this partition:
                 let fetch = None;
                 let merge_reservation =
-                    MemoryConsumer::new(format!("{}[Merge {partition}]", name))
+                    MemoryConsumer::new(format!("{name}[Merge {partition}]"))
                         .register(context.memory_pool());
                 StreamingMergeBuilder::new()
                     .with_streams(input_streams)
@@ -688,7 +685,15 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_none() {
+            self.input.partition_statistics(None)
+        } else {
+            Ok(Statistics::new_unknown(&self.schema()))
+        }
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -735,14 +740,22 @@ impl ExecutionPlan for RepartitionExec {
         )?)))
     }
 
-    fn try_pushdown_filters(
+    fn gather_filters_for_pushdown(
         &self,
-        fd: FilterDescription,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        Ok(filter_pushdown_transparent::<Arc<dyn ExecutionPlan>>(
-            Arc::new(self.clone()),
-            fd,
+    ) -> Result<FilterDescription> {
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::transparent(
+            child_pushdown_result,
         ))
     }
 }

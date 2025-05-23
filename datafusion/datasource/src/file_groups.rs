@@ -420,9 +420,19 @@ impl FileGroup {
         self.files.push(file);
     }
 
-    /// Get the statistics for this group
-    pub fn statistics(&self) -> Option<&Statistics> {
-        self.statistics.as_deref()
+    /// Get the specific file statistics for the given index
+    /// If the index is None, return the `FileGroup` statistics
+    pub fn file_statistics(&self, index: Option<usize>) -> Option<&Statistics> {
+        if let Some(index) = index {
+            self.files.get(index).and_then(|f| f.statistics.as_deref())
+        } else {
+            self.statistics.as_deref()
+        }
+    }
+
+    /// Get the mutable reference to the statistics for this group
+    pub fn statistics_mut(&mut self) -> Option<&mut Statistics> {
+        self.statistics.as_mut().map(Arc::make_mut)
     }
 
     /// Partition the list of files into `n` groups
@@ -953,8 +963,8 @@ mod test {
             (Some(_), None) => panic!("Expected Some, got None"),
             (None, Some(_)) => panic!("Expected None, got Some"),
             (Some(expected), Some(actual)) => {
-                let expected_string = format!("{:#?}", expected);
-                let actual_string = format!("{:#?}", actual);
+                let expected_string = format!("{expected:#?}");
+                let actual_string = format!("{actual:#?}");
                 assert_eq!(expected_string, actual_string);
             }
         }

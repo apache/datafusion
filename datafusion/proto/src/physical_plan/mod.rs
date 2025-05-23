@@ -728,7 +728,7 @@ impl protobuf::PhysicalPlanNode {
             let mut source = ParquetSource::new(options);
 
             if let Some(predicate) = predicate {
-                source = source.with_predicate(Arc::clone(&schema), predicate);
+                source = source.with_predicate(predicate);
             }
             let base_config = parse_protobuf_file_scan_config(
                 scan.base_conf.as_ref().unwrap(),
@@ -1050,7 +1050,12 @@ impl protobuf::PhysicalPlanNode {
                                     let agg_udf = match &agg_node.fun_definition {
                                         Some(buf) => extension_codec
                                             .try_decode_udaf(udaf_name, buf)?,
-                                        None => registry.udaf(udaf_name)?,
+                                        None => {
+                                            registry.udaf(udaf_name).or_else(|_| {
+                                                extension_codec
+                                                    .try_decode_udaf(udaf_name, &[])
+                                            })?
+                                        }
                                     };
 
                                     AggregateExprBuilder::new(agg_udf, input_phy_expr)
