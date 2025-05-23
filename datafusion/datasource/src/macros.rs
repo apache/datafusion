@@ -42,17 +42,80 @@
 ///
 /// ```rust,no_run
 /// use std::sync::Arc;
+/// use std::any::Any;
+/// use std::fmt::{Formatter, Display, self};
+/// use arrow::datatypes::SchemaRef;
+/// use datafusion_common::{Result, Statistics};
+/// use object_store::ObjectStore;
+/// use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+/// use datafusion_physical_plan::DisplayFormatType;
+/// use datafusion_physical_expr_common::sort_expr::LexOrdering;
 /// use datafusion_datasource::file::FileSource;
+/// use datafusion_datasource::file_stream::FileOpener;
+/// use datafusion_datasource::file_scan_config::FileScanConfig;
 /// use datafusion_datasource::impl_schema_adapter_methods;
 /// use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 ///
+/// #[derive(Clone)]
 /// struct MyFileSource {
+///     schema: SchemaRef,
+///     batch_size: usize,
+///     statistics: Statistics,
+///     projection: Option<Vec<usize>>,
 ///     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-///     // other fields...
+///     metrics: ExecutionPlanMetricsSet,
 /// }
 ///
 /// impl FileSource for MyFileSource {
-///     // Implement other required methods...
+///     fn create_file_opener(
+///         &self,
+///         object_store: Arc<dyn ObjectStore>,
+///         base_config: &FileScanConfig,
+///         partition: usize,
+///     ) -> Arc<dyn FileOpener> {
+///         // Implementation here
+///         unimplemented!()
+///     }
+///     
+///     fn as_any(&self) -> &dyn Any {
+///         self
+///     }
+///     
+///     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
+///         let mut new_source = self.clone();
+///         new_source.batch_size = batch_size;
+///         Arc::new(new_source)
+///     }
+///     
+///     fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+///         let mut new_source = self.clone();
+///         new_source.schema = schema;
+///         Arc::new(new_source)
+///     }
+///     
+///     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
+///         let mut new_source = self.clone();
+///         new_source.projection = config.file_column_projection_indices();
+///         Arc::new(new_source)
+///     }
+///     
+///     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+///         let mut new_source = self.clone();
+///         new_source.statistics = statistics;
+///         Arc::new(new_source)
+///     }
+///     
+///     fn metrics(&self) -> &ExecutionPlanMetricsSet {
+///         &self.metrics
+///     }
+///     
+///     fn statistics(&self) -> Result<Statistics> {
+///         Ok(self.statistics.clone())
+///     }
+///     
+///     fn file_type(&self) -> &str {
+///         "my_file_type"
+///     }
 ///     
 ///     // Use the macro to implement schema adapter methods
 ///     impl_schema_adapter_methods!();
