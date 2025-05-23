@@ -22,8 +22,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::stats::Precision;
-use crate::ScalarValue;
 use crate::{Column, Statistics};
+use crate::{ColumnStatistics, ScalarValue};
 
 /// A source of runtime statistical information to [`PruningPredicate`]s.
 ///
@@ -171,15 +171,15 @@ impl PartitionPruningStatistics {
     ) -> Self {
         let num_containers = partition_values.len();
         let partition_schema = Arc::new(Schema::new(partition_fields));
-        let mut partition_valeus_by_column =
+        let mut partition_values_by_column =
             vec![vec![]; partition_schema.fields().len()];
         for partition_value in partition_values {
             for (i, value) in partition_value.into_iter().enumerate() {
-                partition_valeus_by_column[i].push(value);
+                partition_values_by_column[i].push(value);
             }
         }
         Self {
-            partition_values: partition_valeus_by_column,
+            partition_values: partition_values_by_column,
             num_containers,
             partition_schema,
         }
@@ -225,16 +225,12 @@ impl PruningStatistics for PartitionPruningStatistics {
     ) -> Option<BooleanArray> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
         let partition_values = self.partition_values.get(index)?;
-        let mut contained = Vec::with_capacity(self.partition_values.len());
-        for partition_value in partition_values {
-            let contained_value = if values.contains(partition_value) {
-                Some(true)
-            } else {
-                Some(false)
-            };
-            contained.push(contained_value);
-        }
-        let array = BooleanArray::from(contained);
+        let array = BooleanArray::from(
+            partition_values
+                .iter()
+                .map(|pv| Some(values.contains(pv)))
+                .collect::<Vec<_>>(),
+        );
         Some(array)
     }
 }
@@ -258,73 +254,47 @@ impl PrunableStatistics {
     pub fn new(statistics: Vec<Arc<Statistics>>, schema: SchemaRef) -> Self {
         Self { statistics, schema }
     }
+
+    fn get_exact_column_statistics(
+        &self,
+        column: &Column,
+        get_stat: impl Fn(&ColumnStatistics) -> &Precision<ScalarValue>,
+    ) -> Option<ArrayRef> {
+        let index = self.schema.index_of(column.name()).ok()?;
+        let mut has_value = false;
+        match ScalarValue::iter_to_array(self.statistics.iter().map(|s| {
+            s.column_statistics
+                .get(index)
+                .and_then(|stat| {
+                    if let Precision::Exact(min) = get_stat(&stat) {
+                        has_value = true;
+                        Some(min.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(ScalarValue::Null)
+        })) {
+            // If there is any non-null value and no errors, return the array
+            Ok(array) => has_value.then_some(array),
+            Err(_) => {
+                log::warn!(
+                    "Failed to convert min values to array for column {}",
+                    column.name()
+                );
+                None
+            }
+        }
+    }
 }
 
 impl PruningStatistics for PrunableStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let index = self.schema.index_of(column.name()).ok()?;
-        if self.statistics.iter().any(|s| {
-            s.column_statistics
-                .get(index)
-                .is_some_and(|stat| stat.min_value.is_exact().unwrap_or(false))
-        }) {
-            match ScalarValue::iter_to_array(self.statistics.iter().map(|s| {
-                s.column_statistics
-                    .get(index)
-                    .and_then(|stat| {
-                        if let Precision::Exact(min) = &stat.min_value {
-                            Some(min.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(ScalarValue::Null)
-            })) {
-                Ok(array) => Some(array),
-                Err(_) => {
-                    log::warn!(
-                        "Failed to convert min values to array for column {}",
-                        column.name()
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        }
+        self.get_exact_column_statistics(column, |stat| &stat.min_value)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let index = self.schema.index_of(column.name()).ok()?;
-        if self.statistics.iter().any(|s| {
-            s.column_statistics
-                .get(index)
-                .is_some_and(|stat| stat.max_value.is_exact().unwrap_or(false))
-        }) {
-            match ScalarValue::iter_to_array(self.statistics.iter().map(|s| {
-                s.column_statistics
-                    .get(index)
-                    .and_then(|stat| {
-                        if let Precision::Exact(max) = &stat.max_value {
-                            Some(max.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(ScalarValue::Null)
-            })) {
-                Ok(array) => Some(array),
-                Err(_) => {
-                    log::warn!(
-                        "Failed to convert max values to array for column {}",
-                        column.name()
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        }
+        self.get_exact_column_statistics(column, |stat| &stat.max_value)
     }
 
     fn num_containers(&self) -> usize {
