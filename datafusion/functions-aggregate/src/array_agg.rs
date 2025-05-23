@@ -114,7 +114,7 @@ impl AggregateUDFImpl for ArrayAgg {
             return Ok(vec![Field::new_list(
                 format_state_name(args.name, "distinct_array_agg"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.input_types[0].clone(), true),
+                Field::new_list_field(args.input_fields[0].data_type().clone(), true),
                 true,
             )]);
         }
@@ -122,7 +122,7 @@ impl AggregateUDFImpl for ArrayAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(args.name, "array_agg"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new_list_field(args.input_types[0].clone(), true),
+            Field::new_list_field(args.input_fields[0].data_type().clone(), true),
             true,
         )];
 
@@ -984,7 +984,7 @@ mod tests {
     }
 
     struct ArrayAggAccumulatorBuilder {
-        data_type: DataType,
+        return_field: Field,
         distinct: bool,
         ordering: LexOrdering,
         schema: Schema,
@@ -997,7 +997,7 @@ mod tests {
 
         fn new(data_type: DataType) -> Self {
             Self {
-                data_type: data_type.clone(),
+                return_field: Field::new("f", data_type.clone(), true),
                 distinct: false,
                 ordering: Default::default(),
                 schema: Schema {
@@ -1029,7 +1029,7 @@ mod tests {
 
         fn build(&self) -> Result<Box<dyn Accumulator>> {
             ArrayAgg::default().accumulator(AccumulatorArgs {
-                return_type: &self.data_type,
+                return_field: &self.return_field,
                 schema: &self.schema,
                 ignore_nulls: false,
                 ordering_req: &self.ordering,

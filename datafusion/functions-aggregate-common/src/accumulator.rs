@@ -27,8 +27,8 @@ use std::sync::Arc;
 /// ordering expressions.
 #[derive(Debug)]
 pub struct AccumulatorArgs<'a> {
-    /// The return type of the aggregate function.
-    pub return_type: &'a DataType,
+    /// The return field of the aggregate function.
+    pub return_field: &'a Field,
 
     /// The schema of the input arguments
     pub schema: &'a Schema,
@@ -71,6 +71,13 @@ pub struct AccumulatorArgs<'a> {
     pub exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 
+impl AccumulatorArgs<'_> {
+    /// Returns the return type of the aggregate function.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
+}
+
 /// Factory that returns an accumulator for the given aggregate function.
 pub type AccumulatorFactoryFunction =
     Arc<dyn Fn(AccumulatorArgs) -> Result<Box<dyn Accumulator>> + Send + Sync>;
@@ -81,15 +88,22 @@ pub struct StateFieldsArgs<'a> {
     /// The name of the aggregate function.
     pub name: &'a str,
 
-    /// The input types of the aggregate function.
-    pub input_types: &'a [DataType],
+    /// The input fields of the aggregate function.
+    pub input_fields: &'a [Field],
 
-    /// The return type of the aggregate function.
-    pub return_type: &'a DataType,
+    /// The return fields of the aggregate function.
+    pub return_field: &'a Field,
 
     /// The ordering fields of the aggregate function.
     pub ordering_fields: &'a [Field],
 
     /// Whether the aggregate function is distinct.
     pub is_distinct: bool,
+}
+
+impl StateFieldsArgs<'_> {
+    /// The return type of the aggregate function.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
 }
