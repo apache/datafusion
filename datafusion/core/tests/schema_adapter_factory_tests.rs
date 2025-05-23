@@ -24,6 +24,7 @@ use std::sync::Arc;
 // Import ArrowSource from the correct location
 // ArrowSource is part of the core DataFusion package
 use datafusion::datasource::physical_plan::ArrowSource;
+use datafusion_datasource::PartitionedFile;
 
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::source::ParquetSource;
@@ -177,7 +178,7 @@ fn test_file_source_conversion() {
 #[cfg(feature = "parquet")]
 #[test]
 fn test_schema_adapter_preservation() {
-    use datafusion::datasource::object_store::ObjectStoreUrl;
+    use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 
     // Create a test schema
@@ -193,10 +194,12 @@ fn test_schema_adapter_preservation() {
 
     // Create a FileScanConfig with the source
     let config_builder = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("file:///path/to/parquet").unwrap(),
+        ObjectStoreUrl::local_filesystem(),
         schema.clone(),
         file_source.clone(),
-    );
+    )
+    // Add a file to make it valid
+    .with_file(PartitionedFile::new("test.parquet", 100));
 
     let config = config_builder.build();
 

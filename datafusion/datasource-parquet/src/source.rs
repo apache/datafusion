@@ -428,7 +428,7 @@ pub(crate) fn parse_coerce_int96_string(
     }
 }
 
-/// Allows easy conversion from ParquetSource to Arc<dyn FileSource>
+/// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
 impl From<ParquetSource> for Arc<dyn FileSource> {
     fn from(source: ParquetSource) -> Self {
         as_file_source(source)

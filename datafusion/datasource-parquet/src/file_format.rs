@@ -1730,7 +1730,7 @@ fn create_max_min_accs(
     (max_values, min_values)
 }
 
-/// Converts a ParquetSource to an Arc<dyn FileSource> and applies the schema adapter factory
+/// Converts a ParquetSource to an Arc&lt;dyn FileSource&gt; and applies the schema adapter factory
 /// from the FileScanConfig if present.
 ///
 /// # Arguments

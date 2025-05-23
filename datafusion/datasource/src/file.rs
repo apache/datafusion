@@ -36,7 +36,7 @@ use datafusion_physical_plan::DisplayFormatType;
 
 use object_store::ObjectStore;
 
-/// Helper function to convert any type implementing FileSource to Arc<dyn FileSource>
+/// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
 pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
     Arc::new(source)
 }
