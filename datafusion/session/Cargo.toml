@@ -47,6 +47,11 @@ log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { workspace = true }
+parquet = { workspace = true, optional = true, default-features = true }
+
+[features]
+default = ["parquet"]
+parquet = ["datafusion-common/parquet", "dep:parquet"]
 
 [lints]
 workspace = true
