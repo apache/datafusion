@@ -19,14 +19,14 @@ use abi_stable::{
     std_types::{ROption, RVec},
     StableAbi,
 };
-use arrow::datatypes::Field;
+use arrow_schema::FieldRef;
 use datafusion::{
     common::exec_datafusion_err, error::DataFusionError, logical_expr::ReturnFieldArgs,
     scalar::ScalarValue,
 };
 
 use crate::arrow_wrappers::WrappedSchema;
-use crate::util::{rvec_wrapped_to_vec_field, vec_field_to_rvec_wrapped};
+use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 use prost::Message;
 
 /// A stable struct for sharing a [`ReturnFieldArgs`] across FFI boundaries.
@@ -42,7 +42,7 @@ impl TryFrom<ReturnFieldArgs<'_>> for FFI_ReturnFieldArgs {
     type Error = DataFusionError;
 
     fn try_from(value: ReturnFieldArgs) -> Result<Self, Self::Error> {
-        let arg_fields = vec_field_to_rvec_wrapped(value.arg_fields)?;
+        let arg_fields = vec_fieldref_to_rvec_wrapped(value.arg_fields)?;
         let scalar_arguments: Result<Vec<_>, Self::Error> = value
             .scalar_arguments
             .iter()
@@ -70,12 +70,12 @@ impl TryFrom<ReturnFieldArgs<'_>> for FFI_ReturnFieldArgs {
 // appears a restriction based on the need to have a borrowed ScalarValue
 // in the arguments when converted to ReturnFieldArgs
 pub struct ForeignReturnFieldArgsOwned {
-    arg_fields: Vec<Field>,
+    arg_fields: Vec<FieldRef>,
     scalar_arguments: Vec<Option<ScalarValue>>,
 }
 
 pub struct ForeignReturnFieldArgs<'a> {
-    arg_fields: &'a [Field],
+    arg_fields: &'a [FieldRef],
     scalar_arguments: Vec<Option<&'a ScalarValue>>,
 }
 
@@ -83,7 +83,7 @@ impl TryFrom<&FFI_ReturnFieldArgs> for ForeignReturnFieldArgsOwned {
     type Error = DataFusionError;
 
     fn try_from(value: &FFI_ReturnFieldArgs) -> Result<Self, Self::Error> {
-        let arg_fields = rvec_wrapped_to_vec_field(&value.arg_fields)?;
+        let arg_fields = rvec_wrapped_to_vec_fieldref(&value.arg_fields)?;
         let scalar_arguments: Result<Vec<_>, Self::Error> = value
             .scalar_arguments
             .iter()

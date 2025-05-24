@@ -108,7 +108,7 @@ mod test {
                 args: vec![],
                 arg_fields: vec![],
                 number_rows: 0,
-                return_field: &Field::new("f", DataType::Utf8, true),
+                return_field: Field::new("f", DataType::Utf8, true).into(),
             })
             .unwrap();
 

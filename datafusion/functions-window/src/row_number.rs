@@ -17,6 +17,7 @@
 
 //! `row_number` window function implementation
 
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
 use datafusion_common::arrow::compute::SortOptions;
@@ -106,8 +107,8 @@ impl WindowUDFImpl for RowNumber {
         Ok(Box::<NumRowsEvaluator>::default())
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::UInt64, false))
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
     }
 
     fn sort_options(&self) -> Option<SortOptions> {

@@ -37,7 +37,7 @@ use crate::{
 use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, Spans, TableReference};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -492,6 +492,7 @@ pub fn create_udaf(
         .into_iter()
         .enumerate()
         .map(|(i, t)| Field::new(format!("{i}"), t, true))
+        .map(Arc::new)
         .collect::<Vec<_>>();
     AggregateUDF::from(SimpleAggregateUDF::new(
         name,
@@ -510,7 +511,7 @@ pub struct SimpleAggregateUDF {
     signature: Signature,
     return_type: DataType,
     accumulator: AccumulatorFactoryFunction,
-    state_fields: Vec<Field>,
+    state_fields: Vec<FieldRef>,
 }
 
 impl Debug for SimpleAggregateUDF {
@@ -533,7 +534,7 @@ impl SimpleAggregateUDF {
         return_type: DataType,
         volatility: Volatility,
         accumulator: AccumulatorFactoryFunction,
-        state_fields: Vec<Field>,
+        state_fields: Vec<FieldRef>,
     ) -> Self {
         let name = name.into();
         let signature = Signature::exact(input_type, volatility);
@@ -553,7 +554,7 @@ impl SimpleAggregateUDF {
         signature: Signature,
         return_type: DataType,
         accumulator: AccumulatorFactoryFunction,
-        state_fields: Vec<Field>,
+        state_fields: Vec<FieldRef>,
     ) -> Self {
         let name = name.into();
         Self {
@@ -590,7 +591,7 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
         (self.accumulator)(acc_args)
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(self.state_fields.clone())
     }
 }
@@ -678,12 +679,12 @@ impl WindowUDFImpl for SimpleWindowUDF {
         (self.partition_evaluator_factory)()
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
             field_args.name(),
             self.return_type.clone(),
             true,
-        ))
+        )))
     }
 }
 

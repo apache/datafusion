@@ -18,6 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use arrow::array::Float64Array;
+use arrow::datatypes::FieldRef;
 use arrow::{
     array::{ArrayRef, UInt64Array},
     compute::cast,
@@ -38,7 +39,7 @@ use datafusion_expr::{
 use std::any::Any;
 use std::fmt::Debug;
 use std::mem::size_of_val;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 macro_rules! make_regr_udaf_expr_and_func {
     ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $REGR_TYPE:expr) => {
@@ -278,7 +279,7 @@ impl AggregateUDFImpl for Regr {
         Ok(Box::new(RegrAccumulator::try_new(&self.regr_type)?))
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "count"),
@@ -310,7 +311,10 @@ impl AggregateUDFImpl for Regr {
                 DataType::Float64,
                 true,
             ),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn documentation(&self) -> Option<&Documentation> {

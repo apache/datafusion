@@ -813,7 +813,7 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
 
     let current_fields = expressions
         .iter()
-        .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
+        .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
     let new_types = fields_with_aggregate_udf(&current_fields, func)?
@@ -1622,8 +1622,8 @@ mod test {
             return_type,
             accumulator,
             vec![
-                Field::new("count", DataType::UInt64, true),
-                Field::new("avg", DataType::Float64, true),
+                Field::new("count", DataType::UInt64, true).into(),
+                Field::new("avg", DataType::Float64, true).into(),
             ],
         ));
         let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(

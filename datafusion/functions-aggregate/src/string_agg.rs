@@ -19,7 +19,7 @@
 
 use crate::array_agg::ArrayAgg;
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::Result;
 use datafusion_common::{internal_err, not_impl_err, ScalarValue};
@@ -129,7 +129,7 @@ impl AggregateUDFImpl for StringAgg {
         Ok(DataType::LargeUtf8)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.array_agg.state_fields(args)
     }
 
@@ -154,11 +154,12 @@ impl AggregateUDFImpl for StringAgg {
         };
 
         let array_agg_acc = self.array_agg.accumulator(AccumulatorArgs {
-            return_field: &Field::new(
+            return_field: Field::new(
                 "f",
                 DataType::new_list(acc_args.return_field.data_type().clone(), true),
                 true,
-            ),
+            )
+            .into(),
             exprs: &filter_index(acc_args.exprs, 1),
             ..acc_args
         })?;
@@ -440,7 +441,7 @@ mod tests {
 
         fn build(&self) -> Result<Box<dyn Accumulator>> {
             StringAgg::new().accumulator(AccumulatorArgs {
-                return_field: &Field::new("f", DataType::LargeUtf8, true),
+                return_field: Field::new("f", DataType::LargeUtf8, true).into(),
                 schema: &self.schema,
                 ignore_nulls: false,
                 ordering_req: &self.ordering,

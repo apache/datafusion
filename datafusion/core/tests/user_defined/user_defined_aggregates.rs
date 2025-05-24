@@ -32,6 +32,7 @@ use arrow::array::{
     StringArray, StructArray, UInt64Array,
 };
 use arrow::datatypes::{Fields, Schema};
+use arrow_schema::FieldRef;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
@@ -572,7 +573,7 @@ impl TimeSum {
         // Returns the same type as its input
         let return_type = timestamp_type.clone();
 
-        let state_fields = vec![Field::new("sum", timestamp_type, true)];
+        let state_fields = vec![Field::new("sum", timestamp_type, true).into()];
 
         let volatility = Volatility::Immutable;
 
@@ -672,7 +673,7 @@ impl FirstSelector {
         let state_fields = state_type
             .into_iter()
             .enumerate()
-            .map(|(i, t)| Field::new(format!("{i}"), t, true))
+            .map(|(i, t)| Field::new(format!("{i}"), t, true).into())
             .collect::<Vec<_>>();
 
         // Possible input signatures
@@ -932,9 +933,10 @@ impl AggregateUDFImpl for MetadataBasedAggregateUdf {
         unimplemented!("this should never be called since return_field is implemented");
     }
 
-    fn return_field(&self, _arg_fields: &[Field]) -> Result<Field> {
+    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
         Ok(Field::new(self.name(), DataType::UInt64, true)
-            .with_metadata(self.metadata.clone()))
+            .with_metadata(self.metadata.clone())
+            .into())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

@@ -651,18 +651,17 @@ mod tests {
             .map(|sv| ColumnarValue::Scalar(sv.clone()))
             .collect();
 
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
             .enumerate()
-            .map(|(idx, a)| Field::new(format!("arg_{idx}"), a.data_type(), true))
-            .collect::<Vec<Field>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+            .map(|(idx, a)| Field::new(format!("arg_{idx}"), a.data_type(), true).into())
+            .collect::<Vec<_>>();
 
         RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
             args: args_values,
             arg_fields,
             number_rows: args.len(),
-            return_field: &Field::new("f", Int64, true),
+            return_field: Field::new("f", Int64, true).into(),
         })
     }
 

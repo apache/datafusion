@@ -21,7 +21,7 @@ use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{ColumnarValue, Documentation, Expr, Signature};
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -181,7 +181,7 @@ impl ScalarUDF {
     /// Return the datatype this function returns given the input argument types.
     ///
     /// See [`ScalarUDFImpl::return_field_from_args`] for more details.
-    pub fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    pub fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         self.inner.return_field_from_args(args)
     }
 
@@ -293,20 +293,20 @@ where
 
 /// Arguments passed to [`ScalarUDFImpl::invoke_with_args`] when invoking a
 /// scalar function.
-pub struct ScalarFunctionArgs<'a, 'b> {
+pub struct ScalarFunctionArgs {
     /// The evaluated arguments to the function
     pub args: Vec<ColumnarValue>,
     /// Field associated with each arg, if it exists
-    pub arg_fields: Vec<&'a Field>,
+    pub arg_fields: Vec<FieldRef>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
     /// The return field of the scalar function returned (from `return_type`
     /// or `return_field_from_args`) when creating the physical expression
     /// from the logical expression
-    pub return_field: &'b Field,
+    pub return_field: FieldRef,
 }
 
-impl<'a, 'b> ScalarFunctionArgs<'a, 'b> {
+impl ScalarFunctionArgs {
     /// The return type of the function. See [`Self::return_field`] for more
     /// details.
     pub fn return_type(&self) -> &DataType {
@@ -324,7 +324,7 @@ impl<'a, 'b> ScalarFunctionArgs<'a, 'b> {
 #[derive(Debug)]
 pub struct ReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
-    pub arg_fields: &'a [Field],
+    pub arg_fields: &'a [FieldRef],
     /// Is argument `i` to the function a scalar (constant)?
     ///
     /// If the argument `i` is not a scalar, it will be None
@@ -476,15 +476,16 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// `DataType::Struct`.
     ///
     /// ```rust
-    /// # use arrow::datatypes::{DataType, Field};
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, FieldRef};
     /// # use datafusion_common::Result;
     /// # use datafusion_expr::ReturnFieldArgs;
-    /// # struct Example{};
+    /// # struct Example{}
     /// # impl Example {
-    /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
     ///   // report output is only nullable if any one of the arguments are nullable
     ///   let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-    ///   let field = Field::new("ignored_name", DataType::Int32, true);
+    ///   let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
     ///   Ok(field)
     /// }
     /// # }
@@ -504,7 +505,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function **must** consistently return the same type for the same
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let data_types = args
             .arg_fields
             .iter()
@@ -512,7 +513,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
             .cloned()
             .collect::<Vec<_>>();
         let return_type = self.return_type(&data_types)?;
-        Ok(Field::new(self.name(), return_type, true))
+        Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
 
     #[deprecated(
@@ -766,7 +767,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type(arg_types)
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         self.inner.return_field_from_args(args)
     }
 

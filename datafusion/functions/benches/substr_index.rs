@@ -91,12 +91,13 @@ fn criterion_benchmark(c: &mut Criterion) {
         let counts = ColumnarValue::Array(Arc::new(counts) as ArrayRef);
 
         let args = vec![strings, delimiters, counts];
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
             .enumerate()
-            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
         b.iter(|| {
             black_box(
@@ -105,7 +106,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: arg_fields.clone(),
                         number_rows: batch_len,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     })
                     .expect("substr_index should work on valid values"),
             )

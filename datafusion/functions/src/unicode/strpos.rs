@@ -22,7 +22,9 @@ use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
     ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringArrayType,
 };
-use arrow::datatypes::{ArrowNativeType, DataType, Field, Int32Type, Int64Type};
+use arrow::datatypes::{
+    ArrowNativeType, DataType, Field, FieldRef, Int32Type, Int64Type,
+};
 use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{
@@ -94,7 +96,7 @@ impl ScalarUDFImpl for StrposFunc {
     fn return_field_from_args(
         &self,
         args: datafusion_expr::ReturnFieldArgs,
-    ) -> Result<Field> {
+    ) -> Result<FieldRef> {
         utf8_to_int_type(args.arg_fields[0].data_type(), "strpos/instr/position").map(
             |data_type| {
                 Field::new(
@@ -102,6 +104,7 @@ impl ScalarUDFImpl for StrposFunc {
                     data_type,
                     args.arg_fields.iter().any(|x| x.is_nullable()),
                 )
+                .into()
             },
         )
     }
@@ -329,8 +332,8 @@ mod tests {
             let strpos = StrposFunc::new();
             let args = datafusion_expr::ReturnFieldArgs {
                 arg_fields: &[
-                    Field::new("f1", DataType::Utf8, string_array_nullable),
-                    Field::new("f2", DataType::Utf8, substring_nullable),
+                    Field::new("f1", DataType::Utf8, string_array_nullable).into(),
+                    Field::new("f2", DataType::Utf8, substring_nullable).into(),
                 ],
                 scalar_arguments: &[None::<&ScalarValue>, None::<&ScalarValue>],
             };

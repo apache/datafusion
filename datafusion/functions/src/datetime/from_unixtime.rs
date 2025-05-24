@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType::{Int64, Timestamp, Utf8};
 use arrow::datatypes::TimeUnit::Second;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -81,12 +81,12 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         &self.signature
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // Length check handled in the signature
         debug_assert!(matches!(args.scalar_arguments.len(), 1 | 2));
 
         if args.scalar_arguments.len() == 1 {
-            Ok(Field::new(self.name(), Timestamp(Second, None), true))
+            Ok(Field::new(self.name(), Timestamp(Second, None), true).into())
         } else {
             args.scalar_arguments[1]
                 .and_then(|sv| {
@@ -101,6 +101,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
                             )
                         })
                 })
+                .map(Arc::new)
                 .map_or_else(
                     || {
                         exec_err!(
@@ -170,12 +171,12 @@ mod test {
 
     #[test]
     fn test_without_timezone() {
-        let arg_field = Field::new("a", DataType::Int64, true);
+        let arg_field = Arc::new(Field::new("a", DataType::Int64, true));
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(Int64(Some(1729900800)))],
-            arg_fields: vec![&arg_field],
+            arg_fields: vec![arg_field],
             number_rows: 1,
-            return_field: &Field::new("f", DataType::Timestamp(Second, None), true),
+            return_field: Field::new("f", DataType::Timestamp(Second, None), true).into(),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
@@ -190,8 +191,8 @@ mod test {
     #[test]
     fn test_with_timezone() {
         let arg_fields = vec![
-            Field::new("a", DataType::Int64, true),
-            Field::new("a", DataType::Utf8, true),
+            Field::new("a", DataType::Int64, true).into(),
+            Field::new("a", DataType::Utf8, true).into(),
         ];
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![
@@ -200,13 +201,14 @@ mod test {
                     "America/New_York".to_string(),
                 ))),
             ],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 2,
-            return_field: &Field::new(
+            return_field: Field::new(
                 "f",
                 DataType::Timestamp(Second, Some(Arc::from("America/New_York"))),
                 true,
-            ),
+            )
+            .into(),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
