@@ -38,13 +38,14 @@ use crate::test_util::{aggr_test_schema, arrow_test_data};
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::DataFusionError;
 use datafusion_datasource::source::DataSourceExec;
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
+#[cfg(feature = "compression")]
+use datafusion_common::DataFusionError;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource_csv::partitioned_csv_config;

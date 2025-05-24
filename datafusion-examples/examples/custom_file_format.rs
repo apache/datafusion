@@ -25,6 +25,7 @@ use datafusion::physical_expr::LexRequirement;
 use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
+    config::{ConfigFileType, OutputFormat},
 };
 use datafusion::{
     datasource::physical_plan::FileSource, execution::session_state::SessionStateBuilder,
@@ -150,6 +151,17 @@ impl TSVFileFactory {
 }
 
 impl FileFormatFactory for TSVFileFactory {
+    fn options(&self) -> (Option<OutputFormat>, ConfigFileType) {
+        unimplemented!(
+            "Use FileFormatFactory::create() directly to create the FileFormat"
+        )
+    }
+    fn default_from_output_format(&self, _options: OutputFormat) -> Arc<dyn FileFormat> {
+        unimplemented!(
+            "Use FileFormatFactory::create() directly to create the FileFormat"
+        )
+    }
+
     fn create(
         &self,
         state: &dyn Session,
