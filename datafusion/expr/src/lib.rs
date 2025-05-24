@@ -42,6 +42,7 @@ mod udaf;
 mod udf;
 mod udwf;
 
+pub mod planner_context;
 pub mod conditional_expressions;
 pub mod execution_props;
 pub mod expr;

@@ -21,7 +21,7 @@ use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
     execution::{context::SessionState, TaskContext},
-    logical_expr::LogicalPlan,
+    logical_expr::{planner_context::PlannerContext, LogicalPlan},
     prelude::SessionContext,
 };
 use object_store::ObjectStore;
@@ -51,6 +51,7 @@ pub trait CliSessionContext {
     async fn execute_logical_plan(
         &self,
         plan: LogicalPlan,
+        planner_context: Option<PlannerContext>,
     ) -> Result<DataFrame, DataFusionError>;
 }
 
@@ -92,7 +93,8 @@ impl CliSessionContext for SessionContext {
     async fn execute_logical_plan(
         &self,
         plan: LogicalPlan,
+        planner_context: Option<PlannerContext>,
     ) -> Result<DataFrame, DataFusionError> {
-        self.execute_logical_plan(plan).await
+        self.execute_logical_plan(plan, planner_context).await
     }
 }

@@ -17,9 +17,9 @@
 
 use std::sync::Arc;
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 use datafusion_common::{DFSchema, Result};
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{planner_context::PlannerContext, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::Values as SQLValues;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
