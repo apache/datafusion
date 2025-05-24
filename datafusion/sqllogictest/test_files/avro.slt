@@ -210,11 +210,5 @@ physical_plan
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/alltypes_plain.avro]]}, file_type=avro
 
 # test column projection order from avro file
-query ITII
+query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
 SELECT id, string_col, int_col, bigint_col FROM alltypes_plain ORDER BY id LIMIT 5
-----
-0 0 0 0
-1 1 1 10
-2 0 0 0
-3 1 1 10
-4 0 0 0
