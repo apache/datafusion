@@ -206,40 +206,30 @@ struct Node {
 #[derive(Debug, Clone)]
 enum SubqueryType {
     None,
-    In(Expr),
-    Exists(Expr),
-    Scalar(Expr),
+    In,
+    Exists,
+    Scalar,
 }
 
 impl SubqueryType {
-    fn unwrap_expr(&self) -> Expr {
-        match self {
-            SubqueryType::None => {
-                panic!("not reached")
-            }
-            SubqueryType::In(e) | SubqueryType::Exists(e) | SubqueryType::Scalar(e) => {
-                e.clone()
-            }
-        }
-    }
     fn default_join_type(&self) -> JoinType {
         match self {
             SubqueryType::None => {
                 panic!("not reached")
             }
-            SubqueryType::In(_) => JoinType::LeftSemi,
-            SubqueryType::Exists(_) => JoinType::LeftMark,
+            SubqueryType::In => JoinType::LeftSemi,
+            SubqueryType::Exists => JoinType::LeftMark,
             // TODO: in duckdb, they have JoinType::Single
             // where there is only at most one join partner entry on the LEFT
-            SubqueryType::Scalar(_) => JoinType::Left,
+            SubqueryType::Scalar => JoinType::Left,
         }
     }
     fn prefix(&self) -> String {
         match self {
             SubqueryType::None => "",
-            SubqueryType::In(_) => "__in_sq",
-            SubqueryType::Exists(_) => "__exists_sq",
-            SubqueryType::Scalar(_) => "__scalar_sq",
+            SubqueryType::In => "__in_sq",
+            SubqueryType::Exists => "__exists_sq",
+            SubqueryType::Scalar => "__scalar_sq",
         }
         .to_string()
     }
@@ -330,21 +320,21 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         let (found_sq, checking_type) = match e {
                             Expr::ScalarSubquery(sq) => {
                                 if sq == subquery {
-                                    (true, SubqueryType::Scalar(e.clone()))
+                                    (true, SubqueryType::Scalar)
                                 } else {
                                     (false, SubqueryType::None)
                                 }
                             }
                             Expr::Exists(exist) => {
                                 if &exist.subquery == subquery {
-                                    (true, SubqueryType::Exists(e.clone()))
+                                    (true, SubqueryType::Exists)
                                 } else {
                                     (false, SubqueryType::None)
                                 }
                             }
                             Expr::InSubquery(in_sq) => {
                                 if &in_sq.subquery == subquery {
-                                    (true, SubqueryType::In(e.clone()))
+                                    (true, SubqueryType::In)
                                 } else {
                                     (false, SubqueryType::None)
                                 }
@@ -416,6 +406,9 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         }
 
         match &node {
+            LogicalPlan::Projection(_) => {
+                // TODO: implement me
+            }
             LogicalPlan::Filter(filter) => {
                 // everytime we meet a subquery during traversal, we increment this by 1
                 // we can use this offset to lookup the original subquery info

@@ -897,7 +897,6 @@ impl LogicalPlan {
 
                 Filter::try_new(predicate, Arc::new(input)).map(LogicalPlan::Filter)
             }
-            LogicalPlan::DependentJoin(DependentJoin { left, right, .. }) => todo!(),
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
@@ -1202,6 +1201,7 @@ impl LogicalPlan {
                     unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
+            LogicalPlan::DependentJoin(_) => todo!(),
         }
     }
 
@@ -1949,7 +1949,6 @@ impl LogicalPlan {
                     }
 
                     LogicalPlan::DependentJoin(DependentJoin{
-                        left,right,
                         subquery_expr,
                         correlated_columns,
                         subquery_depth,

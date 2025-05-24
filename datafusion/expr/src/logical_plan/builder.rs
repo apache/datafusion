@@ -895,17 +895,12 @@ impl LogicalPlanBuilder {
         subquery_name: String,
     ) -> Result<Self> {
         let left = self.build()?;
-        let mut schema = left.schema();
+        let schema = left.schema();
         let qualified_fields = schema
             .iter()
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-            .chain(once(subquery_output_field(
-                &subquery_name,
-                right.schema(),
-                &subquery_expr,
-            )))
+            .chain(once(subquery_output_field(&subquery_name, &subquery_expr)))
             .collect();
-        let func_dependencies = schema.functional_dependencies();
         let metadata = schema.metadata().clone();
         let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
 
@@ -1586,7 +1581,6 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
 
 fn subquery_output_field(
     subquery_alias: &String,
-    right_schema: &DFSchema,
     subquery_expr: &Expr,
 ) -> (Option<TableReference>, Arc<Field>) {
     // TODO: check nullability
