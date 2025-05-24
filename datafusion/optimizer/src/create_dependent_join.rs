@@ -51,30 +51,26 @@ impl OptimizerRule for CreateDependentJoin {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Filter(ref filter) => {
-                match &filter.predicate {
-                    Expr::BinaryExpr(binary) => {
-                        // Check if right hand side is a scalar subquery
-                        if let Expr::ScalarSubquery(subquery) = binary.right.as_ref() {
-                            let new_plan = build_dependent_join(
-                                subquery,
-                                filter.input.as_ref().clone(),
-                                JoinType::Left,
-                            )?;
-                            return Ok(Transformed::yes(new_plan));
-                        }
-                        // Continue searching in children if no subquery found
-                        return Ok(Transformed::no(plan));
+        if let LogicalPlan::Filter(ref filter) = plan {
+            match &filter.predicate {
+                Expr::BinaryExpr(binary) => {
+                    // Check if right hand side is a scalar subquery
+                    if let Expr::ScalarSubquery(subquery) = binary.right.as_ref() {
+                        let new_plan = build_dependent_join(
+                            subquery,
+                            filter.input.as_ref().clone(),
+                            JoinType::Left,
+                        )?;
+                        return Ok(Transformed::yes(new_plan));
                     }
-                    _ => {
-                        // TODO: add other type of subqueries.
-                        return Ok(Transformed::no(plan));
-                    }
+                    // Continue searching in children if no subquery found
+                    return Ok(Transformed::no(plan));
+                }
+                _ => {
+                    // TODO: add other type of subqueries.
+                    return Ok(Transformed::no(plan));
                 }
             }
-            // TODO: Add other cases.
-            _ => {}
         }
 
         // No Filter found, continue searching in children
