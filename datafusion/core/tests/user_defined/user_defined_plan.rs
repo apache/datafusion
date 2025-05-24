@@ -861,7 +861,7 @@ impl Stream for TopKReader {
                     arrow::datatypes::DataType::Utf8View => {
                         Arc::new(StringViewArray::from(customer))
                     }
-                    other => panic!("Unsupported customer_id output type: {:?}", other),
+                    other => panic!("Unsupported customer_id output type: {other:?}"),
                 };
 
                 Poll::Ready(Some(
