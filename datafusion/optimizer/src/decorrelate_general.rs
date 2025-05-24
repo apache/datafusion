@@ -37,17 +37,13 @@ use datafusion_common::{internal_err, Column, HashMap, Result};
 use datafusion_expr::expr::{self, Exists, InSubquery};
 use datafusion_expr::expr_rewriter::{normalize_col, strip_outer_reference};
 use datafusion_expr::select_expr::SelectExpr;
-use datafusion_expr::utils::{
-    conjunction, disjunction, split_conjunction, split_disjunction,
-};
+use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
 use datafusion_expr::{
     binary_expr, col, expr_fn, lit, BinaryExpr, Cast, Expr, Filter, JoinType,
     LogicalPlan, LogicalPlanBuilder, Operator as ExprOperator, Subquery,
 };
 use datafusion_expr::{in_list, out_ref_col};
 
-use datafusion_sql::unparser::Unparser;
-use datafusion_sql::TableReference;
 use indexmap::map::Entry;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
@@ -256,13 +252,6 @@ fn contains_subquery(expr: &Expr) -> bool {
         ))
     })
     .expect("Inner is always Ok")
-}
-
-fn print(a: &Expr) -> Result<()> {
-    let unparser = Unparser::default();
-    let round_trip_sql = unparser.expr_to_sql(a)?.to_string();
-    println!("{}", round_trip_sql);
-    Ok(())
 }
 
 impl TreeNodeRewriter for DependentJoinRewriter {
@@ -767,7 +756,7 @@ mod tests {
         assert_snapshot!(formatted_plan,
             @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-  Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, outer_b_alias:UInt32;N]
+  Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
     LeftMark Join:  Filter: outer_ref(outer_table.a) = outer_table.a AND outer_ref(outer_table.b) = outer_table.b [a:UInt32, b:UInt32, c:UInt32, mark;Boolean]
       TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
       SubqueryAlias: __in_sq_1 [outer_b_alias:UInt32;N]
