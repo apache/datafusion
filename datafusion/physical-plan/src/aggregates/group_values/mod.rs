@@ -40,8 +40,9 @@ pub(crate) use single_group_by::primitive::HashValue;
 
 use crate::aggregates::{
     group_values::single_group_by::{
-        bytes::GroupValuesByes, bytes_view::GroupValuesBytesView,
-        primitive::GroupValuesPrimitive,
+        bytes::GroupValuesByes,
+        bytes_view::GroupValuesBytesView,
+        primitive::{GroupValuesLargePrimitive, GroupValuesPrimitive},
     },
     order::GroupOrdering,
 };
@@ -134,6 +135,12 @@ pub(crate) fn new_group_values(
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
+        macro_rules! large_downcast_helper {
+            ($t:ty, $d:ident) => {
+                return Ok(Box::new(GroupValuesLargePrimitive::<$t>::new($d.clone())))
+            };
+        }
+
         macro_rules! downcast_helper {
             ($t:ty, $d:ident) => {
                 return Ok(Box::new(GroupValuesPrimitive::<$t>::new($d.clone())))
@@ -169,7 +176,7 @@ pub(crate) fn new_group_values(
                 TimeUnit::Nanosecond => downcast_helper!(TimestampNanosecondType, d),
             },
             DataType::Decimal128(_, _) => {
-                downcast_helper!(Decimal128Type, d);
+                large_downcast_helper!(Decimal128Type, d);
             }
             DataType::Utf8 => {
                 return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Utf8)));
