@@ -106,7 +106,7 @@ impl GroupValuesRows {
             group_values: None,
             hashes_buffer: Default::default(),
             rows_buffer,
-            random_state: Default::default(),
+            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
     }
 }

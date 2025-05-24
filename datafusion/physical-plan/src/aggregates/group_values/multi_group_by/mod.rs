@@ -270,7 +270,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
-            random_state: Default::default(),
+            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
     }
 
