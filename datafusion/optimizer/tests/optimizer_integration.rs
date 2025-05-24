@@ -250,7 +250,7 @@ fn between_date32_plus_interval() -> Result<()> {
     format!("{plan}"),
     @r#"
 Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-  Projection: 
+  Projection:
     Filter: test.col_date32 >= Date32("1998-03-18") AND test.col_date32 <= Date32("1998-06-16")
       TableScan: test projection=[col_date32]
 "#
@@ -268,7 +268,7 @@ fn between_date64_plus_interval() -> Result<()> {
     format!("{plan}"),
     @r#"
         Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-          Projection: 
+          Projection:
             Filter: test.col_date64 >= Date64("1998-03-18") AND test.col_date64 <= Date64("1998-06-16")
               TableScan: test projection=[col_date64]
         "#

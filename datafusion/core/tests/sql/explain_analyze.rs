@@ -784,7 +784,7 @@ async fn explain_logical_plan_only() {
         vec!["logical_plan", "Projection: count(Int64(1)) AS count(*)\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n    SubqueryAlias: t\
-        \n      Projection: \
+        \n      Projection:\
         \n        Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"]];
     assert_eq!(expected, actual);
 }
