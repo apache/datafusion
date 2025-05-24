@@ -19,13 +19,16 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Int64Array, LargeListArray, ListArray, OffsetSizeTrait, UInt64Array,
+    Array, ArrayRef, FixedSizeListArray, Int64Array, LargeListArray, ListArray,
+    OffsetSizeTrait, UInt64Array,
 };
 use arrow::datatypes::{
     DataType,
     DataType::{FixedSizeList, LargeList, List, UInt64},
 };
-use datafusion_common::cast::{as_generic_list_array, as_int64_array};
+use datafusion_common::cast::{
+    as_fixed_size_list_array, as_generic_list_array, as_int64_array,
+};
 use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -119,6 +122,23 @@ impl ScalarUDFImpl for ArrayLength {
     }
 }
 
+macro_rules! array_length_impl {
+    ($array:expr, $dimension:expr) => {{
+        let array = $array;
+        let dimension = match $dimension {
+            Some(d) => as_int64_array(d)?.clone(),
+            None => Int64Array::from_value(1, array.len()),
+        };
+        let result = array
+            .iter()
+            .zip(dimension.iter())
+            .map(|(arr, dim)| compute_array_length(arr, dim))
+            .collect::<Result<UInt64Array>>()?;
+
+        Ok(Arc::new(result) as ArrayRef)
+    }};
+}
+
 /// Array_length SQL function
 pub fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
@@ -128,26 +148,18 @@ pub fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         List(_) => general_array_length::<i32>(args),
         LargeList(_) => general_array_length::<i64>(args),
+        FixedSizeList(_, _) => fixed_size_array_length(args),
         array_type => exec_err!("array_length does not support type '{array_type:?}'"),
     }
 }
 
+fn fixed_size_array_length(array: &[ArrayRef]) -> Result<ArrayRef> {
+    array_length_impl!(as_fixed_size_list_array(&array[0])?, array.get(1))
+}
+
 /// Dispatch array length computation based on the offset type.
 fn general_array_length<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_generic_list_array::<O>(&array[0])?;
-    let dimension = if array.len() == 2 {
-        as_int64_array(&array[1])?.clone()
-    } else {
-        Int64Array::from_value(1, list_array.len())
-    };
-
-    let result = list_array
-        .iter()
-        .zip(dimension.iter())
-        .map(|(arr, dim)| compute_array_length(arr, dim))
-        .collect::<Result<UInt64Array>>()?;
-
-    Ok(Arc::new(result) as ArrayRef)
+    array_length_impl!(as_generic_list_array::<O>(&array[0])?, array.get(1))
 }
 
 /// Returns the length of a concrete array dimension
@@ -183,6 +195,10 @@ fn compute_array_length(
             }
             LargeList(..) => {
                 value = downcast_arg!(value, LargeListArray).value(0);
+                current_dimension += 1;
+            }
+            FixedSizeList(_, _) => {
+                value = downcast_arg!(value, FixedSizeListArray).value(0);
                 current_dimension += 1;
             }
             _ => return Ok(None),
