@@ -39,8 +39,8 @@ use datafusion_expr::expr_rewriter::{normalize_col, strip_outer_reference};
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
 use datafusion_expr::{
-    binary_expr, col, expr_fn, lit, BinaryExpr, Cast, Expr, Filter, JoinType,
-    LogicalPlan, LogicalPlanBuilder, Operator as ExprOperator, Subquery,
+    binary_expr, col, expr_fn, lit, BinaryExpr, Cast, DependentJoin, Expr, Filter,
+    JoinType, LogicalPlan, LogicalPlanBuilder, Operator as ExprOperator, Subquery,
 };
 use datafusion_expr::{in_list, out_ref_col};
 
@@ -52,6 +52,7 @@ use log::Log;
 pub struct DependentJoinRewriter {
     // each logical plan traversal will assign it a integer id
     current_id: usize,
+    subquery_depth: usize,
     // each newly visted operator is inserted inside this map for tracking
     nodes: IndexMap<usize, Node>,
     // all the node ids from root to the current node
@@ -185,6 +186,7 @@ impl DependentJoinRewriter {
             nodes: IndexMap::new(),
             stack: vec![],
             all_outer_ref_columns: IndexMap::new(),
+            subquery_depth: 0,
         };
     }
 }
@@ -345,6 +347,9 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             }
         };
 
+        if is_dependent_join_node {
+            self.subquery_depth += 1
+        }
         self.stack.push(self.current_id);
         self.nodes.insert(
             self.current_id,
@@ -369,6 +374,8 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         if !node_info.is_dependent_join_node {
             return Ok(Transformed::no(node));
         }
+        let current_subquery_depth = self.subquery_depth;
+        self.subquery_depth -= 1;
         assert!(
             1 == node.inputs().len(),
             "a dependent join node cannot have more than 1 child"
@@ -433,17 +440,25 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     let right = LogicalPlanBuilder::new(subquery_input.clone())
                         .alias(alias.clone())?
                         .build()?;
-                    let on_exprs = column_accesses
+                    let correlated_columns = column_accesses
                         .iter()
-                        .map(|ac| (ac.data_type.clone(), ac.col.clone()))
+                        .map(|ac| (ac.col.clone()))
                         .unique()
-                        .map(|(data_type, column)| {
-                            out_ref_col(data_type.clone(), column.clone()).eq(col(column))
-                        });
+                        .collect();
 
+                    let left = current_plan.build()?;
                     // TODO: create a new dependent join logical plan
-                    current_plan =
-                        current_plan.join_on(right, JoinType::LeftMark, on_exprs)?;
+                    let dependent_join = DependentJoin {
+                        left: Arc::new(left.clone()),
+                        right: Arc::new(right),
+                        schema: left.schema().clone(),
+                        correlated_columns,
+                        depth: current_subquery_depth,
+                        subquery_expr: lit(true),
+                    };
+                    current_plan = LogicalPlanBuilder::new(LogicalPlan::DependentJoin(
+                        dependent_join,
+                    ));
                 }
                 current_plan = current_plan
                     .filter(new_predicate.clone())?
@@ -756,8 +771,8 @@ mod tests {
         assert_snapshot!(formatted_plan,
             @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-  Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
-    LeftMark Join:  Filter: outer_ref(outer_table.a) = outer_table.a AND outer_ref(outer_table.b) = outer_table.b [a:UInt32, b:UInt32, c:UInt32, mark;Boolean]
+  Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32]
+    DependentJoin on outer_table.a, outer_table.b with expr Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
       TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
       SubqueryAlias: __in_sq_1 [outer_b_alias:UInt32;N]
         Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]

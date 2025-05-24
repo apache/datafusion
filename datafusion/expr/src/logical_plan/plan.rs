@@ -287,6 +287,63 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+    /// A node type that only exist during subquery decorrelation
+    /// TODO: maybe we can avoid creating new type of LogicalPlan for this usecase
+    DependentJoin(DependentJoin),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DependentJoin {
+    pub schema: DFSchemaRef,
+    // all the columns provided by the LHS being referenced
+    // in the RHS (and its children nested subqueries, if any) (note that not all outer_refs from the RHS are mentioned in this vectors
+    // because RHS may reference columns provided somewhere from the above join)
+    pub correlated_columns: Vec<Column>,
+    // the upper expr that containing the subquery expr
+    // i.e for predicates: where outer = scalar_sq + 1
+    // correlated exprs are `scalar_sq + 1`
+    pub subquery_expr: Expr,
+    // subquery depth
+    // begins with depth = 1
+    pub depth: usize,
+    pub left: Arc<LogicalPlan>,
+    // dependent side accessing columns from left hand side (and maybe columns)
+    // belong to the parent dependent join node in case of recursion)
+    pub right: Arc<LogicalPlan>,
+}
+
+impl PartialOrd for DependentJoin {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableJoin<'a> {
+            correlated_columns: &'a Vec<Column>,
+            // the upper expr that containing the subquery expr
+            // i.e for predicates: where outer = scalar_sq + 1
+            // correlated exprs are `scalar_sq + 1`
+            subquery_expr: &'a Expr,
+
+            depth: &'a usize,
+            left: &'a Arc<LogicalPlan>,
+            // dependent side accessing columns from left hand side (and maybe columns)
+            // belong to the parent dependent join node in case of recursion)
+            right: &'a Arc<LogicalPlan>,
+        }
+        let comparable_self = ComparableJoin {
+            left: &self.left,
+            right: &self.right,
+            correlated_columns: &self.correlated_columns,
+            subquery_expr: &self.subquery_expr,
+            depth: &self.depth,
+        };
+        let comparable_other = ComparableJoin {
+            left: &other.left,
+            right: &other.right,
+            correlated_columns: &other.correlated_columns,
+            subquery_expr: &other.subquery_expr,
+            depth: &other.depth,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
 }
 
 impl Default for LogicalPlan {
@@ -318,6 +375,7 @@ impl LogicalPlan {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
+            LogicalPlan::DependentJoin(DependentJoin { schema, .. }) => schema,
             LogicalPlan::EmptyRelation(EmptyRelation { schema, .. }) => schema,
             LogicalPlan::Values(Values { schema, .. }) => schema,
             LogicalPlan::TableScan(TableScan {
@@ -452,6 +510,9 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate { input, .. }) => vec![input],
             LogicalPlan::Sort(Sort { input, .. }) => vec![input],
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
+            LogicalPlan::DependentJoin(DependentJoin { left, right, .. }) => {
+                vec![left, right]
+            }
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
@@ -540,6 +601,7 @@ impl LogicalPlan {
             | LogicalPlan::Limit(Limit { input, .. })
             | LogicalPlan::Repartition(Repartition { input, .. })
             | LogicalPlan::Window(Window { input, .. }) => input.head_output_expr(),
+            LogicalPlan::DependentJoin(..) => todo!(),
             LogicalPlan::Join(Join {
                 left,
                 right,
@@ -650,6 +712,7 @@ impl LogicalPlan {
             }) => Aggregate::try_new(input, group_expr, aggr_expr)
                 .map(LogicalPlan::Aggregate),
             LogicalPlan::Sort(_) => Ok(self),
+            LogicalPlan::DependentJoin(_) => todo!(),
             LogicalPlan::Join(Join {
                 left,
                 right,
@@ -837,6 +900,7 @@ impl LogicalPlan {
 
                 Filter::try_new(predicate, Arc::new(input)).map(LogicalPlan::Filter)
             }
+            LogicalPlan::DependentJoin(DependentJoin { left, right, .. }) => todo!(),
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
@@ -1293,6 +1357,7 @@ impl LogicalPlan {
     /// If `Some(n)` then the plan can return at most `n` rows but may return fewer.
     pub fn max_rows(self: &LogicalPlan) -> Option<usize> {
         match self {
+            LogicalPlan::DependentJoin(DependentJoin { left, .. }) => left.max_rows(),
             LogicalPlan::Projection(Projection { input, .. }) => input.max_rows(),
             LogicalPlan::Filter(filter) => {
                 if filter.is_scalar() {
@@ -1885,6 +1950,18 @@ impl LogicalPlan {
 
                         Ok(())
                     }
+
+                    LogicalPlan::DependentJoin(DependentJoin{
+                        left,right,
+                        subquery_expr,
+                        correlated_columns,
+                        ..
+                    }) => {
+                        let correlated_str = correlated_columns.iter().map(|c|{
+                            format!("{c}")
+                        }).collect::<Vec<String>>().join(", ");
+                        write!(f,"DependentJoin on {} with expr {}",correlated_str,subquery_expr)
+                    },
                     LogicalPlan::Join(Join {
                         on: ref keys,
                         filter,

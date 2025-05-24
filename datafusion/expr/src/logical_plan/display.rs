@@ -485,6 +485,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
 
                 object
             }
+            LogicalPlan::DependentJoin(..) => todo!(),
             LogicalPlan::Join(Join {
                 on: ref keys,
                 filter,
