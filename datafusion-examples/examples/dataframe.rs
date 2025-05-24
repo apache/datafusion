@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
     read_parquet(&ctx).await?;
     read_csv(&ctx).await?;
     read_memory(&ctx).await?;
+    read_memory_macro().await?;
     write_out(&ctx).await?;
     register_aggregate_test_data("t1", &ctx).await?;
     register_aggregate_test_data("t2", &ctx).await?;
@@ -169,6 +170,24 @@ async fn read_memory(ctx: &SessionContext) -> Result<()> {
 
     // print the results
     df.show().await?;
+
+    Ok(())
+}
+
+/// Use the DataFrame API to:
+/// 1. Read in-memory data.
+async fn read_memory_macro() -> Result<()> {
+    // create a DataFrame using macro
+    let df = df!(
+        "a" => ["a", "b", "c", "d"],
+        "b" => [1, 10, 10, 100]
+    )?;
+    // print the results
+    df.show().await?;
+
+    // create empty DataFrame using macro
+    let df_empty = df!()?;
+    df_empty.show().await?;
 
     Ok(())
 }

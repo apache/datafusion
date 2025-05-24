@@ -49,6 +49,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::array_conversion::IntoArrayRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
@@ -166,9 +167,12 @@ impl Default for DataFrameWriteOptions {
 ///
 /// # Example
 /// ```
+/// # use std::sync::Arc;
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # use datafusion::functions_aggregate::expr_fn::min;
+/// # use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray};
+/// # use datafusion::arrow::datatypes::{DataType, Field, Schema};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
@@ -181,6 +185,28 @@ impl Default for DataFrameWriteOptions {
 ///            .limit(0, Some(100))?;
 /// // Perform the actual computation
 /// let results = df.collect();
+///
+/// // Create a new dataframe with in-memory data
+/// let schema = Schema::new(vec![
+///     Field::new("id", DataType::Int32, true),
+///     Field::new("name", DataType::Utf8, true),
+/// ]);
+/// let batch = RecordBatch::try_new(
+///     Arc::new(schema),
+///     vec![
+///         Arc::new(Int32Array::from(vec![1, 2, 3])),
+///         Arc::new(StringArray::from(vec!["foo", "bar", "baz"])),
+///     ],
+/// )?;
+/// let df = ctx.read_batch(batch)?;
+/// df.show().await?;
+///
+/// // Create a new dataframe with in-memory data using macro
+/// let df = df!(
+///     "id" => [1, 2, 3],
+///     "name" => ["foo", "bar", "baz"]
+///  )?;
+/// df.show().await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -2198,6 +2224,52 @@ impl DataFrame {
                     .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
             })
             .collect()
+    }
+
+    /// Helper for creating DataFrame.
+    /// # Example
+    /// ```
+    /// use datafusion::prelude::DataFrame;
+    /// let id = Box::new([1, 2, 3]);
+    /// let name = Box::new(["foo", "bar", "baz"]);
+    /// let df = DataFrame::from_columns(vec![("id", id), ("name", name)]).unwrap();
+    /// // +----+------+,
+    /// // | id | name |,
+    /// // +----+------+,
+    /// // | 1  | foo  |,
+    /// // | 2  | bar  |,
+    /// // | 3  | baz  |,
+    /// // +----+------+,
+    /// ```
+    pub fn from_columns(columns: Vec<(&str, Box<dyn IntoArrayRef>)>) -> Result<Self> {
+        let mut fields: Vec<Field> = vec![];
+        let mut arrays: Vec<ArrayRef> = vec![];
+
+        for (name, array_like) in columns {
+            let array = array_like.into_array_ref();
+            let dtype = array.data_type().clone();
+            fields.push(Field::new(name, dtype, true));
+            arrays.push(array);
+        }
+
+        let len =
+            arrays
+                .first()
+                .map(|arr| arr.len())
+                .ok_or(DataFusionError::Execution(
+                    "Column must not be empty".to_string(),
+                ))?;
+        let all_same_len = arrays.iter().all(|arr| arr.len() == len);
+        if !all_same_len {
+            return Err(DataFusionError::Execution(
+                "All columns must have the same length".to_string(),
+            ));
+        }
+
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::try_new(schema, arrays)?;
+        let ctx = SessionContext::new();
+        ctx.read_batch(batch)
     }
 }
 
