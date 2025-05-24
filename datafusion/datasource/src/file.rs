@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
+use crate::schema_adapter::SchemaAdapterFactory;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, Statistics};
@@ -34,6 +35,11 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
 use object_store::ObjectStore;
+
+/// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
+pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
+    Arc::new(source)
+}
 
 /// file format specific behaviors for elements in [`DataSource`]
 ///
@@ -116,4 +122,23 @@ pub trait FileSource: Send + Sync {
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         Ok(FilterPushdownPropagation::unsupported(filters))
     }
+
+    /// Set optional schema adapter factory.
+    ///
+    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
+    /// file get mapped to that of the table schema. The default implementation
+    /// returns the original source.
+    ///
+    /// Note: You can implement this method and `schema_adapter_factory`
+    /// automatically using the [`crate::impl_schema_adapter_methods`] macro.
+    fn with_schema_adapter_factory(
+        &self,
+        factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Arc<dyn FileSource>;
+
+    /// Returns the current schema adapter factory if set
+    ///
+    /// Note: You can implement this method and `with_schema_adapter_factory`
+    /// automatically using the [`crate::impl_schema_adapter_methods`] macro.
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>>;
 }
