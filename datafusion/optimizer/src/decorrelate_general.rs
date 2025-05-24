@@ -73,15 +73,6 @@ struct ColumnAccess {
     data_type: DataType,
 }
 
-fn unwrap_subquery(n: &Node) -> &Subquery {
-    match n.plan {
-        LogicalPlan::Subquery(ref sq) => sq,
-        _ => {
-            unreachable!()
-        }
-    }
-}
-
 impl DependentJoinRewriter {
     // lowest common ancestor from stack
     // given a tree of
@@ -125,16 +116,16 @@ impl DependentJoinRewriter {
     // because the column providers are visited after column-accessor
     // (function visit_with_subqueries always visit the subquery before visiting the other children)
     // we can always infer the LCA inside this function, by getting the deepest common parent
-    fn conclude_lowest_dependent_join_node(
-        &mut self,
-        child_id: usize,
-        col: &Column,
-        tbl_name: &str,
-    ) {
+    fn conclude_lowest_dependent_join_node(&mut self, child_id: usize, col: &Column) {
         if let Some(accesses) = self.all_outer_ref_columns.get(col) {
             for access in accesses.iter() {
                 let mut cur_stack = self.stack.clone();
+
                 cur_stack.push(child_id);
+                if col.name() == "outer_table.a" || col.name == "a" {
+                    println!("{:?}", access);
+                    println!("{:?}", cur_stack);
+                }
                 // this is a dependent join node
                 let (dependent_join_node_id, subquery_node_id) =
                     Self::dependent_join_and_subquery_node_ids(&cur_stack, &access.stack);
@@ -204,7 +195,8 @@ struct Node {
     // This field is only meaningful if the node is dependent join node
     // it track which descendent nodes still accessing the outer columns provided by its
     // left child
-    // the insertion order is top down
+    // the key of this map is node_id of the children subquery
+    // and insertion order matters here, and thus we use IndexMap
     access_tracker: IndexMap<usize, Vec<ColumnAccess>>,
 
     is_dependent_join_node: bool,
@@ -215,34 +207,53 @@ struct Node {
     // which is at the last element
     subquery_type: SubqueryType,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum SubqueryType {
     None,
-    In,
-    Exists,
-    Scalar,
+    In(Expr),
+    Exists(Expr),
+    Scalar(Expr),
 }
+
 impl SubqueryType {
+    fn unwrap_expr(&self) -> Expr {
+        match self {
+            SubqueryType::None => {
+                panic!("not reached")
+            }
+            SubqueryType::In(e) | SubqueryType::Exists(e) | SubqueryType::Scalar(e) => {
+                e.clone()
+            }
+        }
+    }
     fn default_join_type(&self) -> JoinType {
         match self {
             SubqueryType::None => {
                 panic!("not reached")
             }
-            SubqueryType::In => JoinType::LeftSemi,
-            SubqueryType::Exists => JoinType::LeftMark,
+            SubqueryType::In(_) => JoinType::LeftSemi,
+            SubqueryType::Exists(_) => JoinType::LeftMark,
             // TODO: in duckdb, they have JoinType::Single
             // where there is only at most one join partner entry on the LEFT
-            SubqueryType::Scalar => JoinType::Left,
+            SubqueryType::Scalar(_) => JoinType::Left,
         }
     }
     fn prefix(&self) -> String {
         match self {
             SubqueryType::None => "",
-            SubqueryType::In => "__in_sq",
-            SubqueryType::Exists => "__exists_sq",
-            SubqueryType::Scalar => "__scalar_sq",
+            SubqueryType::In(_) => "__in_sq",
+            SubqueryType::Exists(_) => "__exists_sq",
+            SubqueryType::Scalar(_) => "__scalar_sq",
         }
         .to_string()
+    }
+}
+fn unwrap_subquery_input_from_expr(expr: &Expr) -> Arc<LogicalPlan> {
+    match expr {
+        Expr::ScalarSubquery(sq) => sq.subquery.clone(),
+        Expr::Exists(exists) => exists.subquery.subquery.clone(),
+        Expr::InSubquery(in_sq) => in_sq.subquery.subquery.clone(),
+        _ => unreachable!(),
     }
 }
 
@@ -286,11 +297,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             }
             LogicalPlan::TableScan(tbl_scan) => {
                 tbl_scan.projected_schema.columns().iter().for_each(|col| {
-                    self.conclude_lowest_dependent_join_node(
-                        self.current_id,
-                        &col,
-                        tbl_scan.table_name.table(),
-                    );
+                    self.conclude_lowest_dependent_join_node(self.current_id, &col);
                 });
             }
             // TODO
@@ -318,18 +325,31 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             LogicalPlan::Subquery(subquery) => {
                 is_subquery_node = true;
                 let parent = self.stack.last().unwrap();
-                let parent_node = self.nodes.get(parent).unwrap();
+                let parent_node = self.nodes.get_mut(parent).unwrap();
+                parent_node.access_tracker.insert(self.current_id, vec![]);
                 for expr in parent_node.plan.expressions() {
                     expr.exists(|e| {
                         let (found_sq, checking_type) = match e {
                             Expr::ScalarSubquery(sq) => {
-                                (sq == subquery, SubqueryType::Scalar)
+                                if sq == subquery {
+                                    (true, SubqueryType::Scalar(e.clone()))
+                                } else {
+                                    (false, SubqueryType::None)
+                                }
                             }
-                            Expr::Exists(Exists { subquery: sq, .. }) => {
-                                (sq == subquery, SubqueryType::Exists)
+                            Expr::Exists(exist) => {
+                                if &exist.subquery == subquery {
+                                    (true, SubqueryType::Exists(e.clone()))
+                                } else {
+                                    (false, SubqueryType::None)
+                                }
                             }
-                            Expr::InSubquery(InSubquery { subquery: sq, .. }) => {
-                                (sq == subquery, SubqueryType::In)
+                            Expr::InSubquery(in_sq) => {
+                                if &in_sq.subquery == subquery {
+                                    (true, SubqueryType::In(e.clone()))
+                                } else {
+                                    (false, SubqueryType::None)
+                                }
                             }
                             _ => (false, SubqueryType::None),
                         };
@@ -383,48 +403,59 @@ impl TreeNodeRewriter for DependentJoinRewriter {
 
         let cloned_input = (**node.inputs().first().unwrap()).clone();
         let mut current_plan = LogicalPlanBuilder::new(cloned_input);
-        let mut subquery_alias_map = HashMap::new();
-        let mut subquery_alias_by_node_id = HashMap::new();
-        for (subquery_id, column_accesses) in node_info.access_tracker.iter() {
+        let mut subquery_alias_by_offset = HashMap::new();
+        // let mut subquery_alias_by_node_id = HashMap::new();
+        let mut subquery_expr_by_offset = HashMap::new();
+        for (subquery_offset, (subquery_id, column_accesses)) in
+            node_info.access_tracker.iter().enumerate()
+        {
             let subquery_node = self.nodes.get(subquery_id).unwrap();
-            let subquery_input = subquery_node.plan.inputs().first().unwrap();
+            // let subquery_input = subquery_node.plan.inputs().first().unwrap();
             let alias = self
                 .alias_generator
                 .next(&subquery_node.subquery_type.prefix());
-            subquery_alias_by_node_id.insert(subquery_id, alias.clone());
-            subquery_alias_map.insert(unwrap_subquery(subquery_node), alias);
+            subquery_alias_by_offset.insert(subquery_offset, alias);
         }
 
         match &node {
             LogicalPlan::Filter(filter) => {
+                // everytime we meet a subquery during traversal, we increment this by 1
+                // we can use this offset to lookup the original subquery info
+                // in subquery_alias_by_offset
+                // the reason why we cannot create a hashmap keyed by Subquery object
+                // is that the subquery inside this filter expr may have been rewritten in
+                // the lower level
+                let mut offset = 0;
+                let offset_ref = &mut offset;
                 let new_predicate = filter
                     .predicate
                     .clone()
                     .transform(|e| {
                         // replace any subquery expr with subquery_alias.output
                         // column
-                        match e {
-                            Expr::InSubquery(isq) => {
-                                let alias =
-                                    subquery_alias_map.get(&isq.subquery).unwrap();
-                                // TODO: this assume that after decorrelation
-                                // the dependent join will provide an extra column with the structure
-                                // of "subquery_alias.output"
-                                Ok(Transformed::yes(col(format!("{}.output", alias))))
+                        let alias = match e {
+                            Expr::InSubquery(_) | Expr::Exists(_) => {
+                                subquery_alias_by_offset.get(offset_ref).unwrap()
                             }
-                            Expr::Exists(esq) => {
-                                let alias =
-                                    subquery_alias_map.get(&esq.subquery).unwrap();
-                                Ok(Transformed::yes(col(format!("{}.output", alias))))
+                            Expr::ScalarSubquery(ref s) => {
+                                println!("inserting new expr {}", s.subquery);
+                                subquery_alias_by_offset.get(offset_ref).unwrap()
                             }
-                            Expr::ScalarSubquery(sq) => {
-                                let alias = subquery_alias_map.get(&sq).unwrap();
-                                Ok(Transformed::yes(col(format!("{}.output", alias))))
-                            }
-                            _ => Ok(Transformed::no(e)),
-                        }
+                            _ => return Ok(Transformed::no(e)),
+                        };
+                        // we are aware that the original subquery can be rewritten
+                        // update the latest expr to this map
+                        subquery_expr_by_offset.insert(*offset_ref, e);
+                        *offset_ref += 1;
+                        // TODO: this assume that after decorrelation
+                        // the dependent join will provide an extra column with the structure
+                        // of "subquery_alias.output"
+                        Ok(Transformed::yes(col(format!("{}.output", alias))))
                     })?
                     .data;
+                // because dependent join may introduce extra columns
+                // to evaluate the subquery, the final plan should
+                // has another projection to remove these redundant columns
                 let post_join_projections: Vec<Expr> = filter
                     .input
                     .schema()
@@ -432,33 +463,28 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     .iter()
                     .map(|c| col(c.clone()))
                     .collect();
-                for (subquery_id, column_accesses) in node_info.access_tracker.iter() {
-                    let alias = subquery_alias_by_node_id.get(subquery_id).unwrap();
-                    let subquery_node = self.nodes.get(subquery_id).unwrap();
-                    let subquery_input =
-                        subquery_node.plan.inputs().first().unwrap().clone();
-                    let right = LogicalPlanBuilder::new(subquery_input.clone())
-                        .alias(alias.clone())?
-                        .build()?;
+                for (subquery_offset, (_, column_accesses)) in
+                    node_info.access_tracker.iter().enumerate()
+                {
+                    let alias = subquery_alias_by_offset.get(&subquery_offset).unwrap();
+                    let subquery_expr =
+                        subquery_expr_by_offset.get(&subquery_offset).unwrap();
+
+                    let subquery_input = unwrap_subquery_input_from_expr(subquery_expr);
+
                     let correlated_columns = column_accesses
                         .iter()
                         .map(|ac| (ac.col.clone()))
                         .unique()
                         .collect();
 
-                    let left = current_plan.build()?;
-                    // TODO: create a new dependent join logical plan
-                    let dependent_join = DependentJoin {
-                        left: Arc::new(left.clone()),
-                        right: Arc::new(right),
-                        schema: left.schema().clone(),
+                    current_plan = current_plan.dependent_join(
+                        subquery_input.deref().clone(),
                         correlated_columns,
-                        depth: current_subquery_depth,
-                        subquery_expr: lit(true),
-                    };
-                    current_plan = LogicalPlanBuilder::new(LogicalPlan::DependentJoin(
-                        dependent_join,
-                    ));
+                        subquery_expr.clone(),
+                        current_subquery_depth,
+                        alias.clone(),
+                    )?;
                 }
                 current_plan = current_plan
                     .filter(new_predicate.clone())?
@@ -525,215 +551,266 @@ mod tests {
 
     use super::DependentJoinRewriter;
     use arrow::datatypes::DataType as ArrowDataType;
+
+    macro_rules! assert_dependent_join_rewrite {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let mut index = DependentJoinRewriter::new(Arc::new(AliasGenerator::new()));
+            let transformed = index.rewrite_subqueries_into_dependent_joins($plan)?;
+            assert!(transformed.transformed);
+            let display = transformed.data.display_indent_schema();
+            assert_snapshot!(
+                display,
+                @ $expected,
+            )
+        }};
+    }
     #[test]
     fn simple_in_subquery_inside_from_expr() -> Result<()> {
-        unimplemented!()
+        Ok(())
     }
     #[test]
     fn simple_in_subquery_inside_select_expr() -> Result<()> {
-        unimplemented!()
+        Ok(())
     }
     #[test]
-    fn one_simple_and_one_complex_subqueries_at_the_same_level() -> Result<()> {
-        unimplemented!()
-    }
-    #[test]
-    fn two_simple_subqueries_at_the_same_level() -> Result<()> {
-        // let outer_table = test_table_scan_with_name("outer_table")?;
-        // let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
-        // let in_sq_level1 = Arc::new(
-        //     LogicalPlanBuilder::from(inner_table_lv1.clone())
-        //         .filter(col("inner_table_lv1.c").eq(lit(2)))?
-        //         .project(vec![col("inner_table_lv1.a")])?
-        //         .build()?,
-        // );
-        // let exist_sq_level1 = Arc::new(
-        //     LogicalPlanBuilder::from(inner_table_lv1)
-        //         .filter(
-        //             col("inner_table_lv1.a").and(col("inner_table_lv1.b").eq(lit(1))),
-        //         )?
-        //         .build()?,
-        // );
+    fn rewrite_dependent_join_two_nested_subqueries() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
 
-        // let input1 = LogicalPlanBuilder::from(outer_table.clone())
-        //     .filter(
-        //         col("outer_table.a")
-        //             .gt(lit(1))
-        //             .and(exists(exist_sq_level1))
-        //             .and(in_subquery(col("outer_table.b"), in_sq_level1)),
-        //     )?
-        //     .build()?;
-        // let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        // index.rewrite_subqueries_into_dependent_joins(input1)?;
-        // println!("{:?}", index);
-        // let new_plan = index.root_dependent_join_elimination()?;
-        // println!("{}", new_plan);
-        // let expected = "\
-        // LeftSemi Join:  Filter: outer_table.b = __in_sq_2.a\
-        // \n  Filter: __exists_sq_1.mark\
-        // \n    LeftMark Join:  Filter: Boolean(true)\
-        // \n      Filter: outer_table.a > Int32(1)\
-        // \n        TableScan: outer_table\
-        // \n      SubqueryAlias: __exists_sq_1\
-        // \n        Filter: inner_table_lv1.a AND inner_table_lv1.b = Int32(1)\
-        // \n          TableScan: inner_table_lv1\
-        // \n  SubqueryAlias: __in_sq_2\
-        // \n    Projection: inner_table_lv1.a\
-        // \n      Filter: inner_table_lv1.c = Int32(2)\
-        // \n        TableScan: inner_table_lv1";
-        // assert_eq!(expected, format!("{new_plan}"));
+        let inner_table_lv2 = test_table_scan_with_name("inner_table_lv2")?;
+        let scalar_sq_level2 =
+            Arc::new(
+                LogicalPlanBuilder::from(inner_table_lv2)
+                    .filter(
+                        col("inner_table_lv2.a")
+                            .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
+                            .and(col("inner_table_lv2.b").eq(out_ref_col(
+                                ArrowDataType::UInt32,
+                                "inner_table_lv1.b",
+                            ))),
+                    )?
+                    .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv2.a"))])?
+                    .build()?,
+            );
+        let scalar_sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(
+                    col("inner_table_lv1.c")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.c"))
+                        .and(scalar_subquery(scalar_sq_level2).eq(lit(1))),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv1.a"))])?
+                .build()?,
+        );
+
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(
+                col("outer_table.a")
+                    .gt(lit(1))
+                    .and(scalar_subquery(scalar_sq_level1).eq(col("outer_table.a"))),
+            )?
+            .build()?;
+        assert_dependent_join_rewrite!(input1,@r"
+Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+  Filter: outer_table.a > Int32(1) AND __scalar_sq_2.output = outer_table.a [a:UInt32, b:UInt32, c:UInt32, output:Int64]
+    DependentJoin on [outer_table.a, outer_table.c] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Int64]
+      TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+      Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
+        Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c [a:UInt32, b:UInt32, c:UInt32]
+          Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_1.output = Int32(1) [a:UInt32, b:UInt32, c:UInt32, output:Int64]
+            DependentJoin on [inner_table_lv1.b] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, output:Int64]
+              TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+              Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
+                Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
+        ");
+        Ok(())
+    }
+    #[test]
+    fn rewrite_dependent_join_two_subqueries_at_the_same_level() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let in_sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(col("inner_table_lv1.c").eq(lit(2)))?
+                .project(vec![col("inner_table_lv1.a")])?
+                .build()?,
+        );
+        let exist_sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1)
+                .filter(
+                    col("inner_table_lv1.a").and(col("inner_table_lv1.b").eq(lit(1))),
+                )?
+                .build()?,
+        );
+
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(
+                col("outer_table.a")
+                    .gt(lit(1))
+                    .and(exists(exist_sq_level1))
+                    .and(in_subquery(col("outer_table.b"), in_sq_level1)),
+            )?
+            .build()?;
+        assert_dependent_join_rewrite!(input1,@r"
+Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+  Filter: outer_table.a > Int32(1) AND __exists_sq_1.output AND __in_sq_2.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean, output:Boolean]
+    DependentJoin on [] with expr outer_table.b IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean, output:Boolean]
+      DependentJoin on [] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+        TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+        Filter: inner_table_lv1.a AND inner_table_lv1.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+      Projection: inner_table_lv1.a [a:UInt32]
+        Filter: inner_table_lv1.c = Int32(2) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ");
         Ok(())
     }
 
     #[test]
-    fn in_subquery_with_count_depth_1() -> Result<()> {
-        // let outer_table = test_table_scan_with_name("outer_table")?;
-        // let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
-        // let sq_level1 = Arc::new(
-        //     LogicalPlanBuilder::from(inner_table_lv1)
-        //         .filter(
-        //             col("inner_table_lv1.a")
-        //                 .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
-        //                 .and(
-        //                     out_ref_col(ArrowDataType::UInt32, "outer_table.a")
-        //                         .gt(col("inner_table_lv1.c")),
-        //                 )
-        //                 .and(col("inner_table_lv1.b").eq(lit(1)))
-        //                 .and(
-        //                     out_ref_col(ArrowDataType::UInt32, "outer_table.b")
-        //                         .eq(col("inner_table_lv1.b")),
-        //                 ),
-        //         )?
-        //         .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv1.a"))])?
-        //         .project(vec![count(col("inner_table_lv1.a")).alias("count_a")])?
-        //         .build()?,
-        // );
+    fn rewrite_dependent_join_in_subquery_with_count_depth_1() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1)
+                .filter(
+                    col("inner_table_lv1.a")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.a")
+                                .gt(col("inner_table_lv1.c")),
+                        )
+                        .and(col("inner_table_lv1.b").eq(lit(1)))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.b")
+                                .eq(col("inner_table_lv1.b")),
+                        ),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv1.a"))])?
+                .project(vec![count(col("inner_table_lv1.a")).alias("count_a")])?
+                .build()?,
+        );
 
-        // let input1 = LogicalPlanBuilder::from(outer_table.clone())
-        //     .filter(
-        //         col("outer_table.a")
-        //             .gt(lit(1))
-        //             .and(in_subquery(col("outer_table.c"), sq_level1)),
-        //     )?
-        //     .build()?;
-        // let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        // index.rewrite_subqueries_into_dependent_joins(input1)?;
-        // let new_plan = index.root_dependent_join_elimination()?;
-        // let expected = "\
-        // Filter: outer_table.a > Int32(1)\
-        // \n  LeftSemi Join:  Filter: outer_table.c = count_a\
-        // \n    TableScan: outer_table\
-        // \n    Projection: count(inner_table_lv1.a) AS count_a, inner_table_lv1.a, inner_table_lv1.c, inner_table_lv1.b\
-        // \n      Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]]\
-        // \n        Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b\
-        // \n          TableScan: inner_table_lv1";
-        // assert_eq!(expected, format!("{new_plan}"));
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(
+                col("outer_table.a")
+                    .gt(lit(1))
+                    .and(in_subquery(col("outer_table.c"), sq_level1)),
+            )?
+            .build()?;
+        assert_dependent_join_rewrite!(input1,@r"
+Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+  Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+    DependentJoin on [outer_table.a, outer_table.b] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+      TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+      Projection: count(inner_table_lv1.a) AS count_a [count_a:Int64]
+        Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
+          Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ");
         Ok(())
     }
     #[test]
-    fn simple_exist_subquery_with_dependent_columns() -> Result<()> {
-        // let outer_table = test_table_scan_with_name("outer_table")?;
-        // let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
-        // let sq_level1 = Arc::new(
-        //     LogicalPlanBuilder::from(inner_table_lv1)
-        //         .filter(
-        //             col("inner_table_lv1.a")
-        //                 .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
-        //                 .and(
-        //                     out_ref_col(ArrowDataType::UInt32, "outer_table.a")
-        //                         .gt(col("inner_table_lv1.c")),
-        //                 )
-        //                 .and(col("inner_table_lv1.b").eq(lit(1)))
-        //                 .and(
-        //                     out_ref_col(ArrowDataType::UInt32, "outer_table.b")
-        //                         .eq(col("inner_table_lv1.b")),
-        //                 ),
-        //         )?
-        //         .project(vec![out_ref_col(ArrowDataType::UInt32, "outer_table.b")
-        //             .alias("outer_b_alias")])?
-        //         .build()?,
-        // );
+    fn rewrite_dependent_join_exist_subquery_with_dependent_columns() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1)
+                .filter(
+                    col("inner_table_lv1.a")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.a")
+                                .gt(col("inner_table_lv1.c")),
+                        )
+                        .and(col("inner_table_lv1.b").eq(lit(1)))
+                        .and(
+                            out_ref_col(ArrowDataType::UInt32, "outer_table.b")
+                                .eq(col("inner_table_lv1.b")),
+                        ),
+                )?
+                .project(vec![out_ref_col(ArrowDataType::UInt32, "outer_table.b")
+                    .alias("outer_b_alias")])?
+                .build()?,
+        );
 
-        // let input1 = LogicalPlanBuilder::from(outer_table.clone())
-        //     .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
-        //     .build()?;
-        // let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        // index.rewrite_subqueries_into_dependent_joins(input1)?;
-        // let new_plan = index.root_dependent_join_elimination()?;
-        // let expected = "\
-        // Filter: __exists_sq_1.mark\
-        // \n  LeftMark Join:  Filter: __exists_sq_1.a = outer_table.a AND outer_table.a > __exists_sq_1.c AND outer_table.b = __exists_sq_1.b\
-        // \n    Filter: outer_table.a > Int32(1)\
-        // \n      TableScan: outer_table\
-        // \n    SubqueryAlias: __exists_sq_1\
-        // \n      Filter: inner_table_lv1.b = Int32(1)\
-        // \n        TableScan: inner_table_lv1";
-        // assert_eq!(expected, format!("{new_plan}"));
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
+            .build()?;
+        assert_dependent_join_rewrite!(input1,@r"
+Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+  Filter: outer_table.a > Int32(1) AND __exists_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+    DependentJoin on [outer_table.a, outer_table.b] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+      TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+      Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
+        Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn rewrite_exist_subquery_with_no_dependent_columns() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1)
+                .filter(col("inner_table_lv1.b").eq(lit(1)))?
+                .project(vec![col("inner_table_lv1.b"), col("inner_table_lv1.a")])?
+                .build()?,
+        );
+
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
+            .build()?;
+
+        assert_dependent_join_rewrite!(input1,@r"
+Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+  Filter: outer_table.a > Int32(1) AND __exists_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+    DependentJoin on [] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+      TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+      Projection: inner_table_lv1.b, inner_table_lv1.a [b:UInt32, a:UInt32]
+        Filter: inner_table_lv1.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+");
+
         Ok(())
     }
     #[test]
-    fn simple_exist_subquery_with_no_dependent_columns() -> Result<()> {
-        // let outer_table = test_table_scan_with_name("outer_table")?;
-        // let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
-        // let sq_level1 = Arc::new(
-        //     LogicalPlanBuilder::from(inner_table_lv1)
-        //         .filter(col("inner_table_lv1.b").eq(lit(1)))?
-        //         .project(vec![col("inner_table_lv1.b"), col("inner_table_lv1.a")])?
-        //         .build()?,
-        // );
+    fn rewrite_dependent_join_with_in_subquery_no_dependent_column() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1)
+                .filter(col("inner_table_lv1.b").eq(lit(1)))?
+                .project(vec![col("inner_table_lv1.b")])?
+                .build()?,
+        );
 
-        // let input1 = LogicalPlanBuilder::from(outer_table.clone())
-        //     .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
-        //     .build()?;
-        // let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        // index.rewrite_subqueries_into_dependent_joins(input1)?;
-        // let new_plan = index.root_dependent_join_elimination()?;
-        // let expected = "\
-        // Filter: __exists_sq_1.mark\
-        // \n  LeftMark Join:  Filter: Boolean(true)\
-        // \n    Filter: outer_table.a > Int32(1)\
-        // \n      TableScan: outer_table\
-        // \n    SubqueryAlias: __exists_sq_1\
-        // \n      Projection: inner_table_lv1.b, inner_table_lv1.a\
-        // \n        Filter: inner_table_lv1.b = Int32(1)\
-        // \n          TableScan: inner_table_lv1";
-        // assert_eq!(expected, format!("{new_plan}"));
+        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(
+                col("outer_table.a")
+                    .gt(lit(1))
+                    .and(in_subquery(col("outer_table.c"), sq_level1)),
+            )?
+            .build()?;
+        assert_dependent_join_rewrite!(input1,@r"
+Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+  Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+    DependentJoin on [] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+      TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+      Projection: inner_table_lv1.b [b:Uint32] 
+        Filter: inner_table_lv1.a = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ");
+
         Ok(())
     }
     #[test]
-    fn simple_decorrelate_with_in_subquery_no_dependent_column() -> Result<()> {
-        // let outer_table = test_table_scan_with_name("outer_table")?;
-        // let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
-        // let sq_level1 = Arc::new(
-        //     LogicalPlanBuilder::from(inner_table_lv1)
-        //         .filter(col("inner_table_lv1.b").eq(lit(1)))?
-        //         .project(vec![col("inner_table_lv1.b")])?
-        //         .build()?,
-        // );
-
-        // let input1 = LogicalPlanBuilder::from(outer_table.clone())
-        //     .filter(
-        //         col("outer_table.a")
-        //             .gt(lit(1))
-        //             .and(in_subquery(col("outer_table.c"), sq_level1)),
-        //     )?
-        //     .build()?;
-        // let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
-        // index.rewrite_subqueries_into_dependent_joins(input1)?;
-        // let new_plan = index.root_dependent_join_elimination()?;
-        // let expected = "\
-        // LeftSemi Join:  Filter: outer_table.c = __in_sq_1.b\
-        // \n  Filter: outer_table.a > Int32(1)\
-        // \n    TableScan: outer_table\
-        // \n  SubqueryAlias: __in_sq_1\
-        // \n    Projection: inner_table_lv1.b\
-        // \n      Filter: inner_table_lv1.b = Int32(1)\
-        // \n        TableScan: inner_table_lv1";
-        // assert_eq!(expected, format!("{new_plan}"));
-        Ok(())
-    }
-    #[test]
-    fn simple_decorrelate_with_in_subquery_has_dependent_column() -> Result<()> {
+    fn rewrite_dependent_join_with_in_subquery_has_dependent_column() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -763,21 +840,14 @@ mod tests {
                     .and(in_subquery(col("outer_table.c"), sq_level1)),
             )?
             .build()?;
-        let mut index = DependentJoinRewriter::new(Arc::new(AliasGenerator::new()));
-        let transformed = index.rewrite_subqueries_into_dependent_joins(input1)?;
-        assert!(transformed.transformed);
-
-        let formatted_plan = transformed.data.display_indent_schema();
-        assert_snapshot!(formatted_plan,
-            @r"
+        assert_dependent_join_rewrite!(input1,@r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-  Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32]
-    DependentJoin on outer_table.a, outer_table.b with expr Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
+  Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+    DependentJoin on [outer_table.a, outer_table.b] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
       TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
-      SubqueryAlias: __in_sq_1 [outer_b_alias:UInt32;N]
-        Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
-          Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
-            TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+      Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
+        Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
     }

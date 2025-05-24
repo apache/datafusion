@@ -303,13 +303,13 @@ pub struct DependentJoin {
     // i.e for predicates: where outer = scalar_sq + 1
     // correlated exprs are `scalar_sq + 1`
     pub subquery_expr: Expr,
-    // subquery depth
     // begins with depth = 1
-    pub depth: usize,
+    pub subquery_depth: usize,
     pub left: Arc<LogicalPlan>,
     // dependent side accessing columns from left hand side (and maybe columns)
     // belong to the parent dependent join node in case of recursion)
     pub right: Arc<LogicalPlan>,
+    pub subquery_name: String,
 }
 
 impl PartialOrd for DependentJoin {
@@ -333,14 +333,14 @@ impl PartialOrd for DependentJoin {
             right: &self.right,
             correlated_columns: &self.correlated_columns,
             subquery_expr: &self.subquery_expr,
-            depth: &self.depth,
+            depth: &self.subquery_depth,
         };
         let comparable_other = ComparableJoin {
             left: &other.left,
             right: &other.right,
             correlated_columns: &other.correlated_columns,
             subquery_expr: &other.subquery_expr,
-            depth: &other.depth,
+            depth: &other.subquery_depth,
         };
         comparable_self.partial_cmp(&comparable_other)
     }
@@ -1955,12 +1955,13 @@ impl LogicalPlan {
                         left,right,
                         subquery_expr,
                         correlated_columns,
+                        subquery_depth,
                         ..
                     }) => {
                         let correlated_str = correlated_columns.iter().map(|c|{
                             format!("{c}")
                         }).collect::<Vec<String>>().join(", ");
-                        write!(f,"DependentJoin on {} with expr {}",correlated_str,subquery_expr)
+                        write!(f,"DependentJoin on [{}] with expr {} depth {}",correlated_str,subquery_expr,subquery_depth)
                     },
                     LogicalPlan::Join(Join {
                         on: ref keys,
