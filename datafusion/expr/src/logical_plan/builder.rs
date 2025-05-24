@@ -900,7 +900,7 @@ impl LogicalPlanBuilder {
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
     ) -> Result<Self> {
-        self.join_detailed(right, join_type, join_keys, filter, false)
+        self.join_detailed(right, join_type, join_keys, filter, false, vec![])
     }
 
     /// Apply a join using the specified expressions.
@@ -957,6 +957,26 @@ impl LogicalPlanBuilder {
             (Vec::<Column>::new(), Vec::<Column>::new()),
             filter,
             false,
+            vec![],
+        )
+    }
+
+    pub fn dependent_join_on(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        on_exprs: impl IntoIterator<Item = Expr>,
+        outer_ref_columns: Vec<Expr>,
+    ) -> Result<Self> {
+        let filter = on_exprs.into_iter().reduce(Expr::and);
+
+        self.join_detailed(
+            right,
+            join_type,
+            (Vec::<Column>::new(), Vec::<Column>::new()),
+            filter,
+            false,
+            outer_ref_columns,
         )
     }
 
@@ -994,6 +1014,7 @@ impl LogicalPlanBuilder {
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
         null_equals_null: bool,
+        outer_ref_columns: Vec<Expr>,
     ) -> Result<Self> {
         if join_keys.0.len() != join_keys.1.len() {
             return plan_err!("left_keys and right_keys were not the same length");
@@ -1111,6 +1132,8 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null,
+            dependent_join: false,
+            outer_ref_columns,
         })))
     }
 
@@ -1337,12 +1360,12 @@ impl LogicalPlanBuilder {
             .unzip();
         if is_all {
             LogicalPlanBuilder::from(left_plan)
-                .join_detailed(right_plan, join_type, join_keys, None, true)?
+                .join_detailed(right_plan, join_type, join_keys, None, true, vec![])?
                 .build()
         } else {
             LogicalPlanBuilder::from(left_plan)
                 .distinct()?
-                .join_detailed(right_plan, join_type, join_keys, None, true)?
+                .join_detailed(right_plan, join_type, join_keys, None, true, vec![])?
                 .build()
         }
     }

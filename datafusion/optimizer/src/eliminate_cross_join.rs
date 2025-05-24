@@ -329,6 +329,8 @@ fn find_inner_join(
                 filter: None,
                 schema: join_schema,
                 null_equals_null: false,
+                dependent_join: false,
+                outer_ref_columns: vec![],
             }));
         }
     }
@@ -351,6 +353,8 @@ fn find_inner_join(
         join_type: JoinType::Inner,
         join_constraint: JoinConstraint::On,
         null_equals_null: false,
+        dependent_join: false,
+        outer_ref_columns: vec![],
     }))
 }
 
