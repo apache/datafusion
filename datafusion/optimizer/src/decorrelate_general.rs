@@ -36,7 +36,6 @@ use datafusion_common::tree_node::{
 use datafusion_common::{internal_err, Column, HashMap, Result};
 use datafusion_expr::expr::{self, Exists, InSubquery};
 use datafusion_expr::expr_rewriter::{normalize_col, strip_outer_reference};
-use datafusion_expr::out_ref_col;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     conjunction, disjunction, split_conjunction, split_disjunction,
@@ -45,6 +44,7 @@ use datafusion_expr::{
     binary_expr, col, expr_fn, lit, BinaryExpr, Cast, Expr, Filter, JoinType,
     LogicalPlan, LogicalPlanBuilder, Operator as ExprOperator, Subquery,
 };
+use datafusion_expr::{in_list, out_ref_col};
 // use datafusion_sql::unparser::Unparser;
 
 use datafusion_sql::unparser::Unparser;
@@ -55,8 +55,7 @@ use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 use log::Log;
 
-pub struct DependentJoinTracker {
-    root: Option<usize>,
+pub struct DependentJoinRewriter {
     // each logical plan traversal will assign it a integer id
     current_id: usize,
     // each newly visted operator is inserted inside this map for tracking
@@ -419,100 +418,7 @@ fn contains_count_expr(
     .unwrap()
 }
 
-impl fmt::Debug for DependentJoinTracker {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "GeneralDecorrelation Tree:")?;
-        if let Some(root_op) = &self.root {
-            self.fmt_operator(f, *root_op, 0, false)?;
-        } else {
-            writeln!(f, "  <empty root>")?;
-        }
-        Ok(())
-    }
-}
-
-impl DependentJoinTracker {
-    fn fmt_operator(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        node_id: usize,
-        indent: usize,
-        is_last: bool,
-    ) -> fmt::Result {
-        // Find the LogicalPlan corresponding to this Operator
-        let op = self.nodes.get(&node_id).unwrap();
-        let lp = &op.plan;
-
-        for i in 0..indent {
-            if i + 1 == indent {
-                if is_last {
-                    write!(f, "    ")?; // if last child, no vertical line
-                } else {
-                    write!(f, "|   ")?; // vertical line continues
-                }
-            } else {
-                write!(f, "|   ")?;
-            }
-        }
-        if indent > 0 {
-            write!(f, "|--- ")?; // branch
-        }
-
-        let unparsed_sql = match Unparser::default().plan_to_sql(lp) {
-            Ok(str) => str.to_string(),
-            Err(_) => "".to_string(),
-        };
-        let (node_color, display_str) = match lp {
-            LogicalPlan::Subquery(sq) => (
-                "\x1b[32m",
-                format!("\x1b[1m{}{}", lp.display(), sq.subquery),
-            ),
-            _ => ("\x1b[33m", lp.display().to_string()),
-        };
-
-        writeln!(f, "{} [{}] {}\x1b[0m", node_color, node_id, display_str)?;
-        if !unparsed_sql.is_empty() {
-            for i in 0..=indent {
-                if i < indent {
-                    write!(f, "|   ")?;
-                } else if indent > 0 {
-                    write!(f, "|    ")?; // Align with LogicalPlan text
-                }
-            }
-
-            writeln!(f, "{}", unparsed_sql)?;
-        }
-
-        for i in 0..=indent {
-            if i < indent {
-                write!(f, "|   ")?;
-            } else if indent > 0 {
-                write!(f, "|    ")?; // Align with LogicalPlan text
-            }
-        }
-
-        let accessed_by_string = op
-            .access_tracker
-            .iter()
-            .map(|(_, ac)| ac.clone())
-            .flatten()
-            .map(|ac| ac.debug())
-            .collect::<Vec<_>>()
-            .join(",");
-        // Now print the Operator details
-        writeln!(f, "accessed_by: {}", accessed_by_string,)?;
-        let len = op.children.len();
-
-        // Recursively print children if Operator has children
-        for (i, child) in op.children.iter().enumerate() {
-            let last = i + 1 == len;
-
-            self.fmt_operator(f, *child, indent + 1, last)?;
-        }
-
-        Ok(())
-    }
-
+impl DependentJoinRewriter {
     // lowest common ancestor from stack
     // given a tree of
     // n1
@@ -543,7 +449,7 @@ impl DependentJoinTracker {
             let bi = stack_with_table_provider[i];
 
             if ai == bi {
-                lca = Some((ai, stack_with_subquery[ai + 1]));
+                lca = Some((ai, stack_with_subquery[ai]));
             } else {
                 break;
             }
@@ -576,7 +482,6 @@ impl DependentJoinTracker {
                     stack: access.stack.clone(),
                     data_type: access.data_type.clone(),
                 });
-                node.correlated_relations.insert(tbl_name.to_string());
             }
         }
     }
@@ -609,10 +514,9 @@ impl DependentJoinTracker {
     }
 }
 
-impl DependentJoinTracker {
+impl DependentJoinRewriter {
     fn new(alias_generator: Arc<AliasGenerator>) -> Self {
-        return DependentJoinTracker {
-            root: None,
+        return DependentJoinRewriter {
             alias_generator,
             current_id: 0,
             nodes: IndexMap::new(),
@@ -631,7 +535,6 @@ impl ColumnAccess {
 struct Node {
     id: usize,
     plan: LogicalPlan,
-    parent: Option<usize>,
 
     // This field is only meaningful if the node is dependent join node
     // it track which descendent nodes still accessing the outer columns provided by its
@@ -645,9 +548,7 @@ struct Node {
     // note that for dependent join nodes, there can be more than 1
     // subquery children at a time, but always 1 outer-column-providing-child
     // which is at the last element
-    children: Vec<usize>,
     subquery_type: SubqueryType,
-    correlated_relations: IndexSet<String>,
 }
 #[derive(Debug, Clone, Copy)]
 enum SubqueryType {
@@ -697,16 +598,12 @@ fn print(a: &Expr) -> Result<()> {
     Ok(())
 }
 
-impl TreeNodeRewriter for DependentJoinTracker {
+impl TreeNodeRewriter for DependentJoinRewriter {
     type Node = LogicalPlan;
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         self.current_id += 1;
-        if self.root.is_none() {
-            self.root = Some(self.current_id);
-        }
         let mut is_subquery_node = false;
         let mut is_dependent_join_node = false;
-
         let mut subquery_type = SubqueryType::None;
         // for each node, find which column it is accessing, which column it is providing
         // Set of columns current node access
@@ -792,28 +689,19 @@ impl TreeNodeRewriter for DependentJoinTracker {
             }
         };
 
-        let parent = if self.stack.is_empty() {
-            None
-        } else {
-            let previous_node = self.stack.last().unwrap().to_owned();
-            Some(self.stack.last().unwrap().to_owned())
-        };
-
         self.stack.push(self.current_id);
         self.nodes.insert(
             self.current_id,
             Node {
                 id: self.current_id,
-                parent,
                 plan: node.clone(),
                 is_subquery_node,
                 is_dependent_join_node,
-                children: vec![],
                 access_tracker: IndexMap::new(),
                 subquery_type,
-                correlated_relations: IndexSet::new(),
             },
         );
+
         Ok(Transformed::no(node))
     }
     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -897,8 +785,9 @@ impl TreeNodeRewriter for DependentJoinTracker {
                             out_ref_col(data_type.clone(), column.clone()).eq(col(column))
                         });
 
+                    // TODO: create a new dependent join logical plan
                     current_plan =
-                        current_plan.join_on(right, JoinType::LeftDependent, on_exprs)?;
+                        current_plan.join_on(right, JoinType::LeftMark, on_exprs)?;
                 }
                 current_plan = current_plan
                     .filter(new_predicate.clone())?
@@ -923,7 +812,8 @@ impl OptimizerRule for Decorrelation {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let mut transformer = DependentJoinTracker::new(config.alias_generator().clone());
+        let mut transformer =
+            DependentJoinRewriter::new(config.alias_generator().clone());
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
         if rewrite_result.transformed {
             // At this point, we have a logical plan with DependentJoin similar to duckdb
@@ -954,11 +844,15 @@ mod tests {
         EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder,
     };
     use datafusion_functions_aggregate::{count::count, sum::sum};
+    use insta::assert_snapshot;
     use regex_syntax::ast::LiteralKind;
 
-    use crate::test::{test_table_scan, test_table_scan_with_name};
+    use crate::{
+        assert_optimized_plan_eq_display_indent_snapshot,
+        test::{test_table_scan, test_table_scan_with_name},
+    };
 
-    use super::DependentJoinTracker;
+    use super::DependentJoinRewriter;
     use arrow::datatypes::DataType as ArrowDataType;
     #[test]
     fn simple_in_subquery_inside_from_expr() -> Result<()> {
@@ -1198,19 +1092,22 @@ mod tests {
                     .and(in_subquery(col("outer_table.c"), sq_level1)),
             )?
             .build()?;
-        let mut index = DependentJoinTracker::new(Arc::new(AliasGenerator::new()));
+        let mut index = DependentJoinRewriter::new(Arc::new(AliasGenerator::new()));
         let transformed = index.rewrite_subqueries_into_dependent_joins(input1)?;
         assert!(transformed.transformed);
-        let new_plan = transformed.data;
-        println!("{new_plan}");
-        let expected = "\
-        LeftSemi Join:  Filter: outer_table.c = outer_table.b AS outer_b_alias AND __in_sq_1.a = outer_table.a AND outer_table.a > __in_sq_1.c AND outer_table.b = __in_sq_1.b\
-        \n  Filter: outer_table.a > Int32(1)\
-        \n    TableScan: outer_table\
-        \n  SubqueryAlias: __in_sq_1\
-        \n    Filter: inner_table_lv1.b = Int32(1)\
-        \n      TableScan: inner_table_lv1";
-        assert_eq!(expected, format!("{new_plan}"));
+
+        let formatted_plan = transformed.data.display_indent_schema();
+        assert_snapshot!(formatted_plan,
+            @r"
+Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+  Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, outer_b_alias:UInt32;N]
+    LeftMark Join:  Filter: outer_ref(outer_table.a) = outer_table.a AND outer_ref(outer_table.b) = outer_table.b [a:UInt32, b:UInt32, c:UInt32, mark;Boolean]
+      TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+      SubqueryAlias: __in_sq_1 [outer_b_alias:UInt32;N]
+        Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
+          Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ");
         Ok(())
     }
 }

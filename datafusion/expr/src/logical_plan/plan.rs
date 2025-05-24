@@ -546,7 +546,6 @@ impl LogicalPlan {
                 join_type,
                 ..
             }) => match join_type {
-                JoinType::LeftDependent => todo!(),
                 JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
                     if left.schema().fields().is_empty() {
                         right.head_output_expr()
@@ -1332,7 +1331,6 @@ impl LogicalPlan {
                 join_type,
                 ..
             }) => match join_type {
-                JoinType::LeftDependent => todo!(),
                 JoinType::Inner => Some(left.max_rows()? * right.max_rows()?),
                 JoinType::Left | JoinType::Right | JoinType::Full => {
                     match (left.max_rows()?, right.max_rows()?, join_type) {

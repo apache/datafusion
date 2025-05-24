@@ -382,9 +382,6 @@ impl FunctionalDependencies {
                 // All of the functional dependencies are lost in a FULL join:
                 FunctionalDependencies::empty()
             }
-            JoinType::LeftDependent => {
-                unreachable!("LeftDependent should not be reached")
-            }
         }
     }
 

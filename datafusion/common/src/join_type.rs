@@ -67,10 +67,6 @@ pub enum JoinType {
     ///
     /// [1]: http://btw2017.informatik.uni-stuttgart.de/slidesandpapers/F1-10-37/paper_web.pdf
     LeftMark,
-    /// TODO: document me more
-    /// used to represent a virtual join in a complex expr containing subquery(ies),
-    /// The actual join type depends on the correlated expr
-    LeftDependent,
 }
 
 impl JoinType {
@@ -93,9 +89,6 @@ impl JoinType {
             JoinType::RightAnti => JoinType::LeftAnti,
             JoinType::LeftMark => {
                 unreachable!("LeftMark join type does not support swapping")
-            }
-            JoinType::LeftDependent => {
-                unreachable!("Dependent join type does not support swapping")
             }
         }
     }
@@ -128,7 +121,6 @@ impl Display for JoinType {
             JoinType::LeftAnti => "LeftAnti",
             JoinType::RightAnti => "RightAnti",
             JoinType::LeftMark => "LeftMark",
-            JoinType::LeftDependent => "LeftDependent",
         };
         write!(f, "{join_type}")
     }
@@ -149,7 +141,6 @@ impl FromStr for JoinType {
             "LEFTANTI" => Ok(JoinType::LeftAnti),
             "RIGHTANTI" => Ok(JoinType::RightAnti),
             "LEFTMARK" => Ok(JoinType::LeftMark),
-            "LEFTDEPENDENT" => Ok(JoinType::LeftDependent),
             _ => _not_impl_err!("The join type {s} does not exist or is not implemented"),
         }
     }

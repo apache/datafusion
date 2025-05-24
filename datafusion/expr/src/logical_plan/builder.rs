@@ -1620,7 +1620,6 @@ pub fn build_join_schema(
                 .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect()
         }
-        JoinType::LeftDependent => todo!(),
     };
     let func_dependencies = left.functional_dependencies().join(
         right.functional_dependencies(),
