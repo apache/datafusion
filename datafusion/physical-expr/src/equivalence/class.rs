@@ -671,6 +671,7 @@ impl EquivalenceGroup {
             }
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => self.clone(),
             JoinType::RightSemi | JoinType::RightAnti => right_equivalences.clone(),
+            JoinType::LeftDependent => todo!(),
         }
     }
 

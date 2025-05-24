@@ -710,6 +710,7 @@ impl Unparser<'_> {
                 };
 
                 match join.join_type {
+                    JoinType::LeftDependent => todo!(),
                     JoinType::LeftSemi
                     | JoinType::LeftAnti
                     | JoinType::LeftMark
@@ -1237,6 +1238,7 @@ impl Unparser<'_> {
                     ast::JoinOperator::CrossJoin
                 }
             },
+            JoinType::LeftDependent => todo!(),
             JoinType::Left => ast::JoinOperator::LeftOuter(constraint),
             JoinType::Right => ast::JoinOperator::RightOuter(constraint),
             JoinType::Full => ast::JoinOperator::FullOuter(constraint),

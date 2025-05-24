@@ -321,6 +321,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
                 })?;
                 Ok(())
             }
+            JoinType::LeftDependent => todo!(),
         },
         LogicalPlan::Extension(_) => Ok(()),
         plan => check_no_outer_references(plan),
