@@ -130,19 +130,27 @@ mod tests {
         // inner table
         let salary = test_table_scan_with_name("salary")?;
 
-        // SELECT AVG(d1) FROM salary WHERE a = c1
+        // SELECT employees.a
+        // FROM employees
+        // WHERE employees.b > (
+        //     SELECT avg(salary.a)
+        //     FROM salary
+        //     WHERE salary.c = employees.c
+        // );
+
+        // SELECT AVG(salary.a) FROM salary WHERE salary.c = employees.c
         let subquery = Arc::new(
             LogicalPlanBuilder::from(salary)
-                .filter(col("salary.a").eq(col("employees.a")))?
+                .filter(col("salary.c").eq(col("employees.c")))?
                 .aggregate(Vec::<Expr>::new(), vec![avg(col("salary.a"))])?
                 .build()?,
         );
 
-        // SELECT c1 FROM employees WHERE c1 > (subquery)
+        // SELECT employees.a FROM employees WHERE employees.b > (subquery)
         let plan = LogicalPlanBuilder::from(employees)
             .filter(col("employees.a").gt(Expr::ScalarSubquery(Subquery {
                 subquery,
-                outer_ref_columns: vec![col("employees.a")],
+                outer_ref_columns: vec![col("employees.c")],
                 spans: Spans::new(),
             })))?
             .project(vec![col("employees.a")])?
@@ -155,7 +163,7 @@ mod tests {
           Left Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, avg(salary.a):Float64;N]
             TableScan: employees [a:UInt32, b:UInt32, c:UInt32]
             Aggregate: groupBy=[[]], aggr=[[avg(salary.a)]] [avg(salary.a):Float64;N]
-              Filter: salary.a = employees.a [a:UInt32, b:UInt32, c:UInt32]
+              Filter: salary.c = employees.c [a:UInt32, b:UInt32, c:UInt32]
                 TableScan: salary [a:UInt32, b:UInt32, c:UInt32]
         "
         )
