@@ -292,7 +292,9 @@ pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
                 if key_type.is_integer() {
                     // mapping dictionary string types to Text
                     match value_type.as_ref() {
-                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DFColumnType::Text,
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                            DFColumnType::Text
+                        }
                         _ => DFColumnType::Another,
                     }
                 } else {
