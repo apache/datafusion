@@ -32,7 +32,7 @@ use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
+use crate::{aggregates, metrics, ExecutionPlan, InputOrderMode, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
@@ -49,6 +49,7 @@ use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
+use datafusion_expr::groups_accumulator::GroupsAccumulatorMetadata;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::ready;
@@ -407,6 +408,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// specialized for that particular aggregate and its input types
     accumulators: Vec<Box<dyn GroupsAccumulator>>,
 
+    /// The current metadata for the [`GroupsAccumulator`]s, see [`GroupsAccumulator::register_metadata`]
+    accumulators_metadata: GroupsAccumulatorMetadata,
+
     // ========================================================================
     // TASK-SPECIFIC STATES:
     // Inner states groups together properties, states for a specific task.
@@ -477,10 +481,19 @@ impl GroupedHashAggregateStream {
             }
         };
 
+        let group_accumulator_metadata = {
+            let mut metadata = GroupsAccumulatorMetadata::default();
+            metadata.group_indices_ordering = agg.input_order_mode.clone();
+
+            metadata
+        };
+
         // Instantiate the accumulators
         let accumulators: Vec<_> = aggregate_exprs
             .iter()
-            .map(create_group_accumulator)
+            .map(|expr| {
+                create_group_accumulator(expr, group_accumulator_metadata.clone())
+            })
             .collect::<Result<_>>()?;
 
         let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
@@ -620,6 +633,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
+            accumulators_metadata: group_accumulator_metadata,
         })
     }
 }
@@ -629,19 +643,25 @@ impl GroupedHashAggregateStream {
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
     agg_expr: &Arc<AggregateFunctionExpr>,
+    metadata: GroupsAccumulatorMetadata,
 ) -> Result<Box<dyn GroupsAccumulator>> {
-    if agg_expr.groups_accumulator_supported() {
-        agg_expr.create_groups_accumulator()
-    } else {
-        // Note in the log when the slow path is used
-        debug!(
-            "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
-            agg_expr.name()
-        );
-        let agg_expr_captured = Arc::clone(agg_expr);
-        let factory = move || agg_expr_captured.create_accumulator();
-        Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
-    }
+    let mut group_accumulator: Box<dyn GroupsAccumulator> =
+        if agg_expr.groups_accumulator_supported() {
+            agg_expr.create_groups_accumulator()?
+        } else {
+            // Note in the log when the slow path is used
+            debug!(
+                "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
+                agg_expr.name()
+            );
+            let agg_expr_captured = Arc::clone(agg_expr);
+            let factory = move || agg_expr_captured.create_accumulator();
+            Box::new(GroupsAccumulatorAdapter::new(factory))
+        };
+
+    group_accumulator.register_metadata(metadata)?;
+
+    Ok(group_accumulator)
 }
 
 impl Stream for GroupedHashAggregateStream {
@@ -1085,7 +1105,27 @@ impl GroupedHashAggregateStream {
             .with_reservation(self.reservation.new_empty())
             .build()?;
         self.input_done = false;
+
+        let group_ordering_changed = !matches!(
+            self.accumulators_metadata.group_indices_ordering,
+            InputOrderMode::Sorted
+        );
         self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
+
+        if group_ordering_changed {
+            if !self.group_values.is_empty() {
+                return internal_err!(
+                    "Cannot change grouping order after groups have been created"
+                );
+            }
+
+            self.accumulators_metadata.group_indices_ordering = InputOrderMode::Sorted;
+
+            for acc in self.accumulators.iter_mut() {
+                acc.register_metadata(self.accumulators_metadata.clone())?
+            }
+        }
+
         Ok(())
     }
 
