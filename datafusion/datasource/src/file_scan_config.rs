@@ -232,9 +232,15 @@ pub struct FileScanConfig {
 pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
     /// Table schema before any projections or partition columns are applied.
-    /// This schema is used to read the files, but is **not** necessarily the schema of the physical files.
-    /// Rather this is the schema that the physical file schema will be mapped onto, and the schema that the
+    ///
+    /// This schema is used to read the files, but is **not** necessarily the
+    /// schema of the physical files. Rather this is the schema that the
+    /// physical file schema will be mapped onto, and the schema that the
     /// [`DataSourceExec`] will return.
+    ///
+    /// This is usually the same as the table schema as specified by the `TableProvider` minus any partition columns.
+    ///
+    /// This probably would be better named `table_schema`
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
 
@@ -2498,10 +2504,7 @@ mod tests {
                     avg_files_per_partition
                 );
 
-                println!(
-                    "Distribution - min files: {}, max files: {}",
-                    min_size, max_size
-                );
+                println!("Distribution - min files: {min_size}, max files: {max_size}");
             }
         }
 

@@ -41,7 +41,7 @@ use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
 use datafusion_expr::type_coercion::functions::{
-    data_types_with_aggregate_udf, data_types_with_scalar_udf,
+    data_types_with_scalar_udf, fields_with_aggregate_udf,
 };
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
@@ -718,6 +718,9 @@ fn coerce_frame_bound(
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
         || is_utf8_or_utf8view_or_large_utf8(col_type)
+        || matches!(col_type, DataType::List(_))
+        || matches!(col_type, DataType::LargeList(_))
+        || matches!(col_type, DataType::FixedSizeList(_, _))
         || matches!(col_type, DataType::Null)
         || matches!(col_type, DataType::Boolean)
     {
@@ -808,12 +811,15 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
         return Ok(expressions);
     }
 
-    let current_types = expressions
+    let current_fields = expressions
         .iter()
-        .map(|e| e.get_type(schema))
+        .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = data_types_with_aggregate_udf(&current_types, func)?;
+    let new_types = fields_with_aggregate_udf(&current_fields, func)?
+        .into_iter()
+        .map(|f| f.data_type().clone())
+        .collect::<Vec<_>>();
 
     expressions
         .into_iter()
@@ -1143,17 +1149,14 @@ mod test {
         match analyzer.execute_and_check(plan, &options, |_, _| {}) {
             Ok(succeeded_plan) => {
                 panic!(
-                    "Expected a type coercion error, but analysis succeeded: \n{:#?}",
-                    succeeded_plan
+                    "Expected a type coercion error, but analysis succeeded: \n{succeeded_plan:#?}"
                 );
             }
             Err(e) => {
                 let msg = e.to_string();
                 assert!(
                     msg.contains(expected_substr),
-                    "Error did not contain expected substring.\n  expected to find: `{}`\n  actual error: `{}`",
-                    expected_substr,
-                    msg
+                    "Error did not contain expected substring.\n  expected to find: `{expected_substr}`\n  actual error: `{msg}`"
                 );
             }
         }

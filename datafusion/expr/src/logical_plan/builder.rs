@@ -602,7 +602,7 @@ impl LogicalPlanBuilder {
     /// Apply a filter which is used for a having clause
     pub fn having(self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Filter::try_new_with_having(expr, self.plan)
+        Filter::try_new(expr, self.plan)
             .map(LogicalPlan::Filter)
             .map(Self::from)
     }
@@ -1549,7 +1549,7 @@ pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
             // Loop until we find a name that hasn't been used
             while seen.contains(&new_name) {
                 *count += 1;
-                new_name = format!("{}:{}", base_name, count);
+                new_name = format!("{base_name}:{count}");
             }
 
             seen.insert(new_name.clone());
@@ -2681,7 +2681,7 @@ mod tests {
             // Check unnested struct field is a scalar
             let field = plan
                 .schema()
-                .field_with_name(None, &format!("struct_singular.{}", field_name))
+                .field_with_name(None, &format!("struct_singular.{field_name}"))
                 .unwrap();
             assert_eq!(&DataType::UInt32, field.data_type());
         }
@@ -2764,7 +2764,7 @@ mod tests {
         for field_name in &["a", "b"] {
             let field = plan
                 .schema()
-                .field_with_name(None, &format!("struct_singular.{}", field_name))
+                .field_with_name(None, &format!("struct_singular.{field_name}"))
                 .unwrap();
             assert_eq!(&DataType::UInt32, field.data_type());
         }

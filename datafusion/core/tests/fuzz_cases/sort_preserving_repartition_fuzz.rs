@@ -94,7 +94,7 @@ mod sp_repartition_fuzz_tests {
         };
 
         while !remaining_exprs.is_empty() {
-            let n_sort_expr = rng.gen_range(0..remaining_exprs.len() + 1);
+            let n_sort_expr = rng.random_range(0..remaining_exprs.len() + 1);
             remaining_exprs.shuffle(&mut rng);
 
             let ordering = remaining_exprs
@@ -144,7 +144,7 @@ mod sp_repartition_fuzz_tests {
         // Utility closure to generate random array
         let mut generate_random_array = |num_elems: usize, max_val: usize| -> ArrayRef {
             let values: Vec<u64> = (0..num_elems)
-                .map(|_| rng.gen_range(0..max_val) as u64)
+                .map(|_| rng.random_range(0..max_val) as u64)
                 .collect();
             Arc::new(UInt64Array::from_iter_values(values))
         };
@@ -261,7 +261,7 @@ mod sp_repartition_fuzz_tests {
             let res = concat_batches(&res[0].schema(), &res)?;
 
             for ordering in eq_properties.oeq_class().iter() {
-                let err_msg = format!("error in eq properties: {:?}", eq_properties);
+                let err_msg = format!("error in eq properties: {eq_properties:?}");
                 let sort_columns = ordering
                     .iter()
                     .map(|sort_expr| sort_expr.evaluate_to_sort_column(&res))
@@ -273,7 +273,7 @@ mod sp_repartition_fuzz_tests {
                 let sorted_columns = lexsort(&sort_columns, None)?;
 
                 // Make sure after merging ordering is still valid.
-                assert_eq!(orig_columns.len(), sorted_columns.len(), "{}", err_msg);
+                assert_eq!(orig_columns.len(), sorted_columns.len(), "{err_msg}");
                 assert!(
                     izip!(orig_columns.into_iter(), sorted_columns.into_iter())
                         .all(|(lhs, rhs)| { lhs == rhs }),
@@ -447,9 +447,9 @@ mod sp_repartition_fuzz_tests {
         let mut input123: Vec<(i64, i64, i64)> = vec![(0, 0, 0); len];
         input123.iter_mut().for_each(|v| {
             *v = (
-                rng.gen_range(0..n_distinct) as i64,
-                rng.gen_range(0..n_distinct) as i64,
-                rng.gen_range(0..n_distinct) as i64,
+                rng.random_range(0..n_distinct) as i64,
+                rng.random_range(0..n_distinct) as i64,
+                rng.random_range(0..n_distinct) as i64,
             )
         });
         input123.sort();
@@ -471,7 +471,7 @@ mod sp_repartition_fuzz_tests {
         let mut batches = vec![];
         if STREAM {
             while remainder.num_rows() > 0 {
-                let batch_size = rng.gen_range(0..50);
+                let batch_size = rng.random_range(0..50);
                 if remainder.num_rows() < batch_size {
                     break;
                 }
@@ -481,7 +481,7 @@ mod sp_repartition_fuzz_tests {
             }
         } else {
             while remainder.num_rows() > 0 {
-                let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
+                let batch_size = rng.random_range(0..remainder.num_rows() + 1);
                 batches.push(remainder.slice(0, batch_size));
                 remainder =
                     remainder.slice(batch_size, remainder.num_rows() - batch_size);

@@ -27,7 +27,10 @@ pub(crate) mod test_util {
 
     use crate::test::object_store::local_unpartitioned_file;
 
-    /// Writes `batches` to a temporary parquet file
+    /// Writes each `batch` to at least one temporary parquet file
+    ///
+    /// For example, if `batches` contains 2 batches, the function will create
+    /// 2 temporary files, each containing the contents of one batch
     ///
     /// If multi_page is set to `true`, the parquet file(s) are written
     /// with 2 rows per data page (used to test page filtering and
@@ -52,7 +55,7 @@ pub(crate) mod test_util {
             }
         }
 
-        // we need the tmp files to be sorted as some tests rely on the how the returning files are ordered
+        // we need the tmp files to be sorted as some tests rely on the returned file ordering
         // https://github.com/apache/datafusion/pull/6629
         let tmp_files = {
             let mut tmp_files: Vec<_> = (0..batches.len())
@@ -1320,7 +1323,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_sink_write_with_extension() -> Result<()> {
         let filename = "test_file.custom_ext";
-        let file_path = format!("file:///path/to/{}", filename);
+        let file_path = format!("file:///path/to/{filename}");
         let parquet_sink = create_written_parquet_sink(file_path.as_str()).await?;
 
         // assert written to proper path
@@ -1535,8 +1538,7 @@ mod tests {
             let prefix = path_parts[0].as_ref();
             assert!(
                 expected_partitions.contains(prefix),
-                "expected path prefix to match partition, instead found {:?}",
-                prefix
+                "expected path prefix to match partition, instead found {prefix:?}"
             );
             expected_partitions.remove(prefix);
 

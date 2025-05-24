@@ -1513,7 +1513,7 @@ pub(crate) mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]"
             );
         }
 
@@ -1670,11 +1670,7 @@ pub(crate) mod tests {
                         .into_iter()
                         .zip(prev_values)
                         .all(|(current, prev)| current >= prev),
-                    "batch_index: {} row: {} current: {:?}, prev: {:?}",
-                    batch_index,
-                    row,
-                    current_values,
-                    prev_values
+                    "batch_index: {batch_index} row: {row} current: {current_values:?}, prev: {prev_values:?}"
                 );
                 prev_values = current_values;
             }

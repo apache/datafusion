@@ -248,7 +248,7 @@ impl ExecutionPlan for UnionExec {
             }
         }
 
-        warn!("Error in Union: Partition {} not found", partition);
+        warn!("Error in Union: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in Union")
     }
@@ -481,7 +481,7 @@ impl ExecutionPlan for InterleaveExec {
             )));
         }
 
-        warn!("Error in InterleaveExec: Partition {} not found", partition);
+        warn!("Error in InterleaveExec: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in InterleaveExec")
     }
@@ -540,7 +540,12 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
 
     let fields = (0..first_schema.fields().len())
         .map(|i| {
-            inputs
+            // We take the name from the left side of the union to match how names are coerced during logical planning,
+            // which also uses the left side names.
+            let base_field = first_schema.field(i).clone();
+
+            // Coerce metadata and nullability across all inputs
+            let merged_field = inputs
                 .iter()
                 .enumerate()
                 .map(|(input_idx, input)| {
@@ -562,6 +567,9 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
                 // We can unwrap this because if inputs was empty, this would've already panic'ed when we
                 // indexed into inputs[0].
                 .unwrap()
+                .with_name(base_field.name());
+
+            merged_field
         })
         .collect::<Vec<_>>();
 
@@ -924,7 +932,7 @@ mod tests {
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
         let rhs_orderings = rhs.oeq_class();
-        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
+        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{err_msg}");
         for rhs_ordering in rhs_orderings.iter() {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
         }

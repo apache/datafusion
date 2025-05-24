@@ -1050,7 +1050,12 @@ impl protobuf::PhysicalPlanNode {
                                     let agg_udf = match &agg_node.fun_definition {
                                         Some(buf) => extension_codec
                                             .try_decode_udaf(udaf_name, buf)?,
-                                        None => registry.udaf(udaf_name)?,
+                                        None => {
+                                            registry.udaf(udaf_name).or_else(|_| {
+                                                extension_codec
+                                                    .try_decode_udaf(udaf_name, &[])
+                                            })?
+                                        }
                                     };
 
                                     AggregateExprBuilder::new(agg_udf, input_phy_expr)

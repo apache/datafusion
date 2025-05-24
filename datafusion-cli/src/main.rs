@@ -17,13 +17,16 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
+use datafusion::execution::memory_pool::{
+    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::DiskManager;
 use datafusion::prelude::SessionContext;
@@ -120,6 +123,13 @@ struct Args {
 
     #[clap(
         long,
+        help = "The number of top memory consumers to display when query fails due to memory exhaustion. To disable memory consumer tracking, set this value to 0",
+        default_value = "3"
+    )]
+    top_memory_consumers: usize,
+
+    #[clap(
+        long,
         help = "The max number of rows to display for 'Table' format\n[possible values: numbers(0/10/...), inf(no limit)]",
         default_value = "40"
     )]
@@ -154,7 +164,7 @@ async fn main_inner() -> Result<()> {
     let args = Args::parse();
 
     if !args.quiet {
-        println!("DataFusion CLI v{}", DATAFUSION_CLI_VERSION);
+        println!("DataFusion CLI v{DATAFUSION_CLI_VERSION}");
     }
 
     if let Some(ref path) = args.data_path {
@@ -169,9 +179,22 @@ async fn main_inner() -> Result<()> {
     if let Some(memory_limit) = args.memory_limit {
         // set memory pool type
         let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
-            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
+            PoolType::Fair if args.top_memory_consumers == 0 => {
+                Arc::new(FairSpillPool::new(memory_limit))
+            }
+            PoolType::Fair => Arc::new(TrackConsumersPool::new(
+                FairSpillPool::new(memory_limit),
+                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+            )),
+            PoolType::Greedy if args.top_memory_consumers == 0 => {
+                Arc::new(GreedyMemoryPool::new(memory_limit))
+            }
+            PoolType::Greedy => Arc::new(TrackConsumersPool::new(
+                GreedyMemoryPool::new(memory_limit),
+                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+            )),
         };
+
         rt_builder = rt_builder.with_memory_pool(pool)
     }
 
@@ -280,7 +303,7 @@ fn parse_valid_file(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_file() {
         Ok(dir.to_string())
     } else {
-        Err(format!("Invalid file '{}'", dir))
+        Err(format!("Invalid file '{dir}'"))
     }
 }
 
@@ -288,14 +311,14 @@ fn parse_valid_data_dir(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_dir() {
         Ok(dir.to_string())
     } else {
-        Err(format!("Invalid data directory '{}'", dir))
+        Err(format!("Invalid data directory '{dir}'"))
     }
 }
 
 fn parse_batch_size(size: &str) -> Result<usize, String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(size),
-        _ => Err(format!("Invalid batch size '{}'", size)),
+        _ => Err(format!("Invalid batch size '{size}'")),
     }
 }
 
@@ -352,20 +375,20 @@ fn parse_size_string(size: &str, label: &str) -> Result<usize, String> {
         let num_str = caps.get(1).unwrap().as_str();
         let num = num_str
             .parse::<usize>()
-            .map_err(|_| format!("Invalid numeric value in {} '{}'", label, size))?;
+            .map_err(|_| format!("Invalid numeric value in {label} '{size}'"))?;
 
         let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("b");
         let unit = BYTE_SUFFIXES
             .get(suffix)
-            .ok_or_else(|| format!("Invalid {} '{}'", label, size))?;
+            .ok_or_else(|| format!("Invalid {label} '{size}'"))?;
         let total_bytes = usize::try_from(unit.multiplier())
             .ok()
             .and_then(|multiplier| num.checked_mul(multiplier))
-            .ok_or_else(|| format!("{} '{}' is too large", label, size))?;
+            .ok_or_else(|| format!("{label} '{size}' is too large"))?;
 
         Ok(total_bytes)
     } else {
-        Err(format!("Invalid {} '{}'", label, size))
+        Err(format!("Invalid {label} '{size}'"))
     }
 }
 

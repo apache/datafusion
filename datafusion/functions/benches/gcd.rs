@@ -30,9 +30,9 @@ use rand::Rng;
 use std::sync::Arc;
 
 fn generate_i64_array(n_rows: usize) -> ArrayRef {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let values = (0..n_rows)
-        .map(|_| rng.gen_range(0..1000))
+        .map(|_| rng.random_range(0..1000))
         .collect::<Vec<_>>();
     Arc::new(Int64Array::from(values)) as ArrayRef
 }

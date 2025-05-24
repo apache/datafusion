@@ -90,42 +90,42 @@ async fn test_utf8_not_like() {
 
 #[tokio::test]
 async fn test_utf8_like_prefix() {
-    Utf8Test::new(|value| col("a").like(lit(format!("%{}", value))))
+    Utf8Test::new(|value| col("a").like(lit(format!("%{value}"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_like_suffix() {
-    Utf8Test::new(|value| col("a").like(lit(format!("{}%", value))))
+    Utf8Test::new(|value| col("a").like(lit(format!("{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_prefix() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("%{}", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("%{value}"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_ecsape() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{}%", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_suffix() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("{}%", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_suffix_one() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("{}_", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{value}_"))))
         .run()
         .await;
 }
@@ -226,7 +226,7 @@ impl Utf8Test {
             return (*files).clone();
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let values = Self::values();
 
         let mut row_groups = vec![];
@@ -345,7 +345,7 @@ async fn write_parquet_file(
 
 /// The string values for [Utf8Test::values]
 static VALUES: LazyLock<Vec<String>> = LazyLock::new(|| {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let characters = [
         "z",
