@@ -73,7 +73,6 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     fn supports_rewrite(&self) -> bool {
         true
     }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -288,9 +287,7 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 ///
 /// # Arguments
 ///
-/// * `query_info` - The subquery portion of the `where` (select avg(total) from orders)
 /// * `filter_input` - The non-subquery portion (from customers)
-/// * `outer_others` - Any additional parts to the `where` expression (and c.x = y)
 /// * `subquery_alias` - Subquery aliases
 fn build_join(
     subquery: &Subquery,
@@ -300,6 +297,7 @@ fn build_join(
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
+
     if !pull_up.can_pull_up {
         return Ok(None);
     }

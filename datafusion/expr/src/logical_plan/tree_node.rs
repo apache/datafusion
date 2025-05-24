@@ -53,6 +53,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{internal_err, Result};
 
+use super::plan::DependentJoin;
+
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
@@ -348,6 +350,7 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            LogicalPlan::DependentJoin(..) => todo!(),
         })
     }
 }
@@ -400,6 +403,8 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
         match self {
+            // TODO: apply expr on the subquery
+            LogicalPlan::DependentJoin(..) => Ok(TreeNodeRecursion::Continue),
             LogicalPlan::Projection(Projection { expr, .. }) => expr.apply_elements(f),
             LogicalPlan::Values(Values { values, .. }) => values.apply_elements(f),
             LogicalPlan::Filter(Filter { predicate, .. }) => f(predicate),
@@ -487,6 +492,7 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
+            LogicalPlan::DependentJoin(DependentJoin { .. }) => todo!(),
             LogicalPlan::Projection(Projection {
                 expr,
                 input,

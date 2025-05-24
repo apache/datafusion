@@ -49,6 +49,7 @@ use crate::{
 
 use super::dml::InsertOp;
 use super::plan::{ColumnUnnestList, ExplainFormat};
+use super::DependentJoin;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -880,6 +881,40 @@ impl LogicalPlanBuilder {
         ))))
     }
 
+    /// Build a dependent join provided a subquery plan
+    /// this function should only be used by the optimizor
+    /// a dependent join node will provides all columns belonging to the LHS
+    /// and one additional column as the result of evaluating the subquery on the RHS
+    /// under the name "subquery_name.output"
+    pub fn dependent_join(
+        self,
+        right: LogicalPlan,
+        correlated_columns: Vec<Column>,
+        subquery_expr: Expr,
+        subquery_depth: usize,
+        subquery_name: String,
+    ) -> Result<Self> {
+        let left = self.build()?;
+        let schema = left.schema();
+        let qualified_fields = schema
+            .iter()
+            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+            .chain(once(subquery_output_field(&subquery_name, &subquery_expr)))
+            .collect();
+        let metadata = schema.metadata().clone();
+        let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
+
+        Ok(Self::new(LogicalPlan::DependentJoin(DependentJoin {
+            schema: DFSchemaRef::new(dfschema),
+            left: Arc::new(left),
+            right: Arc::new(right),
+            correlated_columns,
+            subquery_expr,
+            subquery_name,
+            subquery_depth,
+        })))
+    }
+
     /// Apply a join to `right` using explicitly specified columns and an
     /// optional filter expression.
     ///
@@ -1542,6 +1577,26 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
         table_reference,
         Arc::new(Field::new("mark", DataType::Boolean, false)),
     )
+}
+
+fn subquery_output_field(
+    subquery_alias: &String,
+    subquery_expr: &Expr,
+) -> (Option<TableReference>, Arc<Field>) {
+    // TODO: check nullability
+    let field = match subquery_expr {
+        Expr::InSubquery(_) => Arc::new(Field::new("output", DataType::Boolean, false)),
+        Expr::Exists(_) => Arc::new(Field::new("output", DataType::Boolean, false)),
+        Expr::ScalarSubquery(sq) => {
+            let data_type = sq.subquery.schema().field(0).data_type().clone();
+            Arc::new(Field::new("output", data_type, false))
+        }
+        _ => {
+            unreachable!()
+        }
+    };
+
+    (Some(TableReference::bare(subquery_alias.clone())), field)
 }
 
 /// Creates a schema for a join operation.
