@@ -354,7 +354,7 @@ async fn oom_recursive_cte() {
 #[tokio::test]
 async fn oom_parquet_sink() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.into_path().join("test.parquet");
+    let path = dir.path().join("test.parquet");
     let _ = File::create(path.clone()).await.unwrap();
 
     TestCase::new()
@@ -378,7 +378,7 @@ async fn oom_parquet_sink() {
 #[tokio::test]
 async fn oom_with_tracked_consumer_pool() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.into_path().join("test.parquet");
+    let path = dir.path().join("test.parquet");
     let _ = File::create(path.clone()).await.unwrap();
 
     TestCase::new()
@@ -417,7 +417,7 @@ async fn oom_with_tracked_consumer_pool() {
 /// If there is memory explosion for spilled record batch, this test will fail.
 #[tokio::test]
 async fn test_stringview_external_sort() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let array_length = 1000;
     let num_batches = 200;
     // Batches contain two columns: random 100-byte string, and random i32
@@ -427,7 +427,7 @@ async fn test_stringview_external_sort() {
         let strings: Vec<String> = (0..array_length)
             .map(|_| {
                 (0..100)
-                    .map(|_| rng.gen_range(0..=u8::MAX) as char)
+                    .map(|_| rng.random_range(0..=u8::MAX) as char)
                     .collect()
             })
             .collect();
@@ -435,8 +435,9 @@ async fn test_stringview_external_sort() {
         let string_array = StringViewArray::from(strings);
         let array_ref: ArrayRef = Arc::new(string_array);
 
-        let random_numbers: Vec<i32> =
-            (0..array_length).map(|_| rng.gen_range(0..=1000)).collect();
+        let random_numbers: Vec<i32> = (0..array_length)
+            .map(|_| rng.random_range(0..=1000))
+            .collect();
         let int_array = Int32Array::from(random_numbers);
         let int_array_ref: ArrayRef = Arc::new(int_array);
 
