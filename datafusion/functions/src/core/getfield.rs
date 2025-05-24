@@ -108,7 +108,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         let [base, field_name] = take_function_args(self.name(), args)?;
 
         let name = match field_name {
-            Expr::Literal(name) => name,
+            Expr::Literal(name, _) => name,
             other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
         };
 
@@ -118,7 +118,7 @@ impl ScalarUDFImpl for GetFieldFunc {
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let [base, field_name] = take_function_args(self.name(), args)?;
         let name = match field_name {
-            Expr::Literal(name) => name,
+            Expr::Literal(name, _) => name,
             other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
         };
 

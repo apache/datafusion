@@ -60,7 +60,7 @@ impl OptimizerRule for EliminateFilter {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(v)),
+                predicate: Expr::Literal(ScalarValue::Boolean(v), _),
                 input,
                 ..
             }) => match v {
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn filter_null() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(None));
+        let filter_expr = Expr::Literal(ScalarValue::Boolean(None), None);
 
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)

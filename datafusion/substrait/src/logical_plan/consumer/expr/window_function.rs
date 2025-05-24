@@ -94,7 +94,7 @@ pub async fn from_window_function(
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
     let args = if fun.name() == "count" && window.arguments.is_empty() {
-        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+        vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {
         from_substrait_func_args(consumer, &window.arguments, input_schema).await?
     };

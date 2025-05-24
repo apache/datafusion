@@ -533,7 +533,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
 // Check whether `expr` is trivial; i.e. it doesn't imply any computation.
 fn is_expr_trivial(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_))
+    matches!(expr, Expr::Column(_) | Expr::Literal(_, _))
 }
 
 /// Rewrites a projection expression using the projection before it (i.e. its input)
@@ -583,8 +583,18 @@ fn is_expr_trivial(expr: &Expr) -> bool {
 fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
     expr.transform_up(|expr| {
         match expr {
-            //  remove any intermediate aliases
-            Expr::Alias(alias) => Ok(Transformed::yes(*alias.expr)),
+            //  remove any intermediate aliases if they do not carry metadata
+            Expr::Alias(alias) => {
+                match alias
+                    .metadata
+                    .as_ref()
+                    .map(|h| h.is_empty())
+                    .unwrap_or(true)
+                {
+                    true => Ok(Transformed::yes(*alias.expr)),
+                    false => Ok(Transformed::no(Expr::Alias(alias))),
+                }
+            }
             Expr::Column(col) => {
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col)?;

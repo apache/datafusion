@@ -107,6 +107,7 @@ impl ScalarUDFImpl for NowFunc {
             .timestamp_nanos_opt();
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
+            None,
         )))
     }
 
