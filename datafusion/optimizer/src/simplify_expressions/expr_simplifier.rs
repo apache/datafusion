@@ -33,8 +33,8 @@ use datafusion_common::{
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
-    Operator, Volatility, WindowFunctionDefinition,
+    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr,
+    ExprSchemable, Like, Operator, Volatility, WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
@@ -172,6 +172,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///   fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
     ///     Ok(DataType::Int32)
     ///   }
+    ///   fn get_schema(&self) -> Option<&DFSchema> {
+    ///     None
+    ///   }
     /// }
     ///
     /// // Create the simplifier
@@ -227,12 +230,17 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         mut expr: Expr,
     ) -> Result<(Transformed<Expr>, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
-        let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
+
+        let empty_schema = DFSchema::empty();
+        let mut const_evaluator = ConstEvaluator::try_new(
+            self.info.execution_props(),
+            self.info.get_schema().unwrap_or(&empty_schema),
+        )?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
         if self.canonicalize {
-            expr = expr.rewrite(&mut Canonicalizer::new()).data()?
+            expr = expr.rewrite(&mut Canonicalizer::new()).data()?;
         }
 
         // Evaluating constants can enable new simplifications and
@@ -249,14 +257,17 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
                 .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
             expr = data;
             num_cycles += 1;
+
             // Track if any transformation occurred
             has_transformed = has_transformed || transformed;
             if !transformed || num_cycles >= self.max_simplifier_cycles {
                 break;
             }
         }
+
         // shorten inlist should be started after other inlist rules are applied
         expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
+
         Ok((
             Transformed::new_transformed(expr, has_transformed),
             num_cycles,
@@ -541,7 +552,7 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
         // stack as not ok (as all parents have at least one child or
         // descendant that can not be evaluated
 
-        if !Self::can_evaluate(&expr) {
+        if !self.can_evaluate(&expr) {
             // walk back up stack, marking first parent that is not mutable
             let parent_iter = self.can_evaluate.iter_mut().rev();
             for p in parent_iter {
@@ -587,12 +598,16 @@ impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
     /// `execution_props`.
-    pub fn try_new(execution_props: &'a ExecutionProps) -> Result<Self> {
+    pub fn try_new(
+        execution_props: &'a ExecutionProps,
+        input_schema: &DFSchema,
+    ) -> Result<Self> {
         // The dummy column name is unused and doesn't matter as only
         // expressions without column references can be evaluated
         static DUMMY_COL_NAME: &str = ".";
+
         let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
-        let input_schema = DFSchema::try_from(schema.clone())?;
+        let input_schema = input_schema.clone();
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
         let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
@@ -617,7 +632,17 @@ impl<'a> ConstEvaluator<'a> {
 
     /// Can the expression be evaluated at plan time, (assuming all of
     /// its children can also be evaluated)?
-    fn can_evaluate(expr: &Expr) -> bool {
+    fn can_evaluate(&self, expr: &Expr) -> bool {
+        // Any time we have metadata on the return value we cannot
+        // simplify to a literal because we will lose it.
+        let false = expr
+            .metadata(&self.input_schema)
+            .map(|metadata| !metadata.is_empty())
+            .unwrap_or(false)
+        else {
+            return false;
+        };
+
         // check for reasons we can't evaluate this node
         //
         // NOTE all expr types are listed here so when new ones are
@@ -641,8 +666,8 @@ impl<'a> ConstEvaluator<'a> {
                 Self::volatility_ok(func.signature().volatility)
             }
             Expr::Literal(_)
-            | Expr::Alias(..)
             | Expr::Unnest(_)
+            | Expr::Alias(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
             | Expr::IsNotNull(_)
@@ -4327,16 +4352,23 @@ mod tests {
     #[derive(Debug, Clone)]
     struct SimplifyMockUdaf {
         simplify: bool,
+        signature: Signature,
     }
 
     impl SimplifyMockUdaf {
         /// make simplify method return new expression
         fn new_with_simplify() -> Self {
-            Self { simplify: true }
+            Self {
+                simplify: true,
+                signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
+            }
         }
         /// make simplify method return no change
         fn new_without_simplify() -> Self {
-            Self { simplify: false }
+            Self {
+                simplify: false,
+                signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
+            }
         }
     }
 
@@ -4350,7 +4382,7 @@ mod tests {
         }
 
         fn signature(&self) -> &Signature {
-            unimplemented!()
+            &self.signature
         }
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -4410,16 +4442,24 @@ mod tests {
     #[derive(Debug, Clone)]
     struct SimplifyMockUdwf {
         simplify: bool,
+        signature: Signature,
     }
 
     impl SimplifyMockUdwf {
         /// make simplify method return new expression
         fn new_with_simplify() -> Self {
-            Self { simplify: true }
+            Self {
+                simplify: true,
+                signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
+            }
         }
+
         /// make simplify method return no change
         fn new_without_simplify() -> Self {
-            Self { simplify: false }
+            Self {
+                simplify: false,
+                signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
+            }
         }
     }
 
@@ -4433,7 +4473,7 @@ mod tests {
         }
 
         fn signature(&self) -> &Signature {
-            unimplemented!()
+            &self.signature
         }
 
         fn simplify(&self) -> Option<WindowFunctionSimplification> {

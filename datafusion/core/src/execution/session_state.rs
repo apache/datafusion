@@ -1951,6 +1951,10 @@ impl SimplifyInfo for SessionSimplifyProvider<'_> {
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
         expr.get_type(self.df_schema)
     }
+
+    fn get_schema(&self) -> Option<&DFSchema> {
+        Some(self.df_schema)
+    }
 }
 
 #[derive(Debug)]
