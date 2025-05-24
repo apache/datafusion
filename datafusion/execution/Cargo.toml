@@ -52,3 +52,4 @@ url = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
+insta = { workspace = true }
