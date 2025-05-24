@@ -118,9 +118,8 @@ macro_rules! chain_traverse {
         $input_indices:ident, $match_indices:ident, $hash_values:ident, $next_chain:ident,
         $input_idx:ident, $chain_idx:ident, $remaining_output:ident
     ) => {
-        let mut i = $chain_idx - 1;
+        let mut match_row_idx = $chain_idx - 1;
         loop {
-            let match_row_idx = i;
             $match_indices.push(match_row_idx);
             $input_indices.push($input_idx as u32);
             $remaining_output -= 1;
@@ -141,7 +140,7 @@ macro_rules! chain_traverse {
                 // end of list
                 break;
             }
-            i = next - 1;
+            match_row_idx = next - 1;
         }
     };
 }
