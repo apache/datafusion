@@ -15,39 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`GeneralPullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
+//! [`DependentJoinRewriter`] converts correlated subqueries to `DependentJoin`
 
-use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::decorrelate::UN_MATCHED_ROW_INDICATOR;
-use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::DataType;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{internal_err, Column, HashMap, Result};
-use datafusion_expr::expr::{self, Exists, InSubquery};
-use datafusion_expr::expr_rewriter::{normalize_col, strip_outer_reference};
-use datafusion_expr::select_expr::SelectExpr;
-use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
-use datafusion_expr::{
-    binary_expr, col, expr_fn, lit, BinaryExpr, Cast, DependentJoin, Expr, Filter,
-    JoinType, LogicalPlan, LogicalPlanBuilder, Operator as ExprOperator, Subquery,
-};
-use datafusion_expr::{in_list, out_ref_col};
+use datafusion_expr::{col, Expr, LogicalPlan, LogicalPlanBuilder};
 
-use indexmap::map::Entry;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use itertools::Itertools;
-use log::Log;
 
 pub struct DependentJoinRewriter {
     // each logical plan traversal will assign it a integer id
@@ -178,11 +162,6 @@ impl DependentJoinRewriter {
     }
 }
 
-impl ColumnAccess {
-    fn debug(&self) -> String {
-        format!("\x1b[31m{} ({})\x1b[0m", self.node_id, self.col)
-    }
-}
 #[derive(Debug, Clone)]
 struct Node {
     id: usize,
@@ -196,7 +175,6 @@ struct Node {
     access_tracker: IndexMap<usize, Vec<ColumnAccess>>,
 
     is_dependent_join_node: bool,
-    is_subquery_node: bool,
 
     // note that for dependent join nodes, there can be more than 1
     // subquery children at a time, but always 1 outer-column-providing-child
@@ -212,18 +190,6 @@ enum SubqueryType {
 }
 
 impl SubqueryType {
-    fn default_join_type(&self) -> JoinType {
-        match self {
-            SubqueryType::None => {
-                panic!("not reached")
-            }
-            SubqueryType::In => JoinType::LeftSemi,
-            SubqueryType::Exists => JoinType::LeftMark,
-            // TODO: in duckdb, they have JoinType::Single
-            // where there is only at most one join partner entry on the LEFT
-            SubqueryType::Scalar => JoinType::Left,
-        }
-    }
     fn prefix(&self) -> String {
         match self {
             SubqueryType::None => "",
@@ -236,9 +202,9 @@ impl SubqueryType {
 }
 fn unwrap_subquery_input_from_expr(expr: &Expr) -> Arc<LogicalPlan> {
     match expr {
-        Expr::ScalarSubquery(sq) => sq.subquery.clone(),
-        Expr::Exists(exists) => exists.subquery.subquery.clone(),
-        Expr::InSubquery(in_sq) => in_sq.subquery.subquery.clone(),
+        Expr::ScalarSubquery(sq) => Arc::clone(&sq.subquery),
+        Expr::Exists(exists) => Arc::clone(&exists.subquery.subquery),
+        Expr::InSubquery(in_sq) => Arc::clone(&in_sq.subquery.subquery),
         _ => unreachable!(),
     }
 }
@@ -257,7 +223,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
     type Node = LogicalPlan;
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         self.current_id += 1;
-        let mut is_subquery_node = false;
         let mut is_dependent_join_node = false;
         let mut subquery_type = SubqueryType::None;
         // for each node, find which column it is accessing, which column it is providing
@@ -283,7 +248,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             }
             LogicalPlan::TableScan(tbl_scan) => {
                 tbl_scan.projected_schema.columns().iter().for_each(|col| {
-                    self.conclude_lowest_dependent_join_node(self.current_id, &col);
+                    self.conclude_lowest_dependent_join_node(self.current_id, col);
                 });
             }
             // TODO
@@ -309,7 +274,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 }
             }
             LogicalPlan::Subquery(subquery) => {
-                is_subquery_node = true;
                 let parent = self.stack.last().unwrap();
                 let parent_node = self.nodes.get_mut(parent).unwrap();
                 // the inserting sequence matter here
@@ -364,7 +328,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             Node {
                 id: self.current_id,
                 plan: node.clone(),
-                is_subquery_node,
                 is_dependent_join_node,
                 access_tracker: IndexMap::new(),
                 subquery_type,
@@ -394,7 +357,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         let mut subquery_alias_by_offset = HashMap::new();
         // let mut subquery_alias_by_node_id = HashMap::new();
         let mut subquery_expr_by_offset = HashMap::new();
-        for (subquery_offset, (subquery_id, column_accesses)) in
+        for (subquery_offset, (subquery_id, _)) in
             node_info.access_tracker.iter().enumerate()
         {
             let subquery_node = self.nodes.get(subquery_id).unwrap();
@@ -425,10 +388,9 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         // replace any subquery expr with subquery_alias.output
                         // column
                         let alias = match e {
-                            Expr::InSubquery(_) | Expr::Exists(_) => {
-                                subquery_alias_by_offset.get(offset_ref).unwrap()
-                            }
-                            Expr::ScalarSubquery(ref s) => {
+                            Expr::InSubquery(_)
+                            | Expr::Exists(_)
+                            | Expr::ScalarSubquery(_) => {
                                 subquery_alias_by_offset.get(offset_ref).unwrap()
                             }
                             _ => return Ok(Transformed::no(e)),
@@ -440,7 +402,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         // TODO: this assume that after decorrelation
                         // the dependent join will provide an extra column with the structure
                         // of "subquery_alias.output"
-                        Ok(Transformed::yes(col(format!("{}.output", alias))))
+                        Ok(Transformed::yes(col(format!("{alias}.output"))))
                     })?
                     .data;
                 // because dependent join may introduce extra columns
@@ -500,7 +462,7 @@ impl OptimizerRule for Decorrelation {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let mut transformer =
-            DependentJoinRewriter::new(config.alias_generator().clone());
+            DependentJoinRewriter::new(Arc::clone(config.alias_generator()));
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
         if rewrite_result.transformed {
             // At this point, we have a logical plan with DependentJoin similar to duckdb
@@ -521,23 +483,16 @@ impl OptimizerRule for Decorrelation {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::{alias::AliasGenerator, Result};
+    use datafusion_expr::{
+        exists, expr_fn::col, in_subquery, lit, out_ref_col, scalar_subquery, Expr,
+        LogicalPlanBuilder,
+    };
+    use datafusion_functions_aggregate::count::count;
+    use insta::assert_snapshot;
     use std::sync::Arc;
 
-    use datafusion_common::{alias::AliasGenerator, DFSchema, Result, ScalarValue};
-    use datafusion_expr::{
-        exists,
-        expr_fn::{self, col, not},
-        in_subquery, lit, out_ref_col, scalar_subquery, table_scan, CreateMemoryTable,
-        EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder,
-    };
-    use datafusion_functions_aggregate::{count::count, sum::sum};
-    use insta::assert_snapshot;
-    use regex_syntax::ast::LiteralKind;
-
-    use crate::{
-        assert_optimized_plan_eq_display_indent_snapshot,
-        test::{test_table_scan, test_table_scan_with_name},
-    };
+    use crate::test::test_table_scan_with_name;
 
     use super::DependentJoinRewriter;
     use arrow::datatypes::DataType as ArrowDataType;
