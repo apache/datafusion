@@ -122,10 +122,6 @@ impl DependentJoinRewriter {
                 let mut cur_stack = self.stack.clone();
 
                 cur_stack.push(child_id);
-                if col.name() == "outer_table.a" || col.name == "a" {
-                    println!("{:?}", access);
-                    println!("{:?}", cur_stack);
-                }
                 // this is a dependent join node
                 let (dependent_join_node_id, subquery_node_id) =
                     Self::dependent_join_and_subquery_node_ids(&cur_stack, &access.stack);
@@ -326,6 +322,8 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 is_subquery_node = true;
                 let parent = self.stack.last().unwrap();
                 let parent_node = self.nodes.get_mut(parent).unwrap();
+                // the inserting sequence matter here
+                // when a parent has multiple children subquery at the same time
                 parent_node.access_tracker.insert(self.current_id, vec![]);
                 for expr in parent_node.plan.expressions() {
                     expr.exists(|e| {
@@ -438,7 +436,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                                 subquery_alias_by_offset.get(offset_ref).unwrap()
                             }
                             Expr::ScalarSubquery(ref s) => {
-                                println!("inserting new expr {}", s.subquery);
                                 subquery_alias_by_offset.get(offset_ref).unwrap()
                             }
                             _ => return Ok(Transformed::no(e)),
@@ -568,11 +565,15 @@ mod tests {
         }};
     }
     #[test]
-    fn simple_in_subquery_inside_from_expr() -> Result<()> {
+    fn rewrite_dependent_join_with_lateral_join() -> Result<()> {
         Ok(())
     }
     #[test]
-    fn simple_in_subquery_inside_select_expr() -> Result<()> {
+    fn rewrite_dependent_join_in_from_expr() -> Result<()> {
+        Ok(())
+    }
+    #[test]
+    fn rewrite_dependent_join_inside_select_expr() -> Result<()> {
         Ok(())
     }
     #[test]

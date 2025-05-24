@@ -881,7 +881,11 @@ impl LogicalPlanBuilder {
         ))))
     }
 
-    ///
+    /// Build a dependent join provided a subquery plan
+    /// this function should only be used by the optimizor
+    /// a dependent join node will provides all columns belonging to the LHS
+    /// and one additional column as the result of evaluating the subquery on the RHS
+    /// under the name "subquery_name.output"
     pub fn dependent_join(
         self,
         right: LogicalPlan,
