@@ -91,7 +91,11 @@ pub struct BenchQuery {
     #[serde(serialize_with = "serialize_start_time")]
     start_time: SystemTime,
 }
-
+/// Internal representation of a single benchmark query iteration result.
+pub struct QueryResult {
+    pub elapsed: Duration,
+    pub row_count: usize,
+}
 /// collects benchmark run data and then serializes it at the end
 pub struct BenchmarkRun {
     context: RunContext,
