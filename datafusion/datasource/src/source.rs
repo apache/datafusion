@@ -58,10 +58,10 @@ use datafusion_physical_plan::filter_pushdown::{
 /// Requires `Debug` to assist debugging
 ///
 /// [`FileScanConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html
-/// [`MemorySourceConfig`]: https://docs.rs/datafusion/47.0.0/datafusion/datasource/memory/struct.MemorySourceConfig.html
+/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemorySourceConfig.html
 /// [`FileSource`]: crate::file::FileSource
-/// [`FileFormat``]: https://docs.rs/datafusion/47.0.0/datafusion/datasource/file_format/index.html
-/// [`TableProvider`]: https://docs.rs/datafusion/47.0.0/datafusion/catalog/trait.TableProvider.html
+/// [`FileFormat``]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/index.html
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 ///
 /// The following diagram shows how DataSource, FileSource, and DataSourceExec are related
 ///
