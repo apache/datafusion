@@ -130,28 +130,6 @@ pub fn normalize_sorts(
         .collect()
 }
 
-/// Recursively rename the table of all [`Column`] expressions in a given expression tree with
-/// a new name, ignoring the `skip_tables`
-pub fn replace_col_base_table(
-    expr: Expr,
-    skip_tables: &[&str],
-    new_table: String,
-) -> Result<Expr> {
-    expr.transform(|expr| {
-        if let Expr::Column(c) = &expr {
-            if let Some(relation) = &c.relation {
-                if !skip_tables.contains(&relation.table()) {
-                    return Ok(Transformed::yes(Expr::Column(
-                        c.with_relation(TableReference::bare(new_table.clone())),
-                    )));
-                }
-            }
-        }
-        Ok(Transformed::no(expr))
-    })
-    .data()
-}
-
 /// Recursively replace all [`Column`] expressions in a given expression tree with
 /// `Column` expressions provided by the hash map argument.
 pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {

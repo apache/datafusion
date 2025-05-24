@@ -1655,25 +1655,6 @@ impl Expr {
         using_columns
     }
 
-    pub fn outer_column_refs(&self) -> HashSet<&Column> {
-        let mut using_columns = HashSet::new();
-        self.add_outer_column_refs(&mut using_columns);
-        using_columns
-    }
-
-    /// Adds references to all outer columns in this expression to the set
-    ///
-    /// See [`Self::column_refs`] for details
-    pub fn add_outer_column_refs<'a>(&'a self, set: &mut HashSet<&'a Column>) {
-        self.apply(|expr| {
-            if let Expr::OuterReferenceColumn(_, col) = expr {
-                set.insert(col);
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .expect("traversal is infallible");
-    }
-
     /// Adds references to all columns in this expression to the set
     ///
     /// See [`Self::column_refs`] for details
@@ -1732,19 +1713,6 @@ impl Expr {
     pub fn contains_outer(&self) -> bool {
         self.exists(|expr| Ok(matches!(expr, Expr::OuterReferenceColumn { .. })))
             .expect("exists closure is infallible")
-    }
-
-    /// Return true if the expression contains out reference(correlated) expressions.
-    pub fn contains_outer_from_relation(&self, outer_relation_name: &String) -> bool {
-        self.exists(|expr| {
-            if let Expr::OuterReferenceColumn(_, col) = expr {
-                if let Some(relation) = &col.relation {
-                    return Ok(relation.table() == outer_relation_name);
-                }
-            }
-            Ok(false)
-        })
-        .expect("exists closure is infallible")
     }
 
     /// Returns true if the expression node is volatile, i.e. whether it can return
