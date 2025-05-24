@@ -40,7 +40,7 @@ use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 
 #[derive(Debug, StructOpt)]
 pub struct RunOpt {
@@ -72,11 +72,6 @@ pub struct RunOpt {
     /// Append a `LIMIT n` clause to the query
     #[structopt(short = "l", long = "limit")]
     limit: Option<usize>,
-}
-
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
 }
 
 impl RunOpt {
@@ -185,18 +180,37 @@ impl RunOpt {
             Some(query_id) => query_id..=query_id,
             None => 1..=Self::SORT_QUERIES.len(),
         };
+        let mut failed_queries: Vec<usize> =
+            Vec::with_capacity(query_range.clone().count());
 
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("{query_id}"));
 
-            let query_results = self.benchmark_query(query_id).await?;
-            for iter in query_results {
-                benchmark_run.write_iter(iter.elapsed, iter.row_count);
+            let query_results = self.benchmark_query(query_id).await;
+            match query_results {
+                Ok(query_results) => {
+                    for iter in query_results {
+                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                    }
+                }
+                Err(e) => {
+                    failed_queries.push(query_id);
+                    eprintln!("Query {query_id} failed: {e}");
+                }
             }
         }
 
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
-
+        if !failed_queries.is_empty() {
+            println!(
+                "Failed Queries: {}",
+                failed_queries
+                    .iter()
+                    .map(|q| q.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         Ok(())
     }
 
