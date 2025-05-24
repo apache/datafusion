@@ -50,34 +50,6 @@ use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 mod cases;
 mod common;
 
-pub struct ParameterTest<'a> {
-    pub sql: &'a str,
-    pub expected_types: Vec<(&'a str, Option<DataType>)>,
-    pub param_values: Vec<ScalarValue>,
-}
-
-impl ParameterTest<'_> {
-    pub fn run(&self) -> String {
-        let plan = logical_plan(self.sql).unwrap();
-
-        let actual_types = plan.get_parameter_types().unwrap();
-        let expected_types: HashMap<String, Option<DataType>> = self
-            .expected_types
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect();
-
-        assert_eq!(actual_types, expected_types);
-
-        let plan_with_params = plan
-            .clone()
-            .with_param_values(self.param_values.clone())
-            .unwrap();
-
-        format!("** Initial Plan:\n{plan}\n** Final Plan:\n{plan_with_params}")
-    }
-}
-
 #[test]
 fn parse_decimals_1() {
     let sql = "SELECT 1";
