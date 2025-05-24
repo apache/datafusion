@@ -75,14 +75,14 @@ logical_plan
 10)------------------Projection: part.p_partkey, part.p_mfgr, partsupp.ps_suppkey, partsupp.ps_supplycost
 11)--------------------Inner Join: part.p_partkey = partsupp.ps_partkey
 12)----------------------Projection: part.p_partkey, part.p_mfgr
-13)------------------------Filter: part.p_size = Int32(15) AND part.p_type LIKE Utf8("%BRASS")
-14)--------------------------TableScan: part projection=[p_partkey, p_mfgr, p_type, p_size], partial_filters=[part.p_size = Int32(15), part.p_type LIKE Utf8("%BRASS")]
+13)------------------------Filter: part.p_size = Int32(15) AND part.p_type LIKE Utf8View("%BRASS")
+14)--------------------------TableScan: part projection=[p_partkey, p_mfgr, p_type, p_size], partial_filters=[part.p_size = Int32(15), part.p_type LIKE Utf8View("%BRASS")]
 15)----------------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
 16)------------------TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
 17)--------------TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
 18)----------Projection: region.r_regionkey
-19)------------Filter: region.r_name = Utf8("EUROPE")
-20)--------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("EUROPE")]
+19)------------Filter: region.r_name = Utf8View("EUROPE")
+20)--------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8View("EUROPE")]
 21)------SubqueryAlias: __scalar_sq_1
 22)--------Projection: min(partsupp.ps_supplycost), partsupp.ps_partkey
 23)----------Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[min(partsupp.ps_supplycost)]]
@@ -96,8 +96,8 @@ logical_plan
 31)------------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
 32)--------------------TableScan: nation projection=[n_nationkey, n_regionkey]
 33)----------------Projection: region.r_regionkey
-34)------------------Filter: region.r_name = Utf8("EUROPE")
-35)--------------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("EUROPE")]
+34)------------------Filter: region.r_name = Utf8View("EUROPE")
+35)--------------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8View("EUROPE")]
 physical_plan
 01)SortPreservingMergeExec: [s_acctbal@0 DESC, n_name@2 ASC NULLS LAST, s_name@1 ASC NULLS LAST, p_partkey@3 ASC NULLS LAST], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[s_acctbal@0 DESC, n_name@2 ASC NULLS LAST, s_name@1 ASC NULLS LAST, p_partkey@3 ASC NULLS LAST], preserve_partitioning=[true]
