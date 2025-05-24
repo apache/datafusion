@@ -2392,6 +2392,7 @@ dependencies = [
  "ctor",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-window",
  "datafusion-functions-window-common",
