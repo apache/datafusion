@@ -76,15 +76,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             // Check the outer query schema
-            if let Some(outer) = planner_context.outer_query_schema()
-                && let Ok((qualifier, field)) =
+            for outer in planner_context.outer_query_schema() {
+                if let Ok((qualifier, field)) =
                     outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
-            {
-                // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                return Ok(Expr::OuterReferenceColumn(
-                    Arc::clone(field),
-                    Column::from((qualifier, field)),
-                ));
+                {
+                    // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                    return Ok(Expr::OuterReferenceColumn(
+                        Arc::clone(field),
+                        Column::from((qualifier, field)),
+                    ));
+                }
             }
 
             // Default case
@@ -172,36 +173,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         not_impl_err!("compound identifier: {ids:?}")
                     } else {
                         // Check the outer_query_schema and try to find a match
-                        if let Some(outer) = planner_context.outer_query_schema() {
-                            let search_result = search_dfschema(&ids, outer);
-                            match search_result {
-                                // Found matching field with spare identifier(s) for nested field(s) in structure
-                                Some((field, qualifier, nested_names))
-                                    if !nested_names.is_empty() =>
-                                {
-                                    // TODO: remove when can support nested identifiers for OuterReferenceColumn
-                                    not_impl_err!(
+                        let outer_schemas = planner_context.outer_query_schema();
+                        let mut maybe_result = None;
+                        if outer_schemas.len() > 0 {
+                            for outer in planner_context.outer_query_schema() {
+                                let search_result = search_dfschema(&ids, outer);
+                                let result = match search_result {
+                                    // Found matching field with spare identifier(s) for nested field(s) in structure
+                                    Some((field, qualifier, nested_names))
+                                        if !nested_names.is_empty() =>
+                                    {
+                                        // TODO: remove when can support nested identifiers for OuterReferenceColumn
+                                        not_impl_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
                                         Column::from((qualifier, field))
                                             .quoted_flat_name()
                                     )
-                                }
-                                // Found matching field with no spare identifier(s)
-                                Some((field, qualifier, _nested_names)) => {
-                                    // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                                    Ok(Expr::OuterReferenceColumn(
-                                        Arc::clone(field),
-                                        Column::from((qualifier, field)),
-                                    ))
-                                }
-                                // Found no matching field, will return a default
-                                None => {
-                                    let s = &ids[0..ids.len()];
-                                    // safe unwrap as s can never be empty or exceed the bounds
-                                    let (relation, column_name) =
-                                        form_identifier(s).unwrap();
-                                    Ok(Expr::Column(Column::new(relation, column_name)))
-                                }
+                                    }
+                                    // Found matching field with no spare identifier(s)
+                                    Some((field, qualifier, _nested_names)) => {
+                                        // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                                        Ok(Expr::OuterReferenceColumn(
+                                            Arc::clone(field),
+                                            Column::from((qualifier, field)),
+                                        ))
+                                    }
+                                    // Found no matching field, will return a default
+                                    None => continue,
+                                };
+                                maybe_result = Some(result);
+                                break;
+                            }
+                            if let Some(result) = maybe_result {
+                                result
+                            } else {
+                                let s = &ids[0..ids.len()];
+                                // safe unwrap as s can never be empty or exceed the bounds
+                                let (relation, column_name) = form_identifier(s).unwrap();
+                                Ok(Expr::Column(Column::new(relation, column_name)))
                             }
                         } else {
                             let s = &ids[0..ids.len()];

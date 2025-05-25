@@ -262,7 +262,7 @@ pub struct PlannerContext {
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
     /// The query schema of the outer query plan, used to resolve the columns in subquery
-    outer_query_schema: Option<DFSchemaRef>,
+    outer_query_schema: Vec<DFSchemaRef>,
     /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
     /// FROM clauses, this should become a suffix of the `outer_query_schema`.
     outer_from_schema: Option<DFSchemaRef>,
@@ -282,7 +282,7 @@ impl PlannerContext {
         Self {
             prepare_param_data_types: Arc::new(vec![]),
             ctes: HashMap::new(),
-            outer_query_schema: None,
+            outer_query_schema: vec![],
             outer_from_schema: None,
             create_table_schema: None,
         }
@@ -298,18 +298,27 @@ impl PlannerContext {
     }
 
     // Return a reference to the outer query's schema
-    pub fn outer_query_schema(&self) -> Option<&DFSchema> {
-        self.outer_query_schema.as_ref().map(|s| s.as_ref())
+    pub fn outer_query_schema(&self) -> Vec<&DFSchema> {
+        self.outer_query_schema
+            .iter()
+            .map(|sc| sc.as_ref())
+            .collect()
     }
 
     /// Sets the outer query schema, returning the existing one, if
     /// any
-    pub fn set_outer_query_schema(
-        &mut self,
-        mut schema: Option<DFSchemaRef>,
-    ) -> Option<DFSchemaRef> {
-        std::mem::swap(&mut self.outer_query_schema, &mut schema);
-        schema
+    pub fn set_outer_query_schema(&mut self, schema: DFSchemaRef) {
+        self.outer_query_schema.push(schema);
+    }
+
+    pub fn latest_outer_query_schema(&mut self) -> Option<DFSchemaRef> {
+        self.outer_query_schema.last().clone().cloned()
+    }
+
+    /// Sets the outer query schema, returning the existing one, if
+    /// any
+    pub fn pop_outer_query_schema(&mut self) -> Option<DFSchemaRef> {
+        self.outer_query_schema.pop()
     }
 
     pub fn set_table_schema(

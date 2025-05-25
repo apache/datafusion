@@ -637,14 +637,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match selection {
             Some(predicate_expr) => {
                 let fallback_schemas = plan.fallback_normalize_schemas();
-                let outer_query_schema = planner_context.outer_query_schema().cloned();
-                let outer_query_schema_vec = outer_query_schema
-                    .as_ref()
-                    .map(|schema| vec![schema])
-                    .unwrap_or_else(Vec::new);
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
+                let outer_query_schema_vec = planner_context.outer_query_schema();
 
                 // Check for aggregation functions
                 let aggregate_exprs =
