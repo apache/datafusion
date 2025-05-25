@@ -1135,7 +1135,9 @@ impl OptimizerRule for PushDownFilter {
                         // (i.e in the case of recursive subquery)
                         // this function may accidentally pushdown the subquery expr as well
                         // until then, we have to exclude these exprs here
-                        .partition(|pred| pred.is_volatile() || has_subquery(pred));
+                        .partition(|pred| {
+                            pred.is_volatile() || has_scalar_subquery(pred)
+                        });
 
                 // Check which non-volatile filters are supported by source
                 let supported_filters = scan
@@ -1427,9 +1429,9 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     is_contain
 }
 
-fn has_subquery(expr: &Expr) -> bool {
+fn has_scalar_subquery(expr: &Expr) -> bool {
     expr.exists(|e| match e {
-        Expr::InSubquery(_) | Expr::Exists(_) | Expr::ScalarSubquery(_) => Ok(true),
+        Expr::ScalarSubquery(_) => Ok(true),
         _ => Ok(false),
     })
     .unwrap()
