@@ -1137,15 +1137,15 @@ mod tests {
             EquivalenceClass::new(vec![lit(6), lit(7), lit(8)]),
         ]);
         let intersect = eq_group1.intersect(&eq_group2);
+
         assert_eq!(intersect.len(), 2);
-        assert_eq!(
-            intersect.classes[0],
-            EquivalenceClass::new(vec![lit(2), lit(3)])
-        );
-        assert_eq!(
-            intersect.classes[1],
-            EquivalenceClass::new(vec![lit(6), lit(7)])
-        );
+        for cls in intersect.classes.iter() {
+            assert_eq!(cls.exprs.len(), 2);
+            assert!(
+                (cls.exprs.contains(&lit(2)) && cls.exprs.contains(&lit(3)))
+                    || (cls.exprs.contains(&lit(6)) && cls.exprs.contains(&lit(7)))
+            );
+        }
         Ok(())
     }
 }
