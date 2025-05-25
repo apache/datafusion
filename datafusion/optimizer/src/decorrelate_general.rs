@@ -109,11 +109,13 @@ impl DependentJoinRewriter {
                 let mut cur_stack = self.stack.clone();
 
                 cur_stack.push(child_id);
-                // this is a dependent join node
                 let (dependent_join_node_id, subquery_node_id) =
                     Self::dependent_join_and_subquery_node_ids(&cur_stack, &access.stack);
                 let node = self.nodes.get_mut(&dependent_join_node_id).unwrap();
-                let accesses = node.access_tracker.entry(subquery_node_id).or_default();
+                let accesses = node
+                    .columns_accesses_by_subquery_id
+                    .entry(subquery_node_id)
+                    .or_default();
                 accesses.push(ColumnAccess {
                     col: col.clone(),
                     node_id: access.node_id,
@@ -152,14 +154,14 @@ impl DependentJoinRewriter {
 
 impl DependentJoinRewriter {
     fn new(alias_generator: Arc<AliasGenerator>) -> Self {
-        return DependentJoinRewriter {
+        DependentJoinRewriter {
             alias_generator,
             current_id: 0,
             nodes: IndexMap::new(),
             stack: vec![],
             all_outer_ref_columns: IndexMap::new(),
             subquery_depth: 0,
-        };
+        }
     }
 }
 
@@ -167,12 +169,12 @@ impl DependentJoinRewriter {
 struct Node {
     plan: LogicalPlan,
 
-    // This field is only meaningful if the node is dependent join node
-    // it track which descendent nodes still accessing the outer columns provided by its
+    // This field is only meaningful if the node is dependent join node.
+    // It tracks which descendent nodes still accessing the outer columns provided by its
     // left child
-    // the key of this map is node_id of the children subquery
-    // and insertion order matters here, and thus we use IndexMap
-    access_tracker: IndexMap<usize, Vec<ColumnAccess>>,
+    // The key of this map is node_id of the children subqueries.
+    // The insertion order matters here, and thus we use IndexMap
+    columns_accesses_by_subquery_id: IndexMap<usize, Vec<ColumnAccess>>,
 
     is_dependent_join_node: bool,
 
@@ -229,8 +231,9 @@ fn contains_subquery(expr: &Expr) -> bool {
 /// needed for the decorrelation:
 /// - The subquery expr
 /// - The correlated columns on the LHS referenced from the RHS (and its recursing subqueries if any)
+///
 /// If in the original node there exists multiple subqueries at the same time
-/// two nested `DependentJoin` plans are generated (with equal depth)
+/// two nested `DependentJoin` plans are generated (with equal depth).
 ///
 /// For illustration, given this query
 /// ```sql
@@ -317,7 +320,9 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 // we rely on the order in which subquery children are visited
                 // to later on find back the corresponding subquery (if some part of them
                 // were rewritten in the lower node)
-                parent_node.access_tracker.insert(new_id, vec![]);
+                parent_node
+                    .columns_accesses_by_subquery_id
+                    .insert(new_id, vec![]);
                 for expr in parent_node.plan.expressions() {
                     expr.exists(|e| {
                         let (found_sq, checking_type) = match e {
@@ -367,7 +372,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             Node {
                 plan: node.clone(),
                 is_dependent_join_node,
-                access_tracker: IndexMap::new(),
+                columns_accesses_by_subquery_id: IndexMap::new(),
                 subquery_type,
             },
         );
@@ -400,7 +405,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         let mut subquery_alias_by_offset = HashMap::new();
         let mut subquery_expr_by_offset = HashMap::new();
         for (subquery_offset, (subquery_id, _)) in
-            node_info.access_tracker.iter().enumerate()
+            node_info.columns_accesses_by_subquery_id.iter().enumerate()
         {
             let subquery_node = self.nodes.get(subquery_id).unwrap();
             let alias = self
@@ -464,7 +469,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     .map(|c| col(c.clone()))
                     .collect();
                 for (subquery_offset, (_, column_accesses)) in
-                    node_info.access_tracker.iter().enumerate()
+                    node_info.columns_accesses_by_subquery_id.iter().enumerate()
                 {
                     let alias = subquery_alias_by_offset.get(&subquery_offset).unwrap();
                     let subquery_expr =
