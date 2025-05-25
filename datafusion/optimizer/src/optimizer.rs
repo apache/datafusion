@@ -35,6 +35,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+use crate::eliminate_aggregation_self_join::EliminateAggregationSelfJoin;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
@@ -244,6 +245,7 @@ impl Optimizer {
             Arc::new(PushDownFilter::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
             Arc::new(EliminateUniqueKeyedSelfJoin::new()),
+            Arc::new(EliminateAggregationSelfJoin::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
             Arc::new(EliminateGroupByConstant::new()),
