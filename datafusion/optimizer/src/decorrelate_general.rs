@@ -20,7 +20,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::{OptimizerConfig, OptimizerRule};
+use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
 use arrow::datatypes::DataType;
 use datafusion_common::alias::AliasGenerator;
@@ -164,7 +164,6 @@ impl DependentJoinRewriter {
 
 #[derive(Debug, Clone)]
 struct Node {
-    id: usize,
     plan: LogicalPlan,
 
     // This field is only meaningful if the node is dependent join node
@@ -221,6 +220,7 @@ fn contains_subquery(expr: &Expr) -> bool {
 
 impl TreeNodeRewriter for DependentJoinRewriter {
     type Node = LogicalPlan;
+    //
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         self.current_id += 1;
         let mut is_dependent_join_node = false;
@@ -326,7 +326,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         self.nodes.insert(
             self.current_id,
             Node {
-                id: self.current_id,
                 plan: node.clone(),
                 is_dependent_join_node,
                 access_tracker: IndexMap::new(),
@@ -449,6 +448,8 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         Ok(Transformed::yes(current_plan.build()?))
     }
 }
+
+#[allow(dead_code)]
 #[derive(Debug)]
 struct Decorrelation {}
 
@@ -475,14 +476,16 @@ impl OptimizerRule for Decorrelation {
         "decorrelate_subquery"
     }
 
-    // The rewriter handle recursion
-    // fn apply_order(&self) -> Option<ApplyOrder> {
-    //    None
-    // }
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::DependentJoinRewriter;
+    use crate::test::test_table_scan_with_name;
+    use arrow::datatypes::DataType as ArrowDataType;
     use datafusion_common::{alias::AliasGenerator, Result};
     use datafusion_expr::{
         exists, expr_fn::col, in_subquery, lit, out_ref_col, scalar_subquery, Expr,
@@ -491,11 +494,6 @@ mod tests {
     use datafusion_functions_aggregate::count::count;
     use insta::assert_snapshot;
     use std::sync::Arc;
-
-    use crate::test::test_table_scan_with_name;
-
-    use super::DependentJoinRewriter;
-    use arrow::datatypes::DataType as ArrowDataType;
 
     macro_rules! assert_dependent_join_rewrite {
         (
@@ -751,8 +749,8 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
   Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
     DependentJoin on [] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
       TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
-      Projection: inner_table_lv1.b [b:Uint32] 
-        Filter: inner_table_lv1.a = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
+      Projection: inner_table_lv1.b [b:UInt32]
+        Filter: inner_table_lv1.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
           TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
         ");
 
