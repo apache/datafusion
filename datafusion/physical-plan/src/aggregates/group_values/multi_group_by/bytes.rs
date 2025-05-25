@@ -148,15 +148,7 @@ where
         match all_null_or_non_null {
             None => {
                 for &row in rows {
-                    if arr.is_null(row) {
-                        self.nulls.append(true);
-                        // nulls need a zero length in the offset buffer
-                        let offset = self.buffer.len();
-                        self.offsets.push(O::usize_as(offset));
-                    } else {
-                        self.nulls.append(false);
-                        self.do_append_val_inner(arr, row)?;
-                    }
+                    self.append_val_inner::<B>(array, row)?
                 }
             }
 

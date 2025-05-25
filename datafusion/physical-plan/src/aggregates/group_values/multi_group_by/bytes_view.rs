@@ -149,14 +149,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         match all_null_or_non_null {
             None => {
                 for &row in rows {
-                    // Null row case, set and return
-                    if arr.is_valid(row) {
-                        self.nulls.append(false);
-                        self.do_append_val_inner(arr, row);
-                    } else {
-                        self.nulls.append(true);
-                        self.views.push(0);
-                    }
+                    self.append_val_inner(array, row);
                 }
             }
 
