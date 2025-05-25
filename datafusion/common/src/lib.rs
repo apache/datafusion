@@ -36,7 +36,6 @@ mod table_reference;
 mod unnest;
 
 pub mod alias;
-pub mod array_conversion;
 pub mod cast;
 pub mod config;
 pub mod cse;

@@ -723,10 +723,6 @@ pub mod dataframe;
 pub mod datasource;
 pub mod error;
 pub mod execution;
-
-/// helpers for creating DataFrame
-pub mod macros;
-
 pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;

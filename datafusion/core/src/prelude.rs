@@ -25,8 +25,8 @@
 //! use datafusion::prelude::*;
 //! ```
 
+pub use crate::dataframe;
 pub use crate::dataframe::DataFrame;
-pub use crate::df;
 pub use crate::execution::context::{SQLOptions, SessionConfig, SessionContext};
 pub use crate::execution::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,

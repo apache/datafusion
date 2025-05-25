@@ -49,7 +49,6 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::array_conversion::IntoArrayRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
@@ -202,7 +201,7 @@ impl Default for DataFrameWriteOptions {
 /// df.show().await?;
 ///
 /// // Create a new dataframe with in-memory data using macro
-/// let df = df!(
+/// let df = dataframe!(
 ///     "id" => [1, 2, 3],
 ///     "name" => ["foo", "bar", "baz"]
 ///  )?;
@@ -2229,9 +2228,11 @@ impl DataFrame {
     /// Helper for creating DataFrame.
     /// # Example
     /// ```
+    /// use std::sync::Arc;
+    /// use arrow::array::{ArrayRef, Int32Array, StringArray};
     /// use datafusion::prelude::DataFrame;
-    /// let id = Box::new([1, 2, 3]);
-    /// let name = Box::new(["foo", "bar", "baz"]);
+    /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
     /// let df = DataFrame::from_columns(vec![("id", id), ("name", name)]).unwrap();
     /// // +----+------+,
     /// // | id | name |,
@@ -2241,36 +2242,76 @@ impl DataFrame {
     /// // | 3  | baz  |,
     /// // +----+------+,
     /// ```
-    pub fn from_columns(columns: Vec<(&str, Box<dyn IntoArrayRef>)>) -> Result<Self> {
-        let mut fields: Vec<Field> = vec![];
-        let mut arrays: Vec<ArrayRef> = vec![];
+    pub fn from_columns(columns: Vec<(&str, ArrayRef)>) -> Result<Self> {
+        let fields = columns
+            .iter()
+            .map(|(name, array)| Field::new(*name, array.data_type().clone(), true))
+            .collect::<Vec<_>>();
 
-        for (name, array_like) in columns {
-            let array = array_like.into_array_ref();
-            let dtype = array.data_type().clone();
-            fields.push(Field::new(name, dtype, true));
-            arrays.push(array);
-        }
-
-        let len =
-            arrays
-                .first()
-                .map(|arr| arr.len())
-                .ok_or(DataFusionError::Execution(
-                    "Column must not be empty".to_string(),
-                ))?;
-        let all_same_len = arrays.iter().all(|arr| arr.len() == len);
-        if !all_same_len {
-            return Err(DataFusionError::Execution(
-                "All columns must have the same length".to_string(),
-            ));
-        }
+        let arrays = columns
+            .into_iter()
+            .map(|(_, array)| array)
+            .collect::<Vec<_>>();
 
         let schema = Arc::new(Schema::new(fields));
         let batch = RecordBatch::try_new(schema, arrays)?;
         let ctx = SessionContext::new();
-        ctx.read_batch(batch)
+        let df = ctx.read_batch(batch)?;
+        Ok(df)
     }
+}
+
+/// Macro for creating DataFrame.
+/// # Example
+/// ```
+/// use datafusion::prelude::dataframe;
+/// # use datafusion::error::Result;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// let df = dataframe!(
+///    "id" => [1, 2, 3],
+///    "name" => ["foo", "bar", "baz"]
+///  )?;
+/// df.show().await?;
+/// // +----+------+,
+/// // | id | name |,
+/// // +----+------+,
+/// // | 1  | foo  |,
+/// // | 2  | bar  |,
+/// // | 3  | baz  |,
+/// // +----+------+,
+/// let df_empty = dataframe!()?; // empty DataFrame
+/// assert_eq!(df_empty.schema().fields().len(), 0);
+/// assert_eq!(df_empty.count().await?, 0);
+/// # Ok(())
+/// # }
+/// ```
+#[macro_export]
+macro_rules! dataframe {
+    () => {{
+        use std::sync::Arc;
+
+        use datafusion::prelude::SessionContext;
+        use datafusion::arrow::array::RecordBatch;
+        use datafusion::arrow::datatypes::Schema;
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        ctx.read_batch(batch)
+    }};
+
+    ($($name:expr => $data:expr),+ $(,)?) => {{
+        use datafusion::prelude::DataFrame;
+        use datafusion::common::test_util::IntoArrayRef;
+
+        let columns = vec![
+            $(
+                ($name, $data.into_array_ref()),
+            )+
+        ];
+
+        DataFrame::from_columns(columns)
+    }};
 }
 
 #[derive(Debug)]

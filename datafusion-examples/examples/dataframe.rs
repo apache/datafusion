@@ -178,7 +178,7 @@ async fn read_memory(ctx: &SessionContext) -> Result<()> {
 /// 1. Read in-memory data.
 async fn read_memory_macro() -> Result<()> {
     // create a DataFrame using macro
-    let df = df!(
+    let df = dataframe!(
         "a" => ["a", "b", "c", "d"],
         "b" => [1, 10, 10, 100]
     )?;
@@ -186,7 +186,7 @@ async fn read_memory_macro() -> Result<()> {
     df.show().await?;
 
     // create empty DataFrame using macro
-    let df_empty = df!()?;
+    let df_empty = dataframe!()?;
     df_empty.show().await?;
 
     Ok(())
