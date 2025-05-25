@@ -2576,13 +2576,15 @@ mod tests {
         let err = nested_table_scan("test_table")?
             .unnest_column("scalar")
             .unwrap_err();
-        // assert!(err
-        //     .to_string()
-        //     .starts_with("Internal error: trying to unnest on invalid data type UInt32"));
-        assert_snapshot!(err.strip_backtrace(), @r"
-        Internal error: trying to unnest on invalid data type UInt32.
-        This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
-        ");
+
+        let err_msg = err
+            .strip_backtrace()
+            .lines()
+            .filter(|line| !line.contains("This was likely caused by a bug"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!(err_msg, @"Internal error: trying to unnest on invalid data type UInt32.");
 
         // Unnesting the strings list.
         let plan = nested_table_scan("test_table")?
