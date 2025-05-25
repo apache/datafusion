@@ -44,6 +44,7 @@ use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_nested_union::EliminateNestedUnion;
 use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
+use crate::eliminate_unique_keyed_self_join::EliminateUniqueKeyedSelfJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::optimize_projections::OptimizeProjections;
@@ -242,6 +243,7 @@ impl Optimizer {
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
+            Arc::new(EliminateUniqueKeyedSelfJoin::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
             Arc::new(EliminateGroupByConstant::new()),
