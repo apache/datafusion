@@ -1957,7 +1957,7 @@ impl LogicalPlan {
                         let correlated_str = correlated_columns.iter().map(|c|{
                             format!("{c}")
                         }).collect::<Vec<String>>().join(", ");
-                        write!(f,"DependentJoin on [{}] with expr {} depth {}",correlated_str,subquery_expr,subquery_depth)
+                        write!(f,"DependentJoin on [{correlated_str}] with expr {subquery_expr} depth {subquery_depth}")
                     },
                     LogicalPlan::Join(Join {
                         on: ref keys,

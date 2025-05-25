@@ -1580,7 +1580,7 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
 }
 
 fn subquery_output_field(
-    subquery_alias: &String,
+    subquery_alias: &str,
     subquery_expr: &Expr,
 ) -> (Option<TableReference>, Arc<Field>) {
     // TODO: check nullability
@@ -1596,7 +1596,7 @@ fn subquery_output_field(
         }
     };
 
-    (Some(TableReference::bare(subquery_alias.clone())), field)
+    (Some(TableReference::bare(subquery_alias)), field)
 }
 
 /// Creates a schema for a join operation.

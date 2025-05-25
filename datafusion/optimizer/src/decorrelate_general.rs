@@ -77,24 +77,27 @@ impl DependentJoinRewriter {
         stack_with_table_provider: &[usize],
         stack_with_subquery: &[usize],
     ) -> (usize, usize) {
-        let mut lca = None;
+        let mut lowest_common_ancestor = 0;
+        let mut subquery_node_id = 0;
 
         let min_len = stack_with_table_provider
             .len()
             .min(stack_with_subquery.len());
 
         for i in 0..min_len {
-            let ai = stack_with_subquery[i];
-            let bi = stack_with_table_provider[i];
+            let right_id = stack_with_subquery[i];
+            let left_id = stack_with_table_provider[i];
 
-            if ai == bi {
-                lca = Some((ai, stack_with_subquery[ai]));
+            if right_id == left_id {
+                // common parent
+                lowest_common_ancestor = right_id;
+                subquery_node_id = stack_with_subquery[i + 1];
             } else {
                 break;
             }
         }
 
-        lca.unwrap()
+        (lowest_common_ancestor, subquery_node_id)
     }
 
     // because the column providers are visited after column-accessor
