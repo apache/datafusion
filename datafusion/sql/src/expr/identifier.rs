@@ -177,7 +177,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         let mut maybe_result = None;
                         if !outer_schemas.is_empty() {
                             for outer in planner_context.outer_queries_schemas() {
-                                let search_result = search_dfschema(&ids, outer);
+                                let search_result = search_dfschema(&ids, &outer);
                                 let result = match search_result {
                                     // Found matching field with spare identifier(s) for nested field(s) in structure
                                     Some((field, qualifier, nested_names))

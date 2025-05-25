@@ -315,11 +315,8 @@ impl PlannerContext {
 
     /// Return the stack of outer relations' schemas, the outer most
     /// relation are at the first entry
-    pub fn outer_queries_schemas(&self) -> Vec<&DFSchema> {
-        self.outer_queries_schemas_stack
-            .iter()
-            .map(|sc| sc.as_ref())
-            .collect()
+    pub fn outer_queries_schemas(&self) -> Vec<DFSchemaRef> {
+        self.outer_queries_schemas_stack.to_vec()
     }
 
     /// Sets the outer query schema, returning the existing one, if
