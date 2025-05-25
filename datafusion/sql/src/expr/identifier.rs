@@ -76,7 +76,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             // Check the outer query schema
-            for outer in planner_context.outer_query_schema() {
+            for outer in planner_context.outer_queries_schemas() {
                 if let Ok((qualifier, field)) =
                     outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
                 {
@@ -173,10 +173,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         not_impl_err!("compound identifier: {ids:?}")
                     } else {
                         // Check the outer_query_schema and try to find a match
-                        let outer_schemas = planner_context.outer_query_schema();
+                        let outer_schemas = planner_context.outer_queries_schemas();
                         let mut maybe_result = None;
                         if !outer_schemas.is_empty() {
-                            for outer in planner_context.outer_query_schema() {
+                            for outer in planner_context.outer_queries_schemas() {
                                 let search_result = search_dfschema(&ids, outer);
                                 let result = match search_result {
                                     // Found matching field with spare identifier(s) for nested field(s) in structure

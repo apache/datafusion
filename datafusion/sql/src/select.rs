@@ -640,7 +640,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
-                let outer_query_schema_vec = planner_context.outer_query_schema();
+                let outer_query_schema_vec = planner_context.outer_queries_schemas();
 
                 // Check for aggregation functions
                 let aggregate_exprs =

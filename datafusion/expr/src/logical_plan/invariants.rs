@@ -208,15 +208,17 @@ pub fn check_subquery_expr(
                     if group_expr.contains(expr) && !aggr_expr.contains(expr) {
                         // TODO revisit this validation logic
                         plan_err!(
-                            "Correlated scalar subquery in the GROUP BY clause must also be in the aggregate expressions"
+                            "Correlated scalar subquery in the GROUP BY clause must \
+                            also be in the aggregate expressions"
                         )
                     } else {
                         Ok(())
                     }
                 }
                 _ => plan_err!(
-                    "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan"
-                )
+                    "Correlated scalar subquery can only be used in Projection, \
+                    Filter, Aggregate plan nodes"
+                ),
             }?;
         }
         check_correlations_in_subquery(inner_plan)
