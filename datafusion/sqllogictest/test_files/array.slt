@@ -5240,6 +5240,19 @@ NULL 10
 NULL 10
 NULL 10
 
+# array_length for fixed sized list
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)')), array_length(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'FixedSizeList(3, List(Int64))'));
+----
+5 3 3
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 1), array_length(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 1), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'FixedSizeList(3, List(Int64))'), 1);
+----
+5 3 3
+
+
 query RRR
 select array_distance([2], [3]), list_distance([1], [2]), list_distance([1], [-2]);
 ----
