@@ -423,14 +423,15 @@ impl EquivalenceGroup {
         self.bridge_classes()
     }
 
+    #[allow(clippy::type_complexity)]
     fn adjacent_set(&self) -> HashSet<(&Arc<dyn PhysicalExpr>, &Arc<dyn PhysicalExpr>)> {
         let mut set = HashSet::new();
         for cls in self.classes.iter() {
-            let exprs = cls.iter().collect::<Vec<_>>();
+            let exprs = cls.exprs.as_slice();
             for i in 0..exprs.len() {
                 for j in i + 1..exprs.len() {
-                    set.insert((exprs[i], exprs[j]));
-                    set.insert((exprs[j], exprs[i]));
+                    set.insert((&exprs[i], &exprs[j]));
+                    set.insert((&exprs[j], &exprs[i]));
                 }
             }
         }
@@ -1137,8 +1138,14 @@ mod tests {
         ]);
         let intersect = eq_group1.intersect(&eq_group2);
         assert_eq!(intersect.len(), 2);
-        assert_eq!(intersect.classes[0], EquivalenceClass::new(vec![lit(2), lit(3)]));
-        assert_eq!(intersect.classes[1], EquivalenceClass::new(vec![lit(6), lit(7)]));
+        assert_eq!(
+            intersect.classes[0],
+            EquivalenceClass::new(vec![lit(2), lit(3)])
+        );
+        assert_eq!(
+            intersect.classes[1],
+            EquivalenceClass::new(vec![lit(6), lit(7)])
+        );
         Ok(())
     }
 }
