@@ -23,6 +23,7 @@ use crate::{
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::vec::IntoIter;
@@ -420,6 +421,31 @@ impl EquivalenceGroup {
         });
         // Unify/bridge groups that have common expressions:
         self.bridge_classes()
+    }
+
+    fn adjacent_set(&self) -> HashSet<(&Arc<dyn PhysicalExpr>, &Arc<dyn PhysicalExpr>)> {
+        let mut set = HashSet::new();
+        for cls in self.classes.iter() {
+            let exprs = cls.iter().collect::<Vec<_>>();
+            for i in 0..exprs.len() {
+                for j in i + 1..exprs.len() {
+                    set.insert((exprs[i], exprs[j]));
+                    set.insert((exprs[j], exprs[i]));
+                }
+            }
+        }
+        set
+    }
+
+    pub fn intersect(&self, other: &Self) -> Self {
+        let set = self.adjacent_set();
+        let other_set = other.adjacent_set();
+        let mut ret = EquivalenceGroup::empty();
+        for (lhs, rhs) in set.intersection(&other_set) {
+            ret.add_equal_conditions(lhs, rhs);
+        }
+        ret.remove_redundant_entries();
+        ret
     }
 
     /// This utility function unifies/bridges classes that have common expressions.
@@ -1096,6 +1122,23 @@ mod tests {
 
         assert!(first_normalized.eq(&second_normalized));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_eq_group_intersect() -> Result<()> {
+        let eq_group1 = EquivalenceGroup::new(vec![
+            EquivalenceClass::new(vec![lit(1), lit(2), lit(3)]),
+            EquivalenceClass::new(vec![lit(5), lit(6), lit(7)]),
+        ]);
+        let eq_group2 = EquivalenceGroup::new(vec![
+            EquivalenceClass::new(vec![lit(2), lit(3), lit(4)]),
+            EquivalenceClass::new(vec![lit(6), lit(7), lit(8)]),
+        ]);
+        let intersect = eq_group1.intersect(&eq_group2);
+        assert_eq!(intersect.len(), 2);
+        assert_eq!(intersect.classes[0], EquivalenceClass::new(vec![lit(2), lit(3)]));
+        assert_eq!(intersect.classes[1], EquivalenceClass::new(vec![lit(6), lit(7)]));
         Ok(())
     }
 }
