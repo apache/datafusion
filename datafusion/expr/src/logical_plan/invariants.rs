@@ -214,12 +214,9 @@ pub fn check_subquery_expr(
                         Ok(())
                     }
                 }
-                any => {
-                    println!("here {any}");
-                    plan_err!(
-                    "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan nodes123 {any}"
+                _ => plan_err!(
+                    "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan"
                 )
-                }
             }?;
         }
         check_correlations_in_subquery(inner_plan)
