@@ -37,10 +37,10 @@ pub struct DependentJoinRewriter {
     // each logical plan traversal will assign it a integer id
     current_id: usize,
     subquery_depth: usize,
-    // each newly visted operator is inserted inside this map for tracking
+    // each newly visted `LogicalPlan` is inserted inside this map for tracking
     nodes: IndexMap<usize, Node>,
     // all the node ids from root to the current node
-    // this is used during traversal only
+    // this is mutated duri traversal
     stack: Vec<usize>,
     // track for each column, the nodes/logical plan that reference to its within the tree
     all_outer_ref_columns: IndexMap<Column, Vec<ColumnAccess>>,
@@ -129,13 +129,11 @@ impl DependentJoinRewriter {
     ) {
         // iter from bottom to top, the goal is to mark the dependent node
         // the current child's access
-        let mut stack = self.stack.clone();
-        stack.push(child_id);
         self.all_outer_ref_columns
             .entry(col.clone())
             .or_default()
             .push(ColumnAccess {
-                stack,
+                stack: self.stack.clone(),
                 node_id: child_id,
                 col: col.clone(),
                 data_type: data_type.clone(),
@@ -208,6 +206,8 @@ fn unwrap_subquery_input_from_expr(expr: &Expr) -> Arc<LogicalPlan> {
     }
 }
 
+// if current expr contains any subquery expr
+// this function must not be recursive
 fn contains_subquery(expr: &Expr) -> bool {
     expr.exists(|expr| {
         Ok(matches!(
@@ -218,10 +218,52 @@ fn contains_subquery(expr: &Expr) -> bool {
     .expect("Inner is always Ok")
 }
 
+/// The rewriting happens up-down, where the parent nodes are downward-visited
+/// before its children (subqueries children are visited first).
+/// This behavior allow the fact that, at any moment, if we observe a `LogicalPlan`
+/// that provides the data for columns, we can assume that all subqueries that reference
+/// its data were already visited, and we can conclude the information of the `DependentJoin`
+/// needed for the decorrelation:
+/// - The subquery expr
+/// - The correlated columns on the LHS referenced from the RHS (and its recursing subqueries if any)
+/// If in the original node there exists multiple subqueries at the same time
+/// two nested `DependentJoin` plans are generated (with equal depth)
+///
+/// For illustration, given this query
+/// ```sql
+/// SELECT ID FROM T1 WHERE EXISTS(SELECT * FROM T2 WHERE T2.ID=T1.ID) OR EXISTS(SELECT * FROM T2 WHERE T2.VALUE=T1.ID);
+/// ```
+///
+/// The traversal happens in the following sequence
+///
+/// ```text
+///                   ↓1   
+///                   ↑12   
+///              ┌────────────┐
+///              │  FILTER    │<--- DependentJoin rewrite
+///              │            │     happens here
+///              └────┬────┬──┘
+///             ↓2    ↓6   ↓10
+///             ↑5    ↑9   ↑11 <---Here we already have enough information
+///              │     |     |     of which node is accessing which column
+///              │     |     |     provided by "Table Scan t1" node
+///              │     |     |
+///        ┌─────┘     │     └─────┐
+///        │           │           │
+///    ┌───▼───┐    ┌──▼───┐   ┌───▼───────┐
+///    │SUBQ1  │    │SUBQ2 │   │TABLE SCAN │
+///    └──┬────┘    └──┬───┘   │    t1     │
+///      ↓3           ↓7       └───────────┘
+///      ↑4           ↑8
+///   ┌──▼────┐    ┌──▼────┐
+///   │SCAN t2│    │SCAN t2│
+///   └───────┘    └───────┘
+/// ```
 impl TreeNodeRewriter for DependentJoinRewriter {
     type Node = LogicalPlan;
-    //
+
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        let new_id = self.current_id;
         self.current_id += 1;
         let mut is_dependent_join_node = false;
         let mut subquery_type = SubqueryType::None;
@@ -236,25 +278,20 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 f.predicate
                     .apply(|expr| {
                         if let Expr::OuterReferenceColumn(data_type, col) = expr {
-                            self.mark_outer_column_access(
-                                self.current_id,
-                                data_type,
-                                col,
-                            );
+                            self.mark_outer_column_access(new_id, data_type, col);
                         }
                         Ok(TreeNodeRecursion::Continue)
                     })
                     .expect("traversal is infallible");
             }
+            // TODO: maybe there are more logical plan that provides columns
+            // aside from TableScan
             LogicalPlan::TableScan(tbl_scan) => {
                 tbl_scan.projected_schema.columns().iter().for_each(|col| {
-                    self.conclude_lowest_dependent_join_node(self.current_id, col);
+                    self.conclude_lowest_dependent_join_node(new_id, col);
                 });
             }
-            // TODO
-            // 1.handle subquery inside projection
-            // 2.projection also provide some new columns
-            // 3.if within projection exists multiple subquery, how does this work
+            // TODO: this is untested
             LogicalPlan::Projection(proj) => {
                 for expr in &proj.expr {
                     if contains_subquery(expr) {
@@ -263,11 +300,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     }
                     expr.apply(|expr| {
                         if let Expr::OuterReferenceColumn(data_type, col) = expr {
-                            self.mark_outer_column_access(
-                                self.current_id,
-                                data_type,
-                                col,
-                            );
+                            self.mark_outer_column_access(new_id, data_type, col);
                         }
                         Ok(TreeNodeRecursion::Continue)
                     })?;
@@ -278,7 +311,10 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 let parent_node = self.nodes.get_mut(parent).unwrap();
                 // the inserting sequence matter here
                 // when a parent has multiple children subquery at the same time
-                parent_node.access_tracker.insert(self.current_id, vec![]);
+                // we rely on the order in which subquery children are visited
+                // to later on find back the corresponding subquery (if some part of them
+                // were rewritten in the lower node)
+                parent_node.access_tracker.insert(new_id, vec![]);
                 for expr in parent_node.plan.expressions() {
                     expr.exists(|e| {
                         let (found_sq, checking_type) = match e {
@@ -322,9 +358,9 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         if is_dependent_join_node {
             self.subquery_depth += 1
         }
-        self.stack.push(self.current_id);
+        self.stack.push(new_id);
         self.nodes.insert(
-            self.current_id,
+            new_id,
             Node {
                 plan: node.clone(),
                 is_dependent_join_node,
@@ -335,6 +371,11 @@ impl TreeNodeRewriter for DependentJoinRewriter {
 
         Ok(Transformed::no(node))
     }
+
+    /// All rewrite happens inside upward traversal
+    /// and only happens if the node is a "dependent join node"
+    /// (i.e the node with at least one subquery expr)
+    /// When all dependency information are already collected
     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         // if the node in the f_up meet any node in the stack, it means that node itself
         // is a dependent join node,transformation by
@@ -354,13 +395,11 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         let cloned_input = (**node.inputs().first().unwrap()).clone();
         let mut current_plan = LogicalPlanBuilder::new(cloned_input);
         let mut subquery_alias_by_offset = HashMap::new();
-        // let mut subquery_alias_by_node_id = HashMap::new();
         let mut subquery_expr_by_offset = HashMap::new();
         for (subquery_offset, (subquery_id, _)) in
             node_info.access_tracker.iter().enumerate()
         {
             let subquery_node = self.nodes.get(subquery_id).unwrap();
-            // let subquery_input = subquery_node.plan.inputs().first().unwrap();
             let alias = self
                 .alias_generator
                 .next(&subquery_node.subquery_type.prefix());
@@ -375,7 +414,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 // everytime we meet a subquery during traversal, we increment this by 1
                 // we can use this offset to lookup the original subquery info
                 // in subquery_alias_by_offset
-                // the reason why we cannot create a hashmap keyed by Subquery object
+                // the reason why we cannot create a hashmap keyed by Subquery object HashMap<Subquery,String>
                 // is that the subquery inside this filter expr may have been rewritten in
                 // the lower level
                 let mut offset = 0;
@@ -398,9 +437,16 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         // update the latest expr to this map
                         subquery_expr_by_offset.insert(*offset_ref, e);
                         *offset_ref += 1;
+
                         // TODO: this assume that after decorrelation
                         // the dependent join will provide an extra column with the structure
                         // of "subquery_alias.output"
+                        // On later step of decorrelation, it rely on this structure
+                        // to again rename the expression after join
+                        // for example if the real join type is LeftMark, the correct output
+                        // column should be "mark" instead, else after the join
+                        // one extra layer of projection is needed to alias "mark" into
+                        // "alias.output"
                         Ok(Transformed::yes(col(format!("{alias}.output"))))
                     })?
                     .data;
@@ -457,6 +503,11 @@ impl OptimizerRule for Decorrelation {
     fn supports_rewrite(&self) -> bool {
         true
     }
+
+    // There will be 2 rewrites going on
+    // - Convert all subqueries (maybe including lateral join in the future) to temporary
+    // LogicalPlan node called DependentJoin
+    // - Decorrelate DependentJoin following top-down approach recursively
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -553,14 +604,14 @@ mod tests {
                 .build()?,
         );
 
-        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(
                 col("outer_table.a")
                     .gt(lit(1))
                     .and(scalar_subquery(scalar_sq_level1).eq(col("outer_table.a"))),
             )?
             .build()?;
-        assert_dependent_join_rewrite!(input1,@r"
+        assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __scalar_sq_2.output = outer_table.a [a:UInt32, b:UInt32, c:UInt32, output:Int64]
     DependentJoin on [outer_table.a, outer_table.c] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Int64]
@@ -594,7 +645,7 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
                 .build()?,
         );
 
-        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(
                 col("outer_table.a")
                     .gt(lit(1))
@@ -602,7 +653,7 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
                     .and(in_subquery(col("outer_table.b"), in_sq_level1)),
             )?
             .build()?;
-        assert_dependent_join_rewrite!(input1,@r"
+        assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __exists_sq_1.output AND __in_sq_2.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean, output:Boolean]
     DependentJoin on [] with expr outer_table.b IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean, output:Boolean]
@@ -641,14 +692,14 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
                 .build()?,
         );
 
-        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(
                 col("outer_table.a")
                     .gt(lit(1))
                     .and(in_subquery(col("outer_table.c"), sq_level1)),
             )?
             .build()?;
-        assert_dependent_join_rewrite!(input1,@r"
+        assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
     DependentJoin on [outer_table.a, outer_table.b] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
@@ -684,10 +735,10 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
                 .build()?,
         );
 
-        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
             .build()?;
-        assert_dependent_join_rewrite!(input1,@r"
+        assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __exists_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
     DependentJoin on [outer_table.a, outer_table.b] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
@@ -700,7 +751,8 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
     }
 
     #[test]
-    fn rewrite_exist_subquery_with_no_dependent_columns() -> Result<()> {
+    fn rewrite_dependent_join_with_exist_subquery_with_no_dependent_columns() -> Result<()>
+    {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -710,11 +762,11 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
                 .build()?,
         );
 
-        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(col("outer_table.a").gt(lit(1)).and(exists(sq_level1)))?
             .build()?;
 
-        assert_dependent_join_rewrite!(input1,@r"
+        assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __exists_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
     DependentJoin on [] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
@@ -737,14 +789,14 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
                 .build()?,
         );
 
-        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(
                 col("outer_table.a")
                     .gt(lit(1))
                     .and(in_subquery(col("outer_table.c"), sq_level1)),
             )?
             .build()?;
-        assert_dependent_join_rewrite!(input1,@r"
+        assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
     DependentJoin on [] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
@@ -780,14 +832,14 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
                 .build()?,
         );
 
-        let input1 = LogicalPlanBuilder::from(outer_table.clone())
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(
                 col("outer_table.a")
                     .gt(lit(1))
                     .and(in_subquery(col("outer_table.c"), sq_level1)),
             )?
             .build()?;
-        assert_dependent_join_rewrite!(input1,@r"
+        assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
     DependentJoin on [outer_table.a, outer_table.b] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
