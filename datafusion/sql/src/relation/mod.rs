@@ -25,7 +25,7 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
-use datafusion_expr::{planner, Subquery, SubqueryAlias};
+use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
 mod join;
@@ -192,7 +192,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             None => Arc::clone(&old_from_schema),
         };
-        planner_context.set_outer_query_schema(new_query_schema);
+        planner_context.append_outer_query_schema(new_query_schema);
 
         let plan = self.create_relation(subquery, planner_context)?;
         let outer_ref_columns = plan.all_out_ref_exprs();

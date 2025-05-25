@@ -244,12 +244,12 @@ impl PlannerContext {
 
     /// Sets the outer query schema, returning the existing one, if
     /// any
-    pub fn set_outer_query_schema(&mut self, mut schema: DFSchemaRef) {
+    pub fn append_outer_query_schema(&mut self, schema: DFSchemaRef) {
         self.outer_query_schema.push(schema);
     }
 
     pub fn latest_outer_query_schema(&mut self) -> Option<DFSchemaRef> {
-        self.outer_query_schema.last().clone().cloned()
+        self.outer_query_schema.last().cloned()
     }
 
     /// Sets the outer query schema, returning the existing one, if
