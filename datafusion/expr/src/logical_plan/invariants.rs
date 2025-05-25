@@ -200,9 +200,12 @@ pub fn check_subquery_expr(
                 }
             }?;
             match outer_plan {
-                LogicalPlan::Projection(_)
-                | LogicalPlan::Filter(_) => Ok(()),
-                LogicalPlan::Aggregate(Aggregate { group_expr, aggr_expr, .. }) => {
+                LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => Ok(()),
+                LogicalPlan::Aggregate(Aggregate {
+                    group_expr,
+                    aggr_expr,
+                    ..
+                }) => {
                     if group_expr.contains(expr) && !aggr_expr.contains(expr) {
                         // TODO revisit this validation logic
                         plan_err!(
@@ -212,9 +215,12 @@ pub fn check_subquery_expr(
                         Ok(())
                     }
                 }
-                _ => plan_err!(
-                    "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan nodes"
+                any => {
+                    println!("here {any}");
+                    plan_err!(
+                    "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan nodes123 {any}"
                 )
+                }
             }?;
         }
         check_correlations_in_subquery(inner_plan)
