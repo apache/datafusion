@@ -71,8 +71,8 @@ use datafusion_expr::{
     Statement, WindowUDF,
 };
 use datafusion_expr::{
-    AggregateUDF, ColumnUnnestList, DmlStatement, FetchType, RecursiveQuery, SkipType,
-    TableSource, Unnest,
+    AggregateUDF, ColumnUnnestList, DependentJoin, DmlStatement, FetchType,
+    RecursiveQuery, SkipType, TableSource, Unnest,
 };
 
 use self::to_proto::{serialize_expr, serialize_exprs};
@@ -1804,6 +1804,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
+            LogicalPlan::DependentJoin(DependentJoin {
+                schema,
+                left,
+                right,
+                subquery_depth,
+                correlated_columns,
+                subquery_expr,
+                subquery_name,
+            }) => Err(proto_error(
+                "LogicalPlan serde is not implemented for DependentJoin",
+            )),
         }
     }
 }
