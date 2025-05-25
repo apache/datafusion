@@ -309,8 +309,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let old_from_schema = planner_context
             .set_outer_from_schema(None)
             .unwrap_or_else(|| Arc::new(DFSchema::empty()));
-        let new_query_schema = match planner_context.pop_outer_query_schema() {
-            Some(old_query_schema) => {
+        let outer_query_schema = planner_context.pop_outer_query_schema();
+        let new_query_schema = match outer_query_schema {
+            Some(ref old_query_schema) => {
                 let mut new_query_schema = old_from_schema.as_ref().clone();
                 new_query_schema.merge(old_query_schema.as_ref());
                 Arc::new(new_query_schema)
@@ -323,6 +324,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let outer_ref_columns = plan.all_out_ref_exprs();
 
         planner_context.pop_outer_query_schema();
+        if let Some(schema) = outer_query_schema {
+            planner_context.set_outer_query_schema(schema);
+        }
         planner_context.set_outer_from_schema(Some(old_from_schema));
 
         // We can omit the subquery wrapper if there are no columns

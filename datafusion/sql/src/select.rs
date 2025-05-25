@@ -29,7 +29,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, Result, not_impl_err, plan_err};
+use datafusion_common::{DFSchema, Column, Result, not_impl_err, plan_err};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -638,9 +638,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(predicate_expr) => {
                 let fallback_schemas = plan.fallback_normalize_schemas();
 
+                let outer_query_schema_vec = planner_context.outer_queries_schemas();
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
-                let outer_query_schema_vec = planner_context.outer_queries_schemas();
 
                 // Check for aggregation functions
                 let aggregate_exprs =
@@ -653,9 +653,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
+                let mut schema_stack: Vec<Vec<&DFSchema>> =
+                    vec![vec![plan.schema()], fallback_schemas];
+                for sc in outer_query_schema_vec.iter().rev() {
+                    schema_stack.push(vec![sc.as_ref()]);
+                }
+
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
-                    &[&[plan.schema()], &fallback_schemas, &outer_query_schema_vec],
+                    schema_stack
+                        .iter()
+                        .map(|sc| sc.as_slice())
+                        .collect::<Vec<&[&DFSchema]>>()
+                        .as_slice(),
                     &[using_columns],
                 )?;
 
