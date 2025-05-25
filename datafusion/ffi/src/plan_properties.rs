@@ -26,6 +26,7 @@ use abi_stable::{
 };
 use arrow::datatypes::SchemaRef;
 use datafusion::{
+    common::external_datafusion_err,
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
     physical_plan::{
@@ -187,7 +188,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
         let proto_output_ordering =
             PhysicalSortExprNodeCollection::decode(df_result!(ffi_orderings)?.as_ref())
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                .map_err(|e| external_datafusion_err!(e))?;
         let orderings = Some(parse_physical_sort_exprs(
             &proto_output_ordering.physical_sort_expr_nodes,
             &default_ctx,
@@ -197,9 +198,8 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
         let partitioning_vec =
             unsafe { df_result!((ffi_props.output_partitioning)(&ffi_props))? };
-        let proto_output_partitioning =
-            Partitioning::decode(partitioning_vec.as_ref())
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let proto_output_partitioning = Partitioning::decode(partitioning_vec.as_ref())
+            .map_err(|e| external_datafusion_err!(e))?;
         let partitioning = parse_protobuf_partitioning(
             Some(&proto_output_partitioning),
             &default_ctx,

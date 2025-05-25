@@ -17,9 +17,11 @@
 
 use clap::Parser;
 use datafusion::common::instant::Instant;
-use datafusion::common::utils::get_available_parallelism;
-use datafusion::common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion::common::runtime::SpawnedTask;
+use datafusion::common::utils::get_available_parallelism;
+use datafusion::common::{
+    exec_datafusion_err, exec_err, external_datafusion_err, DataFusionError, Result,
+};
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
 use indicatif::{
@@ -169,8 +171,8 @@ async fn run_tests() -> Result<()> {
     let m_style = ProgressStyle::with_template(
         "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
     )
-        .unwrap()
-        .progress_chars("##-");
+    .unwrap()
+    .progress_chars("##-");
 
     let start = Instant::now();
 
@@ -204,7 +206,7 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                         )
-                            .await?
+                        .await?
                     }
                     (true, true) => {
                         run_complete_file_with_postgres(
@@ -213,12 +215,12 @@ async fn run_tests() -> Result<()> {
                             m_clone,
                             m_style_clone,
                         )
-                            .await?
+                        .await?
                     }
                 }
                 Ok(()) as Result<()>
             })
-                .join()
+            .join()
         })
         // run up to num_cpus streams in parallel
         .buffer_unordered(get_available_parallelism())
@@ -226,7 +228,7 @@ async fn run_tests() -> Result<()> {
             // Filter out any Ok() leaving only the DataFusionErrors
             futures::stream::iter(match result {
                 // Tokio panic error
-                Err(e) => Some(DataFusionError::External(Box::new(e))),
+                Err(e) => Some(external_datafusion_err!(e)),
                 Ok(thread_result) => match thread_result {
                     // Test run error
                     Err(e) => Some(e),
@@ -291,7 +293,7 @@ async fn run_test_file(
     let res = runner
         .run_file_async(path)
         .await
-        .map_err(|e| DataFusionError::External(Box::new(e)));
+        .map_err(|e| external_datafusion_err!(e))?;
 
     pb.finish_and_clear();
 
@@ -307,11 +309,11 @@ fn get_record_count(path: &PathBuf, label: String) -> u64 {
         Record::Query { conditions, .. } => {
             if conditions.is_empty()
                 || !conditions.contains(&Condition::SkipIf {
-                label: label.clone(),
-            })
+                    label: label.clone(),
+                })
                 || conditions.contains(&Condition::OnlyIf {
-                label: label.clone(),
-            })
+                    label: label.clone(),
+                })
             {
                 count += 1;
             }
@@ -319,11 +321,11 @@ fn get_record_count(path: &PathBuf, label: String) -> u64 {
         Record::Statement { conditions, .. } => {
             if conditions.is_empty()
                 || !conditions.contains(&Condition::SkipIf {
-                label: label.clone(),
-            })
+                    label: label.clone(),
+                })
                 || conditions.contains(&Condition::OnlyIf {
-                label: label.clone(),
-            })
+                    label: label.clone(),
+                })
             {
                 count += 1;
             }
@@ -364,7 +366,7 @@ async fn run_test_file_with_postgres(
     runner
         .run_file_async(path)
         .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        .map_err(|e| external_datafusion_err!(e))?;
 
     pb.finish_and_clear();
 

@@ -22,7 +22,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
@@ -41,7 +41,7 @@ use datafusion_cli::{
 };
 
 use clap::Parser;
-use datafusion::common::config_err;
+use datafusion::common::{config_err, external_datafusion_err};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use mimalloc::MiMalloc;
@@ -256,7 +256,7 @@ async fn main_inner() -> Result<()> {
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
         return exec::exec_from_repl(&ctx, &mut print_options)
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)));
+            .map_err(|e| external_datafusion_err!(e));
     }
 
     if !files.is_empty() {
@@ -404,6 +404,7 @@ pub fn extract_disk_limit(size: &str) -> Result<usize, String> {
 mod tests {
     use super::*;
     use datafusion::common::test_util::batches_to_string;
+    use datafusion::common::DataFusionError;
     use insta::assert_snapshot;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {

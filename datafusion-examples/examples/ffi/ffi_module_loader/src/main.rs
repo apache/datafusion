@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use datafusion::{
+    common::external_datafusion_err,
     error::{DataFusionError, Result},
     prelude::SessionContext,
 };
@@ -32,12 +33,12 @@ async fn main() -> Result<()> {
     // so you will need to change the approach here based on your use case.
     let target: &std::path::Path = "../../../../target/".as_ref();
     let library_path = compute_library_path::<TableProviderModuleRef>(target)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        .map_err(|e| external_datafusion_err!(e))?;
 
     // Load the module
     let table_provider_module =
         TableProviderModuleRef::load_from_directory(&library_path)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .map_err(|e| external_datafusion_err!(e))?;
 
     // By calling the code below, the table provided will be created within
     // the module's code.

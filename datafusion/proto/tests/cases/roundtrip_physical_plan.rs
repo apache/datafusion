@@ -97,7 +97,8 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
+    external_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
+    UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -1597,7 +1598,7 @@ async fn roundtrip_coalesce() -> Result<()> {
         &DefaultPhysicalExtensionCodec {},
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        .map_err(|e| external_datafusion_err!(e))?;
     let restored = node.try_into_physical_plan(
         &ctx,
         ctx.runtime_env().as_ref(),
