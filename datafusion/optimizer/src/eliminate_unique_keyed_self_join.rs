@@ -21,6 +21,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::TreeNode;
+use datafusion_common::TableReference;
 use datafusion_common::{tree_node::Transformed, Result};
 use datafusion_common::{tree_node::TreeNodeRecursion, Dependency};
 use datafusion_common::{Column, DFSchema};
@@ -92,6 +93,18 @@ fn unique_indexes(schema: &DFSchema) -> Vec<HashSet<usize>> {
         .collect::<Vec<_>>()
 }
 
+#[derive(Debug)]
+struct RenamedAlias {
+    from: TableReference,
+    to: TableReference,
+}
+
+#[derive(Debug)]
+struct OptimizationResult {
+    plan: LogicalPlan,
+    renamed_alias: Option<RenamedAlias>,
+}
+
 /// Optimize self-join query by combining LHS and RHS of the join. Current implementation is
 /// very conservative. It only merges nodes if one of them is `TableScan`. It should be possible
 /// to merge projections and filters together as well.
@@ -101,14 +114,17 @@ fn unique_indexes(schema: &DFSchema) -> Vec<HashSet<usize>> {
 /// - If LHS is `TableScan` and RHS isn't `TableScan`, then find `TableScan` on RHS and merge them
 /// - If LHS isn't `TableScan` and RHS is `TableScan` recursively call `optimize` with children swapped
 /// - If LHS and RHS is `SubqueryAlias`, recursively call `optimize` with their input
-fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<LogicalPlan> {
+fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<OptimizationResult> {
     match (left, right) {
         (LogicalPlan::TableScan(left_scan), LogicalPlan::TableScan(right_scan)) => {
             let table_scan = merge_table_scans(left_scan, right_scan);
             let plan = LogicalPlan::TableScan(table_scan)
                 .recompute_schema()
                 .unwrap();
-            Some(plan)
+            Some(OptimizationResult {
+                plan,
+                renamed_alias: None,
+            })
         }
         (
             LogicalPlan::SubqueryAlias(SubqueryAlias {
@@ -117,17 +133,30 @@ fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<LogicalPlan> {
                 ..
             }),
             LogicalPlan::SubqueryAlias(SubqueryAlias {
-                input: right_input, ..
+                input: right_input,
+                alias: right_alias,
+                ..
             }),
         ) => {
-            let plan = optimize(left_input, right_input)?;
+            let OptimizationResult {
+                plan,
+                renamed_alias,
+            } = optimize(left_input, right_input)?;
+            assert!(renamed_alias.is_none(), "Assert `renamed_alias` is `None` because nested `SubqueryAlias` shouldn't be possible");
+
             let plan = LogicalPlanBuilder::new(plan)
                 .alias(left_alias.clone())
                 .unwrap()
                 .build()
                 .unwrap();
             let plan = plan.recompute_schema().unwrap();
-            Some(plan)
+            Some(OptimizationResult {
+                plan,
+                renamed_alias: Some(RenamedAlias {
+                    from: right_alias.clone(),
+                    to: left_alias.clone(),
+                }),
+            })
         }
         (LogicalPlan::TableScan(left_scan), _) => {
             let transformed = right
@@ -145,7 +174,10 @@ fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<LogicalPlan> {
                 "Called `transform_up` and no merged `TableScan`"
             );
             if transformed.transformed {
-                Some(transformed.data)
+                Some(OptimizationResult {
+                    plan: transformed.data,
+                    renamed_alias: None,
+                })
             } else {
                 None
             }
@@ -290,7 +322,7 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
+        Some(ApplyOrder::TopDown)
     }
 
     fn supports_rewrite(&self) -> bool {
@@ -302,25 +334,75 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
         plan: LogicalPlan,
         _: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match &plan {
-            LogicalPlan::Join(
-                join @ Join {
-                    left,
-                    right,
-                    join_type,
-                    filter: None,
-                    ..
-                },
-            ) if *join_type == JoinType::Inner && is_join_on_unique_index(join) => {
-                // If we reach here, it means we can eliminate the self join
-                if let Some(plan) = optimize(left.as_ref(), right.as_ref()) {
-                    Ok(Transformed::yes(plan))
-                } else {
-                    Ok(Transformed::no(plan))
+        let mut renamed = None;
+        let Transformed {
+            data: plan,
+            transformed,
+            ..
+        } = plan
+            .transform_up(|plan| {
+                match &plan {
+                    LogicalPlan::Join(
+                        join @ Join {
+                            left,
+                            right,
+                            join_type,
+                            filter: None,
+                            ..
+                        },
+                    ) if *join_type == JoinType::Inner
+                        && is_join_on_unique_index(join) =>
+                    {
+                        // If we reach here, it means we can eliminate the self join
+                        if let Some(OptimizationResult {
+                            plan,
+                            renamed_alias,
+                        }) = optimize(left.as_ref(), right.as_ref())
+                        {
+                            renamed = renamed_alias;
+                            Ok(Transformed::yes(plan))
+                        } else {
+                            Ok(Transformed::no(plan))
+                        }
+                    }
+                    // This is called `EliminateSelfJoin` after all
+                    _ => Ok(Transformed::no(plan)),
                 }
+            })
+            .unwrap();
+        if !transformed {
+            return Ok(Transformed::no(plan));
+        }
+        match renamed {
+            Some(RenamedAlias { from, to }) => {
+                let Transformed { data: plan, .. } = plan.transform_down(|plan| {
+                    let Transformed {
+                        data: plan,
+                        transformed,
+                        ..
+                    } = plan.map_expressions(|expr| match expr {
+                        Expr::Column(Column {
+                            relation: Some(relation),
+                            name,
+                            spans,
+                        }) if relation == from => {
+                            Ok(Transformed::yes(Expr::Column(Column {
+                                relation: Some(to.clone()),
+                                name,
+                                spans,
+                            })))
+                        }
+                        _ => Ok(Transformed::no(expr)),
+                    })?;
+                    if transformed {
+                        Ok(Transformed::yes(plan.recompute_schema().unwrap()))
+                    } else {
+                        Ok(Transformed::no(plan))
+                    }
+                })?;
+                Ok(Transformed::yes(plan))
             }
-            // This is called `EliminateSelfJoin` after all
-            _ => Ok(Transformed::no(plan)),
+            None => Ok(Transformed::yes(plan)),
         }
     }
 }
