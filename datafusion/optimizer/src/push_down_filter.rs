@@ -1135,7 +1135,7 @@ impl OptimizerRule for PushDownFilter {
                         // (i.e in the case of recursive subquery)
                         // this function may accidentally pushdown the subquery expr as well
                         // until then, we have to exclude these exprs here
-                        .partition(|pred| pred.is_volatile() || has_subquery(*pred));
+                        .partition(|pred| pred.is_volatile() || has_subquery(pred));
 
                 // Check which non-volatile filters are supported by source
                 let supported_filters = scan
