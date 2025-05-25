@@ -3997,6 +3997,7 @@ mod tests {
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
+    use insta::assert_snapshot;
 
     use crate::test::function_stub::count;
 
@@ -4024,13 +4025,13 @@ mod tests {
     fn test_display_indent() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: employee_csv.id\
-        \n  Filter: employee_csv.state IN (<subquery>)\
-        \n    Subquery:\
-        \n      TableScan: employee_csv projection=[state]\
-        \n    TableScan: employee_csv projection=[id, state]";
-
-        assert_eq!(expected, format!("{}", plan.display_indent()));
+        assert_snapshot!(format!("{}", plan.display_indent()), @r"
+        Projection: employee_csv.id
+          Filter: employee_csv.state IN (<subquery>)
+            Subquery:
+              TableScan: employee_csv projection=[state]
+            TableScan: employee_csv projection=[id, state]
+        ");
         Ok(())
     }
 
@@ -4038,13 +4039,13 @@ mod tests {
     fn test_display_indent_schema() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: employee_csv.id [id:Int32]\
-        \n  Filter: employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
-        \n    Subquery: [state:Utf8]\
-        \n      TableScan: employee_csv projection=[state] [state:Utf8]\
-        \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
-
-        assert_eq!(expected, format!("{}", plan.display_indent_schema()));
+        assert_snapshot!(format!("{}", plan.display_indent_schema()), @r"
+        Projection: employee_csv.id [id:Int32]
+          Filter: employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]
+            Subquery: [state:Utf8]
+              TableScan: employee_csv projection=[state] [state:Utf8]
+            TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]
+        ");
         Ok(())
     }
 
@@ -4059,12 +4060,12 @@ mod tests {
                 .project(vec![col("id"), exists(plan1).alias("exists")])?
                 .build();
 
-        let expected = "Projection: employee_csv.id, EXISTS (<subquery>) AS exists\
-        \n  Subquery:\
-        \n    TableScan: employee_csv projection=[state]\
-        \n  TableScan: employee_csv projection=[id, state]";
-
-        assert_eq!(expected, format!("{}", plan?.display_indent()));
+        assert_snapshot!(format!("{}", plan?.display_indent()), @r"
+        Projection: employee_csv.id, EXISTS (<subquery>) AS exists
+          Subquery:
+            TableScan: employee_csv projection=[state]
+          TableScan: employee_csv projection=[id, state]
+        ");
         Ok(())
     }
 
@@ -4072,46 +4073,44 @@ mod tests {
     fn test_display_graphviz() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected_graphviz = r#"
-// Begin DataFusion GraphViz Plan,
-// display it online here: https://dreampuf.github.io/GraphvizOnline
-
-digraph {
-  subgraph cluster_1
-  {
-    graph[label="LogicalPlan"]
-    2[shape=box label="Projection: employee_csv.id"]
-    3[shape=box label="Filter: employee_csv.state IN (<subquery>)"]
-    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
-    4[shape=box label="Subquery:"]
-    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]
-    5[shape=box label="TableScan: employee_csv projection=[state]"]
-    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]
-    6[shape=box label="TableScan: employee_csv projection=[id, state]"]
-    3 -> 6 [arrowhead=none, arrowtail=normal, dir=back]
-  }
-  subgraph cluster_7
-  {
-    graph[label="Detailed LogicalPlan"]
-    8[shape=box label="Projection: employee_csv.id\nSchema: [id:Int32]"]
-    9[shape=box label="Filter: employee_csv.state IN (<subquery>)\nSchema: [id:Int32, state:Utf8]"]
-    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]
-    10[shape=box label="Subquery:\nSchema: [state:Utf8]"]
-    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]
-    11[shape=box label="TableScan: employee_csv projection=[state]\nSchema: [state:Utf8]"]
-    10 -> 11 [arrowhead=none, arrowtail=normal, dir=back]
-    12[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]
-    9 -> 12 [arrowhead=none, arrowtail=normal, dir=back]
-  }
-}
-// End DataFusion GraphViz Plan
-"#;
-
         // just test for a few key lines in the output rather than the
         // whole thing to make test maintenance easier.
         let graphviz = format!("{}", plan.display_graphviz());
 
-        assert_eq!(expected_graphviz, graphviz);
+        assert_snapshot!(graphviz, @r#"
+        // Begin DataFusion GraphViz Plan,
+        // display it online here: https://dreampuf.github.io/GraphvizOnline
+
+        digraph {
+          subgraph cluster_1
+          {
+            graph[label="LogicalPlan"]
+            2[shape=box label="Projection: employee_csv.id"]
+            3[shape=box label="Filter: employee_csv.state IN (<subquery>)"]
+            2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
+            4[shape=box label="Subquery:"]
+            3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]
+            5[shape=box label="TableScan: employee_csv projection=[state]"]
+            4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]
+            6[shape=box label="TableScan: employee_csv projection=[id, state]"]
+            3 -> 6 [arrowhead=none, arrowtail=normal, dir=back]
+          }
+          subgraph cluster_7
+          {
+            graph[label="Detailed LogicalPlan"]
+            8[shape=box label="Projection: employee_csv.id\nSchema: [id:Int32]"]
+            9[shape=box label="Filter: employee_csv.state IN (<subquery>)\nSchema: [id:Int32, state:Utf8]"]
+            8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]
+            10[shape=box label="Subquery:\nSchema: [state:Utf8]"]
+            9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]
+            11[shape=box label="TableScan: employee_csv projection=[state]\nSchema: [state:Utf8]"]
+            10 -> 11 [arrowhead=none, arrowtail=normal, dir=back]
+            12[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]
+            9 -> 12 [arrowhead=none, arrowtail=normal, dir=back]
+          }
+        }
+        // End DataFusion GraphViz Plan
+        "#);
         Ok(())
     }
 
@@ -4119,60 +4118,60 @@ digraph {
     fn test_display_pg_json() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected_pg_json = r#"[
-  {
-    "Plan": {
-      "Expressions": [
-        "employee_csv.id"
-      ],
-      "Node Type": "Projection",
-      "Output": [
-        "id"
-      ],
-      "Plans": [
-        {
-          "Condition": "employee_csv.state IN (<subquery>)",
-          "Node Type": "Filter",
-          "Output": [
-            "id",
-            "state"
-          ],
-          "Plans": [
-            {
-              "Node Type": "Subquery",
+        let pg_json = format!("{}", plan.display_pg_json());
+
+        assert_snapshot!(pg_json, @r#"
+        [
+          {
+            "Plan": {
+              "Expressions": [
+                "employee_csv.id"
+              ],
+              "Node Type": "Projection",
               "Output": [
-                "state"
+                "id"
               ],
               "Plans": [
                 {
-                  "Node Type": "TableScan",
+                  "Condition": "employee_csv.state IN (<subquery>)",
+                  "Node Type": "Filter",
                   "Output": [
+                    "id",
                     "state"
                   ],
-                  "Plans": [],
-                  "Relation Name": "employee_csv"
+                  "Plans": [
+                    {
+                      "Node Type": "Subquery",
+                      "Output": [
+                        "state"
+                      ],
+                      "Plans": [
+                        {
+                          "Node Type": "TableScan",
+                          "Output": [
+                            "state"
+                          ],
+                          "Plans": [],
+                          "Relation Name": "employee_csv"
+                        }
+                      ]
+                    },
+                    {
+                      "Node Type": "TableScan",
+                      "Output": [
+                        "id",
+                        "state"
+                      ],
+                      "Plans": [],
+                      "Relation Name": "employee_csv"
+                    }
+                  ]
                 }
               ]
-            },
-            {
-              "Node Type": "TableScan",
-              "Output": [
-                "id",
-                "state"
-              ],
-              "Plans": [],
-              "Relation Name": "employee_csv"
             }
-          ]
-        }
-      ]
-    }
-  }
-]"#;
-
-        let pg_json = format!("{}", plan.display_pg_json());
-
-        assert_eq!(expected_pg_json, pg_json);
+          }
+        ]
+        "#);
         Ok(())
     }
 
@@ -4221,17 +4220,7 @@ digraph {
         let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
-        assert_eq!(
-            visitor.strings,
-            vec![
-                "pre_visit Projection",
-                "pre_visit Filter",
-                "pre_visit TableScan",
-                "post_visit TableScan",
-                "post_visit Filter",
-                "post_visit Projection",
-            ]
-        );
+        assert_snapshot!(visitor.strings.join(", "), @"pre_visit Projection, pre_visit Filter, pre_visit TableScan, post_visit TableScan, post_visit Filter, post_visit Projection");
     }
 
     #[derive(Debug, Default)]
@@ -4297,9 +4286,9 @@ digraph {
         let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
-        assert_eq!(
-            visitor.inner.strings,
-            vec!["pre_visit Projection", "pre_visit Filter"]
+        assert_snapshot!(
+            visitor.inner.strings.join(", "),
+            @"pre_visit Projection, pre_visit Filter"
         );
     }
 
@@ -4313,14 +4302,9 @@ digraph {
         let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
-        assert_eq!(
-            visitor.inner.strings,
-            vec![
-                "pre_visit Projection",
-                "pre_visit Filter",
-                "pre_visit TableScan",
-                "post_visit TableScan",
-            ]
+        assert_snapshot!(
+            visitor.inner.strings.join(", "),
+            @"pre_visit Projection, pre_visit Filter, pre_visit TableScan, post_visit TableScan"
         );
     }
 
@@ -4362,13 +4346,13 @@ digraph {
         };
         let plan = test_plan();
         let res = plan.visit_with_subqueries(&mut visitor).unwrap_err();
-        assert_eq!(
-            "This feature is not implemented: Error in pre_visit",
-            res.strip_backtrace()
+        assert_snapshot!(
+            res.strip_backtrace(),
+            @"This feature is not implemented: Error in pre_visit"
         );
-        assert_eq!(
-            visitor.inner.strings,
-            vec!["pre_visit Projection", "pre_visit Filter"]
+        assert_snapshot!(
+            visitor.inner.strings.join(", "),
+            @"pre_visit Projection, pre_visit Filter"
         );
     }
 
@@ -4380,18 +4364,13 @@ digraph {
         };
         let plan = test_plan();
         let res = plan.visit_with_subqueries(&mut visitor).unwrap_err();
-        assert_eq!(
-            "This feature is not implemented: Error in post_visit",
-            res.strip_backtrace()
+        assert_snapshot!(
+            res.strip_backtrace(),
+            @"This feature is not implemented: Error in post_visit"
         );
-        assert_eq!(
-            visitor.inner.strings,
-            vec![
-                "pre_visit Projection",
-                "pre_visit Filter",
-                "pre_visit TableScan",
-                "post_visit TableScan",
-            ]
+        assert_snapshot!(
+            visitor.inner.strings.join(", "),
+            @"pre_visit Projection, pre_visit Filter, pre_visit TableScan, post_visit TableScan"
         );
     }
 
@@ -4406,7 +4385,7 @@ digraph {
             })),
             empty_schema,
         );
-        assert_eq!(p.err().unwrap().strip_backtrace(), "Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");
+        assert_snapshot!(p.err().unwrap().strip_backtrace(), @"Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");
         Ok(())
     }
 
@@ -4593,11 +4572,12 @@ digraph {
             .data()
             .unwrap();
 
-        let expected = "Explain\
-                        \n  Filter: foo = Boolean(true)\
-                        \n    TableScan: ?table?";
         let actual = format!("{}", plan.display_indent());
-        assert_eq!(expected.to_string(), actual)
+        assert_snapshot!(actual, @r"
+        Explain
+          Filter: foo = Boolean(true)
+            TableScan: ?table?
+        ")
     }
 
     #[test]
