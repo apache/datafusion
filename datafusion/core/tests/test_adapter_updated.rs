@@ -164,6 +164,19 @@ impl SchemaMapper for TestSchemaMapping {
 
 #[test]
 fn test_schema_adapter() {
+    // This test verifies the functionality of the SchemaAdapter and SchemaAdapterFactory
+    // components used in DataFusion's file sources.
+    //
+    // The test specifically checks:
+    // 1. Creating and attaching a schema adapter factory to a file source
+    // 2. Creating a schema adapter using the factory
+    // 3. The schema adapter's ability to map column indices between a table schema and a file schema
+    // 4. The schema adapter's ability to create a projection that selects only the columns
+    //    from the file schema that are present in the table schema
+    //
+    // Schema adapters are used when the schema of data in files doesn't exactly match
+    // the schema expected by the query engine, allowing for field mapping and data transformation.
+
     // Create a test schema
     let table_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
