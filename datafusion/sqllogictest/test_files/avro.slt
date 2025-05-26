@@ -15,6 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Currently, the avro not support Utf8View type, so we disable the map_varchar_to_utf8view
+# After https://github.com/apache/arrow-rs/issues/7262 released, we can remove this setting
+statement ok
+set datafusion.sql_parser.map_varchar_to_utf8view = false;
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain (
@@ -124,24 +128,69 @@ STORED AS AVRO
 LOCATION '../../testing/data/avro/simple_fixed.avro';
 
 # test avro query
-query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
+query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
 
 # test avro query with snappy
-query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
+query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_snappy
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
 
 # test avro query with bzip2
-query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
+query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_bzip2
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
 
 # test avro query with xz
-query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
+query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_xz
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
 
 # test avro query with zstandard
-query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
+query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_zstandard
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
 
 # test avro single nan schema
 query R
@@ -210,5 +259,11 @@ physical_plan
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/alltypes_plain.avro]]}, file_type=avro
 
 # test column projection order from avro file
-query error DataFusion error: Arrow error: Schema error: type Utf8View not supported
+query ITII
 SELECT id, string_col, int_col, bigint_col FROM alltypes_plain ORDER BY id LIMIT 5
+----
+0 0 0 0
+1 1 1 10
+2 0 0 0
+3 1 1 10
+4 0 0 0

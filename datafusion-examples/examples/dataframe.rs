@@ -182,7 +182,11 @@ async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionEr
     let mut df = ctx.sql("values ('a'), ('b'), ('c')").await.unwrap();
 
     // Ensure the column names and types match the target table
-    df = df.with_column_renamed("column1", "tablecol1").unwrap();
+    df = df
+        .with_column_renamed("column1", "tablecol1")
+        .unwrap()
+        .with_column("tablecol1", cast(col("tablecol1"), DataType::Utf8View))
+        .unwrap();
 
     ctx.sql(
         "create external table
