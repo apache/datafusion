@@ -306,11 +306,28 @@ impl PlannerContext {
         self
     }
 
-    // Return a reference to the outer query's schema
-    // This function is only compatible with
+    /// Return a reference to the outer query's schema
+    /// This function should not be used together with
+    /// `outer_queries_schemas`, `append_outer_query_schema`
+    /// `latest_outer_query_schema` and `pop_outer_query_schema`
     #[deprecated(note = "Use outer_queries_schemas instead")]
     pub fn outer_query_schema(&self) -> Option<&DFSchema> {
         self.outer_query_schema.as_ref().map(|s| s.as_ref())
+    }
+
+    /// Sets the outer query schema, returning the existing one, if
+    /// any, this function should not be used together with
+    /// `outer_queries_schemas`, `append_outer_query_schema`
+    /// `latest_outer_query_schema` and `pop_outer_query_schema`
+    #[deprecated(
+        note = "This struct is now aware of a stack of schemas, check pop_outer_query_schema"
+    )]
+    pub fn set_outer_query_schema(
+        &mut self,
+        mut schema: Option<DFSchemaRef>,
+    ) -> Option<DFSchemaRef> {
+        std::mem::swap(&mut self.outer_query_schema, &mut schema);
+        schema
     }
 
     /// Return the stack of outer relations' schemas, the outer most
@@ -321,7 +338,7 @@ impl PlannerContext {
 
     /// Sets the outer query schema, returning the existing one, if
     /// any
-    pub fn set_outer_query_schema(&mut self, schema: DFSchemaRef) {
+    pub fn append_outer_query_schema(&mut self, schema: DFSchemaRef) {
         self.outer_queries_schemas_stack.push(schema);
     }
 

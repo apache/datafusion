@@ -318,14 +318,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             None => Arc::clone(&old_from_schema),
         };
-        planner_context.set_outer_query_schema(new_query_schema);
+        planner_context.append_outer_query_schema(new_query_schema);
 
         let plan = self.create_relation(subquery, planner_context)?;
         let outer_ref_columns = plan.all_out_ref_exprs();
 
         planner_context.pop_outer_query_schema();
         if let Some(schema) = outer_query_schema {
-            planner_context.set_outer_query_schema(schema);
+            planner_context.append_outer_query_schema(schema);
         }
         planner_context.set_outer_from_schema(Some(old_from_schema));
 
