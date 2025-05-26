@@ -18,9 +18,18 @@
 //! [`EliminateAggregationSelfJoin`] eliminates aggregation expressions
 //! over self joins that can be translated to window expressions.
 
+use std::{collections::HashSet, sync::Arc};
+
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use datafusion_common::{tree_node::Transformed, Result};
-use datafusion_expr::LogicalPlan;
+use datafusion_common::{
+    tree_node::{Transformed, TreeNode, TreeNodeContainer},
+    Column, DFSchema, Dependency, Result, ScalarValue, TableReference,
+};
+use datafusion_expr::{
+    expr::{AggregateFunction, Sort, WindowFunction, WindowFunctionParams},
+    Aggregate, BinaryExpr, Expr, Join, LogicalPlan, Operator, SubqueryAlias, TableScan,
+    Window, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+};
 
 #[derive(Default, Debug)]
 pub struct EliminateAggregationSelfJoin;
@@ -31,6 +40,370 @@ impl EliminateAggregationSelfJoin {
         Self {}
     }
 }
+
+fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan {
+    let filters = left_scan
+        .filters
+        .iter()
+        .chain(right_scan.filters.iter())
+        .cloned()
+        .collect();
+    // FIXME: double iteration over the filters
+    let projection = match (&left_scan.projection, &right_scan.projection) {
+        (Some(left_projection), Some(right_projection)) => Some(
+            left_projection
+                .iter()
+                .chain(right_projection.iter())
+                .cloned()
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>(),
+        ),
+        (Some(left_projection), None) => Some(left_projection.clone()),
+        (None, Some(right_projection)) => Some(right_projection.clone()),
+        (None, None) => None,
+    };
+    let fetch = match (left_scan.fetch, right_scan.fetch) {
+        (Some(left_fetch), Some(right_fetch)) => Some(left_fetch.max(right_fetch)),
+        (Some(rows), None) | (None, Some(rows)) => Some(rows),
+        (None, None) => None,
+    };
+    TableScan::try_new(
+        left_scan.table_name.clone(),
+        Arc::clone(&left_scan.source),
+        projection,
+        filters,
+        fetch,
+    )
+    .unwrap()
+}
+
+// TODO: equality of `inner` `apachearrow::datatypes::SchemaRef` doesn't mean equality of the tables
+fn is_table_scan_same(left: &TableScan, right: &TableScan) -> bool {
+    // If the plans don't scan the same table then we cannot be sure for self-join
+    left.table_name == right.table_name
+}
+
+fn unique_indexes(schema: &DFSchema) -> Vec<HashSet<usize>> {
+    schema
+        .functional_dependencies()
+        .iter()
+        .filter(|dep| dep.mode == Dependency::Single)
+        .map(|dep| dep.source_indices.iter().cloned().collect::<HashSet<_>>())
+        .collect::<Vec<_>>()
+}
+
+/// Given [`Expr`] try to narrow enum variants to comparison expression between
+/// two columns.
+fn try_narrow_filter_to_column_comparison(
+    expr: &Expr,
+) -> Option<(&Column, Operator, &Column)> {
+    match expr {
+        Expr::BinaryExpr(BinaryExpr { left, op, right })
+            if matches!(
+                op,
+                Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+            ) =>
+        {
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::Column(left), Expr::Column(right)) => Some((left, *op, right)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+impl SortOrder {
+    fn is_asc(&self) -> bool {
+        *self == SortOrder::Ascending
+    }
+}
+
+struct OrderBound {
+    sort_order: SortOrder,
+    start_bound: WindowFrameBound,
+    end_bound: WindowFrameBound,
+}
+
+fn operator_to_order_bound(op: Operator) -> OrderBound {
+    match op {
+        Operator::Lt => OrderBound {
+            sort_order: SortOrder::Ascending,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            end_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+        },
+        Operator::LtEq => OrderBound {
+            sort_order: SortOrder::Ascending,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            end_bound: WindowFrameBound::CurrentRow,
+        },
+        Operator::Gt => OrderBound {
+            sort_order: SortOrder::Descending,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            end_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+        },
+        Operator::GtEq => OrderBound {
+            sort_order: SortOrder::Descending,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            end_bound: WindowFrameBound::CurrentRow,
+        },
+        _ => {
+            unreachable!("`operator_to_order_bound` called with non-comparison operator")
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SelfJoinBranch<'a> {
+    // TODO: alias may not be `Option` as alias is required to make query unambiguous
+    alias: Option<&'a TableReference>,
+    /// Backing table
+    table_scan: &'a TableScan,
+}
+
+/// Given [`LogicalPlan`] try to narrow enum variants to a [`TableScan`] and optionally
+/// [`SubqueryAlias`]. Otherwise query might include nodes that may make this optimization
+/// impossible.
+///
+/// Display indent for logical plans are as follows.
+///
+/// ```text
+/// SubqueryAlias: b
+///     TableScan: purchases projection=[user_id, purchase_date, amount]
+/// ```
+fn try_narrow_join_to_table_scan_alias(branch: &LogicalPlan) -> Option<SelfJoinBranch> {
+    match branch {
+        LogicalPlan::TableScan(table_scan) => Some(SelfJoinBranch {
+            alias: None,
+            table_scan,
+        }),
+        LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+            match input.as_ref() {
+                LogicalPlan::TableScan(table_scan) => Some(SelfJoinBranch {
+                    alias: Some(alias),
+                    table_scan,
+                }),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+#[derive(Debug)]
+struct RenamedAlias {
+    from: TableReference,
+    to: TableReference,
+}
+
+#[derive(Debug)]
+struct OptimizationResult {
+    plan: LogicalPlan,
+    renamed_alias: Option<RenamedAlias>,
+}
+
+fn try_replace_with_window(
+    Aggregate {
+        input,
+        group_expr,
+        aggr_expr,
+        schema,
+        ..
+    }: &Aggregate,
+) -> Option<OptimizationResult> {
+    let join = match input.as_ref() {
+        LogicalPlan::Join(
+            join @ Join {
+                filter: Some(_), ..
+            },
+        ) => join,
+        _ => return None,
+    };
+    let left = try_narrow_join_to_table_scan_alias(&join.left)?;
+    let right = try_narrow_join_to_table_scan_alias(&join.right)?;
+
+    // `TableScan`s have to be same for self-join
+    if !is_table_scan_same(left.table_scan, right.table_scan) {
+        return None;
+    }
+    let table_schema = left.table_scan.projected_schema.as_ref();
+
+    // Filter expression should refer to the same column
+    let (left_filter_col, op, right_filter_col) =
+        try_narrow_filter_to_column_comparison(join.filter.as_ref().unwrap())?;
+    let left_filter_idx = table_schema
+        .index_of_column_by_name(None, left_filter_col.name())
+        .unwrap();
+    let right_filter_idx = table_schema
+        .index_of_column_by_name(None, right_filter_col.name())
+        .unwrap();
+    if left_filter_idx != right_filter_idx {
+        return None;
+    }
+
+    // Column indexes from `GROUP BY ...`
+    let mut group_by_idx = HashSet::with_capacity(group_expr.len());
+    for expr in group_expr {
+        match expr {
+            Expr::Column(Column { relation, name, .. }) => {
+                // Each column of `GROUP BY ...` either doesn't have a `TableReference` or
+                // it has to be LHS or RHS
+                debug_assert!(
+                    relation.is_none()
+                        || relation.as_ref() == left.alias
+                        || relation.as_ref() == right.alias
+                );
+                let idx = table_schema
+                    .index_of_column_by_name(None, name.as_str())
+                    .unwrap();
+                group_by_idx.insert(idx);
+            }
+            // If `GROUP BY ...` expression isn't a column reference conservatively
+            // assume it isn't self-join
+            _ => return None,
+        }
+    }
+
+    // Column indexes from `JOIN ON ...`
+    let mut on_idx = HashSet::with_capacity(join.on.len());
+    for on in &join.on {
+        match on {
+            (
+                Expr::Column(Column {
+                    name: left_name, ..
+                }),
+                Expr::Column(Column {
+                    name: right_name, ..
+                }),
+            ) => {
+                let left_idx = table_schema
+                    .index_of_column_by_name(None, left_name.as_str())
+                    .unwrap();
+                let right_idx = table_schema
+                    .index_of_column_by_name(None, right_name.as_str())
+                    .unwrap();
+                if left_idx != right_idx {
+                    return None;
+                }
+                on_idx.insert(left_idx);
+            }
+            _ => return None,
+        }
+    }
+
+    // If `JOIN ON ...` forms a unique constraint then it's invalid
+    let forms_unique_constraint = unique_indexes(schema)
+        .iter()
+        .any(|unique_constraint| on_idx.is_superset(unique_constraint));
+    if forms_unique_constraint {
+        return None;
+    }
+
+    // `GROUP BY ...` columns should equal `JOIN ON ...` columns
+    let on_and_filter = on_idx
+        .iter()
+        .chain(Some(left_filter_idx).iter())
+        .cloned()
+        .collect::<HashSet<_>>();
+    if on_and_filter != group_by_idx {
+        return None;
+    }
+
+    // Transform filter to sorting for window function
+    let OrderBound {
+        sort_order,
+        start_bound,
+        end_bound,
+    } = operator_to_order_bound(op);
+    let sort_col = Expr::Column(Column::new_unqualified(&left_filter_col.name));
+    let order_by = vec![Sort::new(sort_col, sort_order.is_asc(), false)];
+
+    // Transform maybe qualified columns from `GROUP BY ...` to `PARTITION BY ...`
+    let partition_by = group_expr
+        .iter()
+        .map(|expr| match expr {
+            Expr::Column(Column { name, .. }) => {
+                Expr::Column(Column::new_unqualified(name))
+            }
+            _ => unreachable!(),
+        })
+        .collect::<Vec<_>>();
+
+    let mut window_expr = Vec::with_capacity(aggr_expr.len());
+    for aggr_expr in aggr_expr {
+        let AggregateFunction { func, params } = match aggr_expr {
+            Expr::AggregateFunction(aggr_expr) => aggr_expr,
+            _ => unreachable!("`Aggregate::aggr_expr` isn't a `Expr::AggregateFunction`"),
+        };
+        // TODO: try to handle different fields of `AggregateFunctionParams`
+        if params.distinct
+            || params.filter.is_some()
+            || params.order_by.is_some()
+            || params.null_treatment.is_some()
+        {
+            return None;
+        }
+
+        let Transformed { data: args, .. } = params
+            .args
+            .clone()
+            .map_elements(|expr| match expr {
+                Expr::Column(Column { name, .. }) => Ok(Transformed::yes(Expr::Column(
+                    Column::new_unqualified(name),
+                ))),
+                _ => Ok(Transformed::no(expr)),
+            })
+            .unwrap();
+
+        window_expr.push(Expr::WindowFunction(WindowFunction {
+            fun: WindowFunctionDefinition::AggregateUDF(Arc::clone(func)),
+            params: WindowFunctionParams {
+                args,
+                order_by: order_by.clone(),
+                partition_by: partition_by.clone(),
+                window_frame: WindowFrame::new_bounds(
+                    WindowFrameUnits::Rows,
+                    start_bound.clone(),
+                    end_bound.clone(),
+                ),
+                null_treatment: None,
+            },
+        }));
+    }
+
+    let table_scan = merge_table_scans(left.table_scan, right.table_scan);
+    let mut plan = LogicalPlan::TableScan(table_scan);
+    // Readd eliminated aliases if any
+    let renamed_alias = if let Some(left) = left.alias {
+        let alias = SubqueryAlias::try_new(plan.into(), left.table()).unwrap();
+        plan = LogicalPlan::SubqueryAlias(alias);
+        right.alias.map(|right| RenamedAlias {
+            from: right.clone(),
+            to: left.clone(),
+        })
+    } else if let Some(table_reference) = right.alias {
+        let alias = SubqueryAlias::try_new(plan.into(), table_reference.table()).unwrap();
+        plan = LogicalPlan::SubqueryAlias(alias);
+        None
+    } else {
+        None
+    };
+    let window = Window::try_new(window_expr, Arc::new(plan)).unwrap();
+    let plan = LogicalPlan::Window(window);
+
+    Some(OptimizationResult {
+        plan,
+        renamed_alias,
+    })
+}
+
 impl OptimizerRule for EliminateAggregationSelfJoin {
     fn name(&self) -> &str {
         "eliminate_aggregation_self_join"
@@ -49,6 +422,66 @@ impl OptimizerRule for EliminateAggregationSelfJoin {
         plan: LogicalPlan,
         _: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        Ok(Transformed::no(plan))
+        let mut renamed = None;
+        let Transformed {
+            data: plan,
+            transformed,
+            ..
+        } = plan.transform_up(|plan| {
+            let projection = match plan {
+                LogicalPlan::Projection(ref projection) => projection,
+                _ => return Ok(Transformed::no(plan)),
+            };
+            match projection.input.as_ref() {
+                LogicalPlan::Aggregate(ref aggregate) => {
+                    if let Some(OptimizationResult {
+                        plan: window,
+                        renamed_alias,
+                    }) = try_replace_with_window(aggregate)
+                    {
+                        renamed = renamed_alias;
+                        Ok(Transformed::yes(window))
+                    } else {
+                        Ok(Transformed::no(plan))
+                    }
+                }
+                _ => Ok(Transformed::no(plan)),
+            }
+        })?;
+        if !transformed {
+            debug_assert!(renamed.is_none());
+            return Ok(Transformed::no(plan));
+        }
+        match renamed {
+            Some(RenamedAlias { from, to }) => {
+                let Transformed { data: plan, .. } = plan.transform_down(|plan| {
+                    let Transformed {
+                        data: plan,
+                        transformed,
+                        ..
+                    } = plan.map_expressions(|expr| match expr {
+                        Expr::Column(Column {
+                            relation: Some(relation),
+                            name,
+                            spans,
+                        }) if relation == from => {
+                            Ok(Transformed::yes(Expr::Column(Column {
+                                relation: Some(to.clone()),
+                                name,
+                                spans,
+                            })))
+                        }
+                        _ => Ok(Transformed::no(expr)),
+                    })?;
+                    if transformed {
+                        Ok(Transformed::yes(plan.recompute_schema().unwrap()))
+                    } else {
+                        Ok(Transformed::no(plan))
+                    }
+                })?;
+                Ok(Transformed::yes(plan))
+            }
+            None => Ok(Transformed::yes(plan)),
+        }
     }
 }
