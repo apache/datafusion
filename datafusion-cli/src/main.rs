@@ -28,7 +28,6 @@ use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::execution::DiskManager;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::ParquetMetadataFunc;
@@ -206,7 +205,7 @@ async fn main_inner() -> Result<()> {
             .with_mode(DiskManagerMode::OsTmpDirectory)
             .with_max_temp_directory_size(disk_limit.try_into().unwrap())
             .build()?;
-        let disk_config = DiskManagerConfig::new_existing(disk_manager);
+        let disk_config = DiskManagerConfig::new_existing(Arc::new(disk_manager));
         rt_builder = rt_builder.with_disk_manager(disk_config);
     }
 

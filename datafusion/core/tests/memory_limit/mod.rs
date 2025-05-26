@@ -46,7 +46,7 @@ use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::{DiskManager, TaskContext};
+use datafusion_execution::TaskContext;
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
@@ -563,7 +563,7 @@ async fn setup_context(
 
     let runtime = Arc::new(RuntimeEnv {
         memory_pool: runtime.memory_pool.clone(),
-        disk_manager,
+        disk_manager: Arc::new(disk_manager),
         cache_manager: runtime.cache_manager.clone(),
         object_store_registry: runtime.object_store_registry.clone(),
     });
