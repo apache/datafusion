@@ -424,7 +424,7 @@ impl FileFormat for ParquetFormat {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
         // Apply schema adapter factory before building the new config
-        let file_source = apply_schema_adapter(source, &conf);
+        let file_source = source.apply_schema_adapter(&conf);
 
         let conf = FileScanConfigBuilder::from(conf)
             .with_source(file_source)
@@ -1728,29 +1728,6 @@ fn create_max_min_accs(
         })
         .collect();
     (max_values, min_values)
-}
-
-/// Converts a ParquetSource to an Arc&lt;dyn FileSource&gt; and applies the schema adapter factory
-/// from the FileScanConfig if present.
-///
-/// # Arguments
-/// * `source` - The ParquetSource to convert
-/// * `conf` - FileScanConfig that may contain a schema adapter factory
-/// # Returns
-/// The converted FileSource with schema adapter factory applied if provided
-fn apply_schema_adapter(
-    source: ParquetSource,
-    conf: &FileScanConfig,
-) -> Arc<dyn FileSource> {
-    let file_source: Arc<dyn FileSource> = source.into();
-
-    // If the FileScanConfig.file_source() has a schema adapter factory, apply it
-    if let Some(factory) = conf.file_source().schema_adapter_factory() {
-        file_source
-            .with_schema_adapter_factory(Arc::<dyn SchemaAdapterFactory>::clone(&factory))
-    } else {
-        file_source
-    }
 }
 
 #[cfg(test)]

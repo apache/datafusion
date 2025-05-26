@@ -126,21 +126,12 @@ mod parquet_adapter_tests {
         }
     }
 
-    // Implementation of apply_schema_adapter for testing purposes
-    // This mimics the private function in the datafusion-parquet crate
+    // Use the apply_schema_adapter method on ParquetSource
     fn apply_schema_adapter(
         source: ParquetSource,
         conf: &FileScanConfig,
     ) -> Arc<dyn FileSource> {
-        // Convert the ParquetSource to Arc<dyn FileSource>
-        let file_source: Arc<dyn FileSource> = Arc::new(source);
-
-        // If the FileScanConfig.file_source() has a schema adapter factory, apply it
-        if let Some(factory) = conf.file_source().schema_adapter_factory() {
-            file_source.with_schema_adapter_factory(factory)
-        } else {
-            file_source
-        }
+        source.apply_schema_adapter(conf)
     }
 
     #[test]
