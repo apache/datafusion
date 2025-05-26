@@ -31,7 +31,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        planner_context.set_outer_query_schema(input_schema.clone().into());
+        planner_context.append_outer_query_schema(input_schema.clone().into());
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.pop_outer_query_schema();
@@ -53,7 +53,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        planner_context.set_outer_query_schema(input_schema.clone().into());
+        planner_context.append_outer_query_schema(Arc::new(input_schema.clone()));
 
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = &subquery.body.as_ref() {
@@ -96,7 +96,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        planner_context.set_outer_query_schema(input_schema.clone().into());
+        planner_context.append_outer_query_schema(Arc::new(input_schema.clone()));
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
             for item in &select.projection {
@@ -169,7 +169,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        planner_context.set_outer_query_schema(input_schema.clone().into());
+        planner_context.append_outer_query_schema(Arc::new(input_schema.clone()));
 
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
