@@ -893,6 +893,7 @@ impl LogicalPlanBuilder {
         subquery_expr: Expr,
         subquery_depth: usize,
         subquery_name: String,
+        lateral_join_condition: Option<(JoinType, Expr)>,
     ) -> Result<Self> {
         let left = self.build()?;
         let schema = left.schema();
@@ -912,6 +913,7 @@ impl LogicalPlanBuilder {
             subquery_expr,
             subquery_name,
             subquery_depth,
+            lateral_join_condition,
         })))
     }
 

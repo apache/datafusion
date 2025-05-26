@@ -314,6 +314,8 @@ pub struct DependentJoin {
     // belong to the parent dependent join node in case of recursion)
     pub right: Arc<LogicalPlan>,
     pub subquery_name: String,
+
+    pub lateral_join_condition: Option<(JoinType, Expr)>,
 }
 
 impl PartialOrd for DependentJoin {
@@ -331,6 +333,7 @@ impl PartialOrd for DependentJoin {
             // dependent side accessing columns from left hand side (and maybe columns)
             // belong to the parent dependent join node in case of recursion)
             right: &'a Arc<LogicalPlan>,
+            lateral_join_condition: &'a Option<(JoinType, Expr)>,
         }
         let comparable_self = ComparableJoin {
             left: &self.left,
@@ -338,6 +341,7 @@ impl PartialOrd for DependentJoin {
             correlated_columns: &self.correlated_columns,
             subquery_expr: &self.subquery_expr,
             depth: &self.subquery_depth,
+            lateral_join_condition: &self.lateral_join_condition,
         };
         let comparable_other = ComparableJoin {
             left: &other.left,
@@ -345,6 +349,7 @@ impl PartialOrd for DependentJoin {
             correlated_columns: &other.correlated_columns,
             subquery_expr: &other.subquery_expr,
             depth: &other.subquery_depth,
+            lateral_join_condition: &other.lateral_join_condition,
         };
         comparable_self.partial_cmp(&comparable_other)
     }

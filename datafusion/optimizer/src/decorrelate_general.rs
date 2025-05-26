@@ -104,7 +104,11 @@ impl DependentJoinRewriter {
     // because the column providers are visited after column-accessor
     // (function visit_with_subqueries always visit the subquery before visiting the other children)
     // we can always infer the LCA inside this function, by getting the deepest common parent
-    fn conclude_lowest_dependent_join_node(&mut self, child_id: usize, col: &Column) {
+    fn conclude_lowest_dependent_join_node_if_any(
+        &mut self,
+        child_id: usize,
+        col: &Column,
+    ) {
         if let Some(accesses) = self.all_outer_ref_columns.get(col) {
             for access in accesses.iter() {
                 let mut cur_stack = self.stack.clone();
@@ -279,11 +283,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         // for each node, find which column it is accessing, which column it is providing
         // Set of columns current node access
         match &node {
-            LogicalPlan::SubqueryAlias(alias) => {
-                alias.schema.columns().iter().for_each(|col| {
-                    self.conclude_lowest_dependent_join_node(new_id, col);
-                });
-            }
             LogicalPlan::Filter(f) => {
                 if contains_subquery(&f.predicate) {
                     is_dependent_join_node = true;
@@ -302,7 +301,14 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             // aside from TableScan
             LogicalPlan::TableScan(tbl_scan) => {
                 tbl_scan.projected_schema.columns().iter().for_each(|col| {
-                    self.conclude_lowest_dependent_join_node(new_id, col);
+                    self.conclude_lowest_dependent_join_node_if_any(new_id, col);
+                });
+            }
+            // Similar to TableScan, this node may provide column names which
+            // is referenced inside some subqueries
+            LogicalPlan::SubqueryAlias(alias) => {
+                alias.schema.columns().iter().for_each(|col| {
+                    self.conclude_lowest_dependent_join_node_if_any(new_id, col);
                 });
             }
             // TODO: this is untested
@@ -505,6 +511,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         subquery_expr.clone(),
                         current_subquery_depth,
                         alias.clone(),
+                        None, // TODO: handle this when we support lateral join rewrite
                     )?;
                 }
                 current_plan = current_plan
@@ -586,7 +593,7 @@ mod tests {
         }};
     }
     #[test]
-    fn rewrite_dependent_join_with_lateral_join() -> Result<()> {
+    fn rewrite_dependent_join_with_nested_lateral_join() -> Result<()> {
         Ok(())
     }
 
