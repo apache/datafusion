@@ -27,6 +27,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{SchemaAdapter, SchemaAdapterFactory};
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::PartitionedFile;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -200,4 +201,60 @@ fn test_from_implementations() {
 
     #[cfg(feature = "json")]
     test_from_impl::<datafusion_datasource_json::JsonSource>("json");
+}
+
+/// A simple test schema adapter factory that doesn't modify the schema
+#[derive(Debug)]
+struct TestSchemaAdapterFactory {}
+
+impl SchemaAdapterFactory for TestSchemaAdapterFactory {
+    fn create(&self, schema: &Schema) -> Result<Box<dyn SchemaAdapter>> {
+        Ok(Box::new(TestSchemaAdapter {
+            input_schema: Arc::new(schema.clone()),
+        }))
+    }
+}
+
+/// A test schema adapter that passes through data unmodified
+#[derive(Debug)]
+struct TestSchemaAdapter {
+    input_schema: SchemaRef,
+}
+
+impl SchemaAdapter for TestSchemaAdapter {
+    fn adapt(&self, record_batch: RecordBatch) -> Result<RecordBatch> {
+        // Just pass through the batch unmodified
+        Ok(record_batch)
+    }
+
+    fn output_schema(&self) -> SchemaRef {
+        self.input_schema.clone()
+    }
+}
+
+#[cfg(feature = "parquet")]
+#[test]
+fn test_schema_adapter_preservation() {
+    // Create a test schema
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+
+    // Create source with schema adapter factory
+    let source = ParquetSource::default();
+    let factory = Arc::new(TestSchemaAdapterFactory {});
+    let file_source = source.with_schema_adapter_factory(factory);
+
+    // Create a FileScanConfig with the source
+    let config_builder =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema.clone())
+            .with_source(file_source.clone())
+            // Add a file to make it valid
+            .with_file(PartitionedFile::new("test.parquet", 100));
+
+    let config = config_builder.build();
+
+    // Verify the schema adapter factory is present in the file source
+    assert!(config.source().schema_adapter_factory().is_some());
 }
