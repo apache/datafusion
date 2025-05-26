@@ -21,7 +21,6 @@
 
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
@@ -478,10 +477,6 @@ pub struct RepartitionExec {
     /// Inner state that is initialized when the parent calls .execute() on this node
     /// and consumed as soon as the parent starts consuming this node.
     state: Arc<Mutex<RepartitionExecState>>,
-    /// Stores whether the state has been initialized (it's value is different from
-    /// [RepartitionExecState::NotInitialized]). Checking this AtomicBool is faster than
-    /// locking the state's Mutex to check if the state is already initialized.
-    state_initialized: Arc<AtomicBool>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Boolean flag to decide whether to preserve ordering. If true means
@@ -665,8 +660,8 @@ impl ExecutionPlan for RepartitionExec {
         let sort_exprs = self.sort_exprs().cloned().unwrap_or_default();
 
         let state = Arc::clone(&self.state);
-        if !self.state_initialized.swap(true, Ordering::Relaxed) {
-            state.lock().ensure_input_streams_initialized(
+        if let Some(mut state) = state.try_lock() {
+            state.ensure_input_streams_initialized(
                 Arc::clone(&input),
                 metrics.clone(),
                 partitioning.partition_count(),
@@ -844,7 +839,6 @@ impl RepartitionExec {
         Ok(RepartitionExec {
             input,
             state: Default::default(),
-            state_initialized: Arc::new(AtomicBool::new(false)),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
             cache,
