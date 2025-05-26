@@ -80,10 +80,7 @@ impl DiskManagerBuilder {
             }),
             DiskManagerMode::Directories(conf_dirs) => {
                 let local_dirs = create_local_dirs(conf_dirs)?;
-                debug!(
-                    "Created local dirs {:?} as DataFusion working directory",
-                    local_dirs
-                );
+                debug!("Created local dirs {local_dirs:?} as DataFusion working directory");
                 Ok(DiskManager {
                     local_dirs: Mutex::new(Some(local_dirs)),
                     max_temp_directory_size: self.max_temp_directory_size,
