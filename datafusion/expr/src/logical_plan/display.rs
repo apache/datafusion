@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn test_display_empty_schema() {
         let schema = Schema::empty();
-        assert_snapshot!(format!("{}", display_schema(&schema)), @"[]");
+        assert_snapshot!(display_schema(&schema), @"[]");
     }
 
     #[test]
@@ -739,6 +739,6 @@ mod tests {
             Field::new("first_name", DataType::Utf8, true),
         ]);
 
-        assert_snapshot!(format!("{}", display_schema(&schema)), @"[id:Int32, first_name:Utf8;N]");
+        assert_snapshot!(display_schema(&schema), @"[id:Int32, first_name:Utf8;N]");
     }
 }
