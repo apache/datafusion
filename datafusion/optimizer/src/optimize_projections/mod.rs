@@ -1124,7 +1124,7 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
-          Projection: 
+          Projection:
             Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
               TableScan: ?table? projection=[]
         "
