@@ -2414,7 +2414,7 @@ mod tests {
             .filter(exists(Arc::new(subquery)))?
             .build()?;
 
-        assert_snapshot!(format!("{outer_query}"), @r"
+        assert_snapshot!(outer_query, @r"
         Filter: EXISTS (<subquery>)
           Subquery:
             Filter: foo.a = bar.a
@@ -2443,7 +2443,7 @@ mod tests {
             .filter(in_subquery(col("a"), Arc::new(subquery)))?
             .build()?;
 
-        assert_snapshot!(format!("{outer_query}"), @r"
+        assert_snapshot!(outer_query, @r"
         Filter: bar.a IN (<subquery>)
           Subquery:
             Filter: foo.a = bar.a
@@ -2471,7 +2471,7 @@ mod tests {
             .project(vec![scalar_subquery(Arc::new(subquery))])?
             .build()?;
 
-        assert_snapshot!(format!("{outer_query}"), @r"
+        assert_snapshot!(outer_query, @r"
         Projection: (<subquery>)
           Subquery:
             Filter: foo.a = bar.a
@@ -2588,18 +2588,10 @@ mod tests {
             .unnest_column("scalar")
             .unwrap_err();
 
-        let DataFusionError::Internal(desc) = err else {
-            return plan_err!("Plan should have returned an DataFusionError::Internal");
-        };
-
-        let desc = desc
-            .split(DataFusionError::BACK_TRACE_SEP)
-            .collect::<Vec<&str>>()
-            .first()
-            .unwrap_or(&"")
-            .to_string();
-
-        assert_snapshot!(desc, @"trying to unnest on invalid data type UInt32");
+        assert_snapshot!(err.strip_backtrace(), @r"
+        Internal error: trying to unnest on invalid data type UInt32.
+        This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+        ");
 
         // Unnesting the strings list.
         let plan = nested_table_scan("test_table")?
