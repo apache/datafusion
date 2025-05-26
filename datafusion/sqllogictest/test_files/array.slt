@@ -5240,6 +5240,19 @@ NULL 10
 NULL 10
 NULL 10
 
+# array_length for fixed sized list
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)')), array_length(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'FixedSizeList(3, List(Int64))'));
+----
+5 3 3
+
+query III
+select array_length(arrow_cast(make_array(1, 2, 3, 4, 5), 'FixedSizeList(5, Int64)'), 1), array_length(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), 1), array_length(arrow_cast(make_array([1, 2], [3, 4], [5, 6]), 'FixedSizeList(3, List(Int64))'), 1);
+----
+5 3 3
+
+
 query RRR
 select array_distance([2], [3]), list_distance([1], [2]), list_distance([1], [-2]);
 ----
@@ -6009,7 +6022,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection: 
+05)--------Projection:
 06)----------Filter: substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6038,7 +6051,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection: 
+05)--------Projection:
 06)----------Filter: substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6067,7 +6080,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection: 
+05)--------Projection:
 06)----------Filter: substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6098,7 +6111,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection: 
+05)--------Projection:
 06)----------Filter: array_has(LargeList([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)))
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6127,7 +6140,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection: 
+05)--------Projection:
 06)----------Filter: substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6158,7 +6171,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection: 
+05)--------Projection:
 06)----------Filter: substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)) IS NOT NULL OR Boolean(NULL)
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
