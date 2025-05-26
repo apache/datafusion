@@ -3997,7 +3997,7 @@ mod tests {
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
-    use insta::{assert_snapshot, assert_debug_snapshot};
+    use insta::{assert_debug_snapshot, assert_snapshot};
 
     use crate::test::function_stub::count;
 
