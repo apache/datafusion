@@ -41,6 +41,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_contains, Result};
+use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
@@ -550,9 +551,10 @@ async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
 ) -> Result<SessionContext> {
-    let mut disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
-
-    DiskManager::set_arc_max_temp_directory_size(&mut disk_manager, disk_limit)?;
+    let disk_manager = DiskManagerBuilder::default()
+        .with_mode(datafusion_execution::disk_manager::DiskManagerMode::OsTmpDirectory)
+        .with_max_temp_directory_size(disk_limit)
+        .build()?;
 
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_pool(Arc::new(FairSpillPool::new(memory_pool_limit)))
