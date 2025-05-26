@@ -889,7 +889,7 @@ impl LogicalPlanBuilder {
     pub fn dependent_join(
         self,
         right: LogicalPlan,
-        correlated_columns: Vec<Column>,
+        correlated_columns: Vec<(usize, Expr)>,
         subquery_expr: Expr,
         subquery_depth: usize,
         subquery_name: String,

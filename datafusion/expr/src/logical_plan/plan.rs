@@ -295,10 +295,14 @@ pub enum LogicalPlan {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DependentJoin {
     pub schema: DFSchemaRef,
-    // all the columns provided by the LHS being referenced
-    // in the RHS (and its children nested subqueries, if any) (note that not all outer_refs from the RHS are mentioned in this vectors
-    // because RHS may reference columns provided somewhere from the above join)
-    pub correlated_columns: Vec<Column>,
+    // All combinatoins of (subquery,OuterReferencedExpr) on the RHS (and its descendant)
+    // which points to a column on the LHS.
+    // The Expr should always be Expr::OuterRefColumn.
+    // Note that not all outer_refs from the RHS are mentioned in this vectors
+    // because RHS may reference columns provided somewhere from the above join.
+    // Depths of each correlated_columns should always be gte current dependent join
+    // subquery_depth
+    pub correlated_columns: Vec<(usize, Expr)>,
     // the upper expr that containing the subquery expr
     // i.e for predicates: where outer = scalar_sq + 1
     // correlated exprs are `scalar_sq + 1`
@@ -316,7 +320,7 @@ impl PartialOrd for DependentJoin {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
         struct ComparableJoin<'a> {
-            correlated_columns: &'a Vec<Column>,
+            correlated_columns: &'a Vec<(usize, Expr)>,
             // the upper expr that containing the subquery expr
             // i.e for predicates: where outer = scalar_sq + 1
             // correlated exprs are `scalar_sq + 1`
@@ -1954,8 +1958,12 @@ impl LogicalPlan {
                         subquery_depth,
                         ..
                     }) => {
-                        let correlated_str = correlated_columns.iter().map(|c|{
-                            format!("{c}")
+                        let correlated_str = correlated_columns.iter()
+                        .map(|(level,c)|{
+                            if let Expr::OuterReferenceColumn(_, ref col) = c{
+                                return format!("{col} lvl {level}");
+                            }
+                            "".to_string()
                         }).collect::<Vec<String>>().join(", ");
                         write!(f,"DependentJoin on [{correlated_str}] with expr {subquery_expr} depth {subquery_depth}")
                     },

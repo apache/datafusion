@@ -55,6 +55,7 @@ struct ColumnAccess {
     node_id: usize,
     col: Column,
     data_type: DataType,
+    subquery_depth: usize,
 }
 
 impl DependentJoinRewriter {
@@ -121,6 +122,7 @@ impl DependentJoinRewriter {
                     node_id: access.node_id,
                     stack: access.stack.clone(),
                     data_type: access.data_type.clone(),
+                    subquery_depth: access.subquery_depth,
                 });
             }
         }
@@ -142,6 +144,7 @@ impl DependentJoinRewriter {
                 node_id: child_id,
                 col: col.clone(),
                 data_type: data_type.clone(),
+                subquery_depth: self.subquery_depth,
             });
     }
     fn rewrite_subqueries_into_dependent_joins(
@@ -418,6 +421,12 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             LogicalPlan::Projection(_) => {
                 // TODO: implement me
             }
+            LogicalPlan::SubqueryAlias(_) => {
+                unimplemented!(
+                    "handle the case when the LHS has alias\
+                and the RHS's subquery reference the alias column name"
+                )
+            }
             LogicalPlan::Filter(filter) => {
                 // everytime we meet a subquery during traversal, we increment this by 1
                 // we can use this offset to lookup the original subquery info
@@ -479,7 +488,15 @@ impl TreeNodeRewriter for DependentJoinRewriter {
 
                     let correlated_columns = column_accesses
                         .iter()
-                        .map(|ac| (ac.col.clone()))
+                        .map(|ac| {
+                            (
+                                ac.subquery_depth,
+                                Expr::OuterReferenceColumn(
+                                    ac.data_type.clone(),
+                                    ac.col.clone(),
+                                ),
+                            )
+                        })
                         .unique()
                         .collect();
 
@@ -622,12 +639,12 @@ mod tests {
         assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __scalar_sq_2.output = outer_table.a [a:UInt32, b:UInt32, c:UInt32, output:Int64]
-    DependentJoin on [outer_table.a, outer_table.c] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Int64]
+    DependentJoin on [outer_table.a lvl 2, outer_table.c lvl 1] with expr (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Int64]
       TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
       Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
         Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_1.output = Int32(1) [a:UInt32, b:UInt32, c:UInt32, output:Int64]
-            DependentJoin on [inner_table_lv1.b] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, output:Int64]
+            DependentJoin on [inner_table_lv1.b lvl 2] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, output:Int64]
               TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
               Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
                 Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
@@ -710,7 +727,7 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
         assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
-    DependentJoin on [outer_table.a, outer_table.b] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+    DependentJoin on [outer_table.a lvl 1, outer_table.b lvl 1] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
       TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
       Projection: count(inner_table_lv1.a) AS count_a [count_a:Int64]
         Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
@@ -749,7 +766,7 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
         assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __exists_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
-    DependentJoin on [outer_table.a, outer_table.b] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+    DependentJoin on [outer_table.a lvl 1, outer_table.b lvl 1] with expr EXISTS (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
       TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
       Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
         Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
@@ -850,7 +867,7 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
         assert_dependent_join_rewrite!(plan, @r"
 Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
   Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
-    DependentJoin on [outer_table.a, outer_table.b] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
+    DependentJoin on [outer_table.a lvl 1, outer_table.b lvl 1] with expr outer_table.c IN (<subquery>) depth 1 [a:UInt32, b:UInt32, c:UInt32, output:Boolean]
       TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
       Projection: outer_ref(outer_table.b) AS outer_b_alias [outer_b_alias:UInt32;N]
         Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
