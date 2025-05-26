@@ -134,19 +134,11 @@ pub trait FileSource: Send + Sync {
     fn with_schema_adapter_factory(
         &self,
         factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Arc<dyn FileSource>
-    where
-        Self: Sized + Clone,
-    {
-        // clone the _concrete_ self, then wrap it
-        Arc::new(self.clone()) as Arc<dyn FileSource>
-    }
+    ) -> Arc<dyn FileSource>;
 
     /// Returns the current schema adapter factory if set
     ///
     /// Note: You can implement this method and `with_schema_adapter_factory`
     /// automatically using the [`crate::impl_schema_adapter_methods`] macro.
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        None
-    }
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>>;
 }
