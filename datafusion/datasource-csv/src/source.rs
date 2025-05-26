@@ -29,7 +29,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    as_file_source, calculate_range, FileRange,
+    as_file_source, calculate_range, impl_schema_adapter_methods, FileRange,
     ListingTableUrl, RangeCalculation,
 };
 
@@ -284,21 +284,7 @@ impl FileSource for CsvSource {
         }
     }
 
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(
-        &self,
-    ) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
-    }
+    impl_schema_adapter_methods!();
 }
 
 impl FileOpener for CsvOpener {

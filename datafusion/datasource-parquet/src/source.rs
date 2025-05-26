@@ -29,7 +29,7 @@ use crate::ParquetFileReaderFactory;
 use datafusion_common::config::ConfigOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
-// Removed import of impl_schema_adapter_methods
+use datafusion_datasource::impl_schema_adapter_methods;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
@@ -664,17 +664,5 @@ impl FileSource for ParquetSource {
         );
         Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
     }
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
-    }
+    impl_schema_adapter_methods!();
 }

@@ -23,7 +23,7 @@ use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics}
 use datafusion_datasource::{
     file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
-    file_stream::FileOpener,
+    file_stream::FileOpener, impl_schema_adapter_methods,
     schema_adapter::DefaultSchemaAdapterFactory, schema_adapter::SchemaAdapterFactory,
     source::DataSourceExec, PartitionedFile,
 };
@@ -232,21 +232,7 @@ impl FileSource for TestSource {
         }
     }
 
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(
-        &self,
-    ) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
-    }
+    impl_schema_adapter_methods!();
 }
 
 #[derive(Debug, Clone)]

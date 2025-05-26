@@ -17,7 +17,7 @@
 
 use crate::{
     file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
-    schema_adapter::SchemaAdapterFactory,
+    impl_schema_adapter_methods, schema_adapter::SchemaAdapterFactory,
 };
 
 use std::sync::Arc;
@@ -84,19 +84,7 @@ impl FileSource for MockSource {
         "mock"
     }
 
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
-    }
+    impl_schema_adapter_methods!();
 }
 
 /// Create a column expression
