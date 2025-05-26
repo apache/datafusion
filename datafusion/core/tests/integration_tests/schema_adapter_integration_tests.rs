@@ -148,6 +148,12 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
 
 #[tokio::test]
 async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
+    // This test verifies that the same schema adapter factory can be reused
+    // across different file source types. This is important for ensuring that:
+    // 1. The schema adapter factory interface works uniformly across all source types
+    // 2. The factory can be shared and cloned efficiently using Arc
+    // 3. Various data source implementations correctly implement the schema adapter factory pattern
+
     // Create a test factory
     let factory = Arc::new(UppercaseAdapterFactory {});
 
