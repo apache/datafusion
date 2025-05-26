@@ -150,6 +150,8 @@ impl RepartitionExecState {
 
     fn consume_input_streams(
         &mut self,
+        input: Arc<dyn ExecutionPlan>,
+        metrics: ExecutionPlanMetricsSet,
         partitioning: Partitioning,
         preserve_order: bool,
         name: String,
@@ -157,7 +159,18 @@ impl RepartitionExecState {
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
-                return internal_err!("RepartitionExecState::init_input_streams must be called before consuming input streams");
+                self.ensure_input_streams_initialized(
+                    input,
+                    metrics,
+                    partitioning.partition_count(),
+                    Arc::clone(&context),
+                )?;
+                let RepartitionExecState::InputStreamsInitialized(value) = self else {
+                    // This cannot happen, as ensure_input_streams_initialized() was just called,
+                    // but the compiler does not know.
+                    return internal_err!("Programming error: RepartitionExecState must be in the InputStreamsInitialized state after calling RepartitionExecState::ensure_input_streams_initialized");
+                };
+                value
             }
             RepartitionExecState::ConsumingInputStreams(value) => return Ok(value),
             RepartitionExecState::InputStreamsInitialized(value) => value,
@@ -669,6 +682,8 @@ impl ExecutionPlan for RepartitionExec {
                 // lock mutexes
                 let mut state = state.lock();
                 let state = state.consume_input_streams(
+                    Arc::clone(&input),
+                    metrics.clone(),
                     partitioning,
                     preserve_order,
                     name.clone(),
