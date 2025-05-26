@@ -266,7 +266,7 @@ impl PrunableStatistics {
             s.column_statistics
                 .get(index)
                 .and_then(|stat| {
-                    if let Precision::Exact(min) = get_stat(&stat) {
+                    if let Precision::Exact(min) = get_stat(stat) {
                         has_value = true;
                         Some(min.clone())
                     } else {
