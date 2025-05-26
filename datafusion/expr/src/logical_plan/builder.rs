@@ -2259,7 +2259,7 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
     use crate::test::function_stub::sum;
-    use datafusion_common::{Constraint, RecursionUnnestOption};
+    use datafusion_common::{Constraint, RecursionUnnestOption, SchemaError};
     use insta::assert_snapshot;
 
     #[test]
@@ -2270,7 +2270,7 @@ mod tests {
                 .project(vec![col("id")])?
                 .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r#"
+        assert_snapshot!(plan, @r#"
         Projection: employee_csv.id
           Filter: employee_csv.state = Utf8("CO")
             TableScan: employee_csv projection=[id, state]
@@ -2319,7 +2319,7 @@ mod tests {
                 ])?
                 .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST
           TableScan: employee_csv projection=[state, salary]
         ");
@@ -2339,7 +2339,7 @@ mod tests {
             .union(plan.build()?)?
             .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Union
           Union
             Union
@@ -2364,7 +2364,7 @@ mod tests {
             .union_distinct(plan.build()?)?
             .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Distinct:
           Union
             Distinct:
@@ -2389,7 +2389,7 @@ mod tests {
                 .distinct()?
                 .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r#"
+        assert_snapshot!(plan, @r#"
         Distinct:
           Projection: employee_csv.id
             Filter: employee_csv.state = Utf8("CO")
@@ -2495,8 +2495,19 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(e, _)) => {
-                assert_snapshot!(e, @"Schema contains qualified field name employee_csv.id and unqualified field name id which would be ambiguous");
+            Err(DataFusionError::SchemaError(
+                SchemaError::AmbiguousReference {
+                    field:
+                        Column {
+                            relation: Some(TableReference::Bare { table }),
+                            name,
+                            spans: _,
+                        },
+                },
+                _,
+            )) => {
+                assert_eq!(*"employee_csv", *table);
+                assert_eq!("id", &name);
                 Ok(())
             }
             _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
@@ -2577,21 +2588,18 @@ mod tests {
             .unnest_column("scalar")
             .unwrap_err();
 
-        let err_msg = err
-            .strip_backtrace()
-            .lines()
-            .filter(|line| !line.contains("This was likely caused by a bug"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let DataFusionError::Internal(desc) = err else {
+            return plan_err!("Plan should have returned an DataFusionError::Internal");
+        };
 
-        assert_snapshot!(err_msg, @"Internal error: trying to unnest on invalid data type UInt32.");
+        assert_snapshot!(desc, @"trying to unnest on invalid data type UInt32");
 
         // Unnesting the strings list.
         let plan = nested_table_scan("test_table")?
             .unnest_column("strings")?
             .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Unnest: lists[test_table.strings|depth=1] structs[]
           TableScan: test_table
         ");
@@ -2605,7 +2613,7 @@ mod tests {
             .unnest_column("struct_singular")?
             .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Unnest: lists[] structs[test_table.struct_singular]
           TableScan: test_table
         ");
@@ -2626,7 +2634,7 @@ mod tests {
             .unnest_column("struct_singular")?
             .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Unnest: lists[] structs[test_table.struct_singular]
           Unnest: lists[test_table.structs|depth=1] structs[]
             Unnest: lists[test_table.strings|depth=1] structs[]
@@ -2647,7 +2655,7 @@ mod tests {
             .unnest_columns_with_options(cols, UnnestOptions::default())?
             .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Unnest: lists[test_table.strings|depth=1, test_table.structs|depth=1] structs[test_table.struct_singular]
           TableScan: test_table
         ");
@@ -2674,7 +2682,7 @@ mod tests {
             )?
             .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Unnest: lists[test_table.stringss|depth=1, test_table.stringss|depth=2] structs[test_table.struct_singular]
           TableScan: test_table
         ");
@@ -2826,7 +2834,7 @@ mod tests {
                 .aggregate(vec![col("id")], vec![sum(col("salary"))])?
                 .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
           TableScan: employee_csv projection=[id, state, salary]
         ");
@@ -2848,7 +2856,7 @@ mod tests {
                 .aggregate(vec![col("id")], vec![sum(col("salary"))])?
                 .build()?;
 
-        assert_snapshot!(format!("{plan}"), @r"
+        assert_snapshot!(plan, @r"
         Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]
           TableScan: employee_csv projection=[id, state, salary]
         ");

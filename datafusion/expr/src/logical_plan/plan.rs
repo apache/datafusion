@@ -3997,7 +3997,7 @@ mod tests {
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
-    use insta::assert_snapshot;
+    use insta::{assert_snapshot, assert_debug_snapshot};
 
     use crate::test::function_stub::count;
 
@@ -4025,7 +4025,7 @@ mod tests {
     fn test_display_indent() -> Result<()> {
         let plan = display_plan()?;
 
-        assert_snapshot!(format!("{}", plan.display_indent()), @r"
+        assert_snapshot!(plan.display_indent(), @r"
         Projection: employee_csv.id
           Filter: employee_csv.state IN (<subquery>)
             Subquery:
@@ -4039,7 +4039,7 @@ mod tests {
     fn test_display_indent_schema() -> Result<()> {
         let plan = display_plan()?;
 
-        assert_snapshot!(format!("{}", plan.display_indent_schema()), @r"
+        assert_snapshot!(plan.display_indent_schema(), @r"
         Projection: employee_csv.id [id:Int32]
           Filter: employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]
             Subquery: [state:Utf8]
@@ -4060,7 +4060,7 @@ mod tests {
                 .project(vec![col("id"), exists(plan1).alias("exists")])?
                 .build();
 
-        assert_snapshot!(format!("{}", plan?.display_indent()), @r"
+        assert_snapshot!(plan?.display_indent(), @r"
         Projection: employee_csv.id, EXISTS (<subquery>) AS exists
           Subquery:
             TableScan: employee_csv projection=[state]
@@ -4075,9 +4075,7 @@ mod tests {
 
         // just test for a few key lines in the output rather than the
         // whole thing to make test maintenance easier.
-        let graphviz = format!("{}", plan.display_graphviz());
-
-        assert_snapshot!(graphviz, @r#"
+        assert_snapshot!(plan.display_graphviz(), @r#"
         // Begin DataFusion GraphViz Plan,
         // display it online here: https://dreampuf.github.io/GraphvizOnline
 
@@ -4118,9 +4116,7 @@ mod tests {
     fn test_display_pg_json() -> Result<()> {
         let plan = display_plan()?;
 
-        let pg_json = format!("{}", plan.display_pg_json());
-
-        assert_snapshot!(pg_json, @r#"
+        assert_snapshot!(plan.display_pg_json(), @r#"
         [
           {
             "Plan": {
@@ -4220,7 +4216,16 @@ mod tests {
         let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
-        assert_snapshot!(visitor.strings.join(", "), @"pre_visit Projection, pre_visit Filter, pre_visit TableScan, post_visit TableScan, post_visit Filter, post_visit Projection");
+        assert_debug_snapshot!(visitor.strings, @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+            "pre_visit TableScan",
+            "post_visit TableScan",
+            "post_visit Filter",
+            "post_visit Projection",
+        ]
+        "#);
     }
 
     #[derive(Debug, Default)]
@@ -4286,9 +4291,14 @@ mod tests {
         let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
-        assert_snapshot!(
-            visitor.inner.strings.join(", "),
-            @"pre_visit Projection, pre_visit Filter"
+        assert_debug_snapshot!(
+            visitor.inner.strings,
+            @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+        ]
+        "#
         );
     }
 
@@ -4302,9 +4312,16 @@ mod tests {
         let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
-        assert_snapshot!(
-            visitor.inner.strings.join(", "),
-            @"pre_visit Projection, pre_visit Filter, pre_visit TableScan, post_visit TableScan"
+        assert_debug_snapshot!(
+            visitor.inner.strings,
+            @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+            "pre_visit TableScan",
+            "post_visit TableScan",
+        ]
+        "#
         );
     }
 
@@ -4350,9 +4367,14 @@ mod tests {
             res.strip_backtrace(),
             @"This feature is not implemented: Error in pre_visit"
         );
-        assert_snapshot!(
-            visitor.inner.strings.join(", "),
-            @"pre_visit Projection, pre_visit Filter"
+        assert_debug_snapshot!(
+            visitor.inner.strings,
+            @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+        ]
+        "#
         );
     }
 
@@ -4368,9 +4390,16 @@ mod tests {
             res.strip_backtrace(),
             @"This feature is not implemented: Error in post_visit"
         );
-        assert_snapshot!(
-            visitor.inner.strings.join(", "),
-            @"pre_visit Projection, pre_visit Filter, pre_visit TableScan, post_visit TableScan"
+        assert_debug_snapshot!(
+            visitor.inner.strings,
+            @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+            "pre_visit TableScan",
+            "post_visit TableScan",
+        ]
+        "#
         );
     }
 
@@ -4385,7 +4414,7 @@ mod tests {
             })),
             empty_schema,
         );
-        assert_snapshot!(p.err().unwrap().strip_backtrace(), @"Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");
+        assert_snapshot!(p.unwrap_err().strip_backtrace(), @"Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");
         Ok(())
     }
 
