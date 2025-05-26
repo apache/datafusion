@@ -114,7 +114,7 @@ pub async fn from_aggregate_rel(
             aggr_exprs.push(agg_func?.as_ref().clone());
         }
 
-        // Ensure that all expressions have a unique display name
+        // Ensure that all expressions have a unique name
         let mut name_tracker = NameTracker::new();
         let group_exprs = group_exprs
             .iter()
