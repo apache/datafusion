@@ -126,14 +126,6 @@ mod parquet_adapter_tests {
         }
     }
 
-    // Use the apply_schema_adapter method on ParquetSource
-    fn apply_schema_adapter(
-        source: ParquetSource,
-        conf: &FileScanConfig,
-    ) -> Arc<dyn FileSource> {
-        source.apply_schema_adapter(conf)
-    }
-
     #[test]
     fn test_apply_schema_adapter_with_factory() {
         // Create a schema
@@ -160,7 +152,7 @@ mod parquet_adapter_tests {
         .build();
 
         // Apply schema adapter to a new source
-        let result_source = apply_schema_adapter(source, &config);
+        let result_source = source.apply_schema_adapter(&config);
 
         // Verify the adapter was applied
         assert!(result_source.schema_adapter_factory().is_some());
@@ -207,7 +199,7 @@ mod parquet_adapter_tests {
         .build();
 
         // Apply schema adapter function - should pass through the source unchanged
-        let result_source = apply_schema_adapter(source, &config);
+        let result_source = source.apply_schema_adapter(&config);
 
         // Verify no adapter was applied
         assert!(result_source.schema_adapter_factory().is_none());
