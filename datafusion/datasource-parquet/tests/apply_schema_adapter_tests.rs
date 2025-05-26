@@ -16,20 +16,19 @@
 // under the License.
 
 mod parquet_adapter_tests {
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::{ColumnStatistics, DataFusionError, Result};
-    use datafusion_datasource::file::FileSource;
-    use datafusion_datasource::file_scan_config::{
-        FileScanConfig, FileScanConfigBuilder,
+    use arrow::{
+        datatypes::{DataType, Field, Schema, SchemaRef},
+        record_batch::RecordBatch,
     };
-    use datafusion_datasource::schema_adapter::{
-        SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+    use datafusion_common::{ColumnStatistics, DataFusionError, Result};
+    use datafusion_datasource::{
+        file::FileSource,
+        file_scan_config::FileScanConfigBuilder,
+        schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper},
     };
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_execution::object_store::ObjectStoreUrl;
-    use std::fmt::Debug;
-    use std::sync::Arc;
+    use std::{fmt::Debug, sync::Arc};
 
     /// A test schema adapter factory that adds prefix to column names
     #[derive(Debug)]
