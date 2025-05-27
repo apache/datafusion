@@ -50,6 +50,27 @@ use datafusion::prelude::*;
 
 Here is a minimal example showing the execution of a query using the DataFrame API.
 
+Create DataFrame using macro API from in memory rows
+
+```rust
+use datafusion::prelude::*;
+use datafusion::error::Result;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Create a new dataframe with in-memory data using macro
+    let df = dataframe!(
+        "a" => [1, 2, 3],
+        "b" => [true, true, false],
+        "c" => [Some("foo"), Some("bar"), None]
+    )?;
+    df.show().await?;
+    Ok(())
+}
+```
+
+Create DataFrame from file or in memory rows using standard API
+
 ```rust
 use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -84,12 +105,6 @@ async fn main() -> Result<()> {
     let df = ctx.read_batch(batch)?;
     df.show().await?;
 
-    // Create a new dataframe with in-memory data using macro
-    let df = dataframe!(
-      "id" => [1, 2, 3],
-      "name" => ["foo", "bar", "baz"]
-    )?;
-    df.show().await?;
     Ok(())
 }
 ```
