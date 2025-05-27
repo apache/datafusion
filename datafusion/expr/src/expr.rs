@@ -24,6 +24,7 @@ use std::mem;
 use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
+use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
@@ -882,6 +883,16 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
         }
     }
+    
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        match self {
+            WindowFunctionDefinition::AggregateUDF(_) => None,
+            WindowFunctionDefinition::WindowUDF(udwf) => udwf.simplify(),
+        }
+    }
 }
 
 impl Display for WindowFunctionDefinition {
@@ -952,6 +963,13 @@ impl WindowFunction {
                 null_treatment: None,
             },
         }
+    }
+
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        self.fun.simplify()
     }
 }
 

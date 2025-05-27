@@ -1523,14 +1523,13 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 (_, expr) => Transformed::no(expr),
             },
 
-            Expr::WindowFunction(WindowFunction {
-                fun: WindowFunctionDefinition::WindowUDF(ref udwf),
-                ..
-            }) => match (udwf.simplify(), expr) {
-                (Some(simplify_function), Expr::WindowFunction(wf)) => {
-                    Transformed::yes(simplify_function(wf, info)?)
+            Expr::WindowFunction(ref window_fun) => {
+                match (window_fun.simplify(), expr) {
+                    (Some(simplify_function), Expr::WindowFunction(wf)) => {
+                        Transformed::yes(simplify_function(*wf, info)?)
+                    }
+                    (_, expr) => Transformed::no(expr),
                 }
-                (_, expr) => Transformed::no(expr),
             },
 
             //

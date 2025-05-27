@@ -1104,22 +1104,22 @@ async fn test_metadata_based_aggregate_as_window() -> Result<()> {
         )));
 
     let df = df.select(vec![
-        Expr::WindowFunction(WindowFunction::new(
+        Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(Arc::clone(&no_output_meta_udf)),
             vec![col("no_metadata")],
         ))
         .alias("meta_no_in_no_out"),
-        Expr::WindowFunction(WindowFunction::new(
+        Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(no_output_meta_udf),
             vec![col("with_metadata")],
         ))
         .alias("meta_with_in_no_out"),
-        Expr::WindowFunction(WindowFunction::new(
+        Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(Arc::clone(&with_output_meta_udf)),
             vec![col("no_metadata")],
         ))
         .alias("meta_no_in_with_out"),
-        Expr::WindowFunction(WindowFunction::new(
+        Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(with_output_meta_udf),
             vec![col("with_metadata")],
         ))
