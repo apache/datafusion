@@ -35,7 +35,6 @@ use datafusion_expr::logical_plan::LogicalPlan;
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
-use crate::eliminate_aggregation_self_join::EliminateAggregationSelfJoin;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
@@ -45,7 +44,9 @@ use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_nested_union::EliminateNestedUnion;
 use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
-use crate::eliminate_unique_keyed_self_join::EliminateUniqueKeyedSelfJoin;
+use crate::eliminate_self_join::{
+    EliminateAggregationSelfJoin, EliminateUniqueKeyedSelfJoin,
+};
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::optimize_projections::OptimizeProjections;

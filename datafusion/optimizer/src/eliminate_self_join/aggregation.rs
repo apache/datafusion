@@ -23,12 +23,17 @@ use std::{collections::HashSet, sync::Arc};
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::{
     tree_node::{Transformed, TreeNode, TreeNodeContainer},
-    Column, DFSchema, Dependency, Result, ScalarValue, TableReference,
+    Column, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::{
     expr::{AggregateFunction, Sort, WindowFunction, WindowFunctionParams},
     Aggregate, BinaryExpr, Expr, Join, LogicalPlan, Operator, SubqueryAlias, TableScan,
     Window, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+};
+
+use super::{
+    is_table_scan_same, merge_table_scans, unique_indexes, OptimizationResult,
+    RenamedAlias,
 };
 
 #[derive(Default, Debug)]
@@ -39,58 +44,6 @@ impl EliminateAggregationSelfJoin {
     pub fn new() -> Self {
         Self {}
     }
-}
-
-fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan {
-    let filters = left_scan
-        .filters
-        .iter()
-        .chain(right_scan.filters.iter())
-        .cloned()
-        .collect();
-    // FIXME: double iteration over the filters
-    let projection = match (&left_scan.projection, &right_scan.projection) {
-        (Some(left_projection), Some(right_projection)) => Some(
-            left_projection
-                .iter()
-                .chain(right_projection.iter())
-                .cloned()
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>(),
-        ),
-        (Some(left_projection), None) => Some(left_projection.clone()),
-        (None, Some(right_projection)) => Some(right_projection.clone()),
-        (None, None) => None,
-    };
-    let fetch = match (left_scan.fetch, right_scan.fetch) {
-        (Some(left_fetch), Some(right_fetch)) => Some(left_fetch.max(right_fetch)),
-        (Some(rows), None) | (None, Some(rows)) => Some(rows),
-        (None, None) => None,
-    };
-    TableScan::try_new(
-        left_scan.table_name.clone(),
-        Arc::clone(&left_scan.source),
-        projection,
-        filters,
-        fetch,
-    )
-    .unwrap()
-}
-
-// TODO: equality of `inner` `apachearrow::datatypes::SchemaRef` doesn't mean equality of the tables
-fn is_table_scan_same(left: &TableScan, right: &TableScan) -> bool {
-    // If the plans don't scan the same table then we cannot be sure for self-join
-    left.table_name == right.table_name
-}
-
-fn unique_indexes(schema: &DFSchema) -> Vec<HashSet<usize>> {
-    schema
-        .functional_dependencies()
-        .iter()
-        .filter(|dep| dep.mode == Dependency::Single)
-        .map(|dep| dep.source_indices.iter().cloned().collect::<HashSet<_>>())
-        .collect::<Vec<_>>()
 }
 
 /// Given [`Expr`] try to narrow enum variants to comparison expression between
@@ -195,18 +148,6 @@ fn try_narrow_join_to_table_scan_alias(branch: &LogicalPlan) -> Option<SelfJoinB
         }
         _ => None,
     }
-}
-
-#[derive(Debug)]
-struct RenamedAlias {
-    from: TableReference,
-    to: TableReference,
-}
-
-#[derive(Debug)]
-struct OptimizationResult {
-    plan: LogicalPlan,
-    renamed_alias: Option<RenamedAlias>,
 }
 
 fn try_replace_with_window(
@@ -448,40 +389,16 @@ impl OptimizerRule for EliminateAggregationSelfJoin {
                 _ => Ok(Transformed::no(plan)),
             }
         })?;
-        if !transformed {
-            debug_assert!(renamed.is_none());
-            return Ok(Transformed::no(plan));
-        }
-        match renamed {
-            Some(RenamedAlias { from, to }) => {
-                let Transformed { data: plan, .. } = plan.transform_down(|plan| {
-                    let Transformed {
-                        data: plan,
-                        transformed,
-                        ..
-                    } = plan.map_expressions(|expr| match expr {
-                        Expr::Column(Column {
-                            relation: Some(relation),
-                            name,
-                            spans,
-                        }) if relation == from => {
-                            Ok(Transformed::yes(Expr::Column(Column {
-                                relation: Some(to.clone()),
-                                name,
-                                spans,
-                            })))
-                        }
-                        _ => Ok(Transformed::no(expr)),
-                    })?;
-                    if transformed {
-                        Ok(Transformed::yes(plan.recompute_schema().unwrap()))
-                    } else {
-                        Ok(Transformed::no(plan))
-                    }
-                })?;
+
+        if transformed {
+            if let Some(renamed) = renamed {
+                let Transformed { data: plan, .. } = renamed.rewrite_expression(plan)?;
+                Ok(Transformed::yes(plan))
+            } else {
                 Ok(Transformed::yes(plan))
             }
-            None => Ok(Transformed::yes(plan)),
+        } else {
+            Ok(Transformed::no(plan))
         }
     }
 }
