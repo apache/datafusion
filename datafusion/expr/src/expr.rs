@@ -195,7 +195,7 @@ use sqlparser::ast::{
 /// ```
 /// # use datafusion_expr::{lit, col};
 /// let expr = col("c1") + lit(42);
-/// assert_eq!(format!("{expr:?}"), "BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: \"c1\" }), op: Plus, right: Literal(Int32(42)) })");
+/// assert_eq!(format!("{expr:?}"), "BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: \"c1\" }), op: Plus, right: Literal(Int32(42), None) })");
 /// ```
 ///
 /// ## Use the `Display` trait  (detailed expression)
