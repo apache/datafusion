@@ -763,7 +763,7 @@ async fn simple_intersect() -> Result<()> {
         let expected_plan_str = format!(
             "Projection: count(Int64(1)) AS {syntax}\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
-        \n    Projection: \
+        \n    Projection:\
         \n      LeftSemi Join: data.a = data2.a\
         \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
         \n          TableScan: data projection=[a]\
@@ -780,7 +780,7 @@ async fn simple_intersect() -> Result<()> {
     async fn check_constant(sql_syntax: &str, plan_expr: &str) -> Result<()> {
         let expected_plan_str = format!(
             "Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
-        \n  Projection: \
+        \n  Projection:\
         \n    LeftSemi Join: data.a = data2.a\
         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
         \n        TableScan: data projection=[a]\
@@ -958,7 +958,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
         let expected_plan_str = format!(
             "Projection: count(Int64(1)) AS {syntax}\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
-        \n    Projection: \
+        \n    Projection:\
         \n      LeftSemi Join: left.a = right.a\
         \n        SubqueryAlias: left\
         \n          Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -977,7 +977,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     async fn check_constant(sql_syntax: &str, plan_expr: &str) -> Result<()> {
         let expected_plan_str = format!(
             "Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
-        \n  Projection: \
+        \n  Projection:\
         \n    LeftSemi Join: left.a = right.a\
         \n      SubqueryAlias: left\
         \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
