@@ -424,11 +424,11 @@ impl EquivalenceGroup {
     }
 
     /// Returns a set of all adjacent expression pairs in this equivalence group.
-    /// 
+    ///
     /// For each equivalence class, this function creates pairs of expressions that are adjacent
     /// to each other. For example, if we have an equivalence class [a, b, c], it will generate
     /// pairs (a,b), (a,c), (b,c) and their reverse pairs (b,a), (c,a), (c,b).
-    /// 
+    ///
     /// This is used by the `intersect` function to find common expression pairs between
     /// two equivalence groups.
     #[allow(clippy::type_complexity)]
@@ -447,23 +447,23 @@ impl EquivalenceGroup {
     }
 
     /// Computes the intersection of two equivalence groups.
-    /// 
+    ///
     /// This function finds all expression pairs that are equivalent in both groups.
     /// For example, if group1 has (a, b, c) and group2 has (b, c, d), then the intersection
     /// will contain (b, c) since it appears in both groups.
-    /// 
+    ///
     /// The process works as follows:
     /// 1. Get all adjacent expression pairs from both groups using `adjacent_set`
     /// 2. Find the intersection of these pairs
     /// 3. Create a new equivalence group from the intersecting pairs
     /// 4. Remove any redundant entries from the resulting group
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `other` - The other equivalence group to intersect with
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A new equivalence group containing only the expression pairs that are equivalent
     /// in both input groups.
     pub fn intersect(&self, other: &Self) -> Self {
