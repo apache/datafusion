@@ -60,7 +60,7 @@ object_store = { workspace = true, features = ["aws", "gcp", "http"] }
 parking_lot = { workspace = true }
 parquet = { workspace = true, default-features = false }
 regex = { workspace = true }
-rustyline = "15.0"
+rustyline = "16.0"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = { workspace = true }
 
