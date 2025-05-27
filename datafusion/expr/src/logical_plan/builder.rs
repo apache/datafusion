@@ -601,7 +601,7 @@ impl LogicalPlanBuilder {
     /// Apply a filter which is used for a having clause
     pub fn having(self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Filter::try_new_with_having(expr, self.plan)
+        Filter::try_new(expr, self.plan)
             .map(LogicalPlan::Filter)
             .map(Self::from)
     }
