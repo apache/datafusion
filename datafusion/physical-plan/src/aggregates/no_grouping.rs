@@ -76,6 +76,7 @@ impl AggregateStream {
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
+        let input = Box::pin(YieldStream::new(input)) as SendableRecordBatchStream;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
@@ -167,6 +168,55 @@ impl AggregateStream {
             schema: agg_schema,
             stream,
         })
+    }
+}
+
+/// A stream that yields batches of data, yielding control back to the executor
+pub struct YieldStream {
+    inner: SendableRecordBatchStream,
+    batches_processed: usize,
+}
+
+impl YieldStream {
+    pub fn new(inner: SendableRecordBatchStream) -> Self {
+        Self {
+            inner,
+            batches_processed: 0,
+        }
+    }
+}
+
+// Stream<Item = Result<RecordBatch>> to poll_next_unpin
+impl Stream for YieldStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        const YIELD_BATCHES: usize = 64;
+        let this = &mut *self;
+
+        match this.inner.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok(batch))) => {
+                this.batches_processed += 1;
+                if this.batches_processed >= YIELD_BATCHES {
+                    this.batches_processed = 0;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Some(Ok(batch)))
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+// RecordBatchStream schema()
+impl RecordBatchStream for YieldStream {
+    fn schema(&self) -> Arc<arrow_schema::Schema> {
+        self.inner.schema()
     }
 }
 

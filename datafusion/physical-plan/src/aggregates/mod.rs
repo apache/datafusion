@@ -47,6 +47,7 @@ use datafusion_physical_expr::{
     PhysicalSortRequirement,
 };
 
+use crate::aggregates::no_grouping::YieldStream;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use itertools::Itertools;
 
@@ -983,8 +984,9 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, context)
-            .map(|stream| stream.into())
+        let raw_stream = self.execute_typed(partition, context)?.into();
+        let wrapped = Box::pin(YieldStream::new(raw_stream));
+        Ok(wrapped)
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
