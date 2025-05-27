@@ -28,7 +28,7 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{internal_err, Column, HashMap, Result};
-use datafusion_expr::{col, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder};
 
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -196,6 +196,7 @@ enum SubqueryType {
     In,
     Exists,
     Scalar,
+    LateralJoin,
 }
 
 impl SubqueryType {
@@ -205,6 +206,7 @@ impl SubqueryType {
             SubqueryType::In => "__in_sq",
             SubqueryType::Exists => "__exists_sq",
             SubqueryType::Scalar => "__scalar_sq",
+            SubqueryType::LateralJoin => "__lateral_sq",
         }
         .to_string()
     }
@@ -337,41 +339,108 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 parent_node
                     .columns_accesses_by_subquery_id
                     .insert(new_id, vec![]);
-                for expr in parent_node.plan.expressions() {
-                    expr.exists(|e| {
-                        let (found_sq, checking_type) = match e {
-                            Expr::ScalarSubquery(sq) => {
-                                if sq == subquery {
-                                    (true, SubqueryType::Scalar)
-                                } else {
-                                    (false, SubqueryType::None)
-                                }
-                            }
-                            Expr::Exists(exist) => {
-                                if &exist.subquery == subquery {
-                                    (true, SubqueryType::Exists)
-                                } else {
-                                    (false, SubqueryType::None)
-                                }
-                            }
-                            Expr::InSubquery(in_sq) => {
-                                if &in_sq.subquery == subquery {
-                                    (true, SubqueryType::In)
-                                } else {
-                                    (false, SubqueryType::None)
-                                }
-                            }
-                            _ => (false, SubqueryType::None),
-                        };
-                        if found_sq {
-                            subquery_type = checking_type;
-                        }
 
-                        Ok(found_sq)
-                    })?;
+                if let LogicalPlan::Join(_) = parent_node.plan {
+                    subquery_type = SubqueryType::LateralJoin;
+                } else {
+                    for expr in parent_node.plan.expressions() {
+                        expr.exists(|e| {
+                            let (found_sq, checking_type) = match e {
+                                Expr::ScalarSubquery(sq) => {
+                                    if sq == subquery {
+                                        (true, SubqueryType::Scalar)
+                                    } else {
+                                        (false, SubqueryType::None)
+                                    }
+                                }
+                                Expr::Exists(exist) => {
+                                    if &exist.subquery == subquery {
+                                        (true, SubqueryType::Exists)
+                                    } else {
+                                        (false, SubqueryType::None)
+                                    }
+                                }
+                                Expr::InSubquery(in_sq) => {
+                                    if &in_sq.subquery == subquery {
+                                        (true, SubqueryType::In)
+                                    } else {
+                                        (false, SubqueryType::None)
+                                    }
+                                }
+                                _ => (false, SubqueryType::None),
+                            };
+                            if found_sq {
+                                subquery_type = checking_type;
+                            }
+
+                            Ok(found_sq)
+                        })?;
+                    }
                 }
             }
-            LogicalPlan::Aggregate(_) | LogicalPlan::Join(_) => {}
+            LogicalPlan::Aggregate(_) => {}
+            LogicalPlan::Join(join) => {
+                let mut sq_count = if let LogicalPlan::Subquery(_) = &join.left.as_ref() {
+                    1
+                } else {
+                    0
+                };
+                sq_count += if let LogicalPlan::Subquery(_) = join.right.as_ref() {
+                    1
+                } else {
+                    0
+                };
+                match sq_count {
+                    0 => {}
+                    1 => {
+                        is_dependent_join_node = true;
+                    }
+                    _ => {
+                        return internal_err!(
+                            "plan error: join logical plan has both children with type \
+                            Subquery"
+                        );
+                    }
+                };
+
+                if is_dependent_join_node {
+                    self.subquery_depth += 1;
+                    self.stack.push(new_id);
+                    self.nodes.insert(
+                        new_id,
+                        Node {
+                            plan: node.clone(),
+                            is_dependent_join_node,
+                            columns_accesses_by_subquery_id: IndexMap::new(),
+                            subquery_type,
+                        },
+                    );
+
+                    // we assume that RHS is always a subquery for the join
+                    // and because this function assume that subquery side is visited first
+                    // during f_down, we have to visit it at this step, else
+                    // the function visit_with_subqueries will call f_down for the LHS instead
+                    let transformed_subquery = self
+                        .rewrite_subqueries_into_dependent_joins(
+                            join.right.deref().clone(),
+                        )?
+                        .data;
+                    let transformed_left = self
+                        .rewrite_subqueries_into_dependent_joins(
+                            join.left.deref().clone(),
+                        )?
+                        .data;
+                    let mut new_join_node = join.clone();
+                    new_join_node.right = Arc::new(transformed_subquery);
+                    new_join_node.left = Arc::new(transformed_left);
+                    return Ok(Transformed::new(
+                        LogicalPlan::Join(new_join_node),
+                        true,
+                        // since we rewrite the children directly in this function,
+                        TreeNodeRecursion::Jump,
+                    ));
+                }
+            }
             _ => {
                 return internal_err!("impl f_down for node type {:?}", node);
             }
@@ -409,10 +478,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         }
         let current_subquery_depth = self.subquery_depth;
         self.subquery_depth -= 1;
-        assert!(
-            1 == node.inputs().len(),
-            "a dependent join node cannot have more than 1 child"
-        );
 
         let cloned_input = (**node.inputs().first().unwrap()).clone();
         let mut current_plan = LogicalPlanBuilder::new(cloned_input);
@@ -431,6 +496,50 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         match &node {
             LogicalPlan::Projection(_) => {
                 // TODO: implement me
+            }
+            LogicalPlan::Join(join) => {
+                assert!(node_info.columns_accesses_by_subquery_id.len() == 1);
+                let (_, column_accesses) =
+                    node_info.columns_accesses_by_subquery_id.first().unwrap();
+                let alias = subquery_alias_by_offset.get(&0).unwrap();
+                let correlated_columns = column_accesses
+                    .iter()
+                    .map(|ac| {
+                        (
+                            ac.subquery_depth,
+                            Expr::OuterReferenceColumn(
+                                ac.data_type.clone(),
+                                ac.col.clone(),
+                            ),
+                        )
+                    })
+                    .unique()
+                    .collect();
+
+                let subquery_plan = &join.right;
+                let sq = if let LogicalPlan::Subquery(sq) = subquery_plan.as_ref() {
+                    sq
+                } else {
+                    return internal_err!(
+                        "lateral join must have right join as a subquery"
+                    );
+                };
+                let right = sq.subquery.deref().clone();
+                // At the time of implementation lateral join condition is not fully clear yet
+                // So a TODO for future tracking
+                let lateral_join_condition = if let Some(ref filter) = join.filter {
+                    filter.clone()
+                } else {
+                    lit(true)
+                };
+                current_plan = current_plan.dependent_join(
+                    right,
+                    correlated_columns,
+                    None,
+                    current_subquery_depth,
+                    alias.to_string(),
+                    Some((join.join_type, lateral_join_condition)),
+                )?;
             }
             LogicalPlan::Filter(filter) => {
                 // everytime we meet a subquery during traversal, we increment this by 1
@@ -508,7 +617,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     current_plan = current_plan.dependent_join(
                         subquery_input.deref().clone(),
                         correlated_columns,
-                        subquery_expr.clone(),
+                        Some(subquery_expr.clone()),
                         current_subquery_depth,
                         alias.clone(),
                         None, // TODO: handle this when we support lateral join rewrite
@@ -519,7 +628,10 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     .project(post_join_projections)?;
             }
             _ => {
-                unimplemented!("implement more dependent join node creation")
+                unimplemented!(
+                    "implement more dependent join node creation for node {}",
+                    node
+                )
             }
         }
         Ok(Transformed::yes(current_plan.build()?))
@@ -568,10 +680,10 @@ mod tests {
     use super::DependentJoinRewriter;
     use crate::test::test_table_scan_with_name;
     use arrow::datatypes::DataType as ArrowDataType;
-    use datafusion_common::{alias::AliasGenerator, Result};
+    use datafusion_common::{alias::AliasGenerator, Result, Spans};
     use datafusion_expr::{
         binary_expr, exists, expr_fn::col, in_subquery, lit, out_ref_col,
-        scalar_subquery, Expr, JoinType, LogicalPlanBuilder,
+        scalar_subquery, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Subquery,
     };
     use datafusion_functions_aggregate::count::count;
     use insta::assert_snapshot;
@@ -594,6 +706,65 @@ mod tests {
     }
     #[test]
     fn rewrite_dependent_join_with_nested_lateral_join() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+
+        let inner_table_lv2 = test_table_scan_with_name("inner_table_lv2")?;
+        let scalar_sq_level2 =
+            Arc::new(
+                LogicalPlanBuilder::from(inner_table_lv2)
+                    .filter(
+                        col("inner_table_lv2.a")
+                            .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
+                            .and(col("inner_table_lv2.b").eq(out_ref_col(
+                                ArrowDataType::UInt32,
+                                "inner_table_lv1.b",
+                            ))),
+                    )?
+                    .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv2.a"))])?
+                    .build()?,
+            );
+        let sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(
+                    col("inner_table_lv1.c")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.c"))
+                        .and(scalar_subquery(scalar_sq_level2).eq(lit(1))),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv1.a"))])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
+            .join_on(
+                LogicalPlan::Subquery(Subquery {
+                    subquery: sq_level1,
+                    outer_ref_columns: vec![out_ref_col(
+                        ArrowDataType::UInt32,
+                        "outer_table.c",
+                        // note that subquery lvl2 is referencing outer_table.a, and it is not being listed here
+                        // this simulate the limitation of current subquery planning and assert
+                        // that the rewriter can fill in this gap
+                    )],
+                    spans: Spans::new(),
+                }),
+                JoinType::Inner,
+                vec![lit(true)],
+            )?
+            .build()?;
+        assert_dependent_join_rewrite!(plan, @r"
+        DependentJoin on [outer_table.a lvl 2, outer_table.c lvl 1] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+          Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]] [count(inner_table_lv1.a):Int64]
+            Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c [a:UInt32, b:UInt32, c:UInt32]
+              Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_1.output = Int32(1) [a:UInt32, b:UInt32, c:UInt32, output:Int64]
+                DependentJoin on [inner_table_lv1.b lvl 2] with expr (<subquery>) depth 2 [a:UInt32, b:UInt32, c:UInt32, output:Int64]
+                  TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+                  Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]] [count(inner_table_lv2.a):Int64]
+                    Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b) [a:UInt32, b:UInt32, c:UInt32]
+                      TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
+        ");
         Ok(())
     }
 

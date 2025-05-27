@@ -890,17 +890,22 @@ impl LogicalPlanBuilder {
         self,
         right: LogicalPlan,
         correlated_columns: Vec<(usize, Expr)>,
-        subquery_expr: Expr,
+        subquery_expr: Option<Expr>,
         subquery_depth: usize,
         subquery_name: String,
         lateral_join_condition: Option<(JoinType, Expr)>,
     ) -> Result<Self> {
         let left = self.build()?;
         let schema = left.schema();
+        // TODO: for lateral join, output schema is similar to a normal join
         let qualified_fields = schema
             .iter()
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-            .chain(once(subquery_output_field(&subquery_name, &subquery_expr)))
+            .chain(
+                subquery_expr
+                    .iter()
+                    .map(|expr| subquery_output_field(&subquery_name, expr)),
+            )
             .collect();
         let metadata = schema.metadata().clone();
         let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;

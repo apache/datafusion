@@ -306,7 +306,7 @@ pub struct DependentJoin {
     // the upper expr that containing the subquery expr
     // i.e for predicates: where outer = scalar_sq + 1
     // correlated exprs are `scalar_sq + 1`
-    pub subquery_expr: Expr,
+    pub subquery_expr: Option<Expr>,
     // begins with depth = 1
     pub subquery_depth: usize,
     pub left: Arc<LogicalPlan>,
@@ -326,7 +326,7 @@ impl PartialOrd for DependentJoin {
             // the upper expr that containing the subquery expr
             // i.e for predicates: where outer = scalar_sq + 1
             // correlated exprs are `scalar_sq + 1`
-            subquery_expr: &'a Expr,
+            subquery_expr: &'a Option<Expr>,
 
             depth: &'a usize,
             left: &'a Arc<LogicalPlan>,
@@ -1961,6 +1961,7 @@ impl LogicalPlan {
                         subquery_expr,
                         correlated_columns,
                         subquery_depth,
+                        lateral_join_condition,
                         ..
                     }) => {
                         let correlated_str = correlated_columns.iter()
@@ -1970,7 +1971,20 @@ impl LogicalPlan {
                             }
                             "".to_string()
                         }).collect::<Vec<String>>().join(", ");
-                        write!(f,"DependentJoin on [{correlated_str}] with expr {subquery_expr} depth {subquery_depth}")
+                        let lateral_join_info = if let Some((join_type,join_expr))=
+                        lateral_join_condition {
+                            format!(" lateral {join_type} join with {join_expr}")
+                        }else{
+                            "".to_string()
+                        };
+                        let subquery_expr_str = if let Some(expr) = 
+                        subquery_expr{
+                            format!(" with expr {expr}")
+                        }else{
+                             "".to_string() 
+                            };
+                        write!(f,"DependentJoin on [{correlated_str}]{subquery_expr_str}\
+                        {lateral_join_info} depth {subquery_depth}")
                     },
                     LogicalPlan::Join(Join {
                         on: ref keys,
