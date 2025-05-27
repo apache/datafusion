@@ -39,20 +39,18 @@ use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 #[derive(Debug, PartialEq, Eq)]
 pub struct Literal {
     value: ScalarValue,
-    metadata: Option<HashMap<String, String>>,
     field: Field,
 }
 
 impl Hash for Literal {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.value.hash(state);
-        if let Some(metadata) = &self.metadata {
-            let mut keys = metadata.keys().collect::<Vec<_>>();
-            keys.sort();
-            for key in keys {
-                key.hash(state);
-                metadata.get(key).unwrap().hash(state);
-            }
+        let metadata = self.field.metadata();
+        let mut keys = metadata.keys().collect::<Vec<_>>();
+        keys.sort();
+        for key in keys {
+            key.hash(state);
+            metadata.get(key).unwrap().hash(state);
         }
     }
 }
@@ -66,20 +64,17 @@ impl Literal {
     /// Create a literal value expression
     pub fn new_with_metadata(
         value: ScalarValue,
-        metadata: Option<HashMap<String, String>>,
+        metadata: impl Into<Option<HashMap<String, String>>>,
     ) -> Self {
+        let metadata = metadata.into();
         let mut field =
             Field::new(format!("{value}"), value.data_type(), value.is_null());
 
-        if let Some(metadata) = &metadata {
-            field = field.with_metadata(metadata.clone());
+        if let Some(metadata) = metadata {
+            field = field.with_metadata(metadata);
         }
 
-        Self {
-            value,
-            metadata,
-            field,
-        }
+        Self { value, field }
     }
 
     /// Get the scalar value

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::ScalarFunctionExpr;
@@ -113,7 +114,14 @@ pub fn create_physical_expr(
     match e {
         Expr::Alias(Alias { expr, metadata, .. }) => {
             if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
-                let mut new_metadata = prior_metadata.clone().unwrap_or_default();
+                let mut new_metadata = prior_metadata
+                    .as_ref()
+                    .map(|m| {
+                        m.iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect::<HashMap<String, String>>()
+                    })
+                    .unwrap_or_default();
                 if let Some(metadata) = metadata {
                     new_metadata.extend(metadata.clone());
                 }
@@ -136,7 +144,9 @@ pub fn create_physical_expr(
         }
         Expr::Literal(value, metadata) => Ok(Arc::new(Literal::new_with_metadata(
             value.clone(),
-            metadata.clone(),
+            metadata
+                .as_ref()
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
         ))),
         Expr::ScalarVariable(_, variable_names) => {
             if is_system_variables(variable_names) {
