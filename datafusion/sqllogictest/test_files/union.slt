@@ -489,7 +489,7 @@ logical_plan
 04)------Limit: skip=0, fetch=3
 05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)----------SubqueryAlias: a
-07)------------Projection: 
+07)------------Projection:
 08)--------------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 09)----------------Projection: aggregate_test_100.c1
 10)------------------Filter: aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")

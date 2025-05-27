@@ -4385,7 +4385,7 @@ JOIN my_catalog.my_schema.table_with_many_types AS r ON l.binary_col = r.binary_
 logical_plan
 01)Projection: count(Int64(1)) AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-03)----Projection: 
+03)----Projection:
 04)------Inner Join: l.binary_col = r.binary_col
 05)--------SubqueryAlias: l
 06)----------TableScan: my_catalog.my_schema.table_with_many_types projection=[binary_col]
