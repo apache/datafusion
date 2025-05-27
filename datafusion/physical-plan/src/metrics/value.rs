@@ -17,20 +17,20 @@
 
 //! Value representation of metrics
 
+use chrono::{DateTime, Utc};
+use datafusion_common::instant::Instant;
+use datafusion_execution::memory_pool::human_readable_size;
+use parking_lot::Mutex;
+use std::any::Any;
 use std::{
     borrow::{Borrow, Cow},
-    fmt::Display,
+    fmt::{Debug, Display},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
 };
-
-use chrono::{DateTime, Utc};
-use datafusion_common::instant::Instant;
-use datafusion_execution::memory_pool::human_readable_size;
-use parking_lot::Mutex;
 
 /// A counter to record things such as number of input or output rows
 ///
@@ -344,7 +344,7 @@ impl Drop for ScopedTimerGuard<'_> {
 /// Among other differences, the metric types have different ways to
 /// logically interpret their underlying values and some metrics are
 /// so common they are given special treatment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum MetricValue {
     /// Number of output rows produced: "output_rows" metric
     OutputRows(Count),
@@ -401,6 +401,90 @@ pub enum MetricValue {
     StartTimestamp(Timestamp),
     /// The time at which execution ended
     EndTimestamp(Timestamp),
+    Custom {
+        /// The provided name of this metric
+        name: Cow<'static, str>,
+        /// A custom implementation of the metric value.
+        value: Arc<dyn CustomMetricValue>,
+    },
+}
+
+/// A trait for implementing custom metric values.
+///
+/// This trait enables defining application- or operator-specific metric types
+/// that can be aggregated and displayed alongside standard metrics. These
+/// custom metrics integrate with [`MetricValue::Custom`] and support
+/// aggregation logic, introspection, and optional numeric representation.
+///
+/// # Requirements
+/// Implementations of `CustomMetricValue` must satisfy the following:
+///
+/// 1. [`Self::aggregate`]: Defines how two metric values are combined
+/// 2. [`Self::new_empty`]: Returns a new, zero-value instance for accumulation
+/// 3. [`Self::as_any`]: Enables dynamic downcasting for type-specific operations
+/// 4. [`Self::as_usize`]: Optionally maps the value to a `usize` (for sorting, display, etc.)
+///
+/// # Examples
+/// ```
+/// # use std::sync::Arc;
+/// # use std::fmt::{Debug, Display};
+/// # use std::any::Any;
+/// # use std::sync::atomic::{AtomicUsize, Ordering};
+///
+/// # use datafusion_physical_plan::metrics::CustomMetricValue;
+///
+/// #[derive(Debug, Default)]
+/// struct MyCounter {
+///     count: AtomicUsize,
+/// }
+///
+/// impl Display for MyCounter {
+///     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+///         write!(f, "count: {}", self.count.load(Ordering::Relaxed))
+///     }
+/// }
+///
+/// impl CustomMetricValue for MyCounter {
+///     fn new_empty(&self) -> Arc<dyn CustomMetricValue> {
+///         Arc::new(Self::default())
+///     }
+///
+///     fn aggregate(&self, other: Arc<dyn CustomMetricValue>) {
+///         let other = other.as_any().downcast_ref::<Self>().unwrap();
+///         self.count.fetch_add(other.count.load(Ordering::Relaxed), Ordering::Relaxed);
+///     }
+///
+///     fn as_any(&self) -> &dyn Any {
+///         self
+///     }
+///
+///     fn as_usize(&self) -> Option<usize> {
+///         Some(self.count.load(Ordering::Relaxed))
+///     }
+/// }
+/// ```
+///
+/// [`MetricValue::Custom`]: super::MetricValue::Custom
+pub trait CustomMetricValue: Display + Debug + Send + Sync {
+    /// Returns a new, zero-initialized version of this metric value.
+    ///
+    /// This value is used during metric aggregation to accumulate results.
+    fn new_empty(&self) -> Arc<dyn CustomMetricValue>;
+
+    /// Merges another metric value into this one.
+    ///
+    /// The type of `other` could be of a different custom type as long as it's aggregatable into self.
+    fn aggregate(&self, other: Arc<dyn CustomMetricValue + 'static>);
+
+    /// Returns this value as a [`Any`] to support dynamic downcasting.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Optionally returns a numeric representation of the value, if meaningful.
+    ///
+    /// This is used for sorting and summarizing metrics.
+    fn as_usize(&self) -> Option<usize> {
+        None
+    }
 }
 
 impl MetricValue {
@@ -418,6 +502,7 @@ impl MetricValue {
             Self::Time { name, .. } => name.borrow(),
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
+            Self::Custom { name, .. } => name.borrow(),
         }
     }
 
@@ -443,6 +528,9 @@ impl MetricValue {
                 .and_then(|ts| ts.timestamp_nanos_opt())
                 .map(|nanos| nanos as usize)
                 .unwrap_or(0),
+            Self::Custom { name, value } => {
+                value.as_usize().unwrap_or_else(|| panic!("MetricValue::as_usize isn't supported for custom metric values. ({name}: {value:?})"))
+            }
         }
     }
 
@@ -470,6 +558,10 @@ impl MetricValue {
             },
             Self::StartTimestamp(_) => Self::StartTimestamp(Timestamp::new()),
             Self::EndTimestamp(_) => Self::EndTimestamp(Timestamp::new()),
+            Self::Custom { name, value } => Self::Custom {
+                name: name.clone(),
+                value: value.new_empty(),
+            },
         }
     }
 
@@ -516,6 +608,21 @@ impl MetricValue {
             (Self::EndTimestamp(timestamp), Self::EndTimestamp(other_timestamp)) => {
                 timestamp.update_to_max(other_timestamp);
             }
+            (
+                Self::Custom { value, name },
+                Self::Custom {
+                    value: other_value,
+                    name: other_name,
+                },
+            ) => {
+                if name != other_name {
+                    panic!(
+                        "Unsupported metric aggregation between {name} and {other_name}"
+                    )
+                }
+
+                value.aggregate(Arc::clone(other_value));
+            }
             m @ (_, _) => {
                 panic!(
                     "Mismatched metric types. Can not aggregate {:?} with value {:?}",
@@ -540,6 +647,7 @@ impl MetricValue {
             Self::Time { .. } => 8,
             Self::StartTimestamp(_) => 9, // show timestamps last
             Self::EndTimestamp(_) => 10,
+            Self::Custom { .. } => 11,
         }
     }
 
@@ -578,6 +686,9 @@ impl Display for MetricValue {
             Self::StartTimestamp(timestamp) | Self::EndTimestamp(timestamp) => {
                 write!(f, "{timestamp}")
             }
+            Self::Custom { name, value } => {
+                write!(f, "name:{name} {value}")
+            }
         }
     }
 }
@@ -588,6 +699,81 @@ mod tests {
     use datafusion_execution::memory_pool::units::MB;
 
     use super::*;
+
+    #[derive(Debug, Default)]
+    pub struct CustomCounter {
+        count: AtomicUsize,
+    }
+
+    impl Display for CustomCounter {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "count: {}", self.count.load(Ordering::Relaxed))
+        }
+    }
+
+    impl CustomMetricValue for CustomCounter {
+        fn new_empty(&self) -> Arc<dyn CustomMetricValue> {
+            Arc::new(CustomCounter::default())
+        }
+
+        fn aggregate(&self, other: Arc<dyn CustomMetricValue + 'static>) {
+            let other = other.as_any().downcast_ref::<Self>().unwrap();
+            self.count
+                .fetch_add(other.count.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Unsupported metric aggregation between Hi and Hello")]
+    fn test_custom_metric_with_mismatching_names() {
+        let custom_counter = CustomCounter::default();
+        let mut custom_val = MetricValue::Custom {
+            name: Cow::Borrowed("Hi"),
+            value: Arc::new(custom_counter),
+        };
+
+        let other_custom_counter = CustomCounter::default();
+        let other_custom_val = MetricValue::Custom {
+            name: Cow::Borrowed("Hello"),
+            value: Arc::new(other_custom_counter),
+        };
+
+        // Should panic
+        custom_val.aggregate(&other_custom_val);
+    }
+
+    #[test]
+    fn test_custom_metric() {
+        let custom_counter = CustomCounter::default();
+        custom_counter.count.fetch_add(11, Ordering::Relaxed);
+        let mut custom_val = MetricValue::Custom {
+            name: Cow::Borrowed("Hi"),
+            value: Arc::new(custom_counter),
+        };
+
+        let other_custom_counter = CustomCounter::default();
+        other_custom_counter.count.fetch_add(20, Ordering::Relaxed);
+        let other_custom_val = MetricValue::Custom {
+            name: Cow::Borrowed("Hi"),
+            value: Arc::new(other_custom_counter),
+        };
+
+        custom_val.aggregate(&other_custom_val);
+
+        if let MetricValue::Custom { value, .. } = custom_val {
+            let counter = value
+                .as_any()
+                .downcast_ref::<CustomCounter>()
+                .expect("Expected CustomCounter");
+            assert_eq!(counter.count.load(Ordering::Relaxed), 31);
+        } else {
+            panic!("Unexpected value");
+        }
+    }
 
     #[test]
     fn test_display_output_rows() {

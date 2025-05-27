@@ -33,7 +33,9 @@ use datafusion_common::HashMap;
 // public exports
 pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics};
 pub use builder::MetricBuilder;
-pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
+pub use value::{
+    Count, CustomMetricValue, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp,
+};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
 /// [`ExecutionPlan`] execution.
@@ -263,6 +265,7 @@ impl MetricsSet {
             MetricValue::Gauge { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
+            MetricValue::Custom { .. } => false,
         })
     }
 
@@ -520,14 +523,7 @@ mod tests {
         let metrics = metrics.clone_inner();
         assert!(metrics.sum(|_| false).is_none());
 
-        let expected_count = Count::new();
-        expected_count.add(3);
-        let expected_sum = MetricValue::Count {
-            name: "my_counter".into(),
-            count: expected_count,
-        };
-
-        assert_eq!(metrics.sum(|_| true), Some(expected_sum));
+        assert_eq!(metrics.sum(|_| true).map(|m| m.as_usize()), Some(3));
     }
 
     #[test]
