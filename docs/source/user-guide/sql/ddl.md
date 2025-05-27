@@ -98,11 +98,11 @@ Statistics
 : By default, when a table is created, DataFusion will _NOT_ read the files
 to gather statistics, which can be expensive but can accelerate subsequent
 queries substantially. If you want to gather statistics
-when creating a table, set the `datafusion.explain.show_statistics`
+when creating a table, set the `datafusion.execution.collect_statistics`
 configuration option to `true` before creating the table. For example:
 
 ```sql
-SET datafusion.explain.show_statistics = true;
+SET datafusion.execution.collect_statistics = true;
 ```
 
 See the [config settings docs](../configs.md) for more details.
