@@ -5814,8 +5814,10 @@ SELECT STRING_AGG(DISTINCT x,',') FROM strings WHERE g > 100
 ----
 NULL
 
-query error DataFusion error: Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+query T
 SELECT STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
+----
+a|b|i|j|p|x|y|z
 
 query error This feature is not implemented: The second argument of the string_agg function must be a string literal
 SELECT STRING_AGG(DISTINCT x,y) FROM strings

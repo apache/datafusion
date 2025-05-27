@@ -20,7 +20,7 @@
 use crate::array_agg::ArrayAgg;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::cast::as_generic_string_array;
+use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
 use datafusion_common::{internal_err, not_impl_err, ScalarValue};
 use datafusion_expr::function::AccumulatorArgs;
@@ -95,9 +95,15 @@ impl StringAgg {
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Null]),
+                    TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8View]),
                     TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
                     TypeSignature::Exact(vec![DataType::Utf8, DataType::LargeUtf8]),
                     TypeSignature::Exact(vec![DataType::Utf8, DataType::Null]),
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8View]),
+                    TypeSignature::Exact(vec![DataType::Utf8View, DataType::Utf8View]),
+                    TypeSignature::Exact(vec![DataType::Utf8View, DataType::LargeUtf8]),
+                    TypeSignature::Exact(vec![DataType::Utf8View, DataType::Null]),
+                    TypeSignature::Exact(vec![DataType::Utf8View, DataType::Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -207,6 +213,10 @@ impl Accumulator for StringAggAccumulator {
                 .flatten()
                 .collect(),
             DataType::Utf8 => as_generic_string_array::<i32>(list.values())?
+                .iter()
+                .flatten()
+                .collect(),
+            DataType::Utf8View => as_string_view_array(list.values())?
                 .iter()
                 .flatten()
                 .collect(),
