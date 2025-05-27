@@ -168,7 +168,7 @@ rstest = "0.25.0"
 serde_json = "1"
 sqlparser = { version = "0.55.0", features = ["visitor"] }
 tempfile = "3"
-tokio = { version = "1.44", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.45", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 
 [profile.release]
