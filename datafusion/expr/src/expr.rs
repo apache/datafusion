@@ -330,7 +330,7 @@ pub enum Expr {
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     AggregateFunction(AggregateFunction),
     /// Call a window function with a set of arguments.
-    WindowFunction(WindowFunction),
+    WindowFunction(Box<WindowFunction>),
     /// Returns whether the list contains the expr value.
     InList(InList),
     /// EXISTS subquery
@@ -375,6 +375,13 @@ impl Default for Expr {
 impl From<Column> for Expr {
     fn from(value: Column) -> Self {
         Expr::Column(value)
+    }
+}
+
+/// Create an [`Expr`] from a [`WindowFunction`]
+impl From<WindowFunction> for Expr {
+    fn from(value: WindowFunction) -> Self {
+        Expr::WindowFunction(Box::new(value))
     }
 }
 
@@ -2086,32 +2093,27 @@ impl NormalizeEq for Expr {
                         _ => false,
                     }
             }
-            (
-                Expr::WindowFunction(WindowFunction {
+            (Expr::WindowFunction(left), Expr::WindowFunction(other)) => {
+                let WindowFunction {
                     fun: self_fun,
-                    params: self_params,
-                }),
-                Expr::WindowFunction(WindowFunction {
-                    fun: other_fun,
-                    params: other_params,
-                }),
-            ) => {
-                let (
-                    WindowFunctionParams {
+                    params: WindowFunctionParams {
                         args: self_args,
                         window_frame: self_window_frame,
                         partition_by: self_partition_by,
                         order_by: self_order_by,
                         null_treatment: self_null_treatment,
-                    },
-                    WindowFunctionParams {
+                    }
+                } = left.as_ref();
+                let WindowFunction {
+                    fun: other_fun,
+                    params: WindowFunctionParams {
                         args: other_args,
                         window_frame: other_window_frame,
                         partition_by: other_partition_by,
                         order_by: other_order_by,
                         null_treatment: other_null_treatment,
-                    },
-                ) = (self_params, other_params);
+                    }
+                } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
                     && self_window_frame == other_window_frame
@@ -2356,14 +2358,17 @@ impl HashNode for Expr {
                 distinct.hash(state);
                 null_treatment.hash(state);
             }
-            Expr::WindowFunction(WindowFunction { fun, params }) => {
-                let WindowFunctionParams {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params: WindowFunctionParams {
                     args: _args,
                     partition_by: _,
                     order_by: _,
                     window_frame,
                     null_treatment,
-                } = params;
+                    }
+                } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
                 null_treatment.hash(state);
@@ -2646,7 +2651,9 @@ impl Display for SchemaDisplay<'_> {
 
                 Ok(())
             }
-            Expr::WindowFunction(WindowFunction { fun, params }) => match fun {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction { fun, params } = window_fun.as_ref();
+                match fun {
                 WindowFunctionDefinition::AggregateUDF(fun) => {
                     match fun.window_function_schema_name(params) {
                         Ok(name) => {
@@ -2691,6 +2698,7 @@ impl Display for SchemaDisplay<'_> {
 
                     write!(f, " {window_frame}")
                 }
+            }
             },
         }
     }
@@ -3026,7 +3034,9 @@ impl Display for Expr {
             // Expr::ScalarFunction(ScalarFunction { func, args }) => {
             //     write!(f, "{}", func.display_name(args).unwrap())
             // }
-            Expr::WindowFunction(WindowFunction { fun, params }) => match fun {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction { fun, params } = window_fun.as_ref();
+                match fun {
                 WindowFunctionDefinition::AggregateUDF(fun) => {
                     match fun.window_function_display_name(params) {
                         Ok(name) => {
@@ -3066,6 +3076,7 @@ impl Display for Expr {
                         window_frame.end_bound
                     )
                 }
+            }
             },
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.display_name(params) {

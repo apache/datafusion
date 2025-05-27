@@ -123,7 +123,7 @@ pub fn count_all() -> Expr {
 /// let expr = col(expr.schema_name().to_string());
 /// ```
 pub fn count_all_window() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(
+    Expr::from(WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
         vec![Expr::Literal(COUNT_STAR_EXPANSION)],
     ))

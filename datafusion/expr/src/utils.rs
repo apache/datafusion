@@ -579,7 +579,8 @@ pub fn group_window_expr_by_sort_keys(
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
     window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction( WindowFunction{ params: WindowFunctionParams { partition_by, order_by, ..}, .. }) => {
+        Expr::WindowFunction(window_fun) => {
+            let WindowFunctionParams{ partition_by, order_by, ..} = &window_fun.as_ref().params;
             let sort_key = generate_sort_key(partition_by, order_by)?;
             if let Some((_, values)) = result.iter_mut().find(
                 |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
