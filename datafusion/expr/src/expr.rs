@@ -18,7 +18,7 @@
 //! Logical Expressions: [`Expr`]
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -276,7 +276,7 @@ use sqlparser::ast::{
 /// assert!(rewritten.transformed);
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
@@ -284,11 +284,8 @@ pub enum Expr {
     Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
-    /// A constant value.
-    Literal(
-        ScalarValue,
-        Option<std::collections::HashMap<String, String>>,
-    ),
+    /// A constant value along with associated metadata
+    Literal(ScalarValue, Option<BTreeMap<String, String>>),
     /// A binary expression such as "age > 21"
     BinaryExpr(BinaryExpr),
     /// LIKE expression
@@ -373,176 +370,6 @@ pub enum Expr {
 impl Default for Expr {
     fn default() -> Self {
         Expr::Literal(ScalarValue::Null, None)
-    }
-}
-
-impl PartialOrd for Expr {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (Expr::Alias(s), Expr::Alias(o)) => s.partial_cmp(o),
-            (Expr::Column(s), Expr::Column(o)) => s.partial_cmp(o),
-            (Expr::ScalarVariable(sd, ss), Expr::ScalarVariable(od, os)) => {
-                let cmp = sd.partial_cmp(od);
-                let Some(Ordering::Equal) = cmp else {
-                    return cmp;
-                };
-                ss.partial_cmp(os)
-            }
-            (Expr::Literal(sv, sh), Expr::Literal(ov, oh)) => {
-                let cmp = sv.partial_cmp(ov);
-                let Some(Ordering::Equal) = cmp else {
-                    return cmp;
-                };
-
-                match (sh, oh) {
-                    (Some(_), None) => Some(Ordering::Greater),
-                    (None, Some(_)) => Some(Ordering::Less),
-                    (None, None) => Some(Ordering::Equal),
-                    (Some(sh), Some(oh)) => {
-                        let cmp = sh.len().partial_cmp(&oh.len());
-                        let Some(Ordering::Equal) = cmp else {
-                            return cmp;
-                        };
-
-                        let mut s_keys = sh.keys().collect::<Vec<_>>();
-                        let mut o_keys = sh.keys().collect::<Vec<_>>();
-                        s_keys.sort();
-                        o_keys.sort();
-
-                        for (sk, ok) in s_keys.into_iter().zip(o_keys) {
-                            let cmp = sk.partial_cmp(ok);
-                            let Some(Ordering::Equal) = cmp else {
-                                return cmp;
-                            };
-                        }
-
-                        for (sk, sv) in sh {
-                            let ov = oh.get(sk).unwrap();
-                            let cmp = sv.partial_cmp(ov);
-                            let Some(Ordering::Equal) = cmp else {
-                                return cmp;
-                            };
-                        }
-
-                        Some(Ordering::Equal)
-                    }
-                }
-            }
-            (Expr::BinaryExpr(s), Expr::BinaryExpr(o)) => s.partial_cmp(o),
-            (Expr::Like(s), Expr::Like(o)) => s.partial_cmp(o),
-            (Expr::SimilarTo(s), Expr::SimilarTo(o)) => s.partial_cmp(o),
-            (Expr::Not(s), Expr::Not(o)) => s.partial_cmp(o),
-            (Expr::IsNotNull(s), Expr::IsNotNull(o)) => s.partial_cmp(o),
-            (Expr::IsNull(s), Expr::IsNull(o)) => s.partial_cmp(o),
-            (Expr::IsTrue(s), Expr::IsTrue(o)) => s.partial_cmp(o),
-            (Expr::IsFalse(s), Expr::IsFalse(o)) => s.partial_cmp(o),
-            (Expr::IsUnknown(s), Expr::IsUnknown(o)) => s.partial_cmp(o),
-            (Expr::IsNotTrue(s), Expr::IsNotTrue(o)) => s.partial_cmp(o),
-            (Expr::IsNotFalse(s), Expr::IsNotFalse(o)) => s.partial_cmp(o),
-            (Expr::IsNotUnknown(s), Expr::IsNotUnknown(o)) => s.partial_cmp(o),
-            (Expr::Negative(s), Expr::Negative(o)) => s.partial_cmp(o),
-            (Expr::Between(s), Expr::Between(o)) => s.partial_cmp(o),
-            (Expr::Case(s), Expr::Case(o)) => s.partial_cmp(o),
-            (Expr::Cast(s), Expr::Cast(o)) => s.partial_cmp(o),
-            (Expr::TryCast(s), Expr::TryCast(o)) => s.partial_cmp(o),
-            (Expr::ScalarFunction(s), Expr::ScalarFunction(o)) => s.partial_cmp(o),
-            (Expr::AggregateFunction(s), Expr::AggregateFunction(o)) => s.partial_cmp(o),
-            (Expr::WindowFunction(s), Expr::WindowFunction(o)) => s.partial_cmp(o),
-            (Expr::InList(s), Expr::InList(o)) => s.partial_cmp(o),
-            (Expr::Exists(s), Expr::Exists(o)) => s.partial_cmp(o),
-            (Expr::InSubquery(s), Expr::InSubquery(o)) => s.partial_cmp(o),
-            (Expr::ScalarSubquery(s), Expr::ScalarSubquery(o)) => s.partial_cmp(o),
-            #[expect(deprecated)]
-            (
-                Expr::Wildcard {
-                    qualifier: sq,
-                    options: so,
-                },
-                Expr::Wildcard {
-                    qualifier: oq,
-                    options: oo,
-                },
-            ) => {
-                let cmp = sq.partial_cmp(oq);
-                let Some(Ordering::Equal) = cmp else {
-                    return cmp;
-                };
-                so.partial_cmp(oo)
-            }
-            (Expr::GroupingSet(s), Expr::GroupingSet(o)) => s.partial_cmp(o),
-            (Expr::Placeholder(s), Expr::Placeholder(o)) => s.partial_cmp(o),
-            (Expr::OuterReferenceColumn(sd, sc), Expr::OuterReferenceColumn(od, oc)) => {
-                let cmp = sd.partial_cmp(od);
-                let Some(Ordering::Equal) = cmp else {
-                    return cmp;
-                };
-                sc.partial_cmp(oc)
-            }
-            (Expr::Unnest(s), Expr::Unnest(o)) => s.partial_cmp(o),
-            _ => None,
-        }
-    }
-}
-
-impl Hash for Expr {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        #[expect(deprecated)]
-        match self {
-            Expr::Alias(e) => e.hash(state),
-            Expr::Column(e) => e.hash(state),
-            Expr::ScalarVariable(d, s) => {
-                d.hash(state);
-                s.hash(state);
-            }
-            Expr::Literal(v, h) => {
-                v.hash(state);
-
-                if let Some(h) = &h {
-                    let mut keys = h.keys().collect::<Vec<_>>();
-                    keys.sort();
-
-                    for k in keys {
-                        k.hash(state);
-                        h.get(k).unwrap().hash(state);
-                    }
-                }
-            }
-            Expr::BinaryExpr(e) => e.hash(state),
-            Expr::Like(e) => e.hash(state),
-            Expr::SimilarTo(e) => e.hash(state),
-            Expr::Not(e) => e.hash(state),
-            Expr::IsNotNull(e) => e.hash(state),
-            Expr::IsNull(e) => e.hash(state),
-            Expr::IsTrue(e) => e.hash(state),
-            Expr::IsFalse(e) => e.hash(state),
-            Expr::IsUnknown(e) => e.hash(state),
-            Expr::IsNotTrue(e) => e.hash(state),
-            Expr::IsNotFalse(e) => e.hash(state),
-            Expr::IsNotUnknown(e) => e.hash(state),
-            Expr::Negative(e) => e.hash(state),
-            Expr::Between(e) => e.hash(state),
-            Expr::Case(e) => e.hash(state),
-            Expr::Cast(e) => e.hash(state),
-            Expr::TryCast(e) => e.hash(state),
-            Expr::ScalarFunction(e) => e.hash(state),
-            Expr::AggregateFunction(e) => e.hash(state),
-            Expr::WindowFunction(e) => e.hash(state),
-            Expr::InList(e) => e.hash(state),
-            Expr::Exists(e) => e.hash(state),
-            Expr::InSubquery(e) => e.hash(state),
-            Expr::ScalarSubquery(e) => e.hash(state),
-            Expr::Wildcard { qualifier, options } => {
-                qualifier.hash(state);
-                options.hash(state);
-            }
-            Expr::GroupingSet(e) => e.hash(state),
-            Expr::Placeholder(e) => e.hash(state),
-            Expr::OuterReferenceColumn(d, c) => {
-                d.hash(state);
-                c.hash(state);
-            }
-            Expr::Unnest(e) => e.hash(state),
-        }
     }
 }
 

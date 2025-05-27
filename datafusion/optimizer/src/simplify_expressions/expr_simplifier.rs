@@ -18,7 +18,7 @@
 //! Expression simplification API
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::ops::Not;
 
 use arrow::{
@@ -523,9 +523,9 @@ struct ConstEvaluator<'a> {
 #[allow(clippy::large_enum_variant)]
 enum ConstSimplifyResult {
     // Expr was simplified and contains the new expression
-    Simplified(ScalarValue, Option<HashMap<String, String>>),
+    Simplified(ScalarValue, Option<BTreeMap<String, String>>),
     // Expr was not simplified and original value is returned
-    NotSimplified(ScalarValue, Option<HashMap<String, String>>),
+    NotSimplified(ScalarValue, Option<BTreeMap<String, String>>),
     // Evaluation encountered an error, contains the original expression
     SimplifyRuntimeError(DataFusionError, Expr),
 }
@@ -682,7 +682,9 @@ impl<'a> ConstEvaluator<'a> {
                 let m = f.metadata();
                 match m.is_empty() {
                     true => None,
-                    false => Some(m.clone()),
+                    false => {
+                        Some(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                    }
                 }
             });
         let col_val = match phys_expr.evaluate(&self.input_batch) {

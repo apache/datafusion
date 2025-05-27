@@ -28,8 +28,9 @@ pub fn lit<T: Literal>(n: T) -> Expr {
 
 pub fn lit_with_metadata<T: Literal>(
     n: T,
-    metadata: Option<HashMap<String, String>>,
+    metadata: impl Into<Option<HashMap<String, String>>>,
 ) -> Expr {
+    let metadata = metadata.into();
     let Some(metadata) = metadata else {
         return n.lit();
     };
@@ -43,7 +44,7 @@ pub fn lit_with_metadata<T: Literal>(
             prior.extend(metadata);
             prior
         }
-        None => metadata,
+        None => metadata.into_iter().collect(),
     };
 
     Expr::Literal(sv, Some(new_metadata))
