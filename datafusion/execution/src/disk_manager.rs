@@ -105,7 +105,8 @@ pub enum DiskManagerMode {
     OsTmpDirectory,
 
     /// Create a new [DiskManager] that creates temporary files within
-    /// the specified directories
+    /// the specified directories. One of the directories will be chosen
+    /// at random for each temporary file created.
     Directories(Vec<PathBuf>),
 
     /// Disable disk manager, attempts to create temporary files will error
