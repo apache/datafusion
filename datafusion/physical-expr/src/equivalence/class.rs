@@ -481,12 +481,12 @@ impl EquivalenceGroup {
     ///
     /// # Example
     ///
-    /// ```
+    ///
     /// Group1: [a, b, c]  // a=b=c
     /// Group2: [b, c, d]  // b=c=d
     ///
     /// Result: [b, c]     // b=c in both groups
-    /// ```
+    ///
 
     pub fn intersect(&self, other: &Self) -> Self {
         let self_exprs = self.expressions();
