@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -101,7 +101,7 @@ impl PhysicalExpr for NotExpr {
         }
     }
 
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
         self.arg.return_field(input_schema)
     }
 
