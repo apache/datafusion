@@ -487,7 +487,6 @@ impl EquivalenceGroup {
     ///
     /// Result: [b, c]     // b=c in both groups
     ///
-
     pub fn intersect(&self, other: &Self) -> Self {
         let self_exprs = self.expressions();
 
@@ -510,19 +509,17 @@ impl EquivalenceGroup {
             for i in 0..exprs.len() - 1 {
                 let cls_id = exprs[i].2;
                 let next_cls_id = exprs[i + 1].2;
-                if cls_id != next_cls_id {
-                    if i > start {
-                        new_classes.push(EquivalenceClass::new(
-                            (start..=i).map(|idx| exprs[idx].0.clone()).collect(),
-                        ));
-                        start = i + 1;
-                    }
+                if cls_id != next_cls_id && i > start {
+                    new_classes.push(EquivalenceClass::new(
+                        (start..=i).map(|idx| Arc::clone(exprs[idx].0)).collect(),
+                    ));
+                    start = i + 1;
                 }
             }
             if exprs.len() > start {
                 new_classes.push(EquivalenceClass::new(
                     (start..exprs.len())
-                        .map(|idx| exprs[idx].0.clone())
+                        .map(|idx| Arc::clone(exprs[idx].0))
                         .collect(),
                 ));
             }
