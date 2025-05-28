@@ -520,10 +520,11 @@ fn eliminate_unique_keyed_self_join_using_unique_index_with_right_alias() {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-    SubqueryAlias: a
-      Projection: employees.id
-        Filter: employees.department = Utf8("HR")
-          TableScan: employees projection=[id, department]
+    Projection: a.id AS id
+      SubqueryAlias: a
+        Projection: employees.id
+          Filter: employees.department = Utf8("HR")
+            TableScan: employees projection=[id, department]
     "#
     );
 }
@@ -573,6 +574,48 @@ fn eliminate_unique_keyed_self_join_using_unique_index_subquery() {
 }
 
 #[test]
+fn eliminate_unique_keyed_self_join_with_multiple_table_refs() {
+    let sql = r#"
+        SELECT a.id, b.id
+        FROM employees a
+        JOIN (SELECT id FROM employees WHERE department = 'HR') b USING (id);
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    Projection: a.id, a.id AS id
+      SubqueryAlias: a
+        Projection: employees.id
+          Filter: employees.department = Utf8("HR")
+            TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_unique_keyed_self_join_with_multiple_table_refs2() {
+    let sql = r#"
+        SELECT a.id, b.id as d
+        FROM employees a
+        JOIN (SELECT id FROM employees WHERE department = 'HR') b USING (id);
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    Projection: a.id, a.id AS id AS d
+      SubqueryAlias: a
+        Projection: employees.id
+          Filter: employees.department = Utf8("HR")
+            TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
 fn eliminate_unique_keyed_self_join_on_unique_index_subquery() {
     let sql = r#"
         SELECT a.id
@@ -605,10 +648,38 @@ fn eliminate_unique_keyed_self_join_on_unique_index_subquery_with_column_alias()
     format!("{plan}"),
     @r#"
     Projection: a.id
-      SubqueryAlias: a
-        Projection: employees.id
-          Filter: employees.department = Utf8("HR")
-            TableScan: employees projection=[id, department]
+      Inner Join: a.id = b.key
+        SubqueryAlias: a
+          TableScan: employees projection=[id]
+        SubqueryAlias: b
+          Projection: employees.id AS key
+            Filter: employees.department = Utf8("HR")
+              TableScan: employees projection=[id, department]
+    "#
+    );
+}
+
+#[test]
+fn eliminate_unique_keyed_self_join_multiple() {
+    let sql = r#"
+        SELECT
+            a.id
+        FROM
+            employees a
+            JOIN employees b ON a.id = b.id
+            JOIN employees c ON a.id = c.id
+        WHERE
+            b.department = 'HR';
+    "#;
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+    format!("{plan}"),
+    @r#"
+    SubqueryAlias: a
+      Projection: employees.id
+        Filter: employees.department = Utf8("HR")
+          TableScan: employees projection=[id, department]
     "#
     );
 }
@@ -669,6 +740,142 @@ fn eliminate_self_join_on_non_matching_unique_index() {
     );
 }
 
+#[test]
+fn eliminate_aggregate_self_join_less_than_equal() {
+    let sql = r#"
+        SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
+        FROM purchases a
+        JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+        GROUP BY a.user_id, a.purchase_date;
+    "#;
+
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_total
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[user_id, purchase_date, amount]
+    "
+    );
+}
+
+#[test]
+fn eliminate_aggregate_self_join_less_than_equal_no_alias() {
+    let sql = r#"
+        SELECT a.user_id, a.purchase_date, SUM(b.amount)
+        FROM purchases a
+        JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+        GROUP BY a.user_id, a.purchase_date;
+    "#;
+
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[user_id, purchase_date, amount]
+    "
+    );
+}
+
+#[test]
+fn eliminate_aggregate_self_join_less_than() {
+    let sql = r#"
+        SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
+        FROM purchases a
+        JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date < a.purchase_date
+        GROUP BY a.user_id, a.purchase_date;
+    "#;
+
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS running_total
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[user_id, purchase_date, amount]
+    "
+    );
+}
+
+#[test]
+fn eliminate_aggregate_self_join_greater_than_equal() {
+    let sql = r#"
+        SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
+        FROM purchases a
+        JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date >= a.purchase_date
+        GROUP BY a.user_id, a.purchase_date;
+    "#;
+
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_total
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[user_id, purchase_date, amount]
+    "
+    );
+}
+
+#[test]
+fn eliminate_aggregate_self_join_greater_than() {
+    let sql = r#"
+        SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
+        FROM purchases a
+        JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date > a.purchase_date
+        GROUP BY a.user_id, a.purchase_date;
+    "#;
+
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS running_total
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[user_id, purchase_date, amount]
+    "
+    );
+}
+
+#[test]
+fn eliminate_aggregate_self_join_non_optimizable() {
+    let sql = r#"
+        SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
+        FROM purchases a
+        JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.billed_date
+        GROUP BY a.user_id, a.purchase_date;
+    "#;
+
+    let plan = test_sql(sql).unwrap();
+
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
+      Aggregate: groupBy=[[a.user_id, a.purchase_date]], aggr=[[sum(b.amount)]]
+        Projection: a.user_id, a.purchase_date, b.amount
+          Inner Join: a.user_id = b.user_id Filter: b.purchase_date <= a.billed_date
+            SubqueryAlias: a
+              TableScan: purchases projection=[user_id, purchase_date, billed_date]
+            SubqueryAlias: b
+              TableScan: purchases projection=[user_id, purchase_date, amount]
+    "
+    );
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -724,6 +931,20 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
                 Constraint::PrimaryKey(vec![0]),
                 Constraint::Unique(vec![5]),
             ]),
+        )
+        .with_schema_constraints(
+            "purchases",
+            Schema::new_with_metadata(
+                vec![
+                    Field::new("id", DataType::UInt32, false),
+                    Field::new("user_id", DataType::UInt32, false),
+                    Field::new("purchase_date", DataType::Date64, false),
+                    Field::new("billed_date", DataType::Date64, false),
+                    Field::new("amount", DataType::Decimal128(12, 2), false),
+                ],
+                HashMap::new(),
+            ),
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]),
         );
 
     let sql_to_rel = SqlToRel::new(&context_provider);
