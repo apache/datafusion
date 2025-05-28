@@ -138,12 +138,14 @@ pub enum DiskManagerConfig {
     Disabled,
 }
 
+#[allow(deprecated)]
 impl Default for DiskManagerConfig {
     fn default() -> Self {
         Self::NewOs
     }
 }
 
+#[allow(deprecated)]
 impl DiskManagerConfig {
     /// Create temporary files in a temporary directory chosen by the OS
     pub fn new() -> Self {
@@ -185,6 +187,7 @@ impl DiskManager {
     }
 
     /// Create a DiskManager given the configuration
+    #[allow(deprecated)]
     #[deprecated(since = "48.0.0", note = "Use DiskManager::builder() instead")]
     pub fn try_new(config: DiskManagerConfig) -> Result<Arc<Self>> {
         match config {
@@ -399,8 +402,7 @@ mod tests {
     #[test]
     fn lazy_temp_dir_creation() -> Result<()> {
         // A default configuration should not create temp files until requested
-        let config = DiskManagerConfig::new();
-        let dm = DiskManager::try_new(config)?;
+        let dm = Arc::new(DiskManagerBuilder::default().build()?);
 
         assert_eq!(0, local_dir_snapshot(&dm).len());
 
@@ -432,11 +434,14 @@ mod tests {
         let local_dir2 = TempDir::new()?;
         let local_dir3 = TempDir::new()?;
         let local_dirs = vec![local_dir1.path(), local_dir2.path(), local_dir3.path()];
-        let config = DiskManagerConfig::new_specified(
-            local_dirs.iter().map(|p| p.into()).collect(),
+        let dm = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Directories(
+                    local_dirs.iter().map(|p| p.into()).collect(),
+                ))
+                .build()?,
         );
 
-        let dm = DiskManager::try_new(config)?;
         assert!(dm.tmp_files_enabled());
         let actual = dm.create_tmp_file("Testing")?;
 
@@ -448,8 +453,12 @@ mod tests {
 
     #[test]
     fn test_disabled_disk_manager() {
-        let config = DiskManagerConfig::Disabled;
-        let manager = DiskManager::try_new(config).unwrap();
+        let manager = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Disabled)
+                .build()
+                .unwrap(),
+        );
         assert!(!manager.tmp_files_enabled());
         assert_eq!(
             manager.create_tmp_file("Testing").unwrap_err().strip_backtrace(),
@@ -460,11 +469,9 @@ mod tests {
     #[test]
     fn test_disk_manager_create_spill_folder() {
         let dir = TempDir::new().unwrap();
-        let config = DiskManagerConfig::new_specified(vec![dir.path().to_owned()]);
-
-        DiskManager::try_new(config)
-            .unwrap()
-            .create_tmp_file("Testing")
+        DiskManagerBuilder::default()
+            .with_mode(DiskManagerMode::Directories(vec![dir.path().to_path_buf()]))
+            .build()
             .unwrap();
     }
 
@@ -487,8 +494,7 @@ mod tests {
     #[test]
     fn test_temp_file_still_alive_after_disk_manager_dropped() -> Result<()> {
         // Test for the case using OS arranged temporary directory
-        let config = DiskManagerConfig::new();
-        let dm = DiskManager::try_new(config)?;
+        let dm = Arc::new(DiskManagerBuilder::default().build()?);
         let temp_file = dm.create_tmp_file("Testing")?;
         let temp_file_path = temp_file.path().to_owned();
         assert!(temp_file_path.exists());
@@ -504,10 +510,13 @@ mod tests {
         let local_dir2 = TempDir::new()?;
         let local_dir3 = TempDir::new()?;
         let local_dirs = [local_dir1.path(), local_dir2.path(), local_dir3.path()];
-        let config = DiskManagerConfig::new_specified(
-            local_dirs.iter().map(|p| p.into()).collect(),
+        let dm = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Directories(
+                    local_dirs.iter().map(|p| p.into()).collect(),
+                ))
+                .build()?,
         );
-        let dm = DiskManager::try_new(config)?;
         let temp_file = dm.create_tmp_file("Testing")?;
         let temp_file_path = temp_file.path().to_owned();
         assert!(temp_file_path.exists());

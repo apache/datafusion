@@ -31,7 +31,6 @@ use datafusion::assert_batches_eq;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -41,7 +40,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_contains, Result};
-use datafusion_execution::disk_manager::DiskManagerBuilder;
+use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
@@ -205,7 +204,7 @@ async fn sort_merge_join_spill() {
         )
         .with_memory_limit(1_000)
         .with_config(config)
-        .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
         .run()
         .await
@@ -289,7 +288,7 @@ async fn sort_spill_reservation() {
         .with_memory_limit(mem_limit)
     // use a single partition so only a sort is needed
         .with_scenario(scenario)
-        .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_expected_plan(
             // It is important that this plan only has a SortExec, not
             // also merge, so we can ensure the sort could finish
@@ -552,7 +551,7 @@ async fn setup_context(
     memory_pool_limit: usize,
 ) -> Result<SessionContext> {
     let disk_manager = DiskManagerBuilder::default()
-        .with_mode(datafusion_execution::disk_manager::DiskManagerMode::OsTmpDirectory)
+        .with_mode(DiskManagerMode::OsTmpDirectory)
         .with_max_temp_directory_size(disk_limit)
         .build()?;
 
@@ -643,7 +642,7 @@ struct TestCase {
     scenario: Scenario,
     /// How should the disk manager (that allows spilling) be
     /// configured? Defaults to `Disabled`
-    disk_manager_config: DiskManagerConfig,
+    disk_manager_builder: DiskManagerBuilder,
     /// Expected explain plan, if non-empty
     expected_plan: Vec<String>,
     /// Is the plan expected to pass? Defaults to false
@@ -659,7 +658,8 @@ impl TestCase {
             config: SessionConfig::new(),
             memory_pool: None,
             scenario: Scenario::AccessLog,
-            disk_manager_config: DiskManagerConfig::Disabled,
+            disk_manager_builder: DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Disabled),
             expected_plan: vec![],
             expected_success: false,
         }
@@ -716,11 +716,11 @@ impl TestCase {
 
     /// Specify if the disk manager should be enabled. If true,
     /// operators that support it can spill
-    pub fn with_disk_manager_config(
+    pub fn with_disk_manager_builder(
         mut self,
-        disk_manager_config: DiskManagerConfig,
+        disk_manager_builder: DiskManagerBuilder,
     ) -> Self {
-        self.disk_manager_config = disk_manager_config;
+        self.disk_manager_builder = disk_manager_builder;
         self
     }
 
@@ -739,7 +739,7 @@ impl TestCase {
             memory_pool,
             config,
             scenario,
-            disk_manager_config,
+            disk_manager_builder,
             expected_plan,
             expected_success,
         } = self;
@@ -748,7 +748,7 @@ impl TestCase {
 
         let mut builder = RuntimeEnvBuilder::new()
             // disk manager setting controls the spilling
-            .with_disk_manager(disk_manager_config)
+            .with_disk_manager_builder(disk_manager_builder)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
         if let Some(pool) = memory_pool {

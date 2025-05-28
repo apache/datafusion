@@ -42,9 +42,7 @@ use datafusion_cli::{
 use clap::Parser;
 use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
-use datafusion::execution::disk_manager::{
-    DiskManagerBuilder, DiskManagerConfig, DiskManagerMode,
-};
+use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -201,12 +199,10 @@ async fn main_inner() -> Result<()> {
 
     // set disk limit
     if let Some(disk_limit) = args.disk_limit {
-        let disk_manager = DiskManagerBuilder::default()
+        let builder = DiskManagerBuilder::default()
             .with_mode(DiskManagerMode::OsTmpDirectory)
-            .with_max_temp_directory_size(disk_limit.try_into().unwrap())
-            .build()?;
-        let disk_config = DiskManagerConfig::new_existing(Arc::new(disk_manager));
-        rt_builder = rt_builder.with_disk_manager(disk_config);
+            .with_max_temp_directory_size(disk_limit.try_into().unwrap());
+        rt_builder = rt_builder.with_disk_manager_builder(builder);
     }
 
     let runtime_env = rt_builder.build_arc()?;
