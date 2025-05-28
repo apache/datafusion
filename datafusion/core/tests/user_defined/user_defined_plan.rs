@@ -65,14 +65,14 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use arrow::array::{Array, ArrayRef, StringViewArray};
 use arrow::{
-    array::{Int64Array, StringArray},
+    array::Int64Array,
     datatypes::SchemaRef,
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
-    common::cast::{as_int64_array, as_string_array},
+    common::cast::as_int64_array,
     common::{arrow_datafusion_err, internal_err, DFSchemaRef},
     error::{DataFusionError, Result},
     execution::{
@@ -800,7 +800,7 @@ fn accumulate_batch(
     let num_rows = input_batch.num_rows();
 
     // Assuming the input columns are
-    // column[0]: customer_id / UTF8 or UTF8View
+    // column[0]: customer_id UTF8View
     // column[1]: revenue: Int64
 
     let customer_id_column = input_batch.column(0);
@@ -808,10 +808,6 @@ fn accumulate_batch(
 
     for row in 0..num_rows {
         let customer_id = match customer_id_column.data_type() {
-            arrow::datatypes::DataType::Utf8 => {
-                let array = as_string_array(customer_id_column).unwrap();
-                array.value(row)
-            }
             arrow::datatypes::DataType::Utf8View => {
                 let array = as_string_view_array(customer_id_column).unwrap();
                 array.value(row)
@@ -855,9 +851,6 @@ impl Stream for TopKReader {
                 let customer: Vec<&str> = customer.iter().map(|&s| &**s).collect();
 
                 let customer_array: ArrayRef = match schema.field(0).data_type() {
-                    arrow::datatypes::DataType::Utf8 => {
-                        Arc::new(StringArray::from(customer))
-                    }
                     arrow::datatypes::DataType::Utf8View => {
                         Arc::new(StringViewArray::from(customer))
                     }
