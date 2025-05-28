@@ -65,9 +65,7 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use arrow::array::{Array, ArrayRef, StringViewArray};
 use arrow::{
-    array::Int64Array,
-    datatypes::SchemaRef,
-    record_batch::RecordBatch,
+    array::Int64Array, datatypes::SchemaRef, record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use datafusion::execution::session_state::SessionStateBuilder;
