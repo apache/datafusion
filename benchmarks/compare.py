@@ -47,6 +47,7 @@ class QueryRun:
     query: int
     iterations: List[QueryResult]
     start_time: int
+    success: bool = True
 
     @classmethod
     def load_from(cls, data: Dict[str, Any]) -> QueryRun:
@@ -54,6 +55,7 @@ class QueryRun:
             query=data["query"],
             iterations=[QueryResult(**iteration) for iteration in data["iterations"]],
             start_time=data["start_time"],
+            success=data["success"],
         )
 
     @property
@@ -125,11 +127,26 @@ def compare(
     faster_count = 0
     slower_count = 0
     no_change_count = 0
+    failure_count = 0
     total_baseline_time = 0
     total_comparison_time = 0
 
     for baseline_result, comparison_result in zip(baseline.queries, comparison.queries):
         assert baseline_result.query == comparison_result.query
+        
+        base_failed = not baseline_result.success
+        comp_failed = not comparison_result.success 
+        # If a query fails, its execution time is excluded from the performance comparison
+        if base_failed or comp_failed:
+            change_text = "incomparable" 
+            failure_count += 1
+            table.add_row(
+                f"Q{baseline_result.query}",
+                "FAIL" if base_failed else f"{baseline_result.execution_time:.2f}ms",
+                "FAIL" if comp_failed else f"{comparison_result.execution_time:.2f}ms",
+                change_text,
+            )
+            continue
 
         total_baseline_time += baseline_result.execution_time
         total_comparison_time += comparison_result.execution_time
@@ -156,8 +173,12 @@ def compare(
     console.print(table)
 
     # Calculate averages
-    avg_baseline_time = total_baseline_time / len(baseline.queries)
-    avg_comparison_time = total_comparison_time / len(comparison.queries)
+    avg_baseline_time = 0.0
+    avg_comparison_time = 0.0
+    if len(baseline.queries) - failure_count > 0:
+        avg_baseline_time = total_baseline_time / (len(baseline.queries) - failure_count)
+    if len(comparison.queries) - failure_count > 0:
+        avg_comparison_time = total_comparison_time / (len(comparison.queries) - failure_count)
 
     # Summary table
     summary_table = Table(show_header=True, header_style="bold magenta")
@@ -171,6 +192,7 @@ def compare(
     summary_table.add_row("Queries Faster", str(faster_count))
     summary_table.add_row("Queries Slower", str(slower_count))
     summary_table.add_row("Queries with No Change", str(no_change_count))
+    summary_table.add_row("Queries with Failure", str(failure_count))
 
     console.print(summary_table)
 

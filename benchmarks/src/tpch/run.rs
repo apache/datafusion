@@ -118,8 +118,6 @@ impl RunOpt {
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         // register tables
         self.register_tables(&ctx).await?;
-        let mut failed_queries: Vec<usize> =
-            Vec::with_capacity(query_range.clone().count());
 
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
@@ -131,23 +129,13 @@ impl RunOpt {
                     }
                 }
                 Err(e) => {
-                    // TODO mark
-                    failed_queries.push(query_id);
+                    benchmark_run.mark_failed();
                     eprintln!("Query {query_id} failed: {e}");
                 }
             }
         }
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
-        if !failed_queries.is_empty() {
-            println!(
-                "Failed Queries: {}",
-                failed_queries
-                    .iter()
-                    .map(|q| q.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
+        benchmark_run.maybe_print_failures();
         Ok(())
     }
 
