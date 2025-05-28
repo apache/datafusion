@@ -15,70 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aggregates::group_values::single_group_by::primitive::{
+    emit_internal, HashValue,
+};
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
-    PrimitiveArray,
+    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray,
 };
-use arrow::datatypes::{i256, DataType};
+use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
-use half::f16;
 use hashbrown::hash_table::HashTable;
 use std::mem::size_of;
-use std::sync::Arc;
 
-/// A trait to allow hashing of floating point numbers
-pub(crate) trait HashValue {
-    fn hash(&self, state: &RandomState) -> u64;
-}
-
-macro_rules! hash_integer {
-    ($($t:ty),+) => {
-        $(impl HashValue for $t {
-            #[cfg(not(feature = "force_hash_collisions"))]
-            fn hash(&self, state: &RandomState) -> u64 {
-                state.hash_one(self)
-            }
-
-            #[cfg(feature = "force_hash_collisions")]
-            fn hash(&self, _state: &RandomState) -> u64 {
-                0
-            }
-        })+
-    };
-}
-hash_integer!(i8, i16, i32, i64, i128, i256);
-hash_integer!(u8, u16, u32, u64);
-hash_integer!(IntervalDayTime, IntervalMonthDayNano);
-
-macro_rules! hash_float {
-    ($($t:ty),+) => {
-        $(impl HashValue for $t {
-            #[cfg(not(feature = "force_hash_collisions"))]
-            fn hash(&self, state: &RandomState) -> u64 {
-                state.hash_one(self.to_bits())
-            }
-
-            #[cfg(feature = "force_hash_collisions")]
-            fn hash(&self, _state: &RandomState) -> u64 {
-                0
-            }
-        })+
-    };
-}
-
-hash_float!(f16, f32, f64);
-
-/// A [`GroupValues`] storing a single column of primitive values
+/// A [`GroupValues`] storing a single column of large primitive values (bits > 64)
 ///
 /// This specialization is significantly faster than using the more general
 /// purpose `Row`s format
-pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
+pub struct GroupValuesLargePrimitive<T: ArrowPrimitiveType> {
     /// The data type of the output array
     data_type: DataType,
     /// Stores the `(group_index, hash)` based on the hash of its value
@@ -97,7 +54,7 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     random_state: RandomState,
 }
 
-impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
+impl<T: ArrowPrimitiveType> GroupValuesLargePrimitive<T> {
     pub fn new(data_type: DataType) -> Self {
         assert!(PrimitiveArray::<T>::is_compatible(&data_type));
         Self {
@@ -110,7 +67,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
+impl<T: ArrowPrimitiveType> GroupValues for GroupValuesLargePrimitive<T>
 where
     T::Native: HashValue,
 {
@@ -163,55 +120,13 @@ where
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        fn build_primitive<T: ArrowPrimitiveType>(
-            values: Vec<T::Native>,
-            null_idx: Option<usize>,
-        ) -> PrimitiveArray<T> {
-            let nulls = null_idx.map(|null_idx| {
-                let mut buffer = NullBufferBuilder::new(values.len());
-                buffer.append_n_non_nulls(null_idx);
-                buffer.append_null();
-                buffer.append_n_non_nulls(values.len() - null_idx - 1);
-                // NOTE: The inner builder must be constructed as there is at least one null
-                buffer.finish().unwrap()
-            });
-            PrimitiveArray::<T>::new(values.into(), nulls)
-        }
-
-        let array: PrimitiveArray<T> = match emit_to {
-            EmitTo::All => {
-                self.map.clear();
-                build_primitive(std::mem::take(&mut self.values), self.null_group.take())
-            }
-            EmitTo::First(n) => {
-                self.map.retain(|entry| {
-                    // Decrement group index by n
-                    let group_idx = entry.0;
-                    match group_idx.checked_sub(n) {
-                        // Group index was >= n, shift value down
-                        Some(sub) => {
-                            entry.0 = sub;
-                            true
-                        }
-                        // Group index was < n, so remove from table
-                        None => false,
-                    }
-                });
-                let null_group = match &mut self.null_group {
-                    Some(v) if *v >= n => {
-                        *v -= n;
-                        None
-                    }
-                    Some(_) => self.null_group.take(),
-                    None => None,
-                };
-                let mut split = self.values.split_off(n);
-                std::mem::swap(&mut self.values, &mut split);
-                build_primitive(split, null_group)
-            }
-        };
-
-        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+        emit_internal::<T, u64>(
+            emit_to,
+            &mut self.values,
+            &mut self.null_group,
+            &mut self.map,
+            self.data_type.clone(),
+        )
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
