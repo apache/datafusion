@@ -883,7 +883,7 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
         }
     }
-    
+
     /// Return the the inner window simplification function, if any
     ///
     /// See [`WindowFunctionSimplification`] for more information
@@ -2114,23 +2114,25 @@ impl NormalizeEq for Expr {
             (Expr::WindowFunction(left), Expr::WindowFunction(other)) => {
                 let WindowFunction {
                     fun: self_fun,
-                    params: WindowFunctionParams {
-                        args: self_args,
-                        window_frame: self_window_frame,
-                        partition_by: self_partition_by,
-                        order_by: self_order_by,
-                        null_treatment: self_null_treatment,
-                    }
+                    params:
+                        WindowFunctionParams {
+                            args: self_args,
+                            window_frame: self_window_frame,
+                            partition_by: self_partition_by,
+                            order_by: self_order_by,
+                            null_treatment: self_null_treatment,
+                        },
                 } = left.as_ref();
                 let WindowFunction {
                     fun: other_fun,
-                    params: WindowFunctionParams {
-                        args: other_args,
-                        window_frame: other_window_frame,
-                        partition_by: other_partition_by,
-                        order_by: other_order_by,
-                        null_treatment: other_null_treatment,
-                    }
+                    params:
+                        WindowFunctionParams {
+                            args: other_args,
+                            window_frame: other_window_frame,
+                            partition_by: other_partition_by,
+                            order_by: other_order_by,
+                            null_treatment: other_null_treatment,
+                        },
                 } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
@@ -2379,13 +2381,14 @@ impl HashNode for Expr {
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction {
                     fun,
-                    params: WindowFunctionParams {
-                    args: _args,
-                    partition_by: _,
-                    order_by: _,
-                    window_frame,
-                    null_treatment,
-                    }
+                    params:
+                        WindowFunctionParams {
+                            args: _args,
+                            partition_by: _,
+                            order_by: _,
+                            window_frame,
+                            null_treatment,
+                        },
                 } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
@@ -2672,52 +2675,59 @@ impl Display for SchemaDisplay<'_> {
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction { fun, params } = window_fun.as_ref();
                 match fun {
-                WindowFunctionDefinition::AggregateUDF(fun) => {
-                    match fun.window_function_schema_name(params) {
-                        Ok(name) => {
-                            write!(f, "{name}")
-                        }
-                        Err(e) => {
-                            write!(f, "got error from window_function_schema_name {e}")
+                    WindowFunctionDefinition::AggregateUDF(fun) => {
+                        match fun.window_function_schema_name(params) {
+                            Ok(name) => {
+                                write!(f, "{name}")
+                            }
+                            Err(e) => {
+                                write!(
+                                    f,
+                                    "got error from window_function_schema_name {e}"
+                                )
+                            }
                         }
                     }
-                }
-                _ => {
-                    let WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    } = params;
+                    _ => {
+                        let WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                        } = params;
 
-                    write!(
-                        f,
-                        "{}({})",
-                        fun,
-                        schema_name_from_exprs_comma_separated_without_space(args)?
-                    )?;
-
-                    if let Some(null_treatment) = null_treatment {
-                        write!(f, " {null_treatment}")?;
-                    }
-
-                    if !partition_by.is_empty() {
                         write!(
                             f,
-                            " PARTITION BY [{}]",
-                            schema_name_from_exprs(partition_by)?
+                            "{}({})",
+                            fun,
+                            schema_name_from_exprs_comma_separated_without_space(args)?
                         )?;
+
+                        if let Some(null_treatment) = null_treatment {
+                            write!(f, " {null_treatment}")?;
+                        }
+
+                        if !partition_by.is_empty() {
+                            write!(
+                                f,
+                                " PARTITION BY [{}]",
+                                schema_name_from_exprs(partition_by)?
+                            )?;
+                        }
+
+                        if !order_by.is_empty() {
+                            write!(
+                                f,
+                                " ORDER BY [{}]",
+                                schema_name_from_sorts(order_by)?
+                            )?;
+                        };
+
+                        write!(f, " {window_frame}")
                     }
-
-                    if !order_by.is_empty() {
-                        write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
-                    };
-
-                    write!(f, " {window_frame}")
                 }
             }
-            },
         }
     }
 }
@@ -3055,47 +3065,50 @@ impl Display for Expr {
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction { fun, params } = window_fun.as_ref();
                 match fun {
-                WindowFunctionDefinition::AggregateUDF(fun) => {
-                    match fun.window_function_display_name(params) {
-                        Ok(name) => {
-                            write!(f, "{name}")
+                    WindowFunctionDefinition::AggregateUDF(fun) => {
+                        match fun.window_function_display_name(params) {
+                            Ok(name) => {
+                                write!(f, "{name}")
+                            }
+                            Err(e) => {
+                                write!(
+                                    f,
+                                    "got error from window_function_display_name {e}"
+                                )
+                            }
                         }
-                        Err(e) => {
-                            write!(f, "got error from window_function_display_name {e}")
+                    }
+                    WindowFunctionDefinition::WindowUDF(fun) => {
+                        let WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                        } = params;
+
+                        fmt_function(f, &fun.to_string(), false, args, true)?;
+
+                        if let Some(nt) = null_treatment {
+                            write!(f, "{nt}")?;
                         }
-                    }
-                }
-                WindowFunctionDefinition::WindowUDF(fun) => {
-                    let WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    } = params;
 
-                    fmt_function(f, &fun.to_string(), false, args, true)?;
-
-                    if let Some(nt) = null_treatment {
-                        write!(f, "{nt}")?;
+                        if !partition_by.is_empty() {
+                            write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
+                        }
+                        if !order_by.is_empty() {
+                            write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+                        }
+                        write!(
+                            f,
+                            " {} BETWEEN {} AND {}",
+                            window_frame.units,
+                            window_frame.start_bound,
+                            window_frame.end_bound
+                        )
                     }
-
-                    if !partition_by.is_empty() {
-                        write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
-                    }
-                    if !order_by.is_empty() {
-                        write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
-                    }
-                    write!(
-                        f,
-                        " {} BETWEEN {} AND {}",
-                        window_frame.units,
-                        window_frame.start_bound,
-                        window_frame.end_bound
-                    )
                 }
             }
-            },
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.display_name(params) {
                     Ok(name) => {

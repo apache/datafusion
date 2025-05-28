@@ -101,7 +101,7 @@ impl TreeNode for Expr {
                 } = &window_fun.as_ref().params;
                 (args, partition_by, order_by).apply_ref_elements(f)
             }
-            
+
             Expr::InList(InList { expr, list, .. }) => {
                 (expr, list).apply_ref_elements(f)
             }
@@ -233,14 +233,18 @@ impl TreeNode for Expr {
                 })?
             }
             Expr::WindowFunction(window_fun) => {
-                let WindowFunction { fun, params : WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    }} = *window_fun;
-                    (args, partition_by, order_by).map_elements(f)?.update_data(
+                let WindowFunction {
+                    fun,
+                    params:
+                        WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                        },
+                } = *window_fun;
+                (args, partition_by, order_by).map_elements(f)?.update_data(
                     |(new_args, new_partition_by, new_order_by)| {
                         Expr::from(WindowFunction::new(fun, new_args))
                             .partition_by(new_partition_by)
@@ -251,7 +255,7 @@ impl TreeNode for Expr {
                             .unwrap()
                     },
                 )
-            },
+            }
             Expr::AggregateFunction(AggregateFunction {
                 func,
                 params:

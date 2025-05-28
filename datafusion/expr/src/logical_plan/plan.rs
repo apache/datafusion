@@ -2428,7 +2428,8 @@ impl Window {
                 let WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(udwf),
                     params: WindowFunctionParams { partition_by, .. },
-                } = window_fun.as_ref() else {
+                } = window_fun.as_ref()
+                else {
                     return None;
                 };
                 // When there is no PARTITION BY, row number will be unique

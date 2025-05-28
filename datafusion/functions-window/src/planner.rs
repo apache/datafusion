@@ -56,8 +56,7 @@ impl ExprPlanner for WindowFunctionPlanner {
 
         let saved_name = NamePreserver::new_for_projection().save(&origin_expr);
 
-        let Expr::WindowFunction(window_fun) = origin_expr
-        else {
+        let Expr::WindowFunction(window_fun) = origin_expr else {
             unreachable!("")
         };
         let WindowFunction {

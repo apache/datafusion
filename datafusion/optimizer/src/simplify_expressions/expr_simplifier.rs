@@ -1523,13 +1523,11 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 (_, expr) => Transformed::no(expr),
             },
 
-            Expr::WindowFunction(ref window_fun) => {
-                match (window_fun.simplify(), expr) {
-                    (Some(simplify_function), Expr::WindowFunction(wf)) => {
-                        Transformed::yes(simplify_function(*wf, info)?)
-                    }
-                    (_, expr) => Transformed::no(expr),
+            Expr::WindowFunction(ref window_fun) => match (window_fun.simplify(), expr) {
+                (Some(simplify_function), Expr::WindowFunction(wf)) => {
+                    Transformed::yes(simplify_function(*wf, info)?)
                 }
+                (_, expr) => Transformed::no(expr),
             },
 
             //
@@ -4388,8 +4386,7 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::from(WindowFunction::new(udwf, vec![]));
+        let window_function_expr = Expr::from(WindowFunction::new(udwf, vec![]));
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -4397,8 +4394,7 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::from(WindowFunction::new(udwf, vec![]));
+        let window_function_expr = Expr::from(WindowFunction::new(udwf, vec![]));
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);
