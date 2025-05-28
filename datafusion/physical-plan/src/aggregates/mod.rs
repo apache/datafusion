@@ -984,9 +984,18 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let raw_stream = self.execute_typed(partition, context)?.into();
-        let wrapped = Box::pin(YieldStream::new(raw_stream));
-        Ok(wrapped)
+        // Only wrap *no‐grouping* aggregates in our YieldStream
+        // (grouped aggregates tend to produce small streams
+        //  and can rely on Tokio's own task‐yielding)
+        let typed = self.execute_typed(partition, context)?;
+        if self.group_expr().is_empty() {
+            // no GROUP BY: inject our yield wrapper
+            let raw_stream = typed.into(); // SendableRecordBatchStream
+            Ok(Box::pin(YieldStream::new(raw_stream)))
+        } else {
+            // has GROUP BY: just hand back the raw stream
+            Ok(typed.into())
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
