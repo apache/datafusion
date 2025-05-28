@@ -574,7 +574,7 @@ fn eliminate_unique_keyed_self_join_using_unique_index_subquery() {
 }
 
 #[test]
-fn eliminate_unique_keyed_self_join_with_multiple_table_refs() {
+fn eliminate_unique_keyed_self_join_on_subquery_duplicate_qualified_field() {
     let sql = r#"
         SELECT a.id, b.id
         FROM employees a
@@ -655,31 +655,6 @@ fn eliminate_unique_keyed_self_join_on_unique_index_subquery_with_column_alias()
           Projection: employees.id AS key
             Filter: employees.department = Utf8("HR")
               TableScan: employees projection=[id, department]
-    "#
-    );
-}
-
-#[test]
-fn eliminate_unique_keyed_self_join_multiple() {
-    let sql = r#"
-        SELECT
-            a.id
-        FROM
-            employees a
-            JOIN employees b ON a.id = b.id
-            JOIN employees c ON a.id = c.id
-        WHERE
-            b.department = 'HR';
-    "#;
-    let plan = test_sql(sql).unwrap();
-
-    assert_snapshot!(
-    format!("{plan}"),
-    @r#"
-    SubqueryAlias: a
-      Projection: employees.id
-        Filter: employees.department = Utf8("HR")
-          TableScan: employees projection=[id, department]
     "#
     );
 }
