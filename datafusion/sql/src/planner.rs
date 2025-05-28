@@ -39,6 +39,10 @@ use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 use crate::utils::make_decimal_type;
 pub use datafusion_expr::planner::ContextProvider;
 
+// use arrow_schema::DECIMAL_DEFAULT_SCALE;
+// Default scale for decimal type is 18 (as FixedDecimal type)
+pub const DECIMAL_DEFAULT_SCALE: i8 = 18;
+
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
@@ -54,6 +58,11 @@ pub struct ParserOptions {
     pub collect_spans: bool,
     /// Whether `VARCHAR` is mapped to `Utf8View` during SQL planning.
     pub map_varchar_to_utf8view: bool,
+    /// When we encounter a numeric constant, we need to parse it with precision and scale values.
+    /// Since it doesn't arrive from a column whose type we know, we need to use a default precision and scale.
+    /// This is what this configuration controls
+    pub default_decimal128_precision: u8,
+    pub default_decimal128_scale: i8,
 }
 
 impl ParserOptions {
@@ -75,6 +84,8 @@ impl ParserOptions {
             map_varchar_to_utf8view: false,
             enable_options_value_normalization: false,
             collect_spans: false,
+            default_decimal128_precision: DECIMAL128_MAX_PRECISION,
+            default_decimal128_scale: DECIMAL_DEFAULT_SCALE,
         }
     }
 
@@ -147,6 +158,8 @@ impl From<&SqlParserOptions> for ParserOptions {
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
+            default_decimal128_precision: DECIMAL128_MAX_PRECISION,
+            default_decimal128_scale: DECIMAL128_MAX_SCALE
         }
     }
 }
@@ -646,7 +659,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         (Some(precision), Some(scale))
                     }
                 };
-                make_decimal_type(precision, scale)
+                make_decimal_type(precision, scale, self.options.default_decimal128_precision, self.options.default_decimal128_scale)
             }
             SQLDataType::Bytea => Ok(DataType::Binary),
             SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
