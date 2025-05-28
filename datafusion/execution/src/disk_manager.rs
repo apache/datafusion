@@ -120,6 +120,7 @@ impl Default for DiskManagerMode {
 }
 
 /// Configuration for temporary disk access
+#[deprecated(since = "48.0.0", note = "Use DiskManagerBuilder instead")]
 #[derive(Debug, Clone)]
 pub enum DiskManagerConfig {
     /// Use the provided [DiskManager] instance
@@ -184,6 +185,7 @@ impl DiskManager {
     }
 
     /// Create a DiskManager given the configuration
+    #[deprecated(since = "48.0.0", note = "Use DiskManager::builder() instead")]
     pub fn try_new(config: DiskManagerConfig) -> Result<Arc<Self>> {
         match config {
             DiskManagerConfig::Existing(manager) => Ok(manager),
