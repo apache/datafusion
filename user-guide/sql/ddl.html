@@ -543,9 +543,55 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#cautions-when-using-the-with-order-clause">
-     Cautions when using the WITH ORDER Clause
+    <a class="reference internal nav-link" href="#example-parquet">
+     Example: Parquet
     </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example-comma-separated-value-csv">
+     Example: Comma Separated Value (CSV)
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example-compression">
+     Example: Compression
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example-specifying-schema">
+     Example: Specifying Schema
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example-partitioned-tables">
+     Example: Partitioned Tables
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example-unbounded-data-sources">
+     Example: Unbounded Data Sources
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example-with-order-clause">
+     Example:
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       WITH
+      </span>
+      <span class="pre">
+       ORDER
+      </span>
+     </code>
+     Clause
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#cautions-when-using-the-with-order-clause">
+       Cautions when using the WITH ORDER Clause
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
@@ -669,6 +715,8 @@ file system or remote object store as a named table which can be queried.</p>
 <p><code class="docutils literal notranslate"><span class="pre">LOCATION</span> <span class="pre">&lt;literal&gt;</span></code> specifies the location to find the data. It can be
 a path to a file or directory of partitioned files locally or on an
 object store.</p>
+<section id="example-parquet">
+<h3>Example: Parquet<a class="headerlink" href="#example-parquet" title="Link to this heading">¶</a></h3>
 <p>Parquet data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement such as the following. It is not necessary to
 provide schema information for Parquet files.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
@@ -676,6 +724,24 @@ provide schema information for Parquet files.</p>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/tripdata.parquet&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<dl class="simple myst">
+<dt>Statistics</dt><dd><p>By default, when a table is created, DataFusion will <em>NOT</em> read the files
+to gather statistics, which can be expensive but can accelerate subsequent
+queries substantially. If you want to gather statistics
+when creating a table, set the <code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code>
+configuration option to <code class="docutils literal notranslate"><span class="pre">true</span></code> before creating the table. For example:</p>
+</dd>
+</dl>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">collect_statistics</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>See the <a class="reference internal" href="../configs.html"><span class="std std-doc">config settings docs</span></a> for more details.</p>
+</div>
+</section>
+<section id="example-comma-separated-value-csv">
+<h3>Example: Comma Separated Value (CSV)<a class="headerlink" href="#example-comma-separated-value-csv" title="Link to this heading">¶</a></h3>
 <p>CSV data sources can also be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. The schema will be inferred based on
 scanning a subset of the file.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
@@ -684,6 +750,9 @@ scanning a subset of the file.</p>
 <span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
+</section>
+<section id="example-compression">
+<h3>Example: Compression<a class="headerlink" href="#example-compression" title="Link to this heading">¶</a></h3>
 <p>It is also possible to use compressed files, such as <code class="docutils literal notranslate"><span class="pre">.csv.gz</span></code>:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
@@ -692,6 +761,9 @@ scanning a subset of the file.</p>
 <span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
+</section>
+<section id="example-specifying-schema">
+<h3>Example: Specifying Schema<a class="headerlink" href="#example-specifying-schema" title="Link to this heading">¶</a></h3>
 <p>It is also possible to specify the schema manually.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span><span class="w"> </span><span class="p">(</span>
 <span class="w">    </span><span class="n">c1</span><span class="w">  </span><span class="nb">VARCHAR</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
@@ -713,6 +785,9 @@ scanning a subset of the file.</p>
 <span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
+</section>
+<section id="example-partitioned-tables">
+<h3>Example: Partitioned Tables<a class="headerlink" href="#example-partitioned-tables" title="Link to this heading">¶</a></h3>
 <p>It is also possible to specify a directory that contains a partitioned
 table (multiple files with the same schema)</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
@@ -721,13 +796,19 @@ table (multiple files with the same schema)</p>
 <span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>With <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">UNBOUNDED</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. We can create unbounded data sources such as following:</p>
+</section>
+<section id="example-unbounded-data-sources">
+<h3>Example: Unbounded Data Sources<a class="headerlink" href="#example-unbounded-data-sources" title="Link to this heading">¶</a></h3>
+<p>We can create unbounded data sources using the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">UNBOUNDED</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="n">UNBOUNDED</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/tripdata.parquet&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Note that this statement actually reads data from a fixed-size file, so a better example would involve reading from a FIFO file. Nevertheless, once Datafusion sees the <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span></code> keyword in a data source, it tries to execute queries that refer to this unbounded source in streaming fashion. If this is not possible according to query specifications, plan generation fails stating it is not possible to execute given query in streaming fashion. Note that queries that can run with unbounded sources (i.e. in streaming mode) are a subset of those that can with bounded sources. A query that fails with unbounded source(s) may work with bounded source(s).</p>
+</section>
+<section id="example-with-order-clause">
+<h3>Example: <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> Clause<a class="headerlink" href="#example-with-order-clause" title="Link to this heading">¶</a></h3>
 <p>When creating an output from a data source that is already ordered by
 an expression, you can pre-specify the order of the data using the
 <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause. This applies even if the expression used for
@@ -760,7 +841,7 @@ sorting is complex, allowing for greater flexibility.</p>
 </pre></div>
 </div>
 <section id="cautions-when-using-the-with-order-clause">
-<h3>Cautions when using the WITH ORDER Clause<a class="headerlink" href="#cautions-when-using-the-with-order-clause" title="Link to this heading">¶</a></h3>
+<h4>Cautions when using the WITH ORDER Clause<a class="headerlink" href="#cautions-when-using-the-with-order-clause" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>It’s important to understand that using the <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause in the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> statement only specifies the order in which the data should be read from the external file. If the data in the file is not already sorted according to the specified order, then the results may not be correct.</p></li>
 <li><p>It’s also important to note that the <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause does not affect the ordering of the data in the original external file.</p></li>
@@ -777,6 +858,7 @@ sorting is complex, allowing for greater flexibility.</p>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
+</section>
 </section>
 </section>
 <section id="create-table">
