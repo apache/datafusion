@@ -1028,13 +1028,12 @@ mod tests {
     // Regression test for https://github.com/apache/datafusion/issues/13755
     #[test]
     fn test_array_element_return_type_fixed_size_list() {
-        let fixed_size_list_type = DataType::FixedSizeList(
+        let fixed_size_list_type = FixedSizeList(
             Field::new("some_arbitrary_test_field", DataType::Int32, false).into(),
             13,
         );
-        let array_type = DataType::List(
-            Field::new_list_field(fixed_size_list_type.clone(), true).into(),
-        );
+        let array_type =
+            List(Field::new_list_field(fixed_size_list_type.clone(), true).into());
         let index_type = DataType::Int64;
 
         let schema = DFSchema::from_unqualified_fields(
