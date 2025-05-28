@@ -46,7 +46,8 @@ mod test {
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
     use datafusion_physical_plan::{
-        execute_stream_partitioned, ExecutionPlan, ExecutionPlanProperties,
+        execute_stream_partitioned, get_plan_string, ExecutionPlan,
+        ExecutionPlanProperties,
     };
     use futures::TryStreamExt;
     use std::sync::Arc;
@@ -527,6 +528,7 @@ mod test {
 
         let scan_schema = scan.schema();
 
+        // select id, 1+id, count(*) from t group by id, 1+id
         let group_by = PhysicalGroupBy::new_single(vec![
             (col("id", &scan_schema)?, "id".to_string()),
             (
@@ -553,7 +555,15 @@ mod test {
             vec![None],
             Arc::clone(&scan),
             scan_schema.clone(),
-        )?);
+        )?) as _;
+
+        let mut plan_string = get_plan_string(&aggregate_exec_partial);
+        let _ = plan_string.swap_remove(1);
+        let expected_plan = vec![
+            "AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]",
+            //"  DataSourceExec: file_groups={2 groups: [[.../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, .../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [.../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, .../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id, date], file_type=parquet
+        ];
+        assert_eq!(plan_string, expected_plan);
 
         let p0_statistics = aggregate_exec_partial.partition_statistics(Some(0))?;
 
@@ -629,7 +639,7 @@ mod test {
         )
         .await?;
 
-        // agg on empty_table && !group_by.is_empty()
+        // select id, 1+id, count(*) from empty_table group by id, 1+id
         let empty_table =
             Arc::new(EmptyExec::new(scan_schema.clone()).with_partitions(2));
 
@@ -640,7 +650,10 @@ mod test {
             vec![None],
             empty_table.clone(),
             scan_schema.clone(),
-        )?);
+        )?) as _;
+
+        let agg_plan = get_plan_string(&agg_partial).remove(0);
+        assert_eq!("AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]",agg_plan);
 
         let empty_stat = Statistics {
             num_rows: Precision::Exact(0),
@@ -689,7 +702,7 @@ mod test {
         )
         .await?;
 
-        // no group by key
+        // select count(*) from empty_table
         let agg_partial = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
