@@ -504,6 +504,9 @@ impl EquivalenceGroup {
                 .sorted_by_key(|(_, expr_id, _)| *expr_id)
                 .collect::<Vec<_>>();
             let mut start = 0;
+            if exprs.len() <= 1 {
+                continue;
+            }
             for i in 0..exprs.len() - 1 {
                 let cls_id = exprs[i].2;
                 let next_cls_id = exprs[i + 1].2;
