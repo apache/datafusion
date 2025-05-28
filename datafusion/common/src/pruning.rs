@@ -462,8 +462,8 @@ mod tests {
     #[test]
     fn test_partition_pruning_statistics() {
         let partition_values = vec![
-            vec![ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))],
-            vec![ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(4))],
+            vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
+            vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
         ];
         let partition_fields = vec![
             Arc::new(Field::new("a", DataType::Int32, false)),
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(max_values_b, expected_values_b);
 
         // Contained values are only true for the partition values
-        let values = HashSet::from([ScalarValue::Int32(Some(1))]);
+        let values = HashSet::from([ScalarValue::from(1i32)]);
         let contained_a = partition_stats.contained(&column_a, &values).unwrap();
         let expected_contained_a = BooleanArray::from(vec![true, false]);
         assert_eq!(contained_a, expected_contained_a);
@@ -551,7 +551,7 @@ mod tests {
         assert!(partition_stats.max_values(&column_b).is_none());
 
         // Contained values are all empty
-        let values = HashSet::from([ScalarValue::Int32(Some(1))]);
+        let values = HashSet::from([ScalarValue::from(1i32)]);
         let contained_a = partition_stats.contained(&column_a, &values);
         let expected_contained_a = BooleanArray::from(Vec::<Option<bool>>::new());
         assert_eq!(contained_a, Some(expected_contained_a));
@@ -564,20 +564,14 @@ mod tests {
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                100,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(0i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(100i32)))
                             .with_null_count(Precision::Exact(0)),
                     )
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                100,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                200,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(100i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(200i32)))
                             .with_null_count(Precision::Exact(5)),
                     )
                     .with_num_rows(Precision::Exact(100)),
@@ -586,22 +580,14 @@ mod tests {
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                50,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                300,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(50i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(300i32)))
                             .with_null_count(Precision::Exact(10)),
                     )
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                200,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                400,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(200i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(400i32)))
                             .with_null_count(Precision::Exact(0)),
                     )
                     .with_num_rows(Precision::Exact(200)),
@@ -675,7 +661,7 @@ mod tests {
         assert_eq!(row_counts_b, expected_row_counts_b);
 
         // Contained values are all null/missing (we can't know this just from statistics)
-        let values = HashSet::from([ScalarValue::Int32(Some(0))]);
+        let values = HashSet::from([ScalarValue::from(0i32)]);
         assert!(pruning_stats.contained(&column_a, &values).is_none());
         assert!(pruning_stats.contained(&column_b, &values).is_none());
 
@@ -737,7 +723,7 @@ mod tests {
         assert!(pruning_stats.row_counts(&column_b).is_none());
 
         // Contained values are all empty
-        let values = HashSet::from([ScalarValue::Int32(Some(1))]);
+        let values = HashSet::from([ScalarValue::from(1i32)]);
         assert!(pruning_stats.contained(&column_a, &values).is_none());
     }
 
@@ -745,8 +731,8 @@ mod tests {
     fn test_composite_pruning_statistics_partition_and_file() {
         // Create partition statistics
         let partition_values = vec![
-            vec![ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(10))],
-            vec![ScalarValue::Int32(Some(2)), ScalarValue::Int32(Some(20))],
+            vec![ScalarValue::from(1i32), ScalarValue::from(10i32)],
+            vec![ScalarValue::from(2i32), ScalarValue::from(20i32)],
         ];
         let partition_fields = vec![
             Arc::new(Field::new("part_a", DataType::Int32, false)),
@@ -761,22 +747,14 @@ mod tests {
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                100,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                200,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(100i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(200i32)))
                             .with_null_count(Precision::Exact(0)),
                     )
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                300,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                400,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(300i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(400i32)))
                             .with_null_count(Precision::Exact(5)),
                     )
                     .with_num_rows(Precision::Exact(100)),
@@ -785,22 +763,14 @@ mod tests {
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                500,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                600,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(500i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(600i32)))
                             .with_null_count(Precision::Exact(10)),
                     )
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                700,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                800,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(700i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(800i32)))
                             .with_null_count(Precision::Exact(0)),
                     )
                     .with_num_rows(Precision::Exact(200)),
@@ -900,7 +870,7 @@ mod tests {
         assert_eq!(row_counts_col_x, expected_row_counts);
 
         // Test contained values - only available from partition statistics
-        let values = HashSet::from([ScalarValue::Int32(Some(1))]);
+        let values = HashSet::from([ScalarValue::from(1i32)]);
         let contained_part_a = composite_stats.contained(&part_a, &values).unwrap();
         let expected_contained_part_a = BooleanArray::from(vec![true, false]);
         assert_eq!(contained_part_a, expected_contained_part_a);
@@ -931,12 +901,8 @@ mod tests {
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                100,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                200,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(100i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(200i32)))
                             .with_null_count(Precision::Exact(0)),
                     )
                     .with_num_rows(Precision::Exact(100)),
@@ -945,12 +911,8 @@ mod tests {
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                300,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                400,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(300i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(400i32)))
                             .with_null_count(Precision::Exact(5)),
                     )
                     .with_num_rows(Precision::Exact(200)),
@@ -970,12 +932,8 @@ mod tests {
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                1000,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                2000,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(1000i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(2000i32)))
                             .with_null_count(Precision::Exact(10)),
                     )
                     .with_num_rows(Precision::Exact(1000)),
@@ -984,12 +942,8 @@ mod tests {
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
-                                3000,
-                            ))))
-                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
-                                4000,
-                            ))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(3000i32)))
+                            .with_max_value(Precision::Exact(ScalarValue::from(4000i32)))
                             .with_null_count(Precision::Exact(20)),
                     )
                     .with_num_rows(Precision::Exact(2000)),
@@ -1096,8 +1050,8 @@ mod tests {
             // Create statistics with different number of containers
             // Use partition stats for the test
             let partition_values_1 = vec![
-                vec![ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(10))],
-                vec![ScalarValue::Int32(Some(2)), ScalarValue::Int32(Some(20))],
+                vec![ScalarValue::from(1i32), ScalarValue::from(10i32)],
+                vec![ScalarValue::from(2i32), ScalarValue::from(20i32)],
             ];
             let partition_fields_1 = vec![
                 Arc::new(Field::new("part_a", DataType::Int32, false)),
@@ -1106,9 +1060,9 @@ mod tests {
             let partition_stats_1 =
                 PartitionPruningStatistics::new(partition_values_1, partition_fields_1);
             let partition_values_2 = vec![
-                vec![ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(30))],
-                vec![ScalarValue::Int32(Some(4)), ScalarValue::Int32(Some(40))],
-                vec![ScalarValue::Int32(Some(5)), ScalarValue::Int32(Some(50))],
+                vec![ScalarValue::from(3i32), ScalarValue::from(30i32)],
+                vec![ScalarValue::from(4i32), ScalarValue::from(40i32)],
+                vec![ScalarValue::from(5i32), ScalarValue::from(50i32)],
             ];
             let partition_fields_2 = vec![
                 Arc::new(Field::new("part_x", DataType::Int32, false)),
