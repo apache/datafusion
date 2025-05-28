@@ -516,7 +516,7 @@ impl EquivalenceGroup {
                     start = i + 1;
                 }
             }
-            if exprs.len() > start {
+            if exprs.len() > start + 1 {
                 new_classes.push(EquivalenceClass::new(
                     (start..exprs.len())
                         .map(|idx| Arc::clone(exprs[idx].0))
