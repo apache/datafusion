@@ -318,6 +318,41 @@ pub struct DependentJoin {
     pub lateral_join_condition: Option<(JoinType, Expr)>,
 }
 
+impl DependentJoin {
+    fn indent_string(&self) -> String {}
+}
+impl Display for DependentJoin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let correlated_str = self
+            .correlated_columns
+            .iter()
+            .map(|(level, c)| {
+                if let Expr::OuterReferenceColumn(_, ref col) = c {
+                    return format!("{col} lvl {level}");
+                }
+                "".to_string()
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        let lateral_join_info =
+            if let Some((join_type, join_expr)) = self.lateral_join_condition {
+                format!(" lateral {join_type} join with {join_expr}")
+            } else {
+                "".to_string()
+            };
+        let subquery_expr_str = if let Some(expr) = self.subquery_expr {
+            format!(" with expr {expr}")
+        } else {
+            "".to_string()
+        };
+        write!(
+            f,
+            "DependentJoin on [{correlated_str}]{subquery_expr_str}\
+                        {lateral_join_info} depth {subquery_depth}"
+        )
+    }
+}
+
 impl PartialOrd for DependentJoin {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
@@ -1957,34 +1992,8 @@ impl LogicalPlan {
                         Ok(())
                     }
 
-                    LogicalPlan::DependentJoin(DependentJoin{
-                        subquery_expr,
-                        correlated_columns,
-                        subquery_depth,
-                        lateral_join_condition,
-                        ..
-                    }) => {
-                        let correlated_str = correlated_columns.iter()
-                        .map(|(level,c)|{
-                            if let Expr::OuterReferenceColumn(_, ref col) = c{
-                                return format!("{col} lvl {level}");
-                            }
-                            "".to_string()
-                        }).collect::<Vec<String>>().join(", ");
-                        let lateral_join_info = if let Some((join_type,join_expr))=
-                        lateral_join_condition {
-                            format!(" lateral {join_type} join with {join_expr}")
-                        }else{
-                            "".to_string()
-                        };
-                        let subquery_expr_str = if let Some(expr) = 
-                        subquery_expr{
-                            format!(" with expr {expr}")
-                        }else{
-                             "".to_string() 
-                            };
-                        write!(f,"DependentJoin on [{correlated_str}]{subquery_expr_str}\
-                        {lateral_join_info} depth {subquery_depth}")
+                    LogicalPlan::DependentJoin(dependent_join) => {
+                        dependent_join.fmt(f)
                     },
                     LogicalPlan::Join(Join {
                         on: ref keys,

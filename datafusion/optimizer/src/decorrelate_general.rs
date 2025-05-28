@@ -28,7 +28,9 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{internal_err, Column, HashMap, Result};
-use datafusion_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder, Projection};
+use datafusion_expr::{
+    col, lit, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Projection,
+};
 
 use indexmap::map::Entry;
 use indexmap::IndexMap;
@@ -60,6 +62,97 @@ struct ColumnAccess {
 }
 
 impl DependentJoinRewriter {
+    fn rewrite_filter(
+        &mut self,
+        filter: &Filter,
+        dependent_join_node: &Node,
+        current_subquery_depth: usize,
+        mut current_plan: LogicalPlanBuilder,
+        subquery_alias_by_offset: HashMap<usize, String>,
+    ) -> Result<LogicalPlanBuilder> {
+        // everytime we meet a subquery during traversal, we increment this by 1
+        // we can use this offset to lookup the original subquery info
+        // in subquery_alias_by_offset
+        // the reason why we cannot create a hashmap keyed by Subquery object HashMap<Subquery,String>
+        // is that the subquery inside this filter expr may have been rewritten in
+        // the lower level
+        let mut offset = 0;
+        let offset_ref = &mut offset;
+        let mut subquery_expr_by_offset = HashMap::new();
+        let new_predicate = filter
+            .predicate
+            .clone()
+            .transform(|e| {
+                // replace any subquery expr with subquery_alias.output
+                // column
+                let alias = match e {
+                    Expr::InSubquery(_) | Expr::Exists(_) | Expr::ScalarSubquery(_) => {
+                        subquery_alias_by_offset.get(offset_ref).unwrap()
+                    }
+                    _ => return Ok(Transformed::no(e)),
+                };
+                // we are aware that the original subquery can be rewritten
+                // update the latest expr to this map
+                subquery_expr_by_offset.insert(*offset_ref, e);
+                *offset_ref += 1;
+
+                // TODO: this assume that after decorrelation
+                // the dependent join will provide an extra column with the structure
+                // of "subquery_alias.output"
+                // On later step of decorrelation, it rely on this structure
+                // to again rename the expression after join
+                // for example if the real join type is LeftMark, the correct output
+                // column should be "mark" instead, else after the join
+                // one extra layer of projection is needed to alias "mark" into
+                // "alias.output"
+                Ok(Transformed::yes(col(format!("{alias}.output"))))
+            })?
+            .data;
+        // because dependent join may introduce extra columns
+        // to evaluate the subquery, the final plan should
+        // has another projection to remove these redundant columns
+        let post_join_projections: Vec<Expr> = filter
+            .input
+            .schema()
+            .columns()
+            .iter()
+            .map(|c| col(c.clone()))
+            .collect();
+        for (subquery_offset, (_, column_accesses)) in dependent_join_node
+            .columns_accesses_by_subquery_id
+            .iter()
+            .enumerate()
+        {
+            let alias = subquery_alias_by_offset.get(&subquery_offset).unwrap();
+            let subquery_expr = subquery_expr_by_offset.get(&subquery_offset).unwrap();
+
+            let subquery_input = unwrap_subquery_input_from_expr(subquery_expr);
+
+            let correlated_columns = column_accesses
+                .iter()
+                .map(|ac| {
+                    (
+                        ac.subquery_depth,
+                        Expr::OuterReferenceColumn(ac.data_type.clone(), ac.col.clone()),
+                    )
+                })
+                .unique()
+                .collect();
+
+            current_plan = current_plan.dependent_join(
+                subquery_input.deref().clone(),
+                correlated_columns,
+                Some(subquery_expr.clone()),
+                current_subquery_depth,
+                alias.clone(),
+                None, // TODO: handle this when we support lateral join rewrite
+            )?;
+        }
+        current_plan
+            .filter(new_predicate.clone())?
+            .project(post_join_projections)
+    }
+
     fn rewrite_projection(
         &mut self,
         original_proj: &Projection,
@@ -591,10 +684,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         for (subquery_offset, (subquery_id, _)) in
             node_info.columns_accesses_by_subquery_id.iter().enumerate()
         {
-            if self.nodes.get(subquery_id).is_none() {
-                println!("{node} {subquery_offset}");
-            }
-
             let subquery_node = self.nodes.get(subquery_id).unwrap();
             let alias = self
                 .alias_generator
@@ -606,6 +695,15 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             LogicalPlan::Projection(projection) => {
                 current_plan = self.rewrite_projection(
                     projection,
+                    &node_info,
+                    current_subquery_depth,
+                    current_plan,
+                    subquery_alias_by_offset,
+                )?;
+            }
+            LogicalPlan::Filter(filter) => {
+                current_plan = self.rewrite_filter(
+                    filter,
                     &node_info,
                     current_subquery_depth,
                     current_plan,
@@ -655,93 +753,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     alias.to_string(),
                     Some((join.join_type, lateral_join_condition)),
                 )?;
-            }
-            LogicalPlan::Filter(filter) => {
-                // everytime we meet a subquery during traversal, we increment this by 1
-                // we can use this offset to lookup the original subquery info
-                // in subquery_alias_by_offset
-                // the reason why we cannot create a hashmap keyed by Subquery object HashMap<Subquery,String>
-                // is that the subquery inside this filter expr may have been rewritten in
-                // the lower level
-                let mut offset = 0;
-                let offset_ref = &mut offset;
-                let mut subquery_expr_by_offset = HashMap::new();
-                let new_predicate = filter
-                    .predicate
-                    .clone()
-                    .transform(|e| {
-                        // replace any subquery expr with subquery_alias.output
-                        // column
-                        let alias = match e {
-                            Expr::InSubquery(_)
-                            | Expr::Exists(_)
-                            | Expr::ScalarSubquery(_) => {
-                                subquery_alias_by_offset.get(offset_ref).unwrap()
-                            }
-                            _ => return Ok(Transformed::no(e)),
-                        };
-                        // we are aware that the original subquery can be rewritten
-                        // update the latest expr to this map
-                        subquery_expr_by_offset.insert(*offset_ref, e);
-                        *offset_ref += 1;
-
-                        // TODO: this assume that after decorrelation
-                        // the dependent join will provide an extra column with the structure
-                        // of "subquery_alias.output"
-                        // On later step of decorrelation, it rely on this structure
-                        // to again rename the expression after join
-                        // for example if the real join type is LeftMark, the correct output
-                        // column should be "mark" instead, else after the join
-                        // one extra layer of projection is needed to alias "mark" into
-                        // "alias.output"
-                        Ok(Transformed::yes(col(format!("{alias}.output"))))
-                    })?
-                    .data;
-                // because dependent join may introduce extra columns
-                // to evaluate the subquery, the final plan should
-                // has another projection to remove these redundant columns
-                let post_join_projections: Vec<Expr> = filter
-                    .input
-                    .schema()
-                    .columns()
-                    .iter()
-                    .map(|c| col(c.clone()))
-                    .collect();
-                for (subquery_offset, (_, column_accesses)) in
-                    node_info.columns_accesses_by_subquery_id.iter().enumerate()
-                {
-                    let alias = subquery_alias_by_offset.get(&subquery_offset).unwrap();
-                    let subquery_expr =
-                        subquery_expr_by_offset.get(&subquery_offset).unwrap();
-
-                    let subquery_input = unwrap_subquery_input_from_expr(subquery_expr);
-
-                    let correlated_columns = column_accesses
-                        .iter()
-                        .map(|ac| {
-                            (
-                                ac.subquery_depth,
-                                Expr::OuterReferenceColumn(
-                                    ac.data_type.clone(),
-                                    ac.col.clone(),
-                                ),
-                            )
-                        })
-                        .unique()
-                        .collect();
-
-                    current_plan = current_plan.dependent_join(
-                        subquery_input.deref().clone(),
-                        correlated_columns,
-                        Some(subquery_expr.clone()),
-                        current_subquery_depth,
-                        alias.clone(),
-                        None, // TODO: handle this when we support lateral join rewrite
-                    )?;
-                }
-                current_plan = current_plan
-                    .filter(new_predicate.clone())?
-                    .project(post_join_projections)?;
             }
             _ => {
                 unimplemented!(
