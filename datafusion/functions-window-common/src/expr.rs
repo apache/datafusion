@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::arrow::datatypes::Field;
+use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
@@ -27,7 +27,7 @@ pub struct ExpressionArgs<'a> {
     input_exprs: &'a [Arc<dyn PhysicalExpr>],
     /// The corresponding fields of expressions passed as arguments
     /// to the user-defined window function.
-    input_fields: &'a [Field],
+    input_fields: &'a [FieldRef],
 }
 
 impl<'a> ExpressionArgs<'a> {
@@ -42,7 +42,7 @@ impl<'a> ExpressionArgs<'a> {
     ///
     pub fn new(
         input_exprs: &'a [Arc<dyn PhysicalExpr>],
-        input_fields: &'a [Field],
+        input_fields: &'a [FieldRef],
     ) -> Self {
         Self {
             input_exprs,
@@ -56,9 +56,9 @@ impl<'a> ExpressionArgs<'a> {
         self.input_exprs
     }
 
-    /// Returns the [`Field`]s corresponding to the input expressions
+    /// Returns the [`FieldRef`]s corresponding to the input expressions
     /// to the user-defined window function.
-    pub fn input_fields(&self) -> &'a [Field] {
+    pub fn input_fields(&self) -> &'a [FieldRef] {
         self.input_fields
     }
 }

@@ -61,18 +61,17 @@ fn invoke_repeat_with_args(
     args: Vec<ColumnarValue>,
     repeat_times: i64,
 ) -> Result<ColumnarValue, DataFusionError> {
-    let arg_fields_owned = args
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
     string::repeat().invoke_with_args(ScalarFunctionArgs {
         args,
         arg_fields,
         number_rows: repeat_times as usize,
-        return_field: &Field::new("f", DataType::Utf8, true),
+        return_field: Field::new("f", DataType::Utf8, true).into(),
     })
 }
 

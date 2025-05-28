@@ -36,6 +36,7 @@ use crate::{
 use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
@@ -56,6 +57,10 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
+
+/// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
+const AGGREGATION_HASH_SEED: ahash::RandomState =
+    ahash::RandomState::with_seeds('A' as u64, 'G' as u64, 'G' as u64, 'R' as u64);
 
 /// Aggregation modes
 ///
@@ -273,7 +278,7 @@ impl PhysicalGroupBy {
     }
 
     /// Returns the fields that are used as the grouping keys.
-    fn group_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
+    fn group_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = Vec::with_capacity(self.num_group_exprs());
         for ((expr, name), group_expr_nullable) in
             self.expr.iter().zip(self.exprs_nullable().into_iter())
@@ -284,15 +289,19 @@ impl PhysicalGroupBy {
                     expr.data_type(input_schema)?,
                     group_expr_nullable || expr.nullable(input_schema)?,
                 )
-                .with_metadata(expr.return_field(input_schema)?.metadata().clone()),
+                .with_metadata(expr.return_field(input_schema)?.metadata().clone())
+                .into(),
             );
         }
         if !self.is_single() {
-            fields.push(Field::new(
-                Aggregate::INTERNAL_GROUPING_ID,
-                Aggregate::grouping_id_type(self.expr.len()),
-                false,
-            ));
+            fields.push(
+                Field::new(
+                    Aggregate::INTERNAL_GROUPING_ID,
+                    Aggregate::grouping_id_type(self.expr.len()),
+                    false,
+                )
+                .into(),
+            );
         }
         Ok(fields)
     }
@@ -301,7 +310,7 @@ impl PhysicalGroupBy {
     ///
     /// This might be different from the `group_fields` that might contain internal expressions that
     /// should not be part of the output schema.
-    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
+    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = self.group_fields(input_schema)?;
         fields.truncate(self.num_output_exprs());
         Ok(fields)
@@ -621,7 +630,7 @@ impl AggregateExec {
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
-    pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+    pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
         let agg_expr = self.aggr_expr.iter().exactly_one().ok()?;
         agg_expr.get_minmax_desc()
     }

@@ -25,7 +25,7 @@ use crate::{LexOrdering, PhysicalExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::SortOptions;
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
@@ -67,7 +67,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn as_any(&self) -> &dyn Any;
 
     /// The field of the final result of this window function.
-    fn field(&self) -> Result<Field>;
+    fn field(&self) -> Result<FieldRef>;
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
     /// implementation returns placeholder text.
