@@ -21,9 +21,9 @@ use crate::{
     PhysicalSortExpr, PhysicalSortRequirement,
 };
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinType, ScalarValue};
+use datafusion_common::{HashMap, JoinType, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
-use std::collections::HashSet;
+use itertools::Itertools;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::vec::IntoIter;
@@ -423,58 +423,108 @@ impl EquivalenceGroup {
         self.bridge_classes()
     }
 
-    /// Returns a set of all adjacent expression pairs in this equivalence group.
+    /// Creates a mapping from expressions to their positions in the equivalence group.
     ///
-    /// For each equivalence class, this function creates pairs of expressions that are adjacent
-    /// to each other. For example, if we have an equivalence class [a, b, c], it will generate
-    /// pairs (a,b), (a,c), (b,c) and their reverse pairs (b,a), (c,a), (c,b).
+    /// This function builds a HashMap that maps each expression to a tuple containing:
+    /// 1. A unique index for the expression (based on insertion order)
+    /// 2. The ID of the equivalence class it belongs to
     ///
-    /// This is used by the `intersect` function to find common expression pairs between
-    /// two equivalence groups.
-    #[allow(clippy::type_complexity)]
-    fn adjacent_set(&self) -> HashSet<(&Arc<dyn PhysicalExpr>, &Arc<dyn PhysicalExpr>)> {
-        let mut set = HashSet::new();
-        for cls in self.classes.iter() {
-            let exprs = cls.exprs.as_slice();
-            for i in 0..exprs.len() {
-                for j in i + 1..exprs.len() {
-                    set.insert((&exprs[i], &exprs[j]));
-                    set.insert((&exprs[j], &exprs[i]));
-                }
+    /// # Returns
+    ///
+    /// A HashMap where:
+    /// - Key: Reference to a physical expression
+    /// - Value: A tuple (expr_index, class_id) where:
+    ///   - expr_index: A unique index for the expression (0-based, based on insertion order)
+    ///   - class_id: The index of the equivalence class containing this expression
+    ///
+    /// # Example
+    ///
+    /// For an equivalence group with classes:
+    /// - Class 0: [a, b]
+    /// - Class 1: [c, d]
+    ///
+    /// The function returns:
+    /// {
+    ///   a -> (0, 0),
+    ///   b -> (1, 0),
+    ///   c -> (2, 1),
+    ///   d -> (3, 1)
+    /// }
+    fn expressions(&self) -> HashMap<&Arc<dyn PhysicalExpr>, (usize, usize)> {
+        let mut map = HashMap::new();
+        for (cls_id, cls) in self.classes.iter().enumerate() {
+            for expr in cls.exprs.iter() {
+                map.insert(expr, (map.len(), cls_id));
             }
         }
-        set
+        map
     }
 
     /// Computes the intersection of two equivalence groups.
     ///
-    /// This function finds all expression pairs that are equivalent in both groups.
-    /// For example, if group1 has (a, b, c) and group2 has (b, c, d), then the intersection
-    /// will contain (b, c) since it appears in both groups.
+    /// This function finds all expressions that are equivalent in both groups by:
+    /// 1. Creating a mapping of expressions to their positions in the first group
+    /// 2. For each equivalence class in the second group:
+    ///    - Find all expressions that exist in both groups
+    ///    - Sort them by their position in the first group
+    ///    - Group consecutive expressions that belong to the same equivalence class in the first group
     ///
-    /// The process works as follows:
-    /// 1. Get all adjacent expression pairs from both groups using `adjacent_set`
-    /// 2. Find the intersection of these pairs
-    /// 3. Create a new equivalence group from the intersecting pairs
-    /// 4. Remove any redundant entries from the resulting group
-    ///
+    /// Computational Complexity: O(NlogN) where N is the total number of expressions in both groups.
     /// # Arguments
     ///
     /// * `other` - The other equivalence group to intersect with
     ///
     /// # Returns
     ///
-    /// A new equivalence group containing only the expression pairs that are equivalent
+    /// A new equivalence group containing only the expressions that are equivalent
     /// in both input groups.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// Group1: [a, b, c]  // a=b=c
+    /// Group2: [b, c, d]  // b=c=d
+    ///
+    /// Result: [b, c]     // b=c in both groups
+    /// ```
+
     pub fn intersect(&self, other: &Self) -> Self {
-        let set = self.adjacent_set();
-        let other_set = other.adjacent_set();
-        let mut ret = EquivalenceGroup::empty();
-        for (lhs, rhs) in set.intersection(&other_set) {
-            ret.add_equal_conditions(lhs, rhs);
+        let self_exprs = self.expressions();
+
+        let mut new_classes = Vec::new();
+        for cls in other.classes.iter() {
+            let exprs = cls
+                .exprs
+                .iter()
+                .flat_map(|expr| {
+                    self_exprs
+                        .get(expr)
+                        .map(|(expr_id, cls_id)| (expr, *expr_id, *cls_id))
+                })
+                .sorted_by_key(|(_, expr_id, _)| *expr_id)
+                .collect::<Vec<_>>();
+            let mut start = 0;
+            for i in 0..exprs.len() - 1 {
+                let cls_id = exprs[i].2;
+                let next_cls_id = exprs[i + 1].2;
+                if cls_id != next_cls_id {
+                    if i > start {
+                        new_classes.push(EquivalenceClass::new(
+                            (start..=i).map(|idx| exprs[idx].0.clone()).collect(),
+                        ));
+                        start = i + 1;
+                    }
+                }
+            }
+            if exprs.len() > start {
+                new_classes.push(EquivalenceClass::new(
+                    (start..exprs.len())
+                        .map(|idx| exprs[idx].0.clone())
+                        .collect(),
+                ));
+            }
         }
-        ret.remove_redundant_entries();
-        ret
+        Self::new(new_classes)
     }
 
     /// This utility function unifies/bridges classes that have common expressions.
