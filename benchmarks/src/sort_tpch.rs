@@ -174,14 +174,12 @@ impl RunOpt {
     /// If query is specified from command line, run only that query.
     /// Otherwise, run all queries.
     pub async fn run(&self) -> Result<()> {
-        let mut benchmark_run = BenchmarkRun::new();
+        let mut benchmark_run: BenchmarkRun = BenchmarkRun::new();
 
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
             None => 1..=Self::SORT_QUERIES.len(),
         };
-        let mut failed_queries: Vec<usize> =
-            Vec::with_capacity(query_range.clone().count());
 
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("{query_id}"));
@@ -194,23 +192,14 @@ impl RunOpt {
                     }
                 }
                 Err(e) => {
-                    failed_queries.push(query_id);
+                    benchmark_run.mark_failed();
                     eprintln!("Query {query_id} failed: {e}");
                 }
             }
         }
 
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
-        if !failed_queries.is_empty() {
-            println!(
-                "Failed Queries: {}",
-                failed_queries
-                    .iter()
-                    .map(|q| q.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
+        benchmark_run.maybe_print_failures();
         Ok(())
     }
 
@@ -308,7 +297,7 @@ impl RunOpt {
 
         let mut stream = execute_stream(physical_plan.clone(), state.task_ctx())?;
         while let Some(batch) = stream.next().await {
-            row_count += batch.unwrap().num_rows();
+            row_count += batch?.num_rows();
         }
 
         if debug {

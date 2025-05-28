@@ -129,8 +129,6 @@ impl RunOpt {
         self.register_hits(&ctx).await?;
 
         let mut benchmark_run = BenchmarkRun::new();
-        let mut failed_queries: Vec<usize> =
-            Vec::with_capacity(query_range.clone().count());
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
             let query_run = self.benchmark_query(&queries, query_id, &ctx).await;
@@ -141,23 +139,13 @@ impl RunOpt {
                     }
                 }
                 Err(e) => {
+                    benchmark_run.mark_failed();
                     eprintln!("Query {query_id} failed: {e}");
-                    // TODO mark failure
-                    failed_queries.push(query_id);
                 }
             }
         }
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
-        if !failed_queries.is_empty() {
-            println!(
-                "Failed Queries: {}",
-                failed_queries
-                    .iter()
-                    .map(|q| q.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
+        benchmark_run.maybe_print_failures();
         Ok(())
     }
 
