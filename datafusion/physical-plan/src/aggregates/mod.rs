@@ -47,7 +47,6 @@ use datafusion_physical_expr::{
     PhysicalSortRequirement,
 };
 
-use crate::aggregates::no_grouping::YieldStream;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use itertools::Itertools;
 
@@ -984,18 +983,8 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // Only wrap no‐grouping aggregates in our YieldStream
-        // (grouped aggregates tend to produce small streams
-        //  and can rely on Tokio's own task‐yielding)
-        let typed = self.execute_typed(partition, context)?;
-        if self.group_expr().is_empty() {
-            // no GROUP BY: inject our yield wrapper
-            let raw_stream = typed.into(); // SendableRecordBatchStream
-            Ok(Box::pin(YieldStream::new(raw_stream)))
-        } else {
-            // has GROUP BY: just hand back the raw stream
-            Ok(typed.into())
-        }
+        self.execute_typed(partition, context)
+            .map(|stream| stream.into())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
