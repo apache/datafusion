@@ -77,9 +77,7 @@ impl AggregateStream {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
 
-        // Only wrap no‐grouping aggregates in our YieldStream
-        // (grouped aggregates tend to produce small streams
-        //  and can rely on Tokio's own task‐yielding)
+        // Wrap no‐grouping aggregates in our YieldStream
         let input = Box::pin(YieldStream::new(input)) as SendableRecordBatchStream;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
