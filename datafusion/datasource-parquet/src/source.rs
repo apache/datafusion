@@ -613,7 +613,7 @@ impl FileSource for ParquetSource {
 
         let mut source = self.clone();
         let filters = PredicateSupports::new_with_supported_check(filters, |filter| {
-            pushdown_filters && can_expr_be_pushed_down_with_schemas(filter, &file_schema)
+            can_expr_be_pushed_down_with_schemas(filter, &file_schema)
         });
         if filters.is_all_unsupported() {
             // No filters can be pushed down, so we can just return the remaining filters
@@ -629,6 +629,12 @@ impl FileSource for ParquetSource {
         };
         source.predicate = Some(predicate);
         let source = Arc::new(source);
+        // If pushdown_filters is false we tell our parents that they still have to handle the filters,
+        // even if we updated the predicate to include the filters (they will only be used for stats pruning).
+        if !pushdown_filters {
+            return Ok(FilterPushdownPropagation::with_filters(filters.make_unsupported())
+                .with_updated_node(source));
+        }
         Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
     }
 }

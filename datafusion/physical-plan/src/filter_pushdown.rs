@@ -31,6 +31,14 @@ pub enum PredicateSupport {
     Unsupported(Arc<dyn PhysicalExpr>),
 }
 
+impl PredicateSupport {
+    pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
+        match self {
+            PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => expr,
+        }
+    }
+}
+
 /// A thin wrapper around [`PredicateSupport`]s that allows for easy collection of
 /// supported and unsupported filters. Inner vector stores each predicate for one node.
 #[derive(Debug, Clone)]
