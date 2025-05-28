@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::UInt64Array;
+use arrow::array::{Array, UInt64Array};
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::error::DataFusionError;
 use crate::stats::Precision;
 use crate::{Column, Statistics};
 use crate::{ColumnStatistics, ScalarValue};
@@ -140,7 +141,7 @@ pub struct PartitionPruningStatistics {
     /// vectors represent the containers.
     /// The order must match the order of the partition columns in
     /// [`PartitionPruningStatistics::partition_schema`].
-    partition_values: Vec<Vec<ScalarValue>>,
+    partition_values: Vec<ArrayRef>,
     /// The number of containers.
     /// Stored since the partition values are column-major and if
     /// there are no columns we wouldn't know the number of containers.
@@ -165,10 +166,10 @@ impl PartitionPruningStatistics {
     ///   This must **not** be the schema of the entire file or table:
     ///   instead it must only be the schema of the partition columns,
     ///   in the same order as the values in `partition_values`.
-    pub fn new(
+    pub fn try_new(
         partition_values: Vec<Vec<ScalarValue>>,
         partition_fields: Vec<FieldRef>,
-    ) -> Self {
+    ) -> Result<Self, DataFusionError> {
         let num_containers = partition_values.len();
         let partition_schema = Arc::new(Schema::new(partition_fields));
         let mut partition_values_by_column =
@@ -178,28 +179,21 @@ impl PartitionPruningStatistics {
                 partition_values_by_column[i].push(value);
             }
         }
-        Self {
-            partition_values: partition_values_by_column,
+        Ok(Self {
+            partition_values: partition_values_by_column
+                .into_iter()
+                .map(|v| ScalarValue::iter_to_array(v))
+                .collect::<Result<Vec<_>, _>>()?,
             num_containers,
             partition_schema,
-        }
+        })
     }
 }
 
 impl PruningStatistics for PartitionPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
-        let partition_values = self.partition_values.get(index)?;
-        match ScalarValue::iter_to_array(partition_values.iter().cloned()) {
-            Ok(array) => Some(array),
-            Err(_) => {
-                log::warn!(
-                    "Failed to convert min values to array for column {}",
-                    column.name()
-                );
-                None
-            }
-        }
+        self.partition_values.get(index).map(|v| Arc::clone(v))
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
@@ -224,14 +218,15 @@ impl PruningStatistics for PartitionPruningStatistics {
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
-        let partition_values = self.partition_values.get(index)?;
-        let array = BooleanArray::from(
-            partition_values
-                .iter()
-                .map(|pv| Some(values.contains(pv)))
-                .collect::<Vec<_>>(),
-        );
-        Some(array)
+        let array = self.partition_values.get(index)?;
+        let values_array = ScalarValue::iter_to_array(values.iter().cloned()).ok()?;
+        let boolean_array =
+            arrow::compute::kernels::cmp::eq(array, &values_array).ok()?;
+        if boolean_array.null_count() == boolean_array.len() {
+            None
+        } else {
+            Some(boolean_array)
+        }
     }
 }
 
@@ -470,7 +465,8 @@ mod tests {
             Arc::new(Field::new("b", DataType::Int32, false)),
         ];
         let partition_stats =
-            PartitionPruningStatistics::new(partition_values, partition_fields);
+            PartitionPruningStatistics::try_new(partition_values, partition_fields)
+                .unwrap();
 
         let column_a = Column::new_unqualified("a");
         let column_b = Column::new_unqualified("b");
@@ -533,7 +529,8 @@ mod tests {
             Arc::new(Field::new("b", DataType::Int32, false)),
         ];
         let partition_stats =
-            PartitionPruningStatistics::new(partition_values, partition_fields);
+            PartitionPruningStatistics::try_new(partition_values, partition_fields)
+                .unwrap();
 
         let column_a = Column::new_unqualified("a");
         let column_b = Column::new_unqualified("b");
@@ -739,7 +736,8 @@ mod tests {
             Arc::new(Field::new("part_b", DataType::Int32, false)),
         ];
         let partition_stats =
-            PartitionPruningStatistics::new(partition_values, partition_fields);
+            PartitionPruningStatistics::try_new(partition_values, partition_fields)
+                .unwrap();
 
         // Create file statistics
         let file_statistics = vec![
@@ -1057,8 +1055,11 @@ mod tests {
                 Arc::new(Field::new("part_a", DataType::Int32, false)),
                 Arc::new(Field::new("part_b", DataType::Int32, false)),
             ];
-            let partition_stats_1 =
-                PartitionPruningStatistics::new(partition_values_1, partition_fields_1);
+            let partition_stats_1 = PartitionPruningStatistics::try_new(
+                partition_values_1,
+                partition_fields_1,
+            )
+            .unwrap();
             let partition_values_2 = vec![
                 vec![ScalarValue::from(3i32), ScalarValue::from(30i32)],
                 vec![ScalarValue::from(4i32), ScalarValue::from(40i32)],
@@ -1068,8 +1069,11 @@ mod tests {
                 Arc::new(Field::new("part_x", DataType::Int32, false)),
                 Arc::new(Field::new("part_y", DataType::Int32, false)),
             ];
-            let partition_stats_2 =
-                PartitionPruningStatistics::new(partition_values_2, partition_fields_2);
+            let partition_stats_2 = PartitionPruningStatistics::try_new(
+                partition_values_2,
+                partition_fields_2,
+            )
+            .unwrap();
 
             CompositePruningStatistics::new(vec![
                 Box::new(partition_stats_1),
