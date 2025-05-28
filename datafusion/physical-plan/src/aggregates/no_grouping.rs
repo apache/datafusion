@@ -179,6 +179,7 @@ impl AggregateStream {
 pub struct YieldStream {
     inner: SendableRecordBatchStream,
     batches_processed: usize,
+    buffer: Option<Result<RecordBatch>>,
 }
 
 impl YieldStream {
@@ -186,6 +187,7 @@ impl YieldStream {
         Self {
             inner,
             batches_processed: 0,
+            buffer: None,
         }
     }
 }
@@ -201,11 +203,19 @@ impl Stream for YieldStream {
         const YIELD_BATCHES: usize = 64;
         let this = &mut *self;
 
+        if let Some(batch) = this.buffer.take() {
+            return Poll::Ready(Some(batch));
+        }
+
         match this.inner.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(batch))) => {
                 this.batches_processed += 1;
                 if this.batches_processed >= YIELD_BATCHES {
                     this.batches_processed = 0;
+                    // We need to buffer the batch when we return Poll::Pending,
+                    // so that we can return it on the next poll.
+                    // Otherwise, the next poll will miss the batch and return None.
+                    this.buffer = Some(Ok(batch));
                     cx.waker().wake_by_ref();
                     Poll::Pending
                 } else {
