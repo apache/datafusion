@@ -287,7 +287,7 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 ///
 /// # Arguments
 ///
-/// * `query_info` - The subquery portion of the `where` (select avg(total) from orders
+/// * `query_info` - The subquery portion of the `where` (select avg(total) from orders)
 /// * `filter_input` - The non-subquery portion (from customers)
 /// * `outer_others` - Any additional parts to the `where` expression (and c.x = y)
 /// * `subquery_alias` - Subquery aliases

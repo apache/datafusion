@@ -350,7 +350,27 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
-            LogicalPlan::DependentJoin(..) => todo!(),
+            LogicalPlan::DependentJoin(DependentJoin {
+                schema,
+                correlated_columns,
+                subquery_expr,
+                subquery_depth,
+                subquery_name,
+                lateral_join_condition,
+                left,
+                right,
+            }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
+                LogicalPlan::DependentJoin(DependentJoin {
+                    schema,
+                    correlated_columns,
+                    subquery_expr,
+                    subquery_depth,
+                    subquery_name,
+                    lateral_join_condition,
+                    left,
+                    right,
+                })
+            }),
         })
     }
 }
@@ -403,8 +423,28 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
         match self {
-            // TODO: apply expr on the subquery
-            LogicalPlan::DependentJoin(..) => Ok(TreeNodeRecursion::Continue),
+            LogicalPlan::DependentJoin(DependentJoin {
+                correlated_columns,
+                subquery_expr,
+                lateral_join_condition,
+                ..
+            }) => {
+                let correlated_column_exprs = correlated_columns
+                    .iter()
+                    .map(|(_, c)| c.clone())
+                    .collect::<Vec<_>>();
+                let subquery_expr_opt = subquery_expr.clone();
+                let maybe_lateral_join_condition = match lateral_join_condition {
+                    Some((_, condition)) => Some(condition.clone()),
+                    None => None,
+                };
+                (
+                    &correlated_column_exprs,
+                    &subquery_expr_opt,
+                    &maybe_lateral_join_condition,
+                )
+                    .apply_ref_elements(f)
+            }
             LogicalPlan::Projection(Projection { expr, .. }) => expr.apply_elements(f),
             LogicalPlan::Values(Values { values, .. }) => values.apply_elements(f),
             LogicalPlan::Filter(Filter { predicate, .. }) => f(predicate),

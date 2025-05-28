@@ -805,8 +805,10 @@ impl OptimizerRule for Decorrelation {
 #[cfg(test)]
 mod tests {
     use super::DependentJoinRewriter;
+
     use crate::test::test_table_scan_with_name;
     use arrow::datatypes::DataType as ArrowDataType;
+    use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeRefContainer};
     use datafusion_common::{alias::AliasGenerator, Result, Spans};
     use datafusion_expr::{
         binary_expr, exists, expr_fn::col, in_subquery, lit, out_ref_col,

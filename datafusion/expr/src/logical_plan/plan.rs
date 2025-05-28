@@ -318,9 +318,6 @@ pub struct DependentJoin {
     pub lateral_join_condition: Option<(JoinType, Expr)>,
 }
 
-impl DependentJoin {
-    fn indent_string(&self) -> String {}
-}
 impl Display for DependentJoin {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let correlated_str = self
@@ -335,12 +332,12 @@ impl Display for DependentJoin {
             .collect::<Vec<String>>()
             .join(", ");
         let lateral_join_info =
-            if let Some((join_type, join_expr)) = self.lateral_join_condition {
+            if let Some((join_type, join_expr)) = &self.lateral_join_condition {
                 format!(" lateral {join_type} join with {join_expr}")
             } else {
                 "".to_string()
             };
-        let subquery_expr_str = if let Some(expr) = self.subquery_expr {
+        let subquery_expr_str = if let Some(expr) = &self.subquery_expr {
             format!(" with expr {expr}")
         } else {
             "".to_string()
@@ -348,7 +345,8 @@ impl Display for DependentJoin {
         write!(
             f,
             "DependentJoin on [{correlated_str}]{subquery_expr_str}\
-                        {lateral_join_info} depth {subquery_depth}"
+                        {lateral_join_info} depth {0}",
+            self.subquery_depth,
         )
     }
 }
@@ -1993,7 +1991,7 @@ impl LogicalPlan {
                     }
 
                     LogicalPlan::DependentJoin(dependent_join) => {
-                        dependent_join.fmt(f)
+                        Display::fmt(dependent_join,f)
                     },
                     LogicalPlan::Join(Join {
                         on: ref keys,
