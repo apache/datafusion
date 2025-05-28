@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, UInt64Array};
+use arrow::array::{Array, NullArray, UInt64Array};
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use std::collections::HashSet;
@@ -173,7 +173,10 @@ impl PartitionPruningStatistics {
         let num_containers = partition_values.len();
         let partition_schema = Arc::new(Schema::new(partition_fields));
         let mut partition_values_by_column =
-            vec![vec![]; partition_schema.fields().len()];
+            vec![
+                Vec::with_capacity(partition_values.len());
+                partition_schema.fields().len()
+            ];
         for partition_value in partition_values {
             for (i, value) in partition_value.into_iter().enumerate() {
                 partition_values_by_column[i].push(value);
@@ -182,7 +185,13 @@ impl PartitionPruningStatistics {
         Ok(Self {
             partition_values: partition_values_by_column
                 .into_iter()
-                .map(|v| ScalarValue::iter_to_array(v))
+                .map(|v| {
+                    if v.is_empty() {
+                        Ok(Arc::new(NullArray::new(0)) as ArrayRef)
+                    } else {
+                        ScalarValue::iter_to_array(v)
+                    }
+                })
                 .collect::<Result<Vec<_>, _>>()?,
             num_containers,
             partition_schema,
@@ -193,7 +202,18 @@ impl PartitionPruningStatistics {
 impl PruningStatistics for PartitionPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
-        self.partition_values.get(index).map(|v| Arc::clone(v))
+        self.partition_values
+            .get(index)
+            .map(|v| {
+                if v.is_empty() || v.null_count() == v.len() {
+                    // If the array is empty or all nulls, return None
+                    None
+                } else {
+                    // Otherwise, return the array as is
+                    Some(Arc::clone(v))
+                }
+            })
+            .flatten()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
@@ -219,10 +239,20 @@ impl PruningStatistics for PartitionPruningStatistics {
     ) -> Option<BooleanArray> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
         let array = self.partition_values.get(index)?;
-        let values_array = ScalarValue::iter_to_array(values.iter().cloned()).ok()?;
-        let boolean_array =
-            arrow::compute::kernels::cmp::eq(array, &values_array).ok()?;
-        if boolean_array.null_count() == boolean_array.len() {
+        let boolean_arrays = values
+            .iter()
+            .map(|v| {
+                let arrow_value = v.to_scalar()?;
+                arrow::compute::kernels::cmp::eq(array, &arrow_value)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let boolean_array = boolean_arrays.into_iter().reduce(|acc, arr| {
+            arrow::compute::kernels::boolean::and(&acc, &arr)
+                .expect("arrays are known to have equal lengths")
+        })?;
+        // If the boolean array is empty or all null values, return None
+        if boolean_array.is_empty() || boolean_array.null_count() == boolean_array.len() {
             None
         } else {
             Some(boolean_array)
@@ -549,9 +579,7 @@ mod tests {
 
         // Contained values are all empty
         let values = HashSet::from([ScalarValue::from(1i32)]);
-        let contained_a = partition_stats.contained(&column_a, &values);
-        let expected_contained_a = BooleanArray::from(Vec::<Option<bool>>::new());
-        assert_eq!(contained_a, Some(expected_contained_a));
+        assert!(partition_stats.contained(&column_a, &values).is_none());
     }
 
     #[test]
