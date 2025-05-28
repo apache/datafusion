@@ -984,7 +984,7 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // Only wrap *no‐grouping* aggregates in our YieldStream
+        // Only wrap no‐grouping aggregates in our YieldStream
         // (grouped aggregates tend to produce small streams
         //  and can rely on Tokio's own task‐yielding)
         let typed = self.execute_typed(partition, context)?;
