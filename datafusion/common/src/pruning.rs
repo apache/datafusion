@@ -202,18 +202,15 @@ impl PartitionPruningStatistics {
 impl PruningStatistics for PartitionPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
-        self.partition_values
-            .get(index)
-            .map(|v| {
-                if v.is_empty() || v.null_count() == v.len() {
-                    // If the array is empty or all nulls, return None
-                    None
-                } else {
-                    // Otherwise, return the array as is
-                    Some(Arc::clone(v))
-                }
-            })
-            .flatten()
+        self.partition_values.get(index).and_then(|v| {
+            if v.is_empty() || v.null_count() == v.len() {
+                // If the array is empty or all nulls, return None
+                None
+            } else {
+                // Otherwise, return the array as is
+                Some(Arc::clone(v))
+            }
+        })
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
@@ -239,18 +236,18 @@ impl PruningStatistics for PartitionPruningStatistics {
     ) -> Option<BooleanArray> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
         let array = self.partition_values.get(index)?;
-        let boolean_arrays = values
-            .iter()
-            .map(|v| {
-                let arrow_value = v.to_scalar()?;
-                arrow::compute::kernels::cmp::eq(array, &arrow_value)
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .ok()?;
-        let boolean_array = boolean_arrays.into_iter().reduce(|acc, arr| {
-            arrow::compute::kernels::boolean::and(&acc, &arr)
-                .expect("arrays are known to have equal lengths")
-        })?;
+        let boolean_array = values.iter().try_fold(None, |acc, v| {
+            let arrow_value = v.to_scalar().ok()?;
+            let eq_result = arrow::compute::kernels::cmp::eq(array, &arrow_value).ok()?;
+            match acc {
+                None => Some(Some(eq_result)),
+                Some(acc_array) => {
+                    arrow::compute::kernels::boolean::and(&acc_array, &eq_result)
+                        .map(Some)
+                        .ok()
+                }
+            }
+        })??;
         // If the boolean array is empty or all null values, return None
         if boolean_array.is_empty() || boolean_array.null_count() == boolean_array.len() {
             None
