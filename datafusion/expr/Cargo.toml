@@ -58,3 +58,4 @@ sqlparser = { workspace = true }
 [dev-dependencies]
 ctor = { workspace = true }
 env_logger = { workspace = true }
+insta = { workspace = true }
