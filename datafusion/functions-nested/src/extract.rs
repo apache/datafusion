@@ -225,6 +225,23 @@ where
         return Ok(Arc::new(NullArray::new(array.len())));
     }
 
+    if let DataType::Struct(fields) = values.data_type() {
+        let has_null_fields = fields.iter().any(|field| field.data_type() == &Null);
+        if has_null_fields {
+            // Instead of trying to extract from malformed struct data and return appropriate nulls
+            let mut null_array_data = Vec::with_capacity(array.len());
+            for _ in 0..array.len() {
+                null_array_data.push(None::<i32>);
+            }
+
+            // Return null array with the expected struct type
+            return Ok(arrow::array::new_null_array(
+                values.data_type(),
+                array.len(),
+            ));
+        }
+    }
+
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
 
