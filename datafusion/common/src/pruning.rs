@@ -564,7 +564,7 @@ mod tests {
                 Statistics::default()
                     .add_column_statistics(
                         ColumnStatistics::new_unknown()
-                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+                            .with_min_value(Precision::Exact(ScalarValue::from(0i32))
                             .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
                                 100,
                             ))))
