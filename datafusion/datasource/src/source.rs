@@ -90,22 +90,21 @@ use datafusion_physical_plan::filter_pushdown::{
 ///               │   ┊                                                                 ┊
 ///               │   ┊                                                                 ┊
 ///    ┌──────────▼──────────┐                                               ┌──────────▼──────────┐
-///    │                     │                                               │     arrow source    │
+///    │                     │                                               │     ArrowSource     │
 ///    │ FileSource(trait)   ◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│          ...        │
-///    │                     │                                               │    parquet source   │
+///    │                     │                                               │    ParquetSource    │
 ///    └─────────────────────┘                                               └─────────────────────┘
 ///               │
 ///               │
 ///               │
 ///               │
 ///    ┌──────────▼──────────┐
-///    │     arrow source    │
+///    │     ArrowSource     │
 ///    │          ...        │
-///    │    parquet source   │
+///    │    ParquetSource    │
 ///    └─────────────────────┘
 ///               |
-///           FileStream
-///           file opener
+/// FileOpener (called by FileStream)
 ///               │
 ///    ┌──────────▼──────────┐
 ///    │                     │
