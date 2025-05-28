@@ -632,8 +632,10 @@ impl FileSource for ParquetSource {
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
         if !pushdown_filters {
-            return Ok(FilterPushdownPropagation::with_filters(filters.make_unsupported())
-                .with_updated_node(source));
+            return Ok(FilterPushdownPropagation::with_filters(
+                filters.make_unsupported(),
+            )
+            .with_updated_node(source));
         }
         Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
     }

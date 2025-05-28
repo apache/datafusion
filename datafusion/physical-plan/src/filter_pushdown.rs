@@ -34,7 +34,9 @@ pub enum PredicateSupport {
 impl PredicateSupport {
     pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
         match self {
-            PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => expr,
+            PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => {
+                expr
+            }
         }
     }
 }
