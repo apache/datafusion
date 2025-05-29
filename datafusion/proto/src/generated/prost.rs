@@ -1810,10 +1810,6 @@ pub struct NestedLoopJoinExecNode {
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(uint32, repeated, tag = "5")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
-    #[prost(bool, tag = "6")]
-    pub null_equals_null: bool,
-    #[prost(message, repeated, tag = "7")]
-    pub on: ::prost::alloc::vec::Vec<JoinOn>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CoalesceBatchesExecNode {
