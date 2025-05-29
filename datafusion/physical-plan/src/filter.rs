@@ -15,12 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{ready, Context, Poll};
-
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -38,6 +32,13 @@ use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
 };
+use arrow::array::AsArray;
+use arrow::compute::IncrementalRecordBatchBuilder;
+use std::any::Any;
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Context, Poll};
 
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
@@ -393,6 +394,11 @@ impl ExecutionPlan for FilterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // todo thread target size through
+        let batch_size = 8192;
+        let output_batch_builder =
+            IncrementalRecordBatchBuilder::try_new(self.schema(), batch_size)?;
+
         trace!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
@@ -401,6 +407,7 @@ impl ExecutionPlan for FilterExec {
             input: self.input.execute(partition, context)?,
             baseline_metrics,
             projection: self.projection.clone(),
+            output_batch_builder: Some(output_batch_builder),
         }))
     }
 
@@ -647,6 +654,12 @@ struct FilterExecStream {
     baseline_metrics: BaselineMetrics,
     /// The projection indices of the columns in the input schema
     projection: Option<Vec<usize>>,
+    /// The currently in progress output batch
+    ///
+    /// This structure produces cleanly sized batches of target_size
+    ///
+    /// When None, it means input is exhausted currently filtering
+    output_batch_builder: Option<IncrementalRecordBatchBuilder>,
 }
 
 pub fn batch_filter(
@@ -689,6 +702,46 @@ fn filter_and_project(
         })
 }
 
+impl FilterExecStream {
+    /// Evaluates the predicate filter on the given batch and appends and rows that match
+    /// to the in progress output batch builder.
+    fn filter_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        self.predicate
+            .evaluate(&batch)
+            .and_then(|v| v.into_array(batch.num_rows()))
+            .and_then(|filter| {
+                let Some(filter) = filter.as_boolean_opt() else {
+                    return internal_err!(
+                        "Cannot create filter_array from non-boolean predicates"
+                    );
+                };
+
+                let batch = match self.projection.as_ref() {
+                    Some(projection) => {
+                        let projected_columns = projection
+                            .iter()
+                            .map(|i| Arc::clone(batch.column(*i)))
+                            .collect();
+                        // Safety -- the input was a valid RecordBatch and thus the projection is too
+                        unsafe {
+                            RecordBatch::new_unchecked(
+                                Arc::clone(&self.schema),
+                                projected_columns,
+                                batch.num_rows(),
+                            )
+                        }
+                    }
+                    None => batch,
+                };
+                let output_batch_builder = self
+                    .output_batch_builder
+                    .as_mut()
+                    .expect("output_batch_builder should be Some");
+                Ok(output_batch_builder.append_filtered(batch, filter)?)
+            })
+    }
+}
+
 impl Stream for FilterExecStream {
     type Item = Result<RecordBatch>;
 
@@ -698,23 +751,43 @@ impl Stream for FilterExecStream {
     ) -> Poll<Option<Self::Item>> {
         let poll;
         loop {
+            // No more input is done, no more batches to process, so done
+            let Some(output_batch_builder) = self.output_batch_builder.as_mut() else {
+                poll = Poll::Ready(None);
+                break;
+            };
+
+            // If we had a batch ready, return it
+            if let Some(batch) = output_batch_builder.next_batch() {
+                poll = Poll::Ready(Some(Ok(batch)));
+                break;
+            }
+
+            // poll next input batch
             match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    let timer = self.baseline_metrics.elapsed_compute().timer();
-                    let filtered_batch = filter_and_project(
-                        &batch,
-                        &self.predicate,
-                        self.projection.as_ref(),
-                        &self.schema,
-                    )?;
+                    // do the actual work of filtering the batch
+                    let time = self.baseline_metrics.elapsed_compute().clone(); // clone so we can reuse it but it shares the same underlying counter
+                    let timer = time.timer();
+                    self.filter_batch(batch)?;
                     timer.done();
-                    // Skip entirely filtered batches
-                    if filtered_batch.num_rows() == 0 {
-                        continue;
-                    }
-                    poll = Poll::Ready(Some(Ok(filtered_batch)));
+                    continue; // Continue to the next batch
+                }
+                None => {
+                    // end of input stream, finalize the output batch
+                    let output_batch_builder = self
+                        .output_batch_builder
+                        .take()
+                        .expect("output_batch_builder should be Some");
+                    let mut completed_batches = output_batch_builder.build()?;
+                    assert!(
+                        completed_batches.len() <= 1,
+                        "FilterExecStream should produce at most one batch"
+                    );
+                    poll = Poll::Ready(completed_batches.pop_front().map(Ok));
                     break;
                 }
+                // error
                 value => {
                     poll = Poll::Ready(value);
                     break;
