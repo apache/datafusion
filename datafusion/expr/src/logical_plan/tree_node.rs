@@ -532,7 +532,6 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
-            LogicalPlan::DependentJoin(DependentJoin { .. }) => todo!(),
             LogicalPlan::Projection(Projection {
                 expr,
                 input,
@@ -697,7 +696,8 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::DependentJoin(_) => Transformed::no(self),
         })
     }
 

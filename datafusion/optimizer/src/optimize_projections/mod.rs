@@ -382,7 +382,9 @@ fn optimize_projections(
                 dependency_indices.clone(),
             )]
         }
-        LogicalPlan::DependentJoin(..) => unreachable!(),
+        LogicalPlan::DependentJoin(..) => {
+            return Ok(Transformed::no(plan));
+        }
     };
 
     // Required indices are currently ordered (child0, child1, ...)

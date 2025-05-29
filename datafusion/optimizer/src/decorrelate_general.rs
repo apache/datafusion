@@ -634,9 +634,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     ));
                 }
             }
-            _ => {
-                return internal_err!("impl f_down for node type {:?}", node);
-            }
+            _ => {}
         };
 
         if is_dependent_join_node {
@@ -765,9 +763,16 @@ impl TreeNodeRewriter for DependentJoinRewriter {
     }
 }
 
+/// Optimizer rule for rewriting any arbitrary subqueries
 #[allow(dead_code)]
 #[derive(Debug)]
-struct Decorrelation {}
+pub struct Decorrelation {}
+
+impl Decorrelation {
+    pub fn new() -> Self {
+        return Decorrelation {};
+    }
+}
 
 impl OptimizerRule for Decorrelation {
     fn supports_rewrite(&self) -> bool {
@@ -788,7 +793,6 @@ impl OptimizerRule for Decorrelation {
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
         if rewrite_result.transformed {
             // At this point, we have a logical plan with DependentJoin similar to duckdb
-            unimplemented!("implement dependent join decorrelation")
         }
         Ok(rewrite_result)
     }
