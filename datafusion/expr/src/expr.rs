@@ -3598,6 +3598,18 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_schema_display_nested_binary_expr() {
+        let expr = (lit(1) + lit(2)) * lit(3);
+        assert_eq!(
+            format!(
+                "{}",
+                SchemaDisplay(&expr)
+            ),
+            "(Int32(1) + Int32(2)) * Int32(3)"
+        )
+    }
+
     fn wildcard_options(
         opt_ilike: Option<IlikeSelectItem>,
         opt_exclude: Option<ExcludeSelectItem>,
