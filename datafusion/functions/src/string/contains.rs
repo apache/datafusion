@@ -166,15 +166,15 @@ mod test {
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
         let arg_fields = vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("a", DataType::Utf8, true),
+            Field::new("a", DataType::Utf8, true).into(),
+            Field::new("a", DataType::Utf8, true).into(),
         ];
 
         let args = ScalarFunctionArgs {
             args: vec![array, scalar],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 2,
-            return_field: &Field::new("f", DataType::Boolean, true),
+            return_field: Field::new("f", DataType::Boolean, true).into(),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();
