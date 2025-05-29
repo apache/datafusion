@@ -17,8 +17,6 @@
 
 //! [`EliminateUniqueKeyedSelfJoin`] eliminates self joins on unique constraint columns
 
-use std::collections::HashSet;
-
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::{
     tree_node::{Transformed, TreeNode, TreeNodeRecursion},
@@ -28,6 +26,7 @@ use datafusion_expr::{
     expr::Alias, Expr, Join, JoinType, LogicalPlan, LogicalPlanBuilder, Projection,
     SubqueryAlias, TableScan,
 };
+use indexmap::IndexSet;
 
 use super::{
     is_table_scan_same, merge_table_scans, unique_indexes, OptimizationResult,
@@ -131,14 +130,14 @@ struct Resolution {
     /// `TableScan`
     table_scan: TableScan,
     /// Column indexes into `TableScan` that form a unique index
-    column_indexes: HashSet<usize>,
+    column_indexes: IndexSet<usize>,
 }
 
 fn resolve_columns_to_indexes(
     branch: &LogicalPlan,
     mut columns: Vec<Column>,
 ) -> Resolution {
-    let mut column_indexes = HashSet::with_capacity(columns.len());
+    let mut column_indexes = IndexSet::with_capacity(columns.len());
     let mut scan = None;
     branch
         .apply_with_subqueries(|plan| match plan {

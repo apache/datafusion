@@ -18,7 +18,7 @@
 //! [`EliminateAggregationSelfJoin`] eliminates aggregation expressions
 //! over self joins that can be translated to window expressions.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::{
@@ -31,6 +31,7 @@ use datafusion_expr::{
     TableScan, Window, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition,
 };
+use indexmap::IndexSet;
 
 use super::{is_table_scan_same, merge_table_scans, unique_indexes, RenamedAlias};
 
@@ -194,7 +195,7 @@ fn try_replace_with_window(
     }
 
     // Column indexes from `GROUP BY ...`
-    let mut group_by_idx = HashSet::with_capacity(group_expr.len());
+    let mut group_by_idx = IndexSet::with_capacity(group_expr.len());
     for expr in group_expr {
         match expr {
             Expr::Column(Column { relation, name, .. }) => {
@@ -217,7 +218,7 @@ fn try_replace_with_window(
     }
 
     // Column indexes from `JOIN ON ...`
-    let mut on_idx = HashSet::with_capacity(join.on.len());
+    let mut on_idx = IndexSet::with_capacity(join.on.len());
     for on in &join.on {
         match on {
             (
@@ -256,7 +257,7 @@ fn try_replace_with_window(
         .iter()
         .chain(Some(left_filter_idx).iter())
         .cloned()
-        .collect::<HashSet<_>>();
+        .collect::<IndexSet<_>>();
     if on_and_filter != group_by_idx {
         return None;
     }

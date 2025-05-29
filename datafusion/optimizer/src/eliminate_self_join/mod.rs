@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use datafusion_common::{
     tree_node::{Transformed, TreeNode},
@@ -27,6 +27,7 @@ mod aggregation;
 mod unique_keyed;
 
 pub use aggregation::EliminateAggregationSelfJoin;
+use indexmap::IndexSet;
 pub use unique_keyed::EliminateUniqueKeyedSelfJoin;
 
 fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan {
@@ -43,7 +44,7 @@ fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan
                 .iter()
                 .chain(right_projection.iter())
                 .cloned()
-                .collect::<HashSet<_>>()
+                .collect::<IndexSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>(),
         ),
@@ -72,12 +73,12 @@ fn is_table_scan_same(left: &TableScan, right: &TableScan) -> bool {
     left.table_name == right.table_name
 }
 
-fn unique_indexes(schema: &DFSchema) -> Vec<HashSet<usize>> {
+fn unique_indexes(schema: &DFSchema) -> Vec<IndexSet<usize>> {
     schema
         .functional_dependencies()
         .iter()
         .filter(|dep| dep.mode == Dependency::Single)
-        .map(|dep| dep.source_indices.iter().cloned().collect::<HashSet<_>>())
+        .map(|dep| dep.source_indices.iter().cloned().collect::<IndexSet<_>>())
         .collect::<Vec<_>>()
 }
 
