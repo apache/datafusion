@@ -21,7 +21,7 @@ use datafusion_common::{
     tree_node::{Transformed, TreeNode},
     Column, DFSchema, Dependency, Result, TableReference,
 };
-use datafusion_expr::{Expr, LogicalPlan, TableScan};
+use datafusion_expr::{expr::Alias, Expr, LogicalPlan, TableScan};
 
 mod aggregation;
 mod unique_keyed;
@@ -90,17 +90,37 @@ struct RenamedAlias {
 
 impl RenamedAlias {
     fn rewrite_expression(&self, expr: Expr) -> Result<Transformed<Expr>> {
-        expr.transform(|expr| match expr {
-            Expr::Column(Column {
-                relation: Some(relation),
-                name,
-                spans,
-            }) if relation == self.from => Ok(Transformed::yes(Expr::Column(Column {
-                relation: Some(self.to.clone()),
-                name,
-                spans,
-            }))),
-            _ => Ok(Transformed::no(expr)),
+        let mut is_top_level = true;
+        expr.transform(|expr| {
+            let result = match expr {
+                Expr::Column(Column {
+                    relation: Some(relation),
+                    name,
+                    spans,
+                }) if relation == self.from => {
+                    let col = Expr::Column(Column {
+                        relation: Some(self.to.clone()),
+                        name: name.clone(),
+                        spans,
+                    });
+                    if is_top_level {
+                        let alias = Expr::Alias(Alias {
+                            expr: col.into(),
+                            metadata: None,
+                            name,
+                            relation: Some(self.from.clone()),
+                        });
+                        Ok(Transformed::yes(dbg!(alias)))
+                    } else {
+                        Ok(Transformed::yes(col))
+                    }
+                }
+                _ => Ok(Transformed::no(expr)),
+            };
+            if is_top_level {
+                is_top_level = false;
+            }
+            result
         })
     }
 

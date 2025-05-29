@@ -390,11 +390,9 @@ impl OptimizerRule for EliminateAggregationSelfJoin {
                 Some(optimized) => optimized,
                 None => return Ok(Transformed::no(plan)),
             };
-            renamed = renamed_alias;
 
             let aggr_expr_name = aggregate.aggr_expr[0].name_for_alias()?;
             let window_expr_name = window.window_expr[0].name_for_alias()?;
-
             let projection_expr = projection
                 .expr
                 .iter()
@@ -439,7 +437,15 @@ impl OptimizerRule for EliminateAggregationSelfJoin {
                     },
                     _ => expr,
                 })
+                .map(|expr| {
+                    if let Some(renamed_alias) = &renamed_alias {
+                        renamed_alias.rewrite_expression(expr).unwrap().data
+                    } else {
+                        expr
+                    }
+                })
                 .collect::<Vec<_>>();
+            renamed = renamed_alias;
 
             let window = LogicalPlan::Window(window).into();
             let projection = Projection::try_new(projection_expr, window)?;
