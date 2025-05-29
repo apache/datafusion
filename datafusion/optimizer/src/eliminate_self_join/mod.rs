@@ -82,7 +82,7 @@ fn unique_indexes(schema: &DFSchema) -> Vec<IndexSet<usize>> {
         .collect::<Vec<_>>()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RenamedAlias {
     from: TableReference,
     to: TableReference,
@@ -123,7 +123,7 @@ impl RenamedAlias {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct OptimizationResult {
     plan: LogicalPlan,
     renamed_alias: Option<RenamedAlias>,
