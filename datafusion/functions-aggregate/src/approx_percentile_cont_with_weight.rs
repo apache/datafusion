@@ -20,11 +20,8 @@ use std::fmt::{Debug, Formatter};
 use std::mem::size_of_val;
 use std::sync::Arc;
 
-use arrow::{
-    array::ArrayRef,
-    datatypes::{DataType, Field},
-};
-
+use arrow::datatypes::FieldRef;
+use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -174,7 +171,7 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.approx_percentile_cont.state_fields(args)
     }
 

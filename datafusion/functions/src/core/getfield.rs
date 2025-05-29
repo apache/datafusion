@@ -20,7 +20,7 @@ use arrow::array::{
     Scalar,
 };
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
@@ -133,7 +133,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // Length check handled in the signature
         debug_assert_eq!(args.scalar_arguments.len(), 2);
 
@@ -147,7 +147,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // execution.
                         let value_field = fields.get(1).expect("fields should have exactly two members");
 
-                        Ok(value_field.as_ref().clone().with_nullable(true))
+                        Ok(value_field.as_ref().clone().with_nullable(true).into())
                     },
                     _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
@@ -168,11 +168,11 @@ impl ScalarUDFImpl for GetFieldFunc {
                         if args.arg_fields[0].is_nullable() {
                             child_field = child_field.with_nullable(true);
                         }
-                        child_field
+                        Arc::new(child_field)
                     })
                 })
             },
-            (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true)),
+            (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true).into()),
             (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
     }

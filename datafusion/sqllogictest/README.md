@@ -156,6 +156,14 @@ sqllogictests also supports `cargo test` style substring matches on file names t
 cargo test --test sqllogictests -- information
 ```
 
+Additionally, executing specific tests within a file is also supported. Tests are identified by line number within
+the .slt file; for example, the following command will run the test in line `709` for file `information.slt` along
+with any other preparatory statements:
+
+```shell
+cargo test --test sqllogictests -- information:709
+```
+
 ## Running tests: Postgres compatibility
 
 Test files that start with prefix `pg_compat_` verify compatibility

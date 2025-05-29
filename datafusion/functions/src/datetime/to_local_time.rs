@@ -538,13 +538,13 @@ mod tests {
     }
 
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
-        let arg_field = Field::new("a", input.data_type(), true);
+        let arg_field = Field::new("a", input.data_type(), true).into();
         let res = ToLocalTimeFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(input)],
-                arg_fields: vec![&arg_field],
+                arg_fields: vec![arg_field],
                 number_rows: 1,
-                return_field: &Field::new("f", expected.data_type(), true),
+                return_field: Field::new("f", expected.data_type(), true).into(),
             })
             .unwrap();
         match res {
@@ -604,16 +604,17 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>();
             let batch_size = input.len();
-            let arg_field = Field::new("a", input.data_type().clone(), true);
+            let arg_field = Field::new("a", input.data_type().clone(), true).into();
             let args = ScalarFunctionArgs {
                 args: vec![ColumnarValue::Array(Arc::new(input))],
-                arg_fields: vec![&arg_field],
+                arg_fields: vec![arg_field],
                 number_rows: batch_size,
-                return_field: &Field::new(
+                return_field: Field::new(
                     "f",
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
                     true,
-                ),
+                )
+                .into(),
             };
             let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
