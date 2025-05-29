@@ -11943,6 +11943,8 @@ impl<'de> serde::Deserialize<'de> for NestedLoopJoinExecNode {
                 let mut join_type__ = None;
                 let mut filter__ = None;
                 let mut projection__ = None;
+                let mut null_equals_null__ = None;
+                let mut on__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -11978,6 +11980,18 @@ impl<'de> serde::Deserialize<'de> for NestedLoopJoinExecNode {
                                     .into_iter().map(|x| x.0).collect())
                             ;
                         }
+                         GeneratedField::NullEqualsNull => {
+                if null_equals_null__.is_some() {
+                    return Err(serde::de::Error::duplicate_field("nullEqualsNull"));
+                }
+                null_equals_null__ = map_.next_value()?;
+            }
+            GeneratedField::On => {
+                if on__.is_some() {
+                    return Err(serde::de::Error::duplicate_field("on"));
+                }
+                on__ = Some(map_.next_value()?);
+            }
                     }
                 }
                 Ok(NestedLoopJoinExecNode {
@@ -11986,6 +12000,8 @@ impl<'de> serde::Deserialize<'de> for NestedLoopJoinExecNode {
                     join_type: join_type__.unwrap_or_default(),
                     filter: filter__,
                     projection: projection__.unwrap_or_default(),
+                    null_equals_null: null_equals_null__,
+                    on: on__.unwrap_or_default(),
                 })
             }
         }

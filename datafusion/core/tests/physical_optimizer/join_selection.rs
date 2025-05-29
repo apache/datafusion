@@ -514,7 +514,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
             nl_join_filter(),
             &join_type,
             None,
-            false, 
+            false,
             None,
         )
         .unwrap(),

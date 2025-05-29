@@ -513,8 +513,16 @@ impl JoinFuzzTestCase {
             JoinFilter::new(expression, column_indices, Arc::new(intermediate_schema));
 
         Arc::new(
-            NestedLoopJoinExec::try_new(left, right, Some(filter), &self.join_type, None, false, None)
-                .unwrap(),
+            NestedLoopJoinExec::try_new(
+                left,
+                right,
+                Some(filter),
+                &self.join_type,
+                None,
+                false,
+                None,
+            )
+            .unwrap(),
         )
     }
 
