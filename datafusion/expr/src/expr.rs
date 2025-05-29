@@ -2520,7 +2520,7 @@ impl Display for SchemaDisplay<'_> {
                 }
                 let precedence = op.precedence();
                 write_child(f, left.as_ref(), precedence)?;
-                write!(f, " {} ", op)?;
+                write!(f, " {op} ")?;
                 write_child(f, right.as_ref(), precedence)
             }
             Expr::Case(Case {
@@ -3602,10 +3602,7 @@ mod test {
     fn test_schema_display_nested_binary_expr() {
         let expr = (lit(1) + lit(2)) * lit(3);
         assert_eq!(
-            format!(
-                "{}",
-                SchemaDisplay(&expr)
-            ),
+            format!("{}", SchemaDisplay(&expr)),
             "(Int32(1) + Int32(2)) * Int32(3)"
         )
     }
