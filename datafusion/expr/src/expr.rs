@@ -844,19 +844,19 @@ pub enum WindowFunctionDefinition {
 
 impl WindowFunctionDefinition {
     /// Returns the datatype of the window function
-    pub fn return_type(
+    pub fn return_field(
         &self,
-        input_expr_types: &[DataType],
+        input_expr_fields: &[FieldRef],
         _input_expr_nullable: &[bool],
         display_name: &str,
-    ) -> Result<DataType> {
+    ) -> Result<FieldRef> {
         match self {
             WindowFunctionDefinition::AggregateUDF(fun) => {
-                fun.return_type(input_expr_types)
+                fun.return_field(input_expr_fields)
             }
-            WindowFunctionDefinition::WindowUDF(fun) => fun
-                .field(WindowUDFFieldArgs::new(input_expr_types, display_name))
-                .map(|field| field.data_type().clone()),
+            WindowFunctionDefinition::WindowUDF(fun) => {
+                fun.field(WindowUDFFieldArgs::new(input_expr_fields, display_name))
+            }
         }
     }
 

@@ -597,7 +597,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         Signature::exact(vec![DataType::Int64], Volatility::Immutable),
         return_type,
         accumulator,
-        vec![Field::new("value", DataType::Int64, true)],
+        vec![Field::new("value", DataType::Int64, true).into()],
     ));
 
     let ctx = SessionContext::new();
@@ -983,7 +983,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         "dummy",
         fun_def,
         vec![col("a", &schema)?],
-        Field::new("f", DataType::Int64, true),
+        Field::new("f", DataType::Int64, true).into(),
     );
 
     let project =
@@ -1111,7 +1111,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        Field::new("f", DataType::Int64, true),
+        Field::new("f", DataType::Int64, true).into(),
     ));
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1213,7 +1213,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        Field::new("f", DataType::Int64, true),
+        Field::new("f", DataType::Int64, true).into(),
     ));
 
     let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(

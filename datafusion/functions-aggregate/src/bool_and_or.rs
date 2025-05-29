@@ -24,8 +24,8 @@ use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
 use arrow::compute::bool_and as compute_bool_and;
 use arrow::compute::bool_or as compute_bool_or;
-use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
+use arrow::datatypes::{DataType, FieldRef};
 
 use datafusion_common::internal_err;
 use datafusion_common::{downcast_value, not_impl_err};
@@ -150,12 +150,13 @@ impl AggregateUDFImpl for BoolAnd {
         Ok(Box::<BoolAndAccumulator>::default())
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![Field::new(
             format_state_name(args.name, self.name()),
             DataType::Boolean,
             true,
-        )])
+        )
+        .into()])
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -166,14 +167,14 @@ impl AggregateUDFImpl for BoolAnd {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        match args.return_type {
+        match args.return_field.data_type() {
             DataType::Boolean => {
                 Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x && y, true)))
             }
             _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 args.name,
-                args.return_type
+                args.return_field.data_type()
             ),
         }
     }
@@ -288,12 +289,13 @@ impl AggregateUDFImpl for BoolOr {
         Ok(Box::<BoolOrAccumulator>::default())
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![Field::new(
             format_state_name(args.name, self.name()),
             DataType::Boolean,
             true,
-        )])
+        )
+        .into()])
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -304,7 +306,7 @@ impl AggregateUDFImpl for BoolOr {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        match args.return_type {
+        match args.return_field.data_type() {
             DataType::Boolean => Ok(Box::new(BooleanGroupsAccumulator::new(
                 |x, y| x || y,
                 false,
@@ -312,7 +314,7 @@ impl AggregateUDFImpl for BoolOr {
             _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 args.name,
-                args.return_type
+                args.return_field.data_type()
             ),
         }
     }

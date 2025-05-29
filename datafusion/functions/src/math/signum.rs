@@ -157,12 +157,12 @@ mod test {
             f32::INFINITY,
             f32::NEG_INFINITY,
         ]));
-        let arg_fields = [Field::new("a", DataType::Float32, false)];
+        let arg_fields = vec![Field::new("a", DataType::Float32, false).into()];
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: array.len(),
-            return_field: &Field::new("f", DataType::Float32, true),
+            return_field: Field::new("f", DataType::Float32, true).into(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
@@ -203,12 +203,12 @@ mod test {
             f64::INFINITY,
             f64::NEG_INFINITY,
         ]));
-        let arg_fields = [Field::new("a", DataType::Float64, false)];
+        let arg_fields = vec![Field::new("a", DataType::Float64, false).into()];
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: array.len(),
-            return_field: &Field::new("f", DataType::Float64, true),
+            return_field: Field::new("f", DataType::Float64, true).into(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
