@@ -433,16 +433,11 @@ impl LogicalPlan {
                     .iter()
                     .map(|(_, c)| c.clone())
                     .collect::<Vec<_>>();
-                let subquery_expr_opt = subquery_expr.clone();
                 let maybe_lateral_join_condition = match lateral_join_condition {
                     Some((_, condition)) => Some(condition.clone()),
                     None => None,
                 };
-                (
-                    &correlated_column_exprs,
-                    &subquery_expr_opt,
-                    &maybe_lateral_join_condition,
-                )
+                (&correlated_column_exprs, &maybe_lateral_join_condition)
                     .apply_ref_elements(f)
             }
             LogicalPlan::Projection(Projection { expr, .. }) => expr.apply_elements(f),
