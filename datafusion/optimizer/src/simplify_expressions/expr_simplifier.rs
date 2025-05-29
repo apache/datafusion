@@ -2147,10 +2147,13 @@ mod tests {
     use arrow::datatypes::FieldRef;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
-        expr::WindowFunction, function::{
+        expr::WindowFunction,
+        function::{
             AccumulatorArgs, AggregateFunctionSimplification,
             WindowFunctionSimplification,
-        }, interval_arithmetic::Interval, *
+        },
+        interval_arithmetic::Interval,
+        *,
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;

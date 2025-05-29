@@ -1264,7 +1264,11 @@ pub fn collect_subquery_cols(
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr::WindowFunction, expr_vec_fmt, grouping_set, lit, rollup, test::function_stub::{max_udaf, min_udaf, sum_udaf}, Cast, ExprFunctionExt, WindowFunctionDefinition
+        col, cube,
+        expr::WindowFunction,
+        expr_vec_fmt, grouping_set, lit, rollup,
+        test::function_stub::{max_udaf, min_udaf, sum_udaf},
+        Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
 
