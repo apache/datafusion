@@ -242,10 +242,11 @@ pub fn check_subquery_expr(
             | LogicalPlan::TableScan(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Join(_) => Ok(()),
+            | LogicalPlan::Join(_) 
+            | LogicalPlan::DependentJoin(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
-                Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, \
+                Projection, Filter, TableScan, Window functions, Aggregate, Join and DependentJoin plan nodes, \
                 but was used in [{}]",
                 outer_plan.display()
             ),
@@ -330,6 +331,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
             }
         },
         LogicalPlan::Extension(_) => Ok(()),
+        LogicalPlan::DependentJoin(_) => Ok(()),
         plan => check_no_outer_references(plan),
     }
 }

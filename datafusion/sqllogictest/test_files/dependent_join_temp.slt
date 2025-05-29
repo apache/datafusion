@@ -119,22 +119,132 @@ where c_acctbal < (
 logical_plan
 01)Sort: customer.c_custkey ASC NULLS LAST
 02)--Projection: customer.c_custkey
-03)----Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.sum(orders.o_totalprice)
-04)------TableScan: customer projection=[c_custkey, c_acctbal]
-05)------SubqueryAlias: __scalar_sq_1
-06)--------Projection: sum(orders.o_totalprice), orders.o_custkey
-07)----------Aggregate: groupBy=[[orders.o_custkey]], aggr=[[sum(orders.o_totalprice)]]
-08)------------Projection: orders.o_custkey, orders.o_totalprice
-09)--------------Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_3.output
-10)----------------Projection: orders.o_custkey, orders.o_totalprice, __scalar_sq_3.output
-11)------------------DependentJoin on [orders.o_orderkey lvl 1] with expr (<subquery>) depth 1
-12)--------------------Subquery:
-13)----------------------Projection: sum(lineitem.l_extendedprice) AS price
-14)------------------------Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
-15)--------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
-16)----------------------------TableScan: lineitem
-17)--------------------TableScan: orders
-18)--------------------Projection: sum(lineitem.l_extendedprice) AS price
-19)----------------------Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
-20)------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
-21)--------------------------TableScan: lineitem, partial_filters=[lineitem.l_orderkey = outer_ref(orders.o_orderkey), lineitem.l_extendedprice < outer_ref(customer.c_acctbal)]
+03)----Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_2.output
+04)------Projection: customer.c_custkey, customer.c_acctbal, __scalar_sq_2.output
+05)--------DependentJoin on [customer.c_custkey lvl 1, customer.c_acctbal lvl 2] with expr (<subquery>) depth 1
+06)----------Subquery:
+07)------------Projection: sum(orders.o_totalprice)
+08)--------------Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+09)----------------Projection: orders.o_orderkey, orders.o_custkey, orders.o_orderstatus, orders.o_totalprice, orders.o_orderdate, orders.o_orderpriority, orders.o_clerk, orders.o_shippriority, orders.o_comment
+10)------------------Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_1.output
+11)--------------------DependentJoin on [orders.o_orderkey lvl 2] with expr (<subquery>) depth 2
+12)----------------------Subquery:
+13)------------------------Projection: sum(lineitem.l_extendedprice) AS price
+14)--------------------------Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
+15)----------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+16)------------------------------TableScan: lineitem
+17)----------------------TableScan: orders
+18)----------------------Projection: sum(lineitem.l_extendedprice) AS price
+19)------------------------Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
+20)--------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+21)----------------------------TableScan: lineitem
+22)----------TableScan: customer
+23)----------Projection: sum(orders.o_totalprice)
+24)------------Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+25)--------------Projection: orders.o_orderkey, orders.o_custkey, orders.o_orderstatus, orders.o_totalprice, orders.o_orderdate, orders.o_orderpriority, orders.o_clerk, orders.o_shippriority, orders.o_comment
+26)----------------Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_1.output
+27)------------------DependentJoin on [orders.o_orderkey lvl 2] with expr (<subquery>) depth 2
+28)--------------------Subquery:
+29)----------------------Projection: sum(lineitem.l_extendedprice) AS price
+30)------------------------Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
+31)--------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+32)----------------------------TableScan: lineitem
+33)--------------------TableScan: orders
+34)--------------------Projection: sum(lineitem.l_extendedprice) AS price
+35)----------------------Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
+36)------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+37)--------------------------TableScan: lineitem, partial_filters=[lineitem.l_orderkey = outer_ref(orders.o_orderkey), lineitem.l_extendedprice < outer_ref(customer.c_acctbal)]
+
+# correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing_level1_relation
+query TT
+explain select c_custkey from customer
+where c_acctbal < (
+    select sum(o_totalprice) from orders
+    where o_custkey = c_custkey
+    and exists (
+        select * from lineitem where l_orderkey = o_orderkey
+        and l_extendedprice < c_acctbal
+    )
+) order by c_custkey;
+----
+logical_plan
+01)Sort: customer.c_custkey ASC NULLS LAST
+02)--Projection: customer.c_custkey
+03)----Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_2.output
+04)------Projection: customer.c_custkey, customer.c_acctbal, __scalar_sq_2.output
+05)--------DependentJoin on [customer.c_custkey lvl 1, customer.c_acctbal lvl 2] with expr (<subquery>) depth 1
+06)----------Subquery:
+07)------------Projection: sum(orders.o_totalprice)
+08)--------------Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+09)----------------Projection: orders.o_orderkey, orders.o_custkey, orders.o_orderstatus, orders.o_totalprice, orders.o_orderdate, orders.o_orderpriority, orders.o_clerk, orders.o_shippriority, orders.o_comment
+10)------------------Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND __exists_sq_1.output
+11)--------------------DependentJoin on [orders.o_orderkey lvl 2] with expr EXISTS (<subquery>) depth 2
+12)----------------------Subquery:
+13)------------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_linenumber, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_tax, lineitem.l_returnflag, lineitem.l_linestatus, lineitem.l_shipdate, lineitem.l_commitdate, lineitem.l_receiptdate, lineitem.l_shipinstruct, lineitem.l_shipmode, lineitem.l_comment
+14)--------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+15)----------------------------TableScan: lineitem
+16)----------------------TableScan: orders
+17)----------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_linenumber, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_tax, lineitem.l_returnflag, lineitem.l_linestatus, lineitem.l_shipdate, lineitem.l_commitdate, lineitem.l_receiptdate, lineitem.l_shipinstruct, lineitem.l_shipmode, lineitem.l_comment
+18)------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+19)--------------------------TableScan: lineitem
+20)----------TableScan: customer
+21)----------Projection: sum(orders.o_totalprice)
+22)------------Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+23)--------------Projection: orders.o_orderkey, orders.o_custkey, orders.o_orderstatus, orders.o_totalprice, orders.o_orderdate, orders.o_orderpriority, orders.o_clerk, orders.o_shippriority, orders.o_comment
+24)----------------Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND __exists_sq_1.output
+25)------------------DependentJoin on [orders.o_orderkey lvl 2] with expr EXISTS (<subquery>) depth 2
+26)--------------------Subquery:
+27)----------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_linenumber, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_tax, lineitem.l_returnflag, lineitem.l_linestatus, lineitem.l_shipdate, lineitem.l_commitdate, lineitem.l_receiptdate, lineitem.l_shipinstruct, lineitem.l_shipmode, lineitem.l_comment
+28)------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+29)--------------------------TableScan: lineitem
+30)--------------------TableScan: orders
+31)--------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_linenumber, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_tax, lineitem.l_returnflag, lineitem.l_linestatus, lineitem.l_shipdate, lineitem.l_commitdate, lineitem.l_receiptdate, lineitem.l_shipinstruct, lineitem.l_shipmode, lineitem.l_comment
+32)----------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+33)------------------------TableScan: lineitem, partial_filters=[lineitem.l_orderkey = outer_ref(orders.o_orderkey), lineitem.l_extendedprice < outer_ref(customer.c_acctbal)]
+
+# correlated_recursive_scalar_subquery_with_level_3_in_subquery_referencing_level1_relation
+query TT
+explain select c_custkey from customer
+where c_acctbal < (
+    select sum(o_totalprice) from orders
+    where o_custkey = c_custkey
+    and o_totalprice in (
+        select l_extendedprice as price from lineitem where l_orderkey = o_orderkey
+        and l_extendedprice < c_acctbal
+    )
+) order by c_custkey;
+----
+logical_plan
+01)Sort: customer.c_custkey ASC NULLS LAST
+02)--Projection: customer.c_custkey
+03)----Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_2.output
+04)------Projection: customer.c_custkey, customer.c_acctbal, __scalar_sq_2.output
+05)--------DependentJoin on [customer.c_custkey lvl 1, customer.c_acctbal lvl 2] with expr (<subquery>) depth 1
+06)----------Subquery:
+07)------------Projection: sum(orders.o_totalprice)
+08)--------------Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+09)----------------Projection: orders.o_orderkey, orders.o_custkey, orders.o_orderstatus, orders.o_totalprice, orders.o_orderdate, orders.o_orderpriority, orders.o_clerk, orders.o_shippriority, orders.o_comment
+10)------------------Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND __in_sq_1.output
+11)--------------------DependentJoin on [orders.o_orderkey lvl 2] with expr orders.o_totalprice IN (<subquery>) depth 2
+12)----------------------Subquery:
+13)------------------------Projection: lineitem.l_extendedprice AS price
+14)--------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+15)----------------------------TableScan: lineitem
+16)----------------------TableScan: orders
+17)----------------------Projection: lineitem.l_extendedprice AS price
+18)------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+19)--------------------------TableScan: lineitem
+20)----------TableScan: customer
+21)----------Projection: sum(orders.o_totalprice)
+22)------------Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+23)--------------Projection: orders.o_orderkey, orders.o_custkey, orders.o_orderstatus, orders.o_totalprice, orders.o_orderdate, orders.o_orderpriority, orders.o_clerk, orders.o_shippriority, orders.o_comment
+24)----------------Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND __in_sq_1.output
+25)------------------DependentJoin on [orders.o_orderkey lvl 2] with expr orders.o_totalprice IN (<subquery>) depth 2
+26)--------------------Subquery:
+27)----------------------Projection: lineitem.l_extendedprice AS price
+28)------------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+29)--------------------------TableScan: lineitem
+30)--------------------TableScan: orders
+31)--------------------Projection: lineitem.l_extendedprice AS price
+32)----------------------Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+33)------------------------TableScan: lineitem, partial_filters=[lineitem.l_orderkey = outer_ref(orders.o_orderkey), lineitem.l_extendedprice < outer_ref(customer.c_acctbal)]
