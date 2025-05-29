@@ -1012,13 +1012,13 @@ mod tests {
         for udf in &udfs {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
-                let arg_field = Field::new("arg", array.data_type().clone(), true);
+                let arg_field = Field::new("arg", array.data_type().clone(), true).into();
                 assert!(matches!(rt, Timestamp(_, Some(_))));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
-                    arg_fields: vec![&arg_field],
+                    arg_fields: vec![arg_field],
                     number_rows: 4,
-                    return_field: &Field::new("f", rt, true),
+                    return_field: Field::new("f", rt, true).into(),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1062,12 +1062,12 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 assert!(matches!(rt, Timestamp(_, None)));
-                let arg_field = Field::new("arg", array.data_type().clone(), true);
+                let arg_field = Field::new("arg", array.data_type().clone(), true).into();
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
-                    arg_fields: vec![&arg_field],
+                    arg_fields: vec![arg_field],
                     number_rows: 5,
-                    return_field: &Field::new("f", rt, true),
+                    return_field: Field::new("f", rt, true).into(),
                 };
                 let res = udf
                     .invoke_with_args(args)

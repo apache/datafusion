@@ -512,7 +512,7 @@ impl Unparser<'_> {
                     .expr
                     .iter()
                     .map(|sort_expr| {
-                        unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
+                        unproject_sort_expr(sort_expr.clone(), agg, sort.input.as_ref())
                     })
                     .collect::<Result<Vec<_>>>()?;
 
