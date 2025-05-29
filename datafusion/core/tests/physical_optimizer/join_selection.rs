@@ -514,6 +514,8 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
             nl_join_filter(),
             &join_type,
             None,
+            false, 
+            None,
         )
         .unwrap(),
     );
@@ -590,6 +592,8 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
             Arc::clone(&small),
             nl_join_filter(),
             &join_type,
+            None,
+            false,
             None,
         )
         .unwrap(),

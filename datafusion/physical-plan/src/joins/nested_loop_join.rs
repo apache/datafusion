@@ -47,20 +47,29 @@ use crate::{
     SendableRecordBatchStream,
 };
 
-use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Date32Array, Date64Array,
+    Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder, UInt8Array,
+};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::{DataType, TimeUnit};
 use datafusion_common::{
-    exec_datafusion_err, internal_err, project_schema, JoinSide, Result, Statistics,
+    exec_datafusion_err, internal_err, not_impl_err, project_schema, JoinSide, Result,
+    Statistics,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_expr::JoinType;
+use datafusion_expr::{ColumnarValue, JoinType};
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
+use datafusion_physical_expr::PhysicalExprRef;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -178,6 +187,18 @@ pub struct NestedLoopJoinExec {
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Null matching behavior: If `null_equals_null` is true, rows that have
+    /// `null`s in both left and right equijoin columns will be matched.
+    /// Otherwise, rows that have `null`s in the join columns will not be
+    /// matched and thus will not appear in the output.
+    null_equals_null: bool,
+    /// Set of equijoin columns from the relations: `(left_col, right_col)`
+    ///
+    /// This is optional as a nested loop join can be passed a 'on' clause
+    /// in the case that a Hash Join cost is more expensive than a
+    /// nested loop join or when a user would like to pick nested loop
+    /// join by hint
+    on: Option<Vec<(PhysicalExprRef, PhysicalExprRef)>>,
 }
 
 impl NestedLoopJoinExec {
@@ -188,10 +209,12 @@ impl NestedLoopJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         projection: Option<Vec<usize>>,
+        null_equals_null: bool,
+        on: Option<Vec<(PhysicalExprRef, PhysicalExprRef)>>,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
-        check_join_is_valid(&left_schema, &right_schema, &[])?;
+        check_join_is_valid(&left_schema, &right_schema, on.as_deref().unwrap_or(&[]))?;
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
         let join_schema = Arc::new(join_schema);
@@ -214,6 +237,8 @@ impl NestedLoopJoinExec {
             projection,
             metrics: Default::default(),
             cache,
+            null_equals_null,
+            on,
         })
     }
 
@@ -239,6 +264,14 @@ impl NestedLoopJoinExec {
 
     pub fn projection(&self) -> Option<&Vec<usize>> {
         self.projection.as_ref()
+    }
+
+    pub fn null_equals_null(&self) -> bool {
+        self.null_equals_null
+    }
+
+    pub fn on(&self) -> Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
+        self.on.clone()
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -349,6 +382,8 @@ impl NestedLoopJoinExec {
             self.filter.clone(),
             &self.join_type,
             projection,
+            self.null_equals_null,
+            self.on.clone(),
         )
     }
 
@@ -368,6 +403,8 @@ impl NestedLoopJoinExec {
                 self.projection.as_ref(),
                 self.join_type(),
             ),
+            self.null_equals_null,
+            self.on.clone(),
         )?;
 
         // For Semi/Anti joins, swap result will produce same output schema,
@@ -474,6 +511,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
             self.filter.clone(),
             &self.join_type,
             self.projection.clone(),
+            self.null_equals_null,
+            self.on.clone(),
         )?))
     }
 
@@ -543,6 +582,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 state: NestedLoopJoinStreamState::WaitBuildSide,
                 batch_transformer: BatchSplitter::new(batch_size),
                 left_data: None,
+                null_equals_null: self.null_equals_null,
+                on: self.on.clone(),
             }))
         } else {
             Ok(Box::pin(NestedLoopJoinStream {
@@ -558,6 +599,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 state: NestedLoopJoinStreamState::WaitBuildSide,
                 batch_transformer: NoopBatchTransformer::new(),
                 left_data: None,
+                null_equals_null: self.null_equals_null,
+                on: self.on.clone(),
             }))
         }
     }
@@ -615,6 +658,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 self.join_type(),
                 // Returned early if projection is not None
                 None,
+                self.null_equals_null,
+                self.on.clone(),
             )?)))
         } else {
             try_embed_projection(projection, self)
@@ -718,8 +763,6 @@ struct NestedLoopJoinStream<T> {
     inner_table: OnceFut<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    // TODO: support null aware equal
-    // null_equals_null: bool
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Cache for join indices calculations
@@ -732,6 +775,10 @@ struct NestedLoopJoinStream<T> {
     batch_transformer: T,
     /// Result of the left data future
     left_data: Option<Arc<JoinLeftData>>,
+    /// If null_equals_null is true, null == null else null != null
+    null_equals_null: bool,
+    /// Equijoin columns
+    on: Option<Vec<(PhysicalExprRef, PhysicalExprRef)>>,
 }
 
 /// Creates a Cartesian product of two input batches, preserving the order of the right batch,
@@ -754,6 +801,8 @@ fn build_join_indices(
     right_batch: &RecordBatch,
     filter: Option<&JoinFilter>,
     indices_cache: &mut (UInt64Array, UInt32Array),
+    null_equals_null: bool,
+    on: Option<&Vec<(PhysicalExprRef, PhysicalExprRef)>>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let left_row_count = left_batch.num_rows();
     let right_row_count = right_batch.num_rows();
@@ -763,7 +812,7 @@ fn build_join_indices(
     let (left_indices_cache, right_indices_cache) = indices_cache;
     let cached_output_row_count = left_indices_cache.len();
 
-    let (left_indices, right_indices) =
+    let (mut left_indices, mut right_indices) =
         match output_row_count.cmp(&cached_output_row_count) {
             std::cmp::Ordering::Equal => {
                 // Reuse the cached indices
@@ -796,6 +845,18 @@ fn build_join_indices(
             }
         };
 
+    // Get equijoin matches if there is 'on' clause
+    if on.is_some() {
+        (left_indices, right_indices) = get_equijoin_match(
+            left_indices,
+            right_indices,
+            left_batch,
+            right_batch,
+            on.unwrap(),
+            null_equals_null,
+        )?;
+    }
+
     if let Some(filter) = filter {
         apply_join_filter_to_indices(
             left_batch,
@@ -808,6 +869,123 @@ fn build_join_indices(
     } else {
         Ok((left_indices, right_indices))
     }
+}
+
+// Find matching indices based on join `on` predicates
+fn get_equijoin_match(
+    left_indices: UInt64Array,
+    right_indices: UInt32Array,
+    left_batch: &RecordBatch,
+    right_batch: &RecordBatch,
+    on: &Vec<(PhysicalExprRef, PhysicalExprRef)>,
+    null_equals_null: bool,
+) -> Result<(UInt64Array, UInt32Array)> {
+    // Create the different `ArrayRef`s holding the values that were evaluated
+    // against each expression in the `on` predicate
+    let left_arrays: Vec<ArrayRef> = on
+        .iter()
+        .map(|(l, _)| l.evaluate(left_batch))
+        .collect::<Result<Vec<ColumnarValue>>>()?
+        .into_iter()
+        .map(|cv| cv.into_array(left_batch.num_rows()).unwrap())
+        .collect();
+    let right_arrays: Vec<ArrayRef> = on
+        .iter()
+        .map(|(_, r)| r.evaluate(right_batch))
+        .collect::<Result<Vec<ColumnarValue>>>()?
+        .into_iter()
+        .map(|cv| cv.into_array(right_batch.num_rows()).unwrap())
+        .collect();
+
+    let mut out_l = UInt64Builder::new();
+    let mut out_r = UInt32Builder::new();
+
+    // Goes through both left and right indices and compares the values
+    for (l_idx, r_idx) in left_indices.values().iter().zip(right_indices.values()) {
+        if compare_arrays(
+            &left_arrays,
+            *l_idx as usize,
+            &right_arrays,
+            *r_idx as usize,
+            null_equals_null,
+        )? {
+            out_l.append_value(*l_idx);
+            out_r.append_value(*r_idx);
+        }
+    }
+
+    Ok((out_l.finish(), out_r.finish()))
+}
+
+// Compares values in the array, returns true if match, false otherwise
+fn compare_arrays(
+    left_arrays: &[ArrayRef],
+    left: usize,
+    right_arrays: &[ArrayRef],
+    right: usize,
+    null_equals_null: bool,
+) -> Result<bool> {
+    for (left_array, right_array) in left_arrays.iter().zip(right_arrays.iter()) {
+        macro_rules! compare_value {
+            ($T:ty) => {{
+                let left_array = left_array.as_any().downcast_ref::<$T>().unwrap();
+                let right_array = right_array.as_any().downcast_ref::<$T>().unwrap();
+
+                // Branching logic for values that are null or not
+                match (left_array.is_null(left), right_array.is_null(right)) {
+                    (false, false) => left_array.value(left) == right_array.value(right),
+                    (true, false) => false,
+                    (false, true) => false,
+                    // If both values are true (true, true), it will return based on
+                    // whether `null_equals_null` is true
+                    _ => null_equals_null,
+                }
+            }};
+        }
+
+        let res: bool = match left_array.data_type() {
+            DataType::Null => {
+                if right_array.data_type().is_null() {
+                    null_equals_null
+                } else {
+                    false
+                }
+            }
+            DataType::Boolean => compare_value!(BooleanArray),
+            DataType::Int8 => compare_value!(Int8Array),
+            DataType::Int16 => compare_value!(Int16Array),
+            DataType::Int32 => compare_value!(Int32Array),
+            DataType::Int64 => compare_value!(Int64Array),
+            DataType::UInt8 => compare_value!(UInt8Array),
+            DataType::UInt16 => compare_value!(UInt16Array),
+            DataType::UInt32 => compare_value!(UInt32Array),
+            DataType::UInt64 => compare_value!(UInt64Array),
+            DataType::Float32 => compare_value!(Float32Array),
+            DataType::Float64 => compare_value!(Float64Array),
+            DataType::Utf8 => compare_value!(StringArray),
+            DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Decimal128(..) => compare_value!(Decimal128Array),
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => compare_value!(TimestampSecondArray),
+                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
+                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
+                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
+            },
+            DataType::Date32 => compare_value!(Date32Array),
+            DataType::Date64 => compare_value!(Date64Array),
+            dt => {
+                return not_impl_err!(
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
+                );
+            }
+        };
+        if !res {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 impl<T: BatchTransformer> NestedLoopJoinStream<T> {
@@ -899,6 +1077,8 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
                     visited_left_side,
                     &mut self.indices_cache,
                     self.right_side_ordered,
+                    self.null_equals_null,
+                    self.on.as_ref(),
                 );
                 timer.done();
 
@@ -982,15 +1162,22 @@ fn join_left_and_right_batch(
     visited_left_side: &SharedBitmapBuilder,
     indices_cache: &mut (UInt64Array, UInt32Array),
     right_side_ordered: bool,
+    null_equals_null: bool,
+    on: Option<&Vec<(PhysicalExprRef, PhysicalExprRef)>>,
 ) -> Result<RecordBatch> {
-    let (left_side, right_side) =
-        build_join_indices(left_batch, right_batch, filter, indices_cache).map_err(
-            |e| {
-                exec_datafusion_err!(
-                    "Fail to build join indices in NestedLoopJoinExec, error: {e}"
-                )
-            },
-        )?;
+    let (left_side, right_side) = build_join_indices(
+        left_batch,
+        right_batch,
+        filter,
+        indices_cache,
+        null_equals_null,
+        on,
+    )
+    .map_err(|e| {
+        exec_datafusion_err!(
+            "Fail to build join indices in NestedLoopJoinExec, error: {e}"
+        )
+    })?;
 
     // set the left bitmap
     // and only full join need the left bitmap
@@ -1046,7 +1233,7 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::test::TestMemoryExec;
+    use crate::test::{build_table_i32_null, TestMemoryExec};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
@@ -1129,6 +1316,95 @@ pub(crate) mod tests {
         )
     }
 
+    fn build_left_table_equijoin() -> Arc<dyn ExecutionPlan> {
+        build_table(
+            ("a1", &vec![12, 2, 11]),
+            ("b1", &vec![2, 2, 8]),
+            ("c1", &vec![50, 90, 110]),
+            None,
+            Vec::new(),
+        )
+    }
+
+    fn build_right_table_equijoin() -> Arc<dyn ExecutionPlan> {
+        build_table(
+            ("a2", &vec![12, 2, 10]),
+            ("b2", &vec![10, 2, 10]),
+            ("c2", &vec![40, 80, 100]),
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// This builds table with nullable values (uses same logic as `build_table` above)
+    fn build_table_null(
+        a: (&str, &Vec<Option<i32>>),
+        b: (&str, &Vec<Option<i32>>),
+        c: (&str, &Vec<Option<i32>>),
+        batch_size: Option<usize>,
+        sorted_column_names: Vec<&str>,
+    ) -> Arc<dyn ExecutionPlan> {
+        // build 0 or more sliced RecordBatches with nullable values
+        let batch = build_table_i32_null(a, b, c);
+        let schema = batch.schema();
+
+        let batches = if let Some(batch_size) = batch_size {
+            let num_batches = batch.num_rows().div_ceil(batch_size);
+            (0..num_batches)
+                .map(|i| {
+                    let start = i * batch_size;
+                    let remaining_rows = batch.num_rows() - start;
+                    batch.slice(start, batch_size.min(remaining_rows))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![batch]
+        };
+
+        // create the in‑memory source
+        let mut source =
+            TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
+
+        // attach sort information if requested
+        if !sorted_column_names.is_empty() {
+            let mut sort_info = LexOrdering::default();
+            for name in sorted_column_names {
+                let idx = schema.index_of(name).unwrap();
+                sort_info.push(PhysicalSortExpr {
+                    expr: Arc::new(Column::new(name, idx)),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                });
+            }
+            source = source.try_with_sort_information(vec![sort_info]).unwrap();
+        }
+
+        // wrap in cache and return
+        Arc::new(TestMemoryExec::update_cache(Arc::new(source)))
+    }
+
+    fn build_left_table_null() -> Arc<dyn ExecutionPlan> {
+        build_table_null(
+            ("a1", &vec![Some(1), Some(1), Some(2), Some(2)]),
+            ("b1", &vec![None, Some(1), Some(2), Some(3)]), // null in key field
+            ("c1", &vec![Some(1), None, Some(8), Some(9)]), // null in non-key field
+            None,
+            Vec::new(),
+        )
+    }
+
+    fn build_right_table_null() -> Arc<dyn ExecutionPlan> {
+        build_table_null(
+            ("a2", &vec![Some(1), Some(1), Some(2), Some(3)]),
+            ("b2", &vec![None, Some(1), Some(2), Some(2)]),
+            ("c2", &vec![Some(10), Some(70), Some(80), Some(90)]),
+            None,
+            Vec::new(),
+        )
+    }
+
     fn prepare_join_filter() -> JoinFilter {
         let column_indices = vec![
             ColumnIndex {
@@ -1193,8 +1469,15 @@ pub(crate) mod tests {
         )?) as Arc<dyn ExecutionPlan>;
 
         // Use the required distribution for nested loop join to test partition data
-        let nested_loop_join =
-            NestedLoopJoinExec::try_new(left, right, join_filter, join_type, None)?;
+        let nested_loop_join = NestedLoopJoinExec::try_new(
+            left,
+            right,
+            join_filter,
+            join_type,
+            None,
+            false,
+            None,
+        )?;
         let columns = columns(&nested_loop_join.schema());
         let mut batches = vec![];
         for i in 0..partition_count {
@@ -1207,6 +1490,36 @@ pub(crate) mod tests {
                     .collect::<Vec<_>>(),
             );
         }
+        Ok((columns, batches))
+    }
+
+    pub(crate) async fn equijoin_collect(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: &JoinType,
+        join_filter: Option<JoinFilter>,
+        on: Option<Vec<(PhysicalExprRef, PhysicalExprRef)>>,
+        null_equals_null: bool,
+        context: Arc<TaskContext>,
+    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+        let nested_loop_join = NestedLoopJoinExec::try_new(
+            left,
+            right,
+            join_filter,
+            join_type,
+            None,
+            null_equals_null,
+            on,
+        )?;
+
+        let columns = columns(&nested_loop_join.schema());
+        let stream = nested_loop_join.execute(0, Arc::clone(&context))?;
+        let batches = common::collect(stream)
+            .await?
+            .into_iter()
+            .filter(|b| b.num_rows() > 0)
+            .collect::<Vec<_>>();
+
         Ok((columns, batches))
     }
 
@@ -1617,6 +1930,8 @@ pub(crate) mod tests {
             Some(filter),
             &join_type,
             None,
+            false,
+            None,
         )?) as Arc<dyn ExecutionPlan>;
         assert_eq!(nested_loop_join.maintains_input_order(), vec![false, true]);
 
@@ -1682,5 +1997,174 @@ pub(crate) mod tests {
     /// Returns the column names on the schema
     fn columns(schema: &Schema) -> Vec<String> {
         schema.fields().iter().map(|f| f.name().clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn equijoin_inner() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_left_table_equijoin();
+        let right = build_right_table_equijoin();
+        let expr_l: PhysicalExprRef = Arc::new(Column::new("b1", 1));
+        let expr_r: PhysicalExprRef = Arc::new(Column::new("b2", 1));
+
+        let (columns, batches) = equijoin_collect(
+            left,
+            right,
+            &JoinType::Inner,
+            None,
+            Some(vec![(expr_l, expr_r)]), // b1 == b2
+            false,                        // null_equals_null boolean
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, ["a1", "b1", "c1", "a2", "b2", "c2"]);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+                +----+----+----+----+----+----+
+                | a1 | b1 | c1 | a2 | b2 | c2 |
+                +----+----+----+----+----+----+
+                | 12 | 2  | 50 | 2  | 2  | 80 |
+                | 2  | 2  | 90 | 2  | 2  | 80 |
+                +----+----+----+----+----+----+
+                "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn equijoin_inner_with_null() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_left_table_null();
+        let right = build_right_table_null();
+        let expr_l: PhysicalExprRef = Arc::new(Column::new("b1", 1));
+        let expr_r: PhysicalExprRef = Arc::new(Column::new("b2", 1));
+
+        let (columns, batches) = equijoin_collect(
+            left,
+            right,
+            &JoinType::Inner,
+            None,
+            Some(vec![(expr_l, expr_r)]), // b1 == b2
+            true,                         // null_equals_null boolean set to true
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, ["a1", "b1", "c1", "a2", "b2", "c2"]);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+                +----+----+----+----+----+----+
+                | a1 | b1 | c1 | a2 | b2 | c2 |
+                +----+----+----+----+----+----+
+                | 1  |    | 1  | 1  |    | 10 |
+                | 1  | 1  |    | 1  | 1  | 70 |
+                | 2  | 2  | 8  | 2  | 2  | 80 |
+                | 2  | 2  | 8  | 3  | 2  | 90 |
+                +----+----+----+----+----+----+
+                "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn equijoin_inner_without_null() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_left_table_null();
+        let right = build_right_table_null();
+        let expr_l: PhysicalExprRef = Arc::new(Column::new("b1", 1));
+        let expr_r: PhysicalExprRef = Arc::new(Column::new("b2", 1));
+
+        let (columns, batches) = equijoin_collect(
+            left,
+            right,
+            &JoinType::Inner,
+            None,
+            Some(vec![(expr_l, expr_r)]), // b1 == b2
+            false,                        // null_equals_null boolean set to false
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, ["a1", "b1", "c1", "a2", "b2", "c2"]);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+                +----+----+----+----+----+----+
+                | a1 | b1 | c1 | a2 | b2 | c2 |
+                +----+----+----+----+----+----+
+                | 1  | 1  |    | 1  | 1  | 70 |
+                | 2  | 2  | 8  | 2  | 2  | 80 |
+                | 2  | 2  | 8  | 3  | 2  | 90 |
+                +----+----+----+----+----+----+
+                "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn equijoin_left_with_null() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_left_table_null();
+        let right = build_right_table_null();
+        let expr_l: PhysicalExprRef = Arc::new(Column::new("b1", 1));
+        let expr_r: PhysicalExprRef = Arc::new(Column::new("b2", 1));
+
+        let (columns, batches) = equijoin_collect(
+            left,
+            right,
+            &JoinType::Left,
+            None,
+            Some(vec![(expr_l, expr_r)]), // b1 == b2
+            true,                         // null_equals_null boolean set to true
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, ["a1", "b1", "c1", "a2", "b2", "c2"]);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+                +----+----+----+----+----+----+
+                | a1 | b1 | c1 | a2 | b2 | c2 |
+                +----+----+----+----+----+----+
+                | 1  |    | 1  | 1  |    | 10 |
+                | 1  | 1  |    | 1  | 1  | 70 |
+                | 2  | 2  | 8  | 2  | 2  | 80 |
+                | 2  | 2  | 8  | 3  | 2  | 90 |
+                | 2  | 3  | 9  |    |    |    |
+                +----+----+----+----+----+----+
+                "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn equijoin_left_without_null() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_left_table_null();
+        let right = build_right_table_null();
+        let expr_l: PhysicalExprRef = Arc::new(Column::new("b1", 1));
+        let expr_r: PhysicalExprRef = Arc::new(Column::new("b2", 1));
+
+        let (columns, batches) = equijoin_collect(
+            left,
+            right,
+            &JoinType::Left,
+            None,
+            Some(vec![(expr_l, expr_r)]), // b1 == b2
+            false,                        // null_equals_null boolean set to false
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, ["a1", "b1", "c1", "a2", "b2", "c2"]);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+                +----+----+----+----+----+----+
+                | a1 | b1 | c1 | a2 | b2 | c2 |
+                +----+----+----+----+----+----+
+                | 1  |    | 1  |    |    |    |
+                | 1  | 1  |    | 1  | 1  | 70 |
+                | 2  | 2  | 8  | 2  | 2  | 80 |
+                | 2  | 2  | 8  | 3  | 2  | 90 |
+                | 2  | 3  | 9  |    |    |    |
+                +----+----+----+----+----+----+
+                "#);
+
+        Ok(())
     }
 }

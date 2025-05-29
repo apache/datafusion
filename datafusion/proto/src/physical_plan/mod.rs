@@ -1558,6 +1558,42 @@ impl protobuf::PhysicalPlanNode {
                 join.join_type
             ))
         })?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        let on_pairs: Vec<(PhysicalExprRef, PhysicalExprRef)> = join
+            .on
+            .iter()
+            .map(|join_on| {
+                let left_msg = join_on
+                    .left
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Missing left expr"))?;
+                let right_msg = join_on
+                    .right
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Missing right expr"))?;
+
+                parse_physical_expr(
+                    left_msg,
+                    registry,
+                    left_schema.as_ref(),
+                    extension_codec,
+                )
+                .and_then(|l| {
+                    parse_physical_expr(
+                        right_msg,
+                        registry,
+                        right_schema.as_ref(),
+                        extension_codec,
+                    )
+                    .map(|r| (l, r))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        let on: Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> =
+            (!on_pairs.is_empty()).then_some(on_pairs);
+
         let filter = join
                     .filter
                     .as_ref()
@@ -1612,6 +1648,8 @@ impl protobuf::PhysicalPlanNode {
             filter,
             &join_type.into(),
             projection,
+            join.null_equals_null,
+            on,
         )?))
     }
 
@@ -2514,7 +2552,19 @@ impl protobuf::PhysicalPlanNode {
             exec.right().to_owned(),
             extension_codec,
         )?;
-
+        let on: Vec<protobuf::JoinOn> = exec
+            .on()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(l_expr, r_expr)| {
+                let l = serialize_physical_expr(&l_expr, extension_codec).unwrap();
+                let r = serialize_physical_expr(&r_expr, extension_codec).unwrap();
+                protobuf::JoinOn {
+                    left: Some(l),
+                    right: Some(r),
+                }
+            })
+            .collect();
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
         let filter = exec
             .filter()
@@ -2552,6 +2602,8 @@ impl protobuf::PhysicalPlanNode {
                     projection: exec.projection().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
+                    null_equals_null: exec.null_equals_null(),
+                    on,
                 },
             ))),
         })

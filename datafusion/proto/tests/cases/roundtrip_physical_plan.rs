@@ -299,6 +299,8 @@ fn roundtrip_nested_loop_join() -> Result<()> {
             None,
             join_type,
             Some(vec![0]),
+            false,
+            None,
         )?))?;
     }
     Ok(())

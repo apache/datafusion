@@ -409,6 +409,31 @@ pub fn build_table_i32(
     .unwrap()
 }
 
+/// Returns record batch with 3 columns of nullable i32 in memory
+pub fn build_table_i32_null(
+    a: (&str, &Vec<Option<i32>>),
+    b: (&str, &Vec<Option<i32>>),
+    c: (&str, &Vec<Option<i32>>),
+) -> RecordBatch {
+    // Define a schema where each column is nullable
+    let schema = Schema::new(vec![
+        Field::new(a.0, DataType::Int32, true),
+        Field::new(b.0, DataType::Int32, true),
+        Field::new(c.0, DataType::Int32, true),
+    ]);
+
+    // Build the RecordBatch, using Int32Array::from to handle Option<i32> vectors
+    RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(Int32Array::from(a.1.clone())),
+            Arc::new(Int32Array::from(b.1.clone())),
+            Arc::new(Int32Array::from(c.1.clone())),
+        ],
+    )
+    .unwrap()
+}
+
 /// Returns record batch with 2 columns of i32 in memory
 pub fn build_table_i32_two_cols(
     a: (&str, &Vec<i32>),
