@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
-use arrow::datatypes::Field;
+use arrow::datatypes::{Field, FieldRef};
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -39,7 +39,7 @@ use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 #[derive(Debug, PartialEq, Eq)]
 pub struct Literal {
     value: ScalarValue,
-    field: Field,
+    field: FieldRef,
 }
 
 impl Hash for Literal {
@@ -74,7 +74,10 @@ impl Literal {
             field = field.with_metadata(metadata);
         }
 
-        Self { value, field }
+        Self {
+            value,
+            field: field.into(),
+        }
     }
 
     /// Get the scalar value
@@ -103,8 +106,8 @@ impl PhysicalExpr for Literal {
         Ok(self.value.is_null())
     }
 
-    fn return_field(&self, _input_schema: &Schema) -> Result<Field> {
-        Ok(self.field.clone())
+    fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::clone(&self.field))
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {

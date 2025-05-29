@@ -417,11 +417,18 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(ty, _) => {
                 Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
             }
-            Expr::ScalarVariable(ty, _) => Ok(Arc::new(Field::new(&schema_name, ty.clone(), true))),
+            Expr::ScalarVariable(ty, _) => {
+                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
+            }
             Expr::Literal(l, metadata) => {
-                let mut field = Field::new(&schema_name, l.data_type(), l.is_null();
+                let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
                 if let Some(metadata) = metadata {
-                    field = field.with_metadata(metadata.clone());
+                    field = field.with_metadata(
+                        metadata
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    );
                 }
                 Ok(Arc::new(field))
             }
