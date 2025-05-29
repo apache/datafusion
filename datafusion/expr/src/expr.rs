@@ -2500,28 +2500,7 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                fn write_child(
-                    f: &mut Formatter<'_>,
-                    expr: &Expr,
-                    precedence: u8,
-                ) -> fmt::Result {
-                    match expr {
-                        Expr::BinaryExpr(child) => {
-                            let p = child.op.precedence();
-                            if p == 0 || p < precedence {
-                                write!(f, "({})", SchemaDisplay(expr))?;
-                            } else {
-                                write!(f, "{}", SchemaDisplay(expr))?;
-                            }
-                        }
-                        _ => write!(f, "{}", SchemaDisplay(expr))?,
-                    }
-                    Ok(())
-                }
-                let precedence = op.precedence();
-                write_child(f, left.as_ref(), precedence)?;
-                write!(f, " {op} ")?;
-                write_child(f, right.as_ref(), precedence)
+                write!(f, "({} {op} {})", SchemaDisplay(left), SchemaDisplay(right),)
             }
             Expr::Case(Case {
                 expr,
@@ -3600,11 +3579,11 @@ mod test {
 
     #[test]
     fn test_schema_display_nested_binary_expr() {
-        let expr = (lit(1) + lit(2)) * lit(3);
+        let expr = lit(1) * (lit(2) + lit(3));
         assert_eq!(
             format!("{}", SchemaDisplay(&expr)),
-            "(Int32(1) + Int32(2)) * Int32(3)"
-        )
+            "(Int32(1) * (Int32(2) + Int32(3)))"
+        );
     }
 
     fn wildcard_options(
