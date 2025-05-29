@@ -218,3 +218,19 @@ uninlined_format_args = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+
+# Patch to pull in  https://github.com/apache/arrow-rs/pull/7513
+[patch.crates-io]
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
