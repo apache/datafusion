@@ -26,15 +26,13 @@ use datafusion_common::{
     Column, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::{
-    expr::{AggregateFunction, Sort, WindowFunction, WindowFunctionParams},
-    Aggregate, BinaryExpr, Expr, Join, LogicalPlan, Operator, SubqueryAlias, TableScan,
-    Window, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    expr::{AggregateFunction, Alias, Sort, WindowFunction, WindowFunctionParams},
+    Aggregate, BinaryExpr, Expr, Join, LogicalPlan, Operator, Projection, SubqueryAlias,
+    TableScan, Window, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 
-use super::{
-    is_table_scan_same, merge_table_scans, unique_indexes, OptimizationResult,
-    RenamedAlias,
-};
+use super::{is_table_scan_same, merge_table_scans, unique_indexes, RenamedAlias};
 
 #[derive(Default, Debug)]
 pub struct EliminateAggregationSelfJoin;
@@ -148,6 +146,12 @@ fn try_narrow_join_to_table_scan_alias(branch: &LogicalPlan) -> Option<SelfJoinB
         }
         _ => None,
     }
+}
+
+#[derive(Debug)]
+struct OptimizationResult {
+    window: Window,
+    renamed_alias: Option<RenamedAlias>,
 }
 
 fn try_replace_with_window(
@@ -337,10 +341,9 @@ fn try_replace_with_window(
         None
     };
     let window = Window::try_new(window_expr, Arc::new(plan)).unwrap();
-    let plan = LogicalPlan::Window(window);
 
     Some(OptimizationResult {
-        plan,
+        window,
         renamed_alias,
     })
 }
@@ -373,21 +376,73 @@ impl OptimizerRule for EliminateAggregationSelfJoin {
                 LogicalPlan::Projection(ref projection) => projection,
                 _ => return Ok(Transformed::no(plan)),
             };
-            match projection.input.as_ref() {
-                LogicalPlan::Aggregate(ref aggregate) => {
-                    if let Some(OptimizationResult {
-                        plan: window,
-                        renamed_alias,
-                    }) = try_replace_with_window(aggregate)
-                    {
-                        renamed = renamed_alias;
-                        Ok(Transformed::yes(window))
-                    } else {
-                        Ok(Transformed::no(plan))
-                    }
+            let aggregate = match projection.input.as_ref() {
+                LogicalPlan::Aggregate(aggregate) if aggregate.aggr_expr.len() == 1 => {
+                    aggregate
                 }
-                _ => Ok(Transformed::no(plan)),
-            }
+                _ => return Ok(Transformed::no(plan)),
+            };
+            let OptimizationResult {
+                window,
+                renamed_alias,
+            } = match try_replace_with_window(aggregate) {
+                Some(optimized) => optimized,
+                None => return Ok(Transformed::no(plan)),
+            };
+            renamed = renamed_alias;
+
+            let aggr_expr_name = aggregate.aggr_expr[0].name_for_alias()?;
+            let window_expr_name = window.window_expr[0].name_for_alias()?;
+
+            let projection_expr = projection
+                .expr
+                .iter()
+                .cloned()
+                .map(|expr| match &expr {
+                    Expr::Column(Column {
+                        relation: None,
+                        name,
+                        spans,
+                    }) if name.as_str() == aggr_expr_name.as_str() => {
+                        let alias = Alias {
+                            expr: Box::new(Expr::Column(Column {
+                                relation: None,
+                                name: window_expr_name.clone(),
+                                spans: spans.to_owned(),
+                            })),
+                            relation: None,
+                            name: name.to_owned(),
+                            metadata: None,
+                        };
+                        Expr::Alias(alias)
+                    }
+                    Expr::Alias(alias) => match alias.expr.as_ref() {
+                        Expr::Column(Column {
+                            relation: None,
+                            name,
+                            spans,
+                        }) if name.as_str() == aggr_expr_name.as_str() => {
+                            let alias = Alias {
+                                expr: Box::new(Expr::Column(Column {
+                                    relation: None,
+                                    name: window_expr_name.clone(),
+                                    spans: spans.to_owned(),
+                                })),
+                                relation: None,
+                                name: alias.name.to_owned(),
+                                metadata: None,
+                            };
+                            Expr::Alias(alias)
+                        }
+                        _ => expr,
+                    },
+                    _ => expr,
+                })
+                .collect::<Vec<_>>();
+
+            let window = LogicalPlan::Window(window).into();
+            let projection = Projection::try_new(projection_expr, window)?;
+            Ok(Transformed::yes(LogicalPlan::Projection(projection)))
         })?;
 
         if transformed {
