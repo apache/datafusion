@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::arrow::datatypes::Field;
+use datafusion_common::arrow::datatypes::FieldRef;
 
 /// Metadata for defining the result field from evaluating a
 /// user-defined window function.
 pub struct WindowUDFFieldArgs<'a> {
     /// The fields corresponding to the arguments to the
     /// user-defined window function.
-    input_fields: &'a [Field],
+    input_fields: &'a [FieldRef],
     /// The display name of the user-defined window function.
     display_name: &'a str,
 }
@@ -37,7 +37,7 @@ impl<'a> WindowUDFFieldArgs<'a> {
     /// * `function_name` - The qualified schema name of the
     ///   user-defined window function expression.
     ///
-    pub fn new(input_fields: &'a [Field], display_name: &'a str) -> Self {
+    pub fn new(input_fields: &'a [FieldRef], display_name: &'a str) -> Self {
         WindowUDFFieldArgs {
             input_fields,
             display_name,
@@ -46,7 +46,7 @@ impl<'a> WindowUDFFieldArgs<'a> {
 
     /// Returns the field of input expressions passed as arguments
     /// to the user-defined window function.
-    pub fn input_fields(&self) -> &[Field] {
+    pub fn input_fields(&self) -> &[FieldRef] {
         self.input_fields
     }
 
@@ -58,7 +58,7 @@ impl<'a> WindowUDFFieldArgs<'a> {
 
     /// Returns `Some(Field)` of input expression at index, otherwise
     /// returns `None` if the index is out of bounds.
-    pub fn get_input_field(&self, index: usize) -> Option<Field> {
+    pub fn get_input_field(&self, index: usize) -> Option<FieldRef> {
         self.input_fields.get(index).cloned()
     }
 }

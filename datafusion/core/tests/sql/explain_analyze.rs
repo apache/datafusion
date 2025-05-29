@@ -561,7 +561,9 @@ async fn csv_explain_verbose_plans() {
 async fn explain_analyze_runs_optimizers(#[values("*", "1")] count_expr: &str) {
     // repro for https://github.com/apache/datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optimizer
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_collect_statistics(true),
+    );
     register_alltypes_parquet(&ctx).await;
 
     // This happens as an optimization pass where count(*)/count(1) can be
@@ -782,7 +784,7 @@ async fn explain_logical_plan_only() {
         vec!["logical_plan", "Projection: count(Int64(1)) AS count(*)\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n    SubqueryAlias: t\
-        \n      Projection: \
+        \n      Projection:\
         \n        Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"]];
     assert_eq!(expected, actual);
 }

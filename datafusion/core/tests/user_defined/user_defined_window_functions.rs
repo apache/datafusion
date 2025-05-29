@@ -23,6 +23,7 @@ use arrow::array::{
     UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow_schema::FieldRef;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::prelude::SessionContext;
@@ -564,8 +565,8 @@ impl OddCounter {
                 &self.aliases
             }
 
-            fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-                Ok(Field::new(field_args.name(), DataType::Int64, true))
+            fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+                Ok(Field::new(field_args.name(), DataType::Int64, true).into())
             }
         }
 
@@ -683,7 +684,7 @@ impl WindowUDFImpl for VariadicWindowUDF {
         unimplemented!("unnecessary for testing");
     }
 
-    fn field(&self, _: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, _: WindowUDFFieldArgs) -> Result<FieldRef> {
         unimplemented!("unnecessary for testing");
     }
 }
@@ -809,9 +810,10 @@ impl WindowUDFImpl for MetadataBasedWindowUdf {
         Ok(Box::new(MetadataBasedPartitionEvaluator { double_output }))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         Ok(Field::new(field_args.name(), DataType::UInt64, true)
-            .with_metadata(self.metadata.clone()))
+            .with_metadata(self.metadata.clone())
+            .into())
     }
 }
 
