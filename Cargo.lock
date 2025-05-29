@@ -247,7 +247,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -270,7 +270,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -283,7 +283,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "ahash 0.8.12",
  "arrow-buffer",
@@ -299,7 +299,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "bytes",
  "half",
@@ -309,7 +309,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -329,7 +329,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -344,7 +344,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -355,7 +355,7 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -381,7 +381,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -394,7 +394,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -415,7 +415,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -427,7 +427,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -439,7 +439,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "bitflags 2.9.1",
  "serde",
@@ -449,7 +449,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",
@@ -462,7 +462,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1048,7 +1048,7 @@ dependencies = [
  "bitflags 2.9.1",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "lazy_static",
  "lazycell",
  "log",
@@ -3719,15 +3719,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -4401,7 +4392,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "55.1.0"
-source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#3e1be01c514be59bc72954095d6f393df48361f6"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/cache_filter_result#a6f6e583f8a371f110f2cf0b50a5dcb480dfe2cb"
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",
@@ -4823,7 +4814,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -4843,7 +4834,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.101",
