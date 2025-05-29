@@ -234,3 +234,17 @@ arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/
 arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
 arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
 parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result" }
+# /Users/andrewlamb/Software/arrow-rs
+#arrow = { path= "/Users/andrewlamb/Software/arrow-rs/arrow" }
+#arrow-array = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-array" }
+#arrow-buffer = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-buffer" }
+#arrow-cast = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-cast" }
+#arrow-data = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-data" }
+#arrow-ipc = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-ipc" }
+#arrow-schema = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-schema" }
+#arrow-select = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-select" }
+#arrow-string = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-string" }
+#arrow-ord = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-ord" }
+#arrow-flight = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-flight" }
+#parquet = { path= "/Users/andrewlamb/Software/arrow-rs/parquet" }
+
