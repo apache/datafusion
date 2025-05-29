@@ -2385,7 +2385,7 @@ mod tests {
         // Setup sort expression
         let exec_props = ExecutionProps::new();
         let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
-        let sort_expr = vec![col("value").sort(true, false)];
+        let sort_expr = [col("value").sort(true, false)];
 
         let physical_sort_exprs: Vec<_> = sort_expr
             .iter()

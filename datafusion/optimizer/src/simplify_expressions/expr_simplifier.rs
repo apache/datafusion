@@ -1825,7 +1825,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     info, &left, op, &right,
                 ) && op.supports_propagation() =>
             {
-                unwrap_cast_in_comparison_for_binary(info, left, right, op)?
+                unwrap_cast_in_comparison_for_binary(info, *left, *right, op)?
             }
             // literal op try_cast/cast(expr as data_type)
             // -->
@@ -1838,8 +1838,8 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             {
                 unwrap_cast_in_comparison_for_binary(
                     info,
-                    right,
-                    left,
+                    *right,
+                    *left,
                     op.swap().unwrap(),
                 )?
             }
