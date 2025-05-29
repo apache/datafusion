@@ -29,7 +29,7 @@ use crate::logical_plan::Subquery;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -854,10 +854,10 @@ impl WindowFunctionDefinition {
     /// Returns the datatype of the window function
     pub fn return_field(
         &self,
-        input_expr_fields: &[Field],
+        input_expr_fields: &[FieldRef],
         _input_expr_nullable: &[bool],
         display_name: &str,
-    ) -> Result<Field> {
+    ) -> Result<FieldRef> {
         match self {
             WindowFunctionDefinition::AggregateUDF(fun) => {
                 fun.return_field(input_expr_fields)

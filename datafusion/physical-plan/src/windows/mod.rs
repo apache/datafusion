@@ -30,8 +30,8 @@ use crate::{
     InputOrderMode, PhysicalExpr,
 };
 
-use arrow::datatypes::{Field, Schema, SchemaRef};
-use arrow_schema::SortOptions;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
@@ -84,7 +84,10 @@ pub fn schema_add_window_field(
     if let WindowFunctionDefinition::AggregateUDF(_) = window_fn {
         Ok(Arc::new(Schema::new(window_fields)))
     } else {
-        window_fields.extend_from_slice(&[window_expr_return_field.with_name(fn_name)]);
+        window_fields.extend_from_slice(&[window_expr_return_field
+            .as_ref()
+            .clone()
+            .with_name(fn_name)]);
         Ok(Arc::new(Schema::new(window_fields)))
     }
 }
@@ -199,7 +202,7 @@ pub struct WindowUDFExpr {
     /// Display name
     name: String,
     /// Fields of input expressions
-    input_fields: Vec<Field>,
+    input_fields: Vec<FieldRef>,
     /// This is set to `true` only if the user-defined window function
     /// expression supports evaluation in reverse order, and the
     /// evaluation order is reversed.
@@ -219,7 +222,7 @@ impl StandardWindowFunctionExpr for WindowUDFExpr {
         self
     }
 
-    fn field(&self) -> Result<Field> {
+    fn field(&self) -> Result<FieldRef> {
         self.fun
             .field(WindowUDFFieldArgs::new(&self.input_fields, &self.name))
     }
@@ -637,7 +640,7 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
 
     use arrow::compute::SortOptions;
-    use arrow_schema::DataType;
+    use arrow_schema::{DataType, Field};
     use datafusion_execution::TaskContext;
 
     use datafusion_functions_aggregate::count::count_udaf;
