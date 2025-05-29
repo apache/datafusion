@@ -88,26 +88,31 @@ struct RenamedAlias {
 }
 
 impl RenamedAlias {
-    fn rewrite_expression(&self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    fn rewrite_expression(&self, expr: Expr) -> Result<Transformed<Expr>> {
+        expr.transform(|expr| match expr {
+            Expr::Column(Column {
+                relation: Some(relation),
+                name,
+                spans,
+            }) if relation == self.from => Ok(Transformed::yes(Expr::Column(Column {
+                relation: Some(self.to.clone()),
+                name,
+                spans,
+            }))),
+            _ => Ok(Transformed::no(expr)),
+        })
+    }
+
+    fn rewrite_logical_plan(
+        &self,
+        plan: LogicalPlan,
+    ) -> Result<Transformed<LogicalPlan>> {
         plan.transform_down(|plan| {
             let Transformed {
                 data: plan,
                 transformed,
                 ..
-            } = plan.map_expressions(|expr| match expr {
-                Expr::Column(Column {
-                    relation: Some(relation),
-                    name,
-                    spans,
-                }) if relation == self.from => {
-                    Ok(Transformed::yes(Expr::Column(Column {
-                        relation: Some(self.to.clone()),
-                        name,
-                        spans,
-                    })))
-                }
-                _ => Ok(Transformed::no(expr)),
-            })?;
+            } = plan.map_expressions(|expr| self.rewrite_expression(expr))?;
             if transformed {
                 Ok(Transformed::yes(plan.recompute_schema().unwrap()))
             } else {

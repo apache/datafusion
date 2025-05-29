@@ -447,7 +447,8 @@ impl OptimizerRule for EliminateAggregationSelfJoin {
 
         if transformed {
             if let Some(renamed) = renamed {
-                let Transformed { data: plan, .. } = renamed.rewrite_expression(plan)?;
+                let Transformed { data: plan, .. } =
+                    renamed.rewrite_logical_plan(plan)?;
                 Ok(Transformed::yes(plan))
             } else {
                 Ok(Transformed::yes(plan))
