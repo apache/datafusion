@@ -3642,8 +3642,7 @@ mod test {
         //
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
-        // See https://github.com/apache/datafusion/issues/14256 for details
-        // TODO: used to be 112
+        // See https://github.com/apache/datafusion/issues/16199 for details
         assert_eq!(size_of::<Expr>(), 144);
         assert_eq!(size_of::<ScalarValue>(), 64);
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
