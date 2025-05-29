@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction, WindowFunctionParams};
+use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
@@ -1264,9 +1264,7 @@ pub fn collect_subquery_cols(
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr_vec_fmt, grouping_set, lit, rollup,
-        test::function_stub::max_udaf, test::function_stub::min_udaf,
-        test::function_stub::sum_udaf, Cast, ExprFunctionExt, WindowFunctionDefinition,
+        col, cube, expr::WindowFunction, expr_vec_fmt, grouping_set, lit, rollup, test::function_stub::{max_udaf, min_udaf, sum_udaf}, Cast, ExprFunctionExt, WindowFunctionDefinition
     };
     use arrow::datatypes::{UnionFields, UnionMode};
 

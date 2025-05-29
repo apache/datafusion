@@ -2435,7 +2435,7 @@ impl Window {
                 // When there is no PARTITION BY, row number will be unique
                 // across the entire table.
                 if udwf.name() == "row_number" && partition_by.is_empty() {
-                    return Some(idx + input_len);
+                    Some(idx + input_len)
                 } else {
                     None
                 }

@@ -34,11 +34,11 @@ use datafusion_common::{
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
-    Operator, Volatility, WindowFunctionDefinition,
+    Operator, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
-    expr::{InList, InSubquery, WindowFunction},
+    expr::{InList, InSubquery},
     utils::{iter_conjunction, iter_conjunction_owned},
 };
 use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
@@ -2145,12 +2145,10 @@ mod tests {
     use crate::test::test_table_scan_with_name;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
-        function::{
+        expr::WindowFunction, function::{
             AccumulatorArgs, AggregateFunctionSimplification,
             WindowFunctionSimplification,
-        },
-        interval_arithmetic::Interval,
-        *,
+        }, interval_arithmetic::Interval, *
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
