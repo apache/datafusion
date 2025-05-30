@@ -1649,6 +1649,18 @@ async fn with_column_renamed() -> Result<()> {
         // no-op for missing column
         .with_column_renamed("c4", "boom")?;
 
+    // one projection is reused for  all renames
+    assert_snapshot!(
+        df_sum_renamed.logical_plan(),
+        @r#"
+    Projection: aggregate_test_100.c1 AS one, aggregate_test_100.c2 AS two, aggregate_test_100.c3, aggregate_test_100.c2 + aggregate_test_100.c3 AS sum AS total
+      Limit: skip=0, fetch=1
+        Sort: aggregate_test_100.c1 ASC NULLS FIRST, aggregate_test_100.c2 ASC NULLS FIRST, aggregate_test_100.c3 ASC NULLS FIRST
+          Filter: aggregate_test_100.c2 = Int32(3) AND aggregate_test_100.c1 = Utf8("a")
+            Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3
+              TableScan: aggregate_test_100
+    "#);
+
     let references: Vec<_> = df_sum_renamed
         .schema()
         .iter()
