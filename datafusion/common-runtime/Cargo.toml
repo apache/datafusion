@@ -40,8 +40,8 @@ name = "datafusion_common_runtime"
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
-datafusion-execution = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
+datafusion-execution = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
