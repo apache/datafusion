@@ -21,6 +21,55 @@
 
 ## DataFusion `48.0.0`
 
+### `VARCHAR` SQL type changed to map to `Utf8View` Arrow type
+
+The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`
+which improves performance for many string operations. You can read more about
+`Utf8View` in the [DataFusion blog post on German-style strings]
+
+[datafusion blog post on german-style strings]: https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/
+
+This means that when you create a table with a `VARCHAR` column, it will now use
+`Utf8View` as the underlying data type. For example:
+
+```sql
+> CREATE TABLE my_table (my_column VARCHAR);
+0 row(s) fetched.
+Elapsed 0.001 seconds.
+
+> DESCRIBE my_table;
++-------------+-----------+-------------+
+| column_name | data_type | is_nullable |
++-------------+-----------+-------------+
+| my_column   | Utf8View  | YES         |
++-------------+-----------+-------------+
+1 row(s) fetched.
+Elapsed 0.000 seconds.
+```
+
+You can restore the old behavior of using `Utf8` by changing the
+`datafusion.sql_parser.map_varchar_to_utf8view` configuration setting. For
+example
+
+```sql
+> set datafusion.sql_parser.map_varchar_to_utf8view = false;
+0 row(s) fetched.
+Elapsed 0.001 seconds.
+
+> CREATE TABLE my_table (my_column VARCHAR);
+0 row(s) fetched.
+Elapsed 0.014 seconds.
+
+> DESCRIBE my_table;
++-------------+-----------+-------------+
+| column_name | data_type | is_nullable |
++-------------+-----------+-------------+
+| my_column   | Utf8      | YES         |
++-------------+-----------+-------------+
+1 row(s) fetched.
+Elapsed 0.004 seconds.
+```
+
 ### `ListingOptions` default for `collect_stat` changed from `true` to `false`
 
 This makes it agree with the default for `SessionConfig`.
