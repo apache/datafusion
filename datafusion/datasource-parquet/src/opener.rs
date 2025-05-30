@@ -42,6 +42,7 @@ use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::encryption::decrypt::FileDecryptionProperties;
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -82,6 +83,8 @@ pub(super) struct ParquetOpener {
     pub enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
+    /// Optional parquet FileDecryptionProperties
+    pub file_decryption_properties:  Option<Arc<FileDecryptionProperties>>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -123,6 +126,8 @@ impl FileOpener for ParquetOpener {
             .global_counter("num_predicate_creation_errors");
 
         let enable_page_index = self.enable_page_index;
+        let file_decryption_properties = self.file_decryption_properties.clone();
+
 
         Ok(Box::pin(async move {
             // Don't load the page index yet. Since it is not stored inline in
@@ -131,6 +136,9 @@ impl FileOpener for ParquetOpener {
             // pruning predicates. Thus default to not requesting if from the
             // underlying reader.
             let mut options = ArrowReaderOptions::new().with_page_index(false);
+            if let Some(ref fd_val) = file_decryption_properties {
+                options = options.with_file_decryption_properties((**fd_val).clone());
+            }
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
 
             // Begin by loading the metadata from the underlying reader (note

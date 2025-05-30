@@ -56,6 +56,7 @@ arrow = { workspace = true }
 arrow-ipc = { workspace = true }
 base64 = "0.22.1"
 half = { workspace = true }
+hex = "0.4.3"
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 libc = "0.2.172"
@@ -66,7 +67,10 @@ paste = "1.0.15"
 pyo3 = { version = "0.24.2", optional = true }
 recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true }
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = {workspace = true}
 tokio = { workspace = true }
+
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 web-time = "1.1.0"
