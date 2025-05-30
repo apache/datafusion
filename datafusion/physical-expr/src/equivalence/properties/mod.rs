@@ -348,10 +348,19 @@ impl EquivalenceProperties {
         // Add all new normalized constants
         self.constants.extend(normalized_constants);
 
+        let oeq_class = self.normalized_oeq_class();
+        let mut oeq_class_new = oeq_class.clone();
+
         // Discover any new orderings based on the constants
-        for ordering in self.normalized_oeq_class().iter() {
-            if let Err(e) = self.discover_new_orderings(&ordering[0].expr) {
-                log::debug!("error discovering new orderings: {e}");
+        for ordering in oeq_class.iter() {
+            match self.discover_new_orderings_impl(&ordering[0].expr, &oeq_class_new) {
+                Ok(new_orderings) => {
+                    oeq_class_new.add_new_orderings(new_orderings.iter().map(|ordering| self.normalize_sort_exprs(ordering)));
+                    self.oeq_class.add_new_orderings(new_orderings);
+                }
+                Err(e) => {
+                    log::debug!("error discovering new orderings: {e}");
+                }
             }
         }
 
@@ -366,19 +375,26 @@ impl EquivalenceProperties {
     // For a discussion, see: https://github.com/apache/datafusion/issues/9812
     fn discover_new_orderings(&mut self, expr: &Arc<dyn PhysicalExpr>) -> Result<()> {
         let normalized_expr = self.eq_group().normalize_expr(Arc::clone(expr));
+        let new_orderings = self.discover_new_orderings_impl(&normalized_expr, &self.normalized_oeq_class())?;
+        self.oeq_class.add_new_orderings(new_orderings);
+        Ok(())
+    }
+
+    // call this method directly to avoid the expensive normalization process
+    fn discover_new_orderings_impl(&mut self, normalized_expr: &Arc<dyn PhysicalExpr>, oeq_class: &OrderingEquivalenceClass) -> Result<Vec<LexOrdering>> {
         let eq_class = self
             .eq_group
             .iter()
             .find_map(|class| {
                 class
-                    .contains(&normalized_expr)
+                    .contains(normalized_expr)
                     .then(|| class.clone().into_vec())
             })
-            .unwrap_or_else(|| vec![Arc::clone(&normalized_expr)]);
+            .unwrap_or_else(|| vec![Arc::clone(normalized_expr)]);
 
         let mut new_orderings: Vec<LexOrdering> = vec![];
-        for ordering in self.normalized_oeq_class().iter() {
-            if !ordering[0].expr.eq(&normalized_expr) {
+        for ordering in oeq_class.iter() {
+            if !ordering[0].expr.eq(normalized_expr) {
                 continue;
             }
 
@@ -435,9 +451,7 @@ impl EquivalenceProperties {
                 }
             }
         }
-
-        self.oeq_class.add_new_orderings(new_orderings);
-        Ok(())
+        Ok(new_orderings)
     }
 
     /// Updates the ordering equivalence group within assuming that the table
