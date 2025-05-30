@@ -43,6 +43,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod custom_reader;
+mod encryption;
 mod external_access_plan;
 mod file_statistics;
 mod filter_pushdown;
@@ -51,7 +52,6 @@ mod row_group_pruning;
 mod schema;
 mod schema_coercion;
 mod utils;
-mod encryption;
 
 #[cfg(test)]
 #[ctor::ctor]

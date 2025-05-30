@@ -308,7 +308,14 @@ async fn fetch_schema_with_location(
     coerce_int96: Option<TimeUnit>,
 ) -> Result<(Path, Schema)> {
     let loc_path = file.location.clone();
-    let schema = fetch_schema(store, file, metadata_size_hint, file_decryption_properties, coerce_int96).await?;
+    let schema = fetch_schema(
+        store,
+        file,
+        metadata_size_hint,
+        file_decryption_properties,
+        coerce_int96,
+    )
+    .await?;
     Ok((loc_path, schema))
 }
 
@@ -343,14 +350,19 @@ impl FileFormat for ParquetFormat {
             Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
             None => None,
         };
-        let config_file_decryption_properties = &state.config().options()
-            .execution.parquet.file_decryption_properties.clone();
+        let config_file_decryption_properties = &state
+            .config()
+            .options()
+            .execution
+            .parquet
+            .file_decryption_properties
+            .clone();
         let file_decryption_properties: Option<FileDecryptionProperties> =
             match config_file_decryption_properties {
                 Some(cfd) => {
                     let fd: FileDecryptionProperties = cfd.clone().into();
                     Some(fd)
-                },
+                }
                 None => None,
             };
         let mut schemas: Vec<_> = futures::stream::iter(objects)
@@ -409,13 +421,14 @@ impl FileFormat for ParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
-        let config_file_decryption_properties = &self.options.global.file_decryption_properties;
+        let config_file_decryption_properties =
+            &self.options.global.file_decryption_properties;
         let file_decryption_properties: Option<FileDecryptionProperties> =
             match config_file_decryption_properties {
                 Some(cfd) => {
                     let fd: FileDecryptionProperties = cfd.clone().into();
                     Some(fd)
-                },
+                }
                 None => None,
             };
         let stats = fetch_statistics(
@@ -951,7 +964,7 @@ pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
     size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>
+    decryption_properties: Option<&FileDecryptionProperties>,
 ) -> Result<ParquetMetaData> {
     let file_size = meta.size;
     let fetch = ObjectStoreFetch::new(store, meta);
@@ -972,7 +985,13 @@ async fn fetch_schema(
     file_decryption_properties: Option<&FileDecryptionProperties>,
     coerce_int96: Option<TimeUnit>,
 ) -> Result<Schema> {
-    let metadata = fetch_parquet_metadata(store, file, metadata_size_hint, file_decryption_properties).await?;
+    let metadata = fetch_parquet_metadata(
+        store,
+        file,
+        metadata_size_hint,
+        file_decryption_properties,
+    )
+    .await?;
     let file_metadata = metadata.file_metadata();
     let schema = parquet_to_arrow_schema(
         file_metadata.schema_descr(),
@@ -994,9 +1013,11 @@ pub async fn fetch_statistics(
     table_schema: SchemaRef,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>
+    decryption_properties: Option<&FileDecryptionProperties>,
 ) -> Result<Statistics> {
-    let metadata = fetch_parquet_metadata(store, file, metadata_size_hint, decryption_properties).await?;
+    let metadata =
+        fetch_parquet_metadata(store, file, metadata_size_hint, decryption_properties)
+            .await?;
     statistics_from_parquet_meta_calc(&metadata, table_schema)
 }
 
