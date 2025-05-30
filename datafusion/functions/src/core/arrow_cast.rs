@@ -17,7 +17,7 @@
 
 //! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
@@ -116,7 +116,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
         let [_, type_arg] = take_function_args(self.name(), args.scalar_arguments)?;
@@ -131,7 +131,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
                     )
                 },
                 |casted_type| match casted_type.parse::<DataType>() {
-                    Ok(data_type) => Ok(Field::new(self.name(), data_type, nullable)),
+                    Ok(data_type) => Ok(Field::new(self.name(), data_type, nullable).into()),
                     Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
                     Err(e) => Err(arrow_datafusion_err!(e)),
                 },
