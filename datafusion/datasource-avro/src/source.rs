@@ -28,6 +28,8 @@ use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
+use datafusion_datasource::impl_schema_adapter_methods;
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
@@ -41,6 +43,7 @@ pub struct AvroSource {
     projection: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl AvroSource {
@@ -123,6 +126,8 @@ impl FileSource for AvroSource {
     ) -> Result<Option<FileScanConfig>> {
         Ok(None)
     }
+
+    impl_schema_adapter_methods!();
 }
 
 mod private {
