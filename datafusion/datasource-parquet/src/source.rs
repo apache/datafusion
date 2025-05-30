@@ -467,13 +467,23 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
-        let mut file_decryption_properties:  Option<Arc<FileDecryptionProperties>> = None;
-        if self.table_parquet_options().global.file_decryption_properties.is_some() {
-            let fdp: FileDecryptionProperties =
-                self.table_parquet_options().global.file_decryption_properties.clone().unwrap().into();
+        let mut file_decryption_properties: Option<Arc<FileDecryptionProperties>> = None;
+        if self
+            .table_parquet_options()
+            .global
+            .file_decryption_properties
+            .is_some()
+        {
+            let fdp: FileDecryptionProperties = self
+                .table_parquet_options()
+                .global
+                .file_decryption_properties
+                .clone()
+                .unwrap()
+                .into();
             file_decryption_properties = Some(Arc::new(fdp));
         }
-        
+
         let coerce_int96 = self
             .table_parquet_options
             .global

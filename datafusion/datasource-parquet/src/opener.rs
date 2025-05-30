@@ -41,8 +41,8 @@ use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::encryption::decrypt::FileDecryptionProperties;
+use parquet::file::metadata::ParquetMetaDataReader;
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -84,7 +84,7 @@ pub(super) struct ParquetOpener {
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
     /// Optional parquet FileDecryptionProperties
-    pub file_decryption_properties:  Option<Arc<FileDecryptionProperties>>,
+    pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -127,7 +127,6 @@ impl FileOpener for ParquetOpener {
 
         let enable_page_index = self.enable_page_index;
         let file_decryption_properties = self.file_decryption_properties.clone();
-
 
         Ok(Box::pin(async move {
             // Don't load the page index yet. Since it is not stored inline in

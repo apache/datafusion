@@ -27,13 +27,12 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
 use hex;
 #[cfg(feature = "parquet")]
-use parquet::encryption::encrypt::FileEncryptionProperties;
-#[cfg(feature = "parquet")]
 use parquet::encryption::decrypt::FileDecryptionProperties;
-
+#[cfg(feature = "parquet")]
+use parquet::encryption::encrypt::FileEncryptionProperties;
+use serde::{Deserialize, Serialize};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -214,7 +213,11 @@ pub struct EncryptionColumnKeys {
 }
 
 impl EncryptionColumnKeys {
-    pub fn new(column_names: &Vec<String>, keys: &Vec<Vec<u8>>, meta: &Vec<Vec<u8>>) -> Self {
+    pub fn new(
+        column_names: &Vec<String>,
+        keys: &Vec<Vec<u8>>,
+        meta: &Vec<Vec<u8>>,
+    ) -> Self {
         let mut column_keys_as_hex: HashMap<String, EncryptionKeyAsHex> = HashMap::new();
 
         for (i, column_name) in column_names.iter().enumerate() {
@@ -226,7 +229,7 @@ impl EncryptionColumnKeys {
             column_keys_as_hex.insert(column_name.clone(), encryption_key);
         }
 
-        EncryptionColumnKeys {column_keys_as_hex}
+        EncryptionColumnKeys { column_keys_as_hex }
     }
 
     pub fn to_json(&self) -> String {
@@ -234,19 +237,21 @@ impl EncryptionColumnKeys {
     }
 
     pub fn from_json_to_column_keys(s: &String) -> HashMap<String, EncryptionKey> {
-        let eck: EncryptionColumnKeys = serde_json::from_str(s).expect("failed to decode column keys from JSON");
+        let eck: EncryptionColumnKeys =
+            serde_json::from_str(s).expect("failed to decode column keys from JSON");
         let mut hm: HashMap<String, EncryptionKey> = HashMap::new();
         for (key, val) in eck.column_keys_as_hex {
             let col = key;
             let key = hex::decode(val.key).expect("Invalid column key");
-            let key_metadata = val.key_metadata.map(|x| hex::decode(x).expect("Invalid column metadata"));
-            let encryption_key = EncryptionKey {key, key_metadata};
+            let key_metadata = val
+                .key_metadata
+                .map(|x| hex::decode(x).expect("Invalid column metadata"));
+            let encryption_key = EncryptionKey { key, key_metadata };
             hm.insert(col, encryption_key);
         }
         hm
     }
 }
-
 
 config_namespace! {
     pub struct ConfigFileEncryptionProperties {
@@ -271,7 +276,8 @@ config_namespace! {
 #[cfg(feature = "parquet")]
 impl Into<FileDecryptionProperties> for ConfigFileDecryptionProperties {
     fn into(self) -> FileDecryptionProperties {
-        let eck = EncryptionColumnKeys::from_json_to_column_keys(&self.column_keys_as_json_hex);
+        let eck =
+            EncryptionColumnKeys::from_json_to_column_keys(&self.column_keys_as_json_hex);
         let mut column_names: Vec<&str> = Vec::new();
         let mut column_keys: Vec<Vec<u8>> = Vec::new();
         if !eck.is_empty() {
@@ -280,15 +286,19 @@ impl Into<FileDecryptionProperties> for ConfigFileDecryptionProperties {
                 column_keys.push(encryption_key.key.clone());
             }
         }
-        let mut fep = FileDecryptionProperties::builder(hex::decode(self.footer_key_as_hex).unwrap())
-            .with_column_keys(column_names, column_keys).unwrap();
-        
+        let mut fep = FileDecryptionProperties::builder(
+            hex::decode(self.footer_key_as_hex).unwrap(),
+        )
+        .with_column_keys(column_names, column_keys)
+        .unwrap();
+
         if !self.footer_signature_verification {
             fep = fep.disable_footer_signature_verification();
         }
 
         if self.aad_prefix_as_hex.len() > 0 {
-            let aad_prefix = hex::decode(&self.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            let aad_prefix =
+                hex::decode(&self.aad_prefix_as_hex).expect("Invalid AAD prefix");
             fep = fep.with_aad_prefix(aad_prefix);
         }
 
@@ -300,17 +310,23 @@ impl Into<FileDecryptionProperties> for ConfigFileDecryptionProperties {
 impl From<FileDecryptionProperties> for ConfigFileDecryptionProperties {
     fn from(f: FileDecryptionProperties) -> Self {
         let (column_names_vec, column_keys_vec) = f.column_keys();
-        let column_keys_meta= Vec::new();
-        let ck = EncryptionColumnKeys::new(&column_names_vec, &column_keys_vec, &column_keys_meta);
+        let column_keys_meta = Vec::new();
+        let ck = EncryptionColumnKeys::new(
+            &column_names_vec,
+            &column_keys_vec,
+            &column_keys_meta,
+        );
         let mut aad_prefix: Vec<u8> = Vec::new();
         if let Some(prefix) = f.aad_prefix() {
             aad_prefix = prefix.clone();
         }
         ConfigFileDecryptionProperties {
-            footer_key_as_hex: hex::encode(f.footer_key(None).unwrap_or_default().as_ref()),
+            footer_key_as_hex: hex::encode(
+                f.footer_key(None).unwrap_or_default().as_ref(),
+            ),
             column_keys_as_json_hex: ck.to_json(),
             aad_prefix_as_hex: hex::encode(aad_prefix),
-            footer_signature_verification: f.check_plaintext_footer_integrity()
+            footer_signature_verification: f.check_plaintext_footer_integrity(),
         }
     }
 }
@@ -318,20 +334,30 @@ impl From<FileDecryptionProperties> for ConfigFileDecryptionProperties {
 #[cfg(feature = "parquet")]
 impl Into<FileEncryptionProperties> for ConfigFileEncryptionProperties {
     fn into(self) -> FileEncryptionProperties {
-        let eck = EncryptionColumnKeys::from_json_to_column_keys(&self.column_keys_as_json_hex);
-        let mut fep = FileEncryptionProperties::builder(hex::decode(self.footer_key_as_hex).unwrap())
-            .with_plaintext_footer(!self.encrypt_footer)
-            .with_aad_prefix_storage(self.store_aad_prefix);
-        
+        let eck =
+            EncryptionColumnKeys::from_json_to_column_keys(&self.column_keys_as_json_hex);
+        let mut fep = FileEncryptionProperties::builder(
+            hex::decode(self.footer_key_as_hex).unwrap(),
+        )
+        .with_plaintext_footer(!self.encrypt_footer)
+        .with_aad_prefix_storage(self.store_aad_prefix);
+
         if self.footer_key_metadata_as_hex.len() > 0 {
-            fep = fep.with_footer_key_metadata(hex::decode(&self.footer_key_metadata_as_hex).expect("Invalid footer key metadata"));
+            fep = fep.with_footer_key_metadata(
+                hex::decode(&self.footer_key_metadata_as_hex)
+                    .expect("Invalid footer key metadata"),
+            );
         }
 
         for (column_name, encryption_key) in eck.iter() {
             match &encryption_key.key_metadata {
                 Some(key_metadata) => {
-                    fep = fep.with_column_key_and_metadata(column_name, encryption_key.key.clone(), key_metadata.clone());
-                },
+                    fep = fep.with_column_key_and_metadata(
+                        column_name,
+                        encryption_key.key.clone(),
+                        key_metadata.clone(),
+                    );
+                }
                 None => {
                     fep = fep.with_column_key(column_name, encryption_key.key.clone());
                 }
@@ -339,7 +365,8 @@ impl Into<FileEncryptionProperties> for ConfigFileEncryptionProperties {
         }
 
         if self.aad_prefix_as_hex.len() > 0 {
-            let aad_prefix: Vec<u8> = hex::decode(&self.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            let aad_prefix: Vec<u8> =
+                hex::decode(&self.aad_prefix_as_hex).expect("Invalid AAD prefix");
             fep = fep.with_aad_prefix(aad_prefix);
         }
         fep.build().unwrap()
@@ -350,7 +377,11 @@ impl Into<FileEncryptionProperties> for ConfigFileEncryptionProperties {
 impl From<FileEncryptionProperties> for ConfigFileEncryptionProperties {
     fn from(f: FileEncryptionProperties) -> Self {
         let (column_names_vec, column_keys_vec, column_metas_vec) = f.column_keys();
-        let ck = EncryptionColumnKeys::new(&column_names_vec, &column_keys_vec, &column_metas_vec);
+        let ck = EncryptionColumnKeys::new(
+            &column_names_vec,
+            &column_keys_vec,
+            &column_metas_vec,
+        );
         let mut aad_prefix: Vec<u8> = Vec::new();
         if let Some(prefix) = f.aad_prefix() {
             aad_prefix = prefix.clone();
@@ -358,14 +389,16 @@ impl From<FileEncryptionProperties> for ConfigFileEncryptionProperties {
         ConfigFileEncryptionProperties {
             encrypt_footer: f.encrypt_footer(),
             footer_key_as_hex: hex::encode(f.footer_key()),
-            footer_key_metadata_as_hex: f.footer_key_metadata().map(|x| hex::encode(x)).unwrap_or_default(),
+            footer_key_metadata_as_hex: f
+                .footer_key_metadata()
+                .map(|x| hex::encode(x))
+                .unwrap_or_default(),
             column_keys_as_json_hex: ck.to_json(),
             aad_prefix_as_hex: hex::encode(aad_prefix),
             store_aad_prefix: f.store_aad_prefix(),
         }
     }
 }
-
 
 config_namespace! {
     /// Options related to catalog and directory scanning
@@ -2279,9 +2312,13 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::{
+        ConfigEntry, ConfigExtension, ConfigField, ConfigFileDecryptionProperties,
+        ConfigFileEncryptionProperties, ConfigFileType, ExtensionOptions, Extensions,
+        TableOptions,
+    };
     use std::any::Any;
     use std::collections::HashMap;
-    use crate::config::{ConfigEntry, ConfigExtension, ConfigField, ConfigFileDecryptionProperties, ConfigFileEncryptionProperties, ConfigFileType, ExtensionOptions, Extensions, TableOptions};
 
     #[derive(Default, Debug, Clone)]
     pub struct TestExtensionConfig {
@@ -2415,80 +2452,99 @@ mod tests {
     fn parquet_table_encryption() {
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
-        
+
         let footer_key = b"0123456789012345".to_vec(); // 128bit/16
         let column_names = vec!["double_field", "float_field"];
-        let column_keys = vec![b"1234567890123450".to_vec(), b"1234567890123451".to_vec()];
+        let column_keys =
+            vec![b"1234567890123450".to_vec(), b"1234567890123451".to_vec()];
 
-        let file_encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
-            .with_column_keys(column_names.clone(), column_keys.clone())
-            .unwrap()
-            .build()
-            .unwrap();
+        let file_encryption_properties =
+            FileEncryptionProperties::builder(footer_key.clone())
+                .with_column_keys(column_names.clone(), column_keys.clone())
+                .unwrap()
+                .build()
+                .unwrap();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
             .with_column_keys(column_names.clone(), column_keys.clone())
             .unwrap()
             .build()
             .unwrap();
-        
+
         // Test round-trip
-        let config_encrypt: ConfigFileEncryptionProperties = file_encryption_properties.clone().into();
-        let encryption_properties_built: FileEncryptionProperties = config_encrypt.clone().into();
+        let config_encrypt: ConfigFileEncryptionProperties =
+            file_encryption_properties.clone().into();
+        let encryption_properties_built: FileEncryptionProperties =
+            config_encrypt.clone().into();
         assert_eq!(file_encryption_properties, encryption_properties_built);
-        
-        let config_decrypt: ConfigFileDecryptionProperties = decryption_properties.clone().into();
-        let decryption_properties_built: FileDecryptionProperties = config_decrypt.clone().into();
+
+        let config_decrypt: ConfigFileDecryptionProperties =
+            decryption_properties.clone().into();
+        let decryption_properties_built: FileDecryptionProperties =
+            config_decrypt.clone().into();
         assert_eq!(decryption_properties, decryption_properties_built);
-        
-        
+
         ///////////////////////////////////////////////////////////////////////////////////
         // Test encryption config
-        
+
         // Display original encryption config
         // println!("{:#?}", config_encrypt);
-        
+
         let mut table_config = TableOptions::new();
         table_config.set_config_format(ConfigFileType::PARQUET);
         table_config
             .parquet
-            .set("file_encryption_properties.encrypt_footer", config_encrypt.encrypt_footer.to_string().as_str())
+            .set(
+                "file_encryption_properties.encrypt_footer",
+                config_encrypt.encrypt_footer.to_string().as_str(),
+            )
             .unwrap();
         table_config
             .parquet
-            .set("file_encryption_properties.footer_key_as_hex", config_encrypt.footer_key_as_hex.as_str())
+            .set(
+                "file_encryption_properties.footer_key_as_hex",
+                config_encrypt.footer_key_as_hex.as_str(),
+            )
             .unwrap();
-        
+
         table_config
             .parquet
-            .set("file_encryption_properties.column_keys_as_json_hex", config_encrypt.column_keys_as_json_hex.as_str())
+            .set(
+                "file_encryption_properties.column_keys_as_json_hex",
+                config_encrypt.column_keys_as_json_hex.as_str(),
+            )
             .unwrap();
 
         // Print matching final encryption config
         // println!("{:#?}", table_config.parquet.global.file_encryption_properties);
-        
+
         assert_eq!(
             table_config.parquet.global.file_encryption_properties,
             Some(config_encrypt)
         );
-
 
         ///////////////////////////////////////////////////////////////////////////////////
         // Test decryption config
 
         // Display original decryption config
         // println!("{:#?}", config_decrypt);
-        
+
         let mut table_config = TableOptions::new();
         table_config.set_config_format(ConfigFileType::PARQUET);
         table_config
             .parquet
-            .set("file_decryption_properties.footer_key_as_hex", config_decrypt.footer_key_as_hex.as_str())
+            .set(
+                "file_decryption_properties.footer_key_as_hex",
+                config_decrypt.footer_key_as_hex.as_str(),
+            )
             .unwrap();
 
         table_config
             .parquet
-            .set("file_decryption_properties.column_keys_as_json_hex", config_decrypt.column_keys_as_json_hex.as_str())
+            .set(
+                "file_decryption_properties.column_keys_as_json_hex",
+                config_decrypt.column_keys_as_json_hex.as_str(),
+            )
             .unwrap();
 
         // Print matching final decryption config
@@ -2502,7 +2558,8 @@ mod tests {
         // Set config directly
         let mut table_config = TableOptions::new();
         table_config.set_config_format(ConfigFileType::PARQUET);
-        table_config.parquet.global.file_decryption_properties = Some(config_decrypt.clone());
+        table_config.parquet.global.file_decryption_properties =
+            Some(config_decrypt.clone());
         assert_eq!(
             table_config.parquet.global.file_decryption_properties,
             Some(config_decrypt.clone())
