@@ -89,10 +89,10 @@ impl FileSource for TestSource {
     fn with_schema_adapter_factory(
         &self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Arc<dyn FileSource> {
-        Arc::new(Self {
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
             schema_adapter_factory: Some(schema_adapter_factory),
-        })
+        }))
     }
 
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
@@ -196,7 +196,7 @@ fn test_schema_adapter() {
 
     // Add a schema adapter factory
     let factory = Arc::new(TestSchemaAdapterFactory {});
-    let source_with_adapter = source.with_schema_adapter_factory(factory);
+    let source_with_adapter = source.with_schema_adapter_factory(factory).unwrap();
     assert!(source_with_adapter.schema_adapter_factory().is_some());
 
     // Create a schema adapter
