@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::compute::{filter, is_not_null};
+use arrow::datatypes::FieldRef;
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -29,7 +30,6 @@ use arrow::{
     },
     datatypes::{DataType, Field, Schema},
 };
-
 use datafusion_common::{
     downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
     Result, ScalarValue,
@@ -256,7 +256,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "max_size"),
@@ -288,7 +288,10 @@ impl AggregateUDFImpl for ApproxPercentileCont {
                 Field::new_list_field(DataType::Float64, true),
                 false,
             ),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn name(&self) -> &str {

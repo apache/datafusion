@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::ArrowNativeType;
+use arrow::datatypes::{ArrowNativeType, FieldRef};
 use arrow::{
     array::ArrowNativeTypeOp,
     compute::SortOptions,
@@ -92,7 +92,7 @@ pub fn ordering_fields(
     order_bys: &[PhysicalSortExpr],
     // Data type of each expression in the ordering requirement
     data_types: &[DataType],
-) -> Vec<Field> {
+) -> Vec<FieldRef> {
     order_bys
         .iter()
         .zip(data_types.iter())
@@ -104,6 +104,7 @@ pub fn ordering_fields(
                 true,
             )
         })
+        .map(Arc::new)
         .collect()
 }
 

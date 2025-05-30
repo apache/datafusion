@@ -18,8 +18,9 @@
 //! IS NULL expression
 
 use crate::PhysicalExpr;
+use arrow::datatypes::FieldRef;
 use arrow::{
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::Result;
@@ -92,7 +93,7 @@ impl PhysicalExpr for IsNullExpr {
         }
     }
 
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
         self.arg.return_field(input_schema)
     }
 

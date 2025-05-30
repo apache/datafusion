@@ -19,9 +19,9 @@ use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
-    DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
-    DECIMAL256_MAX_PRECISION,
+    DataType, Field, FieldRef, Fields, Int32Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
+    UnionMode, DECIMAL256_MAX_PRECISION,
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
@@ -2516,14 +2516,18 @@ fn roundtrip_window() {
             make_partition_evaluator()
         }
 
-        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-            if let Some(return_type) = field_args.get_input_type(0) {
-                Ok(Field::new(field_args.name(), return_type, true))
+        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+            if let Some(return_field) = field_args.get_input_field(0) {
+                Ok(return_field
+                    .as_ref()
+                    .clone()
+                    .with_name(field_args.name())
+                    .into())
             } else {
                 plan_err!(
                     "dummy_udwf expects 1 argument, got {}: {:?}",
-                    field_args.input_types().len(),
-                    field_args.input_types()
+                    field_args.input_fields().len(),
+                    field_args.input_fields()
                 )
             }
         }

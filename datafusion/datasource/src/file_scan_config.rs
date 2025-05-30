@@ -24,6 +24,8 @@ use std::{
 };
 
 use crate::file_groups::FileGroup;
+#[allow(unused_imports)]
+use crate::schema_adapter::SchemaAdapterFactory;
 use crate::{
     display::FileGroupsDisplay,
     file::FileSource,
@@ -84,6 +86,7 @@ use log::{debug, warn};
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+/// # use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 /// # let file_schema = Arc::new(Schema::new(vec![
 /// #  Field::new("c1", DataType::Int32, false),
 /// #  Field::new("c2", DataType::Int32, false),
@@ -93,21 +96,24 @@ use log::{debug, warn};
 /// # // Note: crate mock ParquetSource, as ParquetSource is not in the datasource crate
 /// #[derive(Clone)]
 /// # struct ParquetSource {
-/// #    projected_statistics: Option<Statistics>
-/// # }
+/// #    projected_statistics: Option<Statistics>,
+/// #    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>
+/// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
 /// #  fn as_any(&self) -> &dyn Any { self  }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_schema(&self, _: SchemaRef) -> Arc<dyn FileSource> { Arc::new(self.clone()) as Arc<dyn FileSource> }
 /// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
-/// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: Some(statistics)} ) }
+/// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: Some(statistics), schema_adapter_factory: self.schema_adapter_factory.clone()} ) }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
 /// #  fn statistics(&self) -> datafusion_common::Result<Statistics> { Ok(self.projected_statistics.clone().expect("projected_statistics should be set")) }
 /// #  fn file_type(&self) -> &str { "parquet" }
+/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: self.projected_statistics.clone(), schema_adapter_factory: Some(factory)} ) }
+/// #  fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> { self.schema_adapter_factory.clone() }
 /// #  }
 /// # impl ParquetSource {
-/// #  fn new() -> Self { Self {projected_statistics: None} }
+/// #  fn new() -> Self { Self {projected_statistics: None, schema_adapter_factory: None} }
 /// # }
 /// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -233,9 +239,15 @@ pub struct FileScanConfig {
 pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
     /// Table schema before any projections or partition columns are applied.
-    /// This schema is used to read the files, but is **not** necessarily the schema of the physical files.
-    /// Rather this is the schema that the physical file schema will be mapped onto, and the schema that the
+    ///
+    /// This schema is used to read the files, but is **not** necessarily the
+    /// schema of the physical files. Rather this is the schema that the
+    /// physical file schema will be mapped onto, and the schema that the
     /// [`DataSourceExec`] will return.
+    ///
+    /// This is usually the same as the table schema as specified by the `TableProvider` minus any partition columns.
+    ///
+    /// This probably would be better named `table_schema`
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
 

@@ -28,9 +28,10 @@ use datafusion_physical_expr::expressions::col;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
-    let schema = Arc::new(Schema::new(vec![Field::new("f", data_type.clone(), true)]));
+    let field = Field::new("f", data_type.clone(), true).into();
+    let schema = Arc::new(Schema::new(vec![Arc::clone(&field)]));
     let accumulator_args = AccumulatorArgs {
-        return_type: data_type,
+        return_field: field,
         schema: &schema,
         ignore_nulls: false,
         order_bys: &[],

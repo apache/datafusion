@@ -30,7 +30,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int32, true)]));
     let accumulator_args = AccumulatorArgs {
-        return_type: &DataType::Int64,
+        return_field: Field::new("f", DataType::Int64, true).into(),
         schema: &schema,
         ignore_nulls: false,
         order_bys: &[],

@@ -22,7 +22,7 @@
 use std::any::Any;
 
 use arrow::datatypes::{
-    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DataType, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 
 use datafusion_common::{exec_err, not_impl_err, utils::take_function_args, Result};
@@ -175,7 +175,7 @@ impl AggregateUDFImpl for Sum {
         unreachable!("stub should not have accumulate()")
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         unreachable!("stub should not have state_fields()")
     }
 
@@ -250,7 +250,7 @@ impl AggregateUDFImpl for Count {
         false
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
 
@@ -332,7 +332,7 @@ impl AggregateUDFImpl for Min {
         Ok(DataType::Int64)
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
 
@@ -413,7 +413,7 @@ impl AggregateUDFImpl for Max {
         Ok(DataType::Int64)
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
 
@@ -479,7 +479,7 @@ impl AggregateUDFImpl for Avg {
         not_impl_err!("no impl for stub")
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
 

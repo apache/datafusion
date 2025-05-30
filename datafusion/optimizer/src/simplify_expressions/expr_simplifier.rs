@@ -520,6 +520,7 @@ struct ConstEvaluator<'a> {
 
 #[allow(dead_code)]
 /// The simplify result of ConstEvaluator
+#[allow(clippy::large_enum_variant)]
 enum ConstSimplifyResult {
     // Expr was simplified and contains the new expression
     Simplified(ScalarValue),
@@ -2143,8 +2144,10 @@ fn simplify_null_div_other_case<S: SimplifyInfo>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
+    use arrow::datatypes::FieldRef;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
         function::{
@@ -2161,8 +2164,6 @@ mod tests {
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-
-    use super::*;
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -4450,7 +4451,7 @@ mod tests {
             unimplemented!("not needed for tests")
         }
 
-        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!("not needed for tests")
         }
     }

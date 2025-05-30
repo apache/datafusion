@@ -26,7 +26,7 @@ use arrow::array::{
     new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray, StructArray,
 };
 use arrow::compute::{filter, SortOptions};
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
@@ -106,33 +106,38 @@ impl AggregateUDFImpl for ArrayAgg {
         ))))
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
             return Ok(vec![Field::new_list(
                 format_state_name(args.name, "distinct_array_agg"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.input_types[0].clone(), true),
+                Field::new_list_field(args.input_fields[0].data_type().clone(), true),
                 true,
-            )]);
+            )
+            .into()]);
         }
 
         let mut fields = vec![Field::new_list(
             format_state_name(args.name, "array_agg"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new_list_field(args.input_types[0].clone(), true),
+            Field::new_list_field(args.input_fields[0].data_type().clone(), true),
             true,
-        )];
+        )
+        .into()];
 
         if args.ordering_fields.is_empty() {
             return Ok(fields);
         }
 
         let orderings = args.ordering_fields.to_vec();
-        fields.push(Field::new_list(
-            format_state_name(args.name, "array_agg_orderings"),
-            Field::new_list_field(DataType::Struct(Fields::from(orderings)), true),
-            false,
-        ));
+        fields.push(
+            Field::new_list(
+                format_state_name(args.name, "array_agg_orderings"),
+                Field::new_list_field(DataType::Struct(Fields::from(orderings)), true),
+                false,
+            )
+            .into(),
+        );
 
         Ok(fields)
     }
@@ -709,7 +714,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Schema;
+    use arrow::datatypes::{FieldRef, Schema};
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
     use datafusion_physical_expr::expressions::Column;
@@ -976,7 +981,7 @@ mod tests {
     }
 
     struct ArrayAggAccumulatorBuilder {
-        data_type: DataType,
+        return_field: FieldRef,
         distinct: bool,
         order_bys: Vec<PhysicalSortExpr>,
         schema: Schema,
@@ -989,8 +994,8 @@ mod tests {
 
         fn new(data_type: DataType) -> Self {
             Self {
-                data_type: data_type.clone(),
-                distinct: Default::default(),
+                return_field: Field::new("f", data_type.clone(), true).into(),
+                distinct: false,
                 order_bys: vec![],
                 schema: Schema {
                     fields: Fields::from(vec![Field::new(
@@ -1022,7 +1027,7 @@ mod tests {
 
         fn build(&self) -> Result<Box<dyn Accumulator>> {
             ArrayAgg::default().accumulator(AccumulatorArgs {
-                return_type: &self.data_type,
+                return_field: Arc::clone(&self.return_field),
                 schema: &self.schema,
                 ignore_nulls: false,
                 order_bys: &self.order_bys,

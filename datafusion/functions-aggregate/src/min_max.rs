@@ -234,13 +234,15 @@ impl AggregateUDFImpl for Max {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MaxAccumulator::try_new(acc_args.return_type)?))
+        Ok(Box::new(MaxAccumulator::try_new(
+            acc_args.return_field.data_type(),
+        )?))
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
-            args.return_type,
+            args.return_field.data_type(),
             Int8 | Int16
                 | Int32
                 | Int64
@@ -275,7 +277,7 @@ impl AggregateUDFImpl for Max {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.return_type;
+        let data_type = args.return_field.data_type();
         match data_type {
             Int8 => primitive_max_accumulator!(data_type, i8, Int8Type),
             Int16 => primitive_max_accumulator!(data_type, i16, Int16Type),
@@ -353,7 +355,9 @@ impl AggregateUDFImpl for Max {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMaxAccumulator::try_new(args.return_type)?))
+        Ok(Box::new(SlidingMaxAccumulator::try_new(
+            args.return_field.data_type(),
+        )?))
     }
 
     fn is_descending(&self) -> Option<bool> {
@@ -614,6 +618,10 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         }
         DataType::Struct(_) => min_max_batch_generic(values, Ordering::Greater)?,
         DataType::List(_) => min_max_batch_generic(values, Ordering::Greater)?,
+        DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Greater)?,
+        DataType::FixedSizeList(_, _) => {
+            min_max_batch_generic(values, Ordering::Greater)?
+        }
         DataType::Dictionary(_, _) => {
             let values = values.as_any_dictionary().values();
             min_batch(values)?
@@ -712,6 +720,8 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         }
         DataType::Struct(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,
+        DataType::LargeList(_) => min_max_batch_generic(values, Ordering::Less)?,
+        DataType::FixedSizeList(_, _) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::Dictionary(_, _) => {
             let values = values.as_any_dictionary().values();
             max_batch(values)?
@@ -1000,6 +1010,23 @@ macro_rules! min_max {
             ) => {
                 min_max_generic!(lhs, rhs, $OP)
             }
+
+
+            (
+                lhs @ ScalarValue::LargeList(_),
+                rhs @ ScalarValue::LargeList(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
+
+            (
+                lhs @ ScalarValue::FixedSizeList(_),
+                rhs @ ScalarValue::FixedSizeList(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
             e => {
                 return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
@@ -1175,13 +1202,15 @@ impl AggregateUDFImpl for Min {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MinAccumulator::try_new(acc_args.return_type)?))
+        Ok(Box::new(MinAccumulator::try_new(
+            acc_args.return_field.data_type(),
+        )?))
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
-            args.return_type,
+            args.return_field.data_type(),
             Int8 | Int16
                 | Int32
                 | Int64
@@ -1216,7 +1245,7 @@ impl AggregateUDFImpl for Min {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.return_type;
+        let data_type = args.return_field.data_type();
         match data_type {
             Int8 => primitive_min_accumulator!(data_type, i8, Int8Type),
             Int16 => primitive_min_accumulator!(data_type, i16, Int16Type),
@@ -1294,7 +1323,9 @@ impl AggregateUDFImpl for Min {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMinAccumulator::try_new(args.return_type)?))
+        Ok(Box::new(SlidingMinAccumulator::try_new(
+            args.return_field.data_type(),
+        )?))
     }
 
     fn is_descending(&self) -> Option<bool> {
@@ -1847,10 +1878,10 @@ mod tests {
     use rand::Rng;
 
     fn get_random_vec_i32(len: usize) -> Vec<i32> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut input = Vec::with_capacity(len);
         for _i in 0..len {
-            input.push(rng.gen_range(0..100));
+            input.push(rng.random_range(0..100));
         }
         input
     }

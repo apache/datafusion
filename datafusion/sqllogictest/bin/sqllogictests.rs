@@ -20,8 +20,8 @@ use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{exec_err, DataFusionError, Result};
 use datafusion_sqllogictest::{
-    df_value_validator, read_dir_recursive, setup_scratch_dir, value_normalizer,
-    DataFusion, TestContext,
+    df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
+    should_skip_record, value_normalizer, DataFusion, Filter, TestContext,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -135,12 +135,19 @@ async fn run_tests() -> Result<()> {
 
             let m_clone = m.clone();
             let m_style_clone = m_style.clone();
+            let filters = options.filters.clone();
 
             SpawnedTask::spawn(async move {
                 match (options.postgres_runner, options.complete) {
                     (false, false) => {
-                        run_test_file(test_file, validator, m_clone, m_style_clone)
-                            .await?
+                        run_test_file(
+                            test_file,
+                            validator,
+                            m_clone,
+                            m_style_clone,
+                            filters.as_ref(),
+                        )
+                        .await?
                     }
                     (false, true) => {
                         run_complete_file(test_file, validator, m_clone, m_style_clone)
@@ -152,6 +159,7 @@ async fn run_tests() -> Result<()> {
                             validator,
                             m_clone,
                             m_style_clone,
+                            filters.as_ref(),
                         )
                         .await?
                     }
@@ -207,6 +215,7 @@ async fn run_test_file(
     validator: Validator,
     mp: MultiProgress,
     mp_style: ProgressStyle,
+    filters: &[Filter],
 ) -> Result<()> {
     let TestFile {
         path,
@@ -235,7 +244,7 @@ async fn run_test_file(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner).await;
+    let result = run_file_in_runner(path, runner, filters).await;
     pb.finish_and_clear();
     result
 }
@@ -243,6 +252,7 @@ async fn run_test_file(
 async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     path: PathBuf,
     mut runner: sqllogictest::Runner<D, M>,
+    filters: &[Filter],
 ) -> Result<()> {
     let path = path.canonicalize()?;
     let records =
@@ -251,6 +261,9 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     for record in records.into_iter() {
         if let Record::Halt { .. } = record {
             break;
+        }
+        if should_skip_record::<D>(&record, filters) {
+            continue;
         }
         if let Err(err) = runner.run_async(record).await {
             errs.push(format!("{err}"));
@@ -318,6 +331,7 @@ async fn run_test_file_with_postgres(
     validator: Validator,
     mp: MultiProgress,
     mp_style: ProgressStyle,
+    filters: &[Filter],
 ) -> Result<()> {
     use datafusion_sqllogictest::Postgres;
     let TestFile {
@@ -339,7 +353,7 @@ async fn run_test_file_with_postgres(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, runner).await;
+    let result = run_file_in_runner(path, runner, filters).await;
     pb.finish_and_clear();
     result
 }
@@ -350,6 +364,7 @@ async fn run_test_file_with_postgres(
     _validator: Validator,
     _mp: MultiProgress,
     _mp_style: ProgressStyle,
+    _filters: &[Filter],
 ) -> Result<()> {
     use datafusion::common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
@@ -569,8 +584,11 @@ struct Options {
     #[clap(long, env = "INCLUDE_TPCH", help = "Include tpch files")]
     include_tpch: bool,
 
-    #[clap(action, help = "test filter (substring match on filenames)")]
-    filters: Vec<String>,
+    #[clap(
+        action,
+        help = "test filter (substring match on filenames with optional :{line_number} suffix)"
+    )]
+    filters: Vec<Filter>,
 
     #[clap(
         long,
@@ -623,15 +641,7 @@ impl Options {
     /// filter and that does a substring match on each input.  returns
     /// true f this path should be run
     fn check_test_file(&self, path: &Path) -> bool {
-        if self.filters.is_empty() {
-            return true;
-        }
-
-        // otherwise check if any filter matches
-        let path_string = path.to_string_lossy();
-        self.filters
-            .iter()
-            .any(|filter| path_string.contains(filter))
+        !should_skip_file(path, &self.filters)
     }
 
     /// Postgres runner executes only tests in files with specific names or in

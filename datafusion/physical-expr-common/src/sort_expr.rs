@@ -44,7 +44,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use arrow::array::RecordBatch;
 /// # use datafusion_common::Result;
 /// # use arrow::compute::SortOptions;
-/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 /// # use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -57,7 +57,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 /// #  fn data_type(&self, input_schema: &Schema) -> Result<DataType> {todo!()}
 /// #  fn nullable(&self, input_schema: &Schema) -> Result<bool> {todo!() }
 /// #  fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {todo!() }
-/// #  fn return_field(&self, input_schema: &Schema) -> Result<Field> { unimplemented!() }
+/// #  fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> { unimplemented!() }
 /// #  fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {todo!()}
 /// #  fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> {todo!()}
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { todo!() }

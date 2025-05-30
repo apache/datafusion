@@ -16,9 +16,8 @@
 // under the License.
 
 //! Defines the Sort-Merge join execution plan.
-//! A Sort-Merge join plan consumes two sorted children plan and produces
+//! A Sort-Merge join plan consumes two sorted children plans and produces
 //! joined output by given join type and other options.
-//! Sort-Merge join feature is currently experimental.
 
 use std::any::Any;
 use std::cmp::Ordering;
@@ -2597,7 +2596,7 @@ mod tests {
         JoinSide,
     };
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::disk_manager::DiskManagerConfig;
+    use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::TaskContext;
     use datafusion_expr::Operator;
@@ -4135,7 +4134,9 @@ mod tests {
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
             .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
@@ -4215,7 +4216,9 @@ mod tests {
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
             .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
@@ -4273,7 +4276,9 @@ mod tests {
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+            )
             .build_arc()?;
 
         for batch_size in [1, 50] {
@@ -4376,7 +4381,9 @@ mod tests {
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(500, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+            )
             .build_arc()?;
 
         for batch_size in [1, 50] {

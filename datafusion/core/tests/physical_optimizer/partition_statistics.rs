@@ -17,6 +17,8 @@
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use arrow::array::{Int32Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion::datasource::listing::ListingTable;
@@ -28,11 +30,17 @@ mod test {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::TaskContext;
     use datafusion_expr_common::operator::Operator;
-    use datafusion_physical_expr::expressions::{binary, lit, Column};
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::{binary, col, lit, Column};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use datafusion_physical_plan::aggregates::{
+        AggregateExec, AggregateMode, PhysicalGroupBy,
+    };
     use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::filter::FilterExec;
     use datafusion_physical_plan::joins::CrossJoinExec;
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -40,10 +48,11 @@ mod test {
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
     use datafusion_physical_plan::{
-        execute_stream_partitioned, ExecutionPlan, ExecutionPlanProperties,
+        execute_stream_partitioned, get_plan_string, ExecutionPlan,
+        ExecutionPlanProperties,
     };
+
     use futures::TryStreamExt;
-    use std::sync::Arc;
 
     /// Creates a test table with statistics from the test data directory.
     ///
@@ -130,10 +139,16 @@ mod test {
         }
     }
 
+    #[derive(PartialEq, Eq, Debug)]
+    enum ExpectedStatistics {
+        Empty,                     // row_count == 0
+        NonEmpty(i32, i32, usize), // (min_id, max_id, row_count)
+    }
+
     /// Helper function to validate that statistics from statistics_by_partition match the actual data
     async fn validate_statistics_with_data(
         plan: Arc<dyn ExecutionPlan>,
-        expected_stats: Vec<(i32, i32, usize)>, // (min_id, max_id, row_count)
+        expected_stats: Vec<ExpectedStatistics>,
         id_column_index: usize,
     ) -> Result<()> {
         let ctx = TaskContext::default();
@@ -163,8 +178,11 @@ mod test {
                 }
             }
 
-            if row_count > 0 {
-                actual_stats.push((min_id, max_id, row_count));
+            if row_count == 0 {
+                actual_stats.push(ExpectedStatistics::Empty);
+            } else {
+                actual_stats
+                    .push(ExpectedStatistics::NonEmpty(min_id, max_id, row_count));
             }
         }
 
@@ -201,8 +219,8 @@ mod test {
 
         // Check the statistics_by_partition with real results
         let expected_stats = vec![
-            (3, 4, 2), // (min_id, max_id, row_count) for first partition
-            (1, 2, 2), // (min_id, max_id, row_count) for second partition
+            ExpectedStatistics::NonEmpty(3, 4, 2), // (min_id, max_id, row_count) for first partition
+            ExpectedStatistics::NonEmpty(1, 2, 2), // (min_id, max_id, row_count) for second partition
         ];
         validate_statistics_with_data(scan, expected_stats, 0).await?;
 
@@ -230,7 +248,10 @@ mod test {
         assert_eq!(statistics[1], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
-        let expected_stats = vec![(3, 4, 2), (1, 2, 2)];
+        let expected_stats = vec![
+            ExpectedStatistics::NonEmpty(3, 4, 2),
+            ExpectedStatistics::NonEmpty(1, 2, 2),
+        ];
         validate_statistics_with_data(projection, expected_stats, 0).await?;
         Ok(())
     }
@@ -253,8 +274,8 @@ mod test {
         assert_eq!(statistics.len(), 1);
         assert_eq!(statistics[0], expected_statistic_partition);
         // Check the statistics_by_partition with real results
-        let expected_stats = vec![(1, 4, 4)];
-        validate_statistics_with_data(sort_exec, expected_stats, 0).await?;
+        let expected_stats = vec![ExpectedStatistics::NonEmpty(1, 4, 4)];
+        validate_statistics_with_data(sort_exec.clone(), expected_stats, 0).await?;
 
         // Sort with preserve_partitioning
         let scan_2 = create_scan_exec_with_statistics(None, Some(2)).await;
@@ -274,7 +295,10 @@ mod test {
         assert_eq!(statistics[1], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
-        let expected_stats = vec![(3, 4, 2), (1, 2, 2)];
+        let expected_stats = vec![
+            ExpectedStatistics::NonEmpty(3, 4, 2),
+            ExpectedStatistics::NonEmpty(1, 2, 2),
+        ];
         validate_statistics_with_data(sort_exec, expected_stats, 0).await?;
         Ok(())
     }
@@ -347,7 +371,12 @@ mod test {
         assert_eq!(statistics[3], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
-        let expected_stats = vec![(3, 4, 2), (1, 2, 2), (3, 4, 2), (1, 2, 2)];
+        let expected_stats = vec![
+            ExpectedStatistics::NonEmpty(3, 4, 2),
+            ExpectedStatistics::NonEmpty(1, 2, 2),
+            ExpectedStatistics::NonEmpty(3, 4, 2),
+            ExpectedStatistics::NonEmpty(1, 2, 2),
+        ];
         validate_statistics_with_data(union_exec, expected_stats, 0).await?;
         Ok(())
     }
@@ -393,7 +422,10 @@ mod test {
         assert_eq!(statistics[1], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
-        let expected_stats = vec![(1, 4, 8), (1, 4, 8)];
+        let expected_stats = vec![
+            ExpectedStatistics::NonEmpty(1, 4, 8),
+            ExpectedStatistics::NonEmpty(1, 4, 8),
+        ];
         validate_statistics_with_data(cross_join, expected_stats, 0).await?;
         Ok(())
     }
@@ -416,7 +448,10 @@ mod test {
         assert_eq!(statistics[1], expected_statistic_partition_2);
 
         // Check the statistics_by_partition with real results
-        let expected_stats = vec![(3, 4, 2), (1, 2, 2)];
+        let expected_stats = vec![
+            ExpectedStatistics::NonEmpty(3, 4, 2),
+            ExpectedStatistics::NonEmpty(1, 2, 2),
+        ];
         validate_statistics_with_data(coalesce_batches, expected_stats, 0).await?;
         Ok(())
     }
@@ -435,7 +470,7 @@ mod test {
         assert_eq!(statistics[0], expected_statistic_partition);
 
         // Check the statistics_by_partition with real results
-        let expected_stats = vec![(1, 4, 4)];
+        let expected_stats = vec![ExpectedStatistics::NonEmpty(1, 4, 4)];
         validate_statistics_with_data(coalesce_partitions, expected_stats, 0).await?;
         Ok(())
     }
@@ -470,6 +505,227 @@ mod test {
         let expected_statistic_partition =
             create_partition_statistics(2, 110, 3, 4, true);
         assert_eq!(statistics[0], expected_statistic_partition);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_agg() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+
+        let scan_schema = scan.schema();
+
+        // select id, 1+id, count(*) from t group by id, 1+id
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (col("id", &scan_schema)?, "id".to_string()),
+            (
+                binary(
+                    lit(1),
+                    Operator::Plus,
+                    col("id", &scan_schema)?,
+                    &scan_schema,
+                )?,
+                "expr".to_string(),
+            ),
+        ]);
+
+        let aggr_expr = vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
+            .schema(Arc::clone(&scan_schema))
+            .alias(String::from("COUNT(c)"))
+            .build()
+            .map(Arc::new)?];
+
+        let aggregate_exec_partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggr_expr.clone(),
+            vec![None],
+            Arc::clone(&scan),
+            scan_schema.clone(),
+        )?) as _;
+
+        let mut plan_string = get_plan_string(&aggregate_exec_partial);
+        let _ = plan_string.swap_remove(1);
+        let expected_plan = vec![
+            "AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]",
+            //"  DataSourceExec: file_groups={2 groups: [[.../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, .../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [.../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, .../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id, date], file_type=parquet
+        ];
+        assert_eq!(plan_string, expected_plan);
+
+        let p0_statistics = aggregate_exec_partial.partition_statistics(Some(0))?;
+
+        let expected_p0_statistics = Statistics {
+            num_rows: Precision::Inexact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Absent,
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+
+        assert_eq!(&p0_statistics, &expected_p0_statistics);
+
+        let expected_p1_statistics = Statistics {
+            num_rows: Precision::Inexact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Absent,
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(2))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+
+        let p1_statistics = aggregate_exec_partial.partition_statistics(Some(1))?;
+        assert_eq!(&p1_statistics, &expected_p1_statistics);
+
+        validate_statistics_with_data(
+            aggregate_exec_partial.clone(),
+            vec![
+                ExpectedStatistics::NonEmpty(3, 4, 2),
+                ExpectedStatistics::NonEmpty(1, 2, 2),
+            ],
+            0,
+        )
+        .await?;
+
+        let agg_final = Arc::new(AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            group_by.clone(),
+            aggr_expr.clone(),
+            vec![None],
+            aggregate_exec_partial.clone(),
+            aggregate_exec_partial.schema(),
+        )?);
+
+        let p0_statistics = agg_final.partition_statistics(Some(0))?;
+        assert_eq!(&p0_statistics, &expected_p0_statistics);
+
+        let p1_statistics = agg_final.partition_statistics(Some(1))?;
+        assert_eq!(&p1_statistics, &expected_p1_statistics);
+
+        validate_statistics_with_data(
+            agg_final.clone(),
+            vec![
+                ExpectedStatistics::NonEmpty(3, 4, 2),
+                ExpectedStatistics::NonEmpty(1, 2, 2),
+            ],
+            0,
+        )
+        .await?;
+
+        // select id, 1+id, count(*) from empty_table group by id, 1+id
+        let empty_table =
+            Arc::new(EmptyExec::new(scan_schema.clone()).with_partitions(2));
+
+        let agg_partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggr_expr.clone(),
+            vec![None],
+            empty_table.clone(),
+            scan_schema.clone(),
+        )?) as _;
+
+        let agg_plan = get_plan_string(&agg_partial).remove(0);
+        assert_eq!("AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]",agg_plan);
+
+        let empty_stat = Statistics {
+            num_rows: Precision::Exact(0),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+
+        assert_eq!(&empty_stat, &agg_partial.partition_statistics(Some(0))?);
+        assert_eq!(&empty_stat, &agg_partial.partition_statistics(Some(1))?);
+        validate_statistics_with_data(
+            agg_partial.clone(),
+            vec![ExpectedStatistics::Empty, ExpectedStatistics::Empty],
+            0,
+        )
+        .await?;
+
+        let agg_partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggr_expr.clone(),
+            vec![None],
+            empty_table.clone(),
+            scan_schema.clone(),
+        )?);
+
+        let agg_final = Arc::new(AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            group_by.clone(),
+            aggr_expr.clone(),
+            vec![None],
+            agg_partial.clone(),
+            agg_partial.schema(),
+        )?);
+
+        assert_eq!(&empty_stat, &agg_final.partition_statistics(Some(0))?);
+        assert_eq!(&empty_stat, &agg_final.partition_statistics(Some(1))?);
+
+        validate_statistics_with_data(
+            agg_final,
+            vec![ExpectedStatistics::Empty, ExpectedStatistics::Empty],
+            0,
+        )
+        .await?;
+
+        // select count(*) from empty_table
+        let agg_partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            aggr_expr.clone(),
+            vec![None],
+            empty_table.clone(),
+            scan_schema.clone(),
+        )?);
+
+        let coalesce = Arc::new(CoalescePartitionsExec::new(agg_partial.clone()));
+
+        let agg_final = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            aggr_expr.clone(),
+            vec![None],
+            coalesce.clone(),
+            coalesce.schema(),
+        )?);
+
+        let expect_stat = Statistics {
+            num_rows: Precision::Exact(1),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+
+        assert_eq!(&expect_stat, &agg_final.partition_statistics(Some(0))?);
+
+        // Verify that the aggregate final result has exactly one partition with one row
+        let mut partitions = execute_stream_partitioned(
+            agg_final.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(1, partitions.len());
+        let result: Vec<RecordBatch> = partitions.remove(0).try_collect().await?;
+        assert_eq!(1, result[0].num_rows());
+
         Ok(())
     }
 }

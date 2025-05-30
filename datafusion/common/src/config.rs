@@ -262,7 +262,7 @@ config_namespace! {
        /// If true, `VARCHAR` is mapped to `Utf8View` during SQL planning.
        /// If false, `VARCHAR` is mapped to `Utf8`  during SQL planning.
        /// Default is false.
-        pub map_varchar_to_utf8view: bool, default = false
+        pub map_varchar_to_utf8view: bool, default = true
 
         /// When set to true, the source locations relative to the original SQL
         /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
@@ -292,7 +292,9 @@ config_namespace! {
         /// target batch size is determined by the configuration setting
         pub coalesce_batches: bool, default = true
 
-        /// Should DataFusion collect statistics after listing files
+        /// Should DataFusion collect statistics when first creating a table.
+        /// Has no effect after the table is created. Applies to the default
+        /// `ListingTableProvider` in DataFusion. Defaults to false.
         pub collect_statistics: bool, default = false
 
         /// Number of partitions for query execution. Increasing partitions can increase

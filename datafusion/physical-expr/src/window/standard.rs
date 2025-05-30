@@ -27,7 +27,7 @@ use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{EquivalenceProperties, PhysicalExpr};
 
 use arrow::array::{new_empty_array, ArrayRef};
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
@@ -96,7 +96,7 @@ impl WindowExpr for StandardWindowExpr {
         self.expr.name()
     }
 
-    fn field(&self) -> Result<Field> {
+    fn field(&self) -> Result<FieldRef> {
         self.expr.field()
     }
 

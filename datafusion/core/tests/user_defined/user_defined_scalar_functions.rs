@@ -28,7 +28,7 @@ use arrow::array::{
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, FieldRef};
 use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
@@ -814,7 +814,7 @@ impl ScalarUDFImpl for TakeUDF {
     ///
     /// 1. If the third argument is '0', return the type of the first argument
     /// 2. If the third argument is '1', return the type of the second argument
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         if args.arg_fields.len() != 3 {
             return plan_err!("Expected 3 arguments, got {}.", args.arg_fields.len());
         }
@@ -845,7 +845,8 @@ impl ScalarUDFImpl for TakeUDF {
             self.name(),
             args.arg_fields[take_idx].data_type().to_owned(),
             true,
-        ))
+        )
+        .into())
     }
 
     // The actual implementation
@@ -1408,9 +1409,10 @@ impl ScalarUDFImpl for MetadataBasedUdf {
         );
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Field::new(self.name(), DataType::UInt64, true)
-            .with_metadata(self.metadata.clone()))
+            .with_metadata(self.metadata.clone())
+            .into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1558,14 +1560,15 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
         Ok(DataType::Utf8)
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Field::new("canonical_extension_udf", DataType::Utf8, true)
-            .with_extension_type(MyUserExtentionType {}))
+            .with_extension_type(MyUserExtentionType {})
+            .into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         assert_eq!(args.arg_fields.len(), 1);
-        let input_field = args.arg_fields[0];
+        let input_field = args.arg_fields[0].as_ref();
 
         let output_as_bool = matches!(
             CanonicalExtensionType::try_from(input_field),

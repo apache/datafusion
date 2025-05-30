@@ -533,7 +533,12 @@ impl GroupedHashAggregateStream {
             return internal_err!("Spill expression is empty");
         };
 
-        let name = format!("GroupedHashAggregateStream[{partition}]");
+        let agg_fn_names = aggregate_exprs
+            .iter()
+            .map(|expr| expr.human_display())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
         let reservation = MemoryConsumer::new(name)
             .with_can_spill(true)
             .register(context.memory_pool());

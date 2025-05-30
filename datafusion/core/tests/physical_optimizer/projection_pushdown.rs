@@ -126,7 +126,7 @@ fn test_update_matching_exprs() -> Result<()> {
                     Arc::new(Column::new("b", 1)),
                 )),
             ],
-            Field::new("f", DataType::Int32, true),
+            Field::new("f", DataType::Int32, true).into(),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -191,7 +191,7 @@ fn test_update_matching_exprs() -> Result<()> {
                     Arc::new(Column::new("b", 1)),
                 )),
             ],
-            Field::new("f", DataType::Int32, true),
+            Field::new("f", DataType::Int32, true).into(),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 3))),
@@ -259,7 +259,7 @@ fn test_update_projected_exprs() -> Result<()> {
                     Arc::new(Column::new("b", 1)),
                 )),
             ],
-            Field::new("f", DataType::Int32, true),
+            Field::new("f", DataType::Int32, true).into(),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -324,7 +324,7 @@ fn test_update_projected_exprs() -> Result<()> {
                     Arc::new(Column::new("b_new", 1)),
                 )),
             ],
-            Field::new("f", DataType::Int32, true),
+            Field::new("f", DataType::Int32, true).into(),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d_new", 3))),

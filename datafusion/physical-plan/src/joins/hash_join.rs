@@ -1307,8 +1307,8 @@ fn lookup_join_hashmap(
     limit: usize,
     offset: JoinHashMapOffset,
 ) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
-    let (probe_indices, build_indices, next_offset) = build_hashmap
-        .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
+    let (probe_indices, build_indices, next_offset) =
+        build_hashmap.get_matched_indices_with_limit_offset(hashes_buffer, limit, offset);
 
     let build_indices: UInt64Array = build_indices.into();
     let probe_indices: UInt32Array = probe_indices.into();
@@ -3333,7 +3333,7 @@ mod tests {
 
     #[test]
     fn join_with_hash_collision() -> Result<()> {
-        let mut hashmap_left = HashTable::with_capacity(2);
+        let mut hashmap_left = HashTable::with_capacity(4);
         let left = build_table_i32(
             ("a", &vec![10, 20]),
             ("x", &vec![100, 200]),
@@ -3348,9 +3348,15 @@ mod tests {
             hashes_buff,
         )?;
 
-        // Create hash collisions (same hashes)
+        // Maps both values to both indices (1 and 2, representing input 0 and 1)
+        // 0 -> (0, 1)
+        // 1 -> (0, 2)
+        // The equality check will make sure only hashes[0] maps to 0 and hashes[1] maps to 1
         hashmap_left.insert_unique(hashes[0], (hashes[0], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 2), |(h, _)| *h);
+
         hashmap_left.insert_unique(hashes[1], (hashes[1], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 2), |(h, _)| *h);
 
         let next = vec![2, 0];
 
