@@ -2005,10 +2005,6 @@ dependencies = [
 name = "datafusion-common-runtime"
 version = "47.0.0"
 dependencies = [
- "arrow",
- "arrow-schema",
- "datafusion-common",
- "datafusion-execution",
  "futures",
  "log",
  "tokio",

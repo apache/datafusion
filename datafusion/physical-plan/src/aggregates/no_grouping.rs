@@ -35,7 +35,8 @@ use std::task::{Context, Poll};
 
 use super::AggregateExec;
 use crate::filter::batch_filter;
-use datafusion_common_runtime::common::YieldStream;
+
+use crate::stream::YieldStream;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 

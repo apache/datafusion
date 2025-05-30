@@ -522,6 +522,71 @@ impl Stream for ObservedStream {
     }
 }
 
+/// Number of batches to yield before voluntarily returning Pending.
+/// This allows long-running operators to periodically yield control
+/// back to the executor (e.g., to handle cancellation).
+const YIELD_BATCHES: usize = 64;
+
+/// A stream that yields batches of data, yielding control back to the executor every `YIELD_BATCHES` batches
+///
+/// This can be useful to allow operators that might not yield to check for cancellation
+pub struct YieldStream {
+    inner: SendableRecordBatchStream,
+    batches_processed: usize,
+    buffer: Option<Result<RecordBatch>>,
+}
+
+impl YieldStream {
+    pub fn new(inner: SendableRecordBatchStream) -> Self {
+        Self {
+            inner,
+            batches_processed: 0,
+            buffer: None,
+        }
+    }
+}
+
+// Stream<Item = Result<RecordBatch>> to poll_next_unpin
+impl Stream for YieldStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+
+        if let Some(batch) = this.buffer.take() {
+            return Poll::Ready(Some(batch));
+        }
+
+        match this.inner.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok(batch))) => {
+                this.batches_processed += 1;
+                if this.batches_processed >= YIELD_BATCHES {
+                    this.batches_processed = 0;
+                    // We need to buffer the batch when we return Poll::Pending,
+                    // so that we can return it on the next poll.
+                    // Otherwise, the next poll will miss the batch and return None.
+                    this.buffer = Some(Ok(batch));
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Some(Ok(batch)))
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+// RecordBatchStream schema()
+impl RecordBatchStream for YieldStream {
+    fn schema(&self) -> Arc<arrow_schema::Schema> {
+        self.inner.schema()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -531,6 +596,7 @@ mod test {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::exec_err;
+    use futures::{stream, TryStreamExt};
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]))
@@ -648,5 +714,69 @@ mod test {
                 "Got the limit of {num_batches} batches before seeing panic"
             );
         }
+    }
+
+    /// A tiny adapter that turns any `Stream<Item = Result<RecordBatch>>`
+    /// into a `RecordBatchStream` by carrying along a schema.
+    struct EmptyBatchStream {
+        inner: Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>,
+        schema: SchemaRef,
+    }
+
+    impl Stream for EmptyBatchStream {
+        type Item = Result<RecordBatch>;
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            Pin::new(&mut self.inner).poll_next(cx)
+        }
+    }
+
+    impl RecordBatchStream for EmptyBatchStream {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+    }
+
+    /// Helper: construct a SendableRecordBatchStream containing `n` empty batches
+    fn make_empty_batches(n: usize) -> SendableRecordBatchStream {
+        let schema: SchemaRef = Arc::new(Schema::empty());
+        let schema_for_stream = Arc::clone(&schema);
+
+        let s =
+            stream::iter((0..n).map(move |_| {
+                Ok(RecordBatch::new_empty(Arc::clone(&schema_for_stream)))
+            }))
+            .boxed();
+
+        Box::pin(EmptyBatchStream { inner: s, schema })
+    }
+
+    #[tokio::test]
+    async fn yield_less_than_threshold() -> Result<()> {
+        let count = YIELD_BATCHES - 10;
+        let inner = make_empty_batches(count);
+        let out: Vec<_> = YieldStream::new(inner).try_collect::<Vec<_>>().await?;
+        assert_eq!(out.len(), count);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn yield_equal_to_threshold() -> Result<()> {
+        let count = YIELD_BATCHES;
+        let inner = make_empty_batches(count);
+        let out: Vec<_> = YieldStream::new(inner).try_collect::<Vec<_>>().await?;
+        assert_eq!(out.len(), count);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn yield_more_than_threshold() -> Result<()> {
+        let count = YIELD_BATCHES + 20;
+        let inner = make_empty_batches(count);
+        let out: Vec<_> = YieldStream::new(inner).try_collect::<Vec<_>>().await?;
+        assert_eq!(out.len(), count);
+        Ok(())
     }
 }
