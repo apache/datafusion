@@ -716,29 +716,6 @@ mod test {
         }
     }
 
-    /// A tiny adapter that turns any `Stream<Item = Result<RecordBatch>>`
-    /// into a `RecordBatchStream` by carrying along a schema.
-    struct EmptyBatchStream {
-        inner: Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>,
-        schema: SchemaRef,
-    }
-
-    impl Stream for EmptyBatchStream {
-        type Item = Result<RecordBatch>;
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
-            Pin::new(&mut self.inner).poll_next(cx)
-        }
-    }
-
-    impl RecordBatchStream for EmptyBatchStream {
-        fn schema(&self) -> SchemaRef {
-            Arc::clone(&self.schema)
-        }
-    }
-
     /// Helper: construct a SendableRecordBatchStream containing `n` empty batches
     fn make_empty_batches(n: usize) -> SendableRecordBatchStream {
         let schema: SchemaRef = Arc::new(Schema::empty());
@@ -750,7 +727,7 @@ mod test {
             }))
             .boxed();
 
-        Box::pin(EmptyBatchStream { inner: s, schema })
+        Box::pin(RecordBatchStreamAdapter::new(schema, s))
     }
 
     #[tokio::test]
