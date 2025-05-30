@@ -33,11 +33,11 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::AggregateExec;
 use crate::filter::batch_filter;
+use datafusion_common_runtime::common::YieldStream;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
-
-use super::AggregateExec;
 
 /// stream struct for aggregation without grouping columns
 pub(crate) struct AggregateStream {
@@ -77,7 +77,7 @@ impl AggregateStream {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
 
-        // Wrap no‐grouping aggregates in our YieldStream
+        // Yield control back to tokio after a certain number of batches so it can check for cancellation.
         let input = Box::pin(YieldStream::new(input)) as SendableRecordBatchStream;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
@@ -170,65 +170,6 @@ impl AggregateStream {
             schema: agg_schema,
             stream,
         })
-    }
-}
-
-/// A stream that yields batches of data, yielding control back to the executor
-pub struct YieldStream {
-    inner: SendableRecordBatchStream,
-    batches_processed: usize,
-    buffer: Option<Result<RecordBatch>>,
-}
-
-impl YieldStream {
-    pub fn new(inner: SendableRecordBatchStream) -> Self {
-        Self {
-            inner,
-            batches_processed: 0,
-            buffer: None,
-        }
-    }
-}
-
-// Stream<Item = Result<RecordBatch>> to poll_next_unpin
-impl Stream for YieldStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        const YIELD_BATCHES: usize = 64;
-        let this = &mut *self;
-
-        if let Some(batch) = this.buffer.take() {
-            return Poll::Ready(Some(batch));
-        }
-
-        match this.inner.poll_next_unpin(cx) {
-            Poll::Ready(Some(Ok(batch))) => {
-                this.batches_processed += 1;
-                if this.batches_processed >= YIELD_BATCHES {
-                    this.batches_processed = 0;
-                    // We need to buffer the batch when we return Poll::Pending,
-                    // so that we can return it on the next poll.
-                    // Otherwise, the next poll will miss the batch and return None.
-                    this.buffer = Some(Ok(batch));
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Some(Ok(batch)))
-                }
-            }
-            other => other,
-        }
-    }
-}
-
-// RecordBatchStream schema()
-impl RecordBatchStream for YieldStream {
-    fn schema(&self) -> Arc<arrow_schema::Schema> {
-        self.inner.schema()
     }
 }
 
