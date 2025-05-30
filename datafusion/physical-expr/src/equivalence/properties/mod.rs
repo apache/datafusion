@@ -355,7 +355,11 @@ impl EquivalenceProperties {
         for ordering in oeq_class.iter() {
             match self.discover_new_orderings_impl(&ordering[0].expr, &oeq_class_new) {
                 Ok(new_orderings) => {
-                    oeq_class_new.add_new_orderings(new_orderings.iter().map(|ordering| self.normalize_sort_exprs(ordering)));
+                    oeq_class_new.add_new_orderings(
+                        new_orderings
+                            .iter()
+                            .map(|ordering| self.normalize_sort_exprs(ordering)),
+                    );
                     self.oeq_class.add_new_orderings(new_orderings);
                 }
                 Err(e) => {
@@ -375,13 +379,20 @@ impl EquivalenceProperties {
     // For a discussion, see: https://github.com/apache/datafusion/issues/9812
     fn discover_new_orderings(&mut self, expr: &Arc<dyn PhysicalExpr>) -> Result<()> {
         let normalized_expr = self.eq_group().normalize_expr(Arc::clone(expr));
-        let new_orderings = self.discover_new_orderings_impl(&normalized_expr, &self.normalized_oeq_class())?;
+        let new_orderings = self.discover_new_orderings_impl(
+            &normalized_expr,
+            &self.normalized_oeq_class(),
+        )?;
         self.oeq_class.add_new_orderings(new_orderings);
         Ok(())
     }
 
     // call this method directly to avoid the expensive normalization process
-    fn discover_new_orderings_impl(&mut self, normalized_expr: &Arc<dyn PhysicalExpr>, oeq_class: &OrderingEquivalenceClass) -> Result<Vec<LexOrdering>> {
+    fn discover_new_orderings_impl(
+        &mut self,
+        normalized_expr: &Arc<dyn PhysicalExpr>,
+        oeq_class: &OrderingEquivalenceClass,
+    ) -> Result<Vec<LexOrdering>> {
         let eq_class = self
             .eq_group
             .iter()
