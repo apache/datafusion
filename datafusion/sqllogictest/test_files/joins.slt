@@ -1338,7 +1338,7 @@ logical_plan
 04)------TableScan: join_t1 projection=[t1_id]
 05)------TableScan: join_t2 projection=[t2_id]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[]
+01)AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[t1_id@0 as t1_id], aggr=[]
 02)--CoalesceBatchesExec: target_batch_size=2
 03)----RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 04)------AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[]
@@ -1396,7 +1396,7 @@ logical_plan
 06)--------TableScan: join_t2 projection=[t2_id]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@1 as count(*)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 05)--------AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
@@ -1425,7 +1425,7 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+05)--------AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[alias1@0 as alias1], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=2
 07)------------RepartitionExec: partitioning=Hash([alias1@0], 2), input_partitions=2
 08)--------------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
@@ -3448,7 +3448,7 @@ physical_plan
 01)SortPreservingMergeExec: [a@0 ASC]
 02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[a@0 as a, last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]@3 as last_col1]
-04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]]
+04)------AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]]
 05)--------CoalesceBatchesExec: target_batch_size=2
 06)----------RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 2), input_partitions=2
 07)------------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]]

@@ -147,7 +147,7 @@ physical_plan
 46)----------CoalesceBatchesExec: target_batch_size=8192
 47)------------RepartitionExec: partitioning=Hash([ps_partkey@1, min(partsupp.ps_supplycost)@0], 4), input_partitions=4
 48)--------------ProjectionExec: expr=[min(partsupp.ps_supplycost)@1 as min(partsupp.ps_supplycost), ps_partkey@0 as ps_partkey]
-49)----------------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
+49)----------------AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
 50)------------------CoalesceBatchesExec: target_batch_size=8192
 51)--------------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
 52)----------------------AggregateExec: mode=Partial, gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
