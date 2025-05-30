@@ -22,16 +22,17 @@ mod union; // Submodule containing calculate_union
 pub use joins::*;
 pub use union::*;
 
-use std::fmt;
-use std::fmt::Display;
+use std::fmt::{self, Display};
+use std::mem;
 use std::sync::Arc;
 
 use self::dependency::{
     construct_prefix_orderings, generate_dependency_orderings, referred_dependencies,
     Dependencies, DependencyMap,
 };
-use crate::equivalence::class::AcrossPartitions;
-use crate::equivalence::{EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping};
+use crate::equivalence::{
+    AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
+};
 use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
@@ -128,16 +129,66 @@ use itertools::Itertools;
 ///
 /// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct EquivalenceProperties {
     /// Distinct equivalence classes (i.e. expressions with the same value).
     eq_group: EquivalenceGroup,
     /// Equivalent sort expressions (i.e. those define the same ordering).
     oeq_class: OrderingEquivalenceClass,
+    /// Cache storing equivalent sort expressions in normal form (i.e. without
+    /// constants/duplicates and in standard form) and a map associating leading
+    /// terms with full sort expressions.
+    oeq_cache: OrderingEquivalenceCache,
     /// Table constraints that factor in equivalence calculations.
     constraints: Constraints,
     /// Schema associated with this object.
     schema: SchemaRef,
+}
+
+/// This object serves as a cache for storing equivalent sort expressions
+/// in normal form, and a map associating leading sort expressions with
+/// full lexicographical orderings. With this information, DataFusion can
+/// efficiently determine whether a given ordering is satisfied by the
+/// existing orderings, and discover new orderings based on the existing
+/// equivalence properties.
+#[derive(Clone, Debug, Default)]
+struct OrderingEquivalenceCache {
+    /// Equivalent sort expressions in normal form.
+    normal_cls: OrderingEquivalenceClass,
+    /// Map associating leading sort expressions with full lexicographical
+    /// orderings. Values are indices into `normal_cls`.
+    leading_map: HashMap<Arc<dyn PhysicalExpr>, Vec<usize>>,
+}
+
+impl OrderingEquivalenceCache {
+    /// Creates a new `OrderingEquivalenceCache` object with the given
+    /// equivalent orderings, which should be in normal form.
+    pub fn new(
+        orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
+    ) -> Self {
+        let mut cache = Self {
+            normal_cls: OrderingEquivalenceClass::new(orderings),
+            leading_map: HashMap::new(),
+        };
+        cache.update_map();
+        cache
+    }
+
+    /// Updates/reconstructs the leading expression map according to the normal
+    /// ordering equivalence class within.
+    pub fn update_map(&mut self) {
+        self.leading_map.clear();
+        for (idx, ordering) in self.normal_cls.iter().enumerate() {
+            let expr = Arc::clone(&ordering.first().expr);
+            self.leading_map.entry(expr).or_default().push(idx);
+        }
+    }
+
+    /// Clears the cache, removing all orderings and leading expressions.
+    pub fn clear(&mut self) {
+        self.normal_cls.clear();
+        self.leading_map.clear();
+    }
 }
 
 impl EquivalenceProperties {
@@ -146,6 +197,7 @@ impl EquivalenceProperties {
         Self {
             eq_group: EquivalenceGroup::default(),
             oeq_class: OrderingEquivalenceClass::default(),
+            oeq_cache: OrderingEquivalenceCache::default(),
             constraints: Constraints::default(),
             schema,
         }
@@ -162,9 +214,18 @@ impl EquivalenceProperties {
         schema: SchemaRef,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) -> Self {
+        let eq_group = EquivalenceGroup::default();
+        let oeq_class = OrderingEquivalenceClass::new(orderings);
+        // Here, we can avoid performing a full normalization, and get by with
+        // only removing constants because the equivalence group is empty.
+        let normal_orderings = oeq_class.iter().cloned().map(|o| {
+            o.into_iter()
+                .filter(|sort_expr| eq_group.is_expr_constant(&sort_expr.expr).is_none())
+        });
         Self {
-            eq_group: EquivalenceGroup::default(),
-            oeq_class: OrderingEquivalenceClass::new(orderings),
+            oeq_cache: OrderingEquivalenceCache::new(normal_orderings),
+            oeq_class,
+            eq_group,
             constraints: Constraints::default(),
             schema,
         }
@@ -221,12 +282,21 @@ impl EquivalenceProperties {
     /// Call this method when existing orderings are invalidated.
     pub fn clear_orderings(&mut self) {
         self.oeq_class.clear();
+        self.oeq_cache.clear();
     }
 
     /// Removes constant expressions that may change across partitions.
     /// This method should be used when merging data from different partitions.
     pub fn clear_per_partition_constants(&mut self) {
-        self.eq_group.clear_per_partition_constants();
+        if self.eq_group.clear_per_partition_constants() {
+            // Renormalize orderings if the equivalence group changes:
+            let normal_orderings = self
+                .oeq_class
+                .iter()
+                .cloned()
+                .map(|o| self.eq_group.normalize_sort_exprs(o));
+            self.oeq_cache = OrderingEquivalenceCache::new(normal_orderings);
+        }
     }
 
     /// Adds new orderings into the existing ordering equivalence class.
@@ -234,8 +304,21 @@ impl EquivalenceProperties {
         &mut self,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) {
-        // TODO: Normalization point.
-        self.oeq_class.add_orderings(orderings);
+        let orderings: Vec<_> =
+            orderings.into_iter().filter_map(LexOrdering::new).collect();
+        let normal_orderings: Vec<_> = orderings
+            .iter()
+            .cloned()
+            .filter_map(|o| self.normalize_sort_exprs(o))
+            .collect();
+        if !normal_orderings.is_empty() {
+            self.oeq_class.extend(orderings);
+            // Normalize given orderings to update the cache:
+            self.oeq_cache.normal_cls.extend(normal_orderings);
+            // TODO: If no ordering is found to be redunant during extension, we
+            //       can use a shortcut algorithm to update the leading map.
+            self.oeq_cache.update_map();
+        }
     }
 
     /// Adds a single ordering to the existing ordering equivalence class.
@@ -249,47 +332,21 @@ impl EquivalenceProperties {
         &mut self,
         other_eq_group: EquivalenceGroup,
     ) -> Result<()> {
-        self.eq_group.extend(other_eq_group);
-        // TODO: Normalization point.
-        // Discover any new orderings based on the new equivalence classes:
-        for ordering in self.normalized_oeq_class() {
-            let leading = Arc::clone(&ordering[0].expr);
-            self.discover_new_orderings(leading)?;
-        }
-        Ok(())
-    }
-
-    /// Adds a new equality condition into the existing equivalence group.
-    /// If the given equality defines a new equivalence class, adds this new
-    /// equivalence class to the equivalence group.
-    pub fn add_equal_conditions(
-        &mut self,
-        left: Arc<dyn PhysicalExpr>,
-        right: Arc<dyn PhysicalExpr>,
-    ) -> Result<()> {
-        // Add equal expressions to the state:
-        if self.eq_group.add_equal_conditions(Arc::clone(&left), right) {
-            // TODO: Normalization point.
-            // Discover any new orderings:
-            self.discover_new_orderings(left)?;
-        }
-        Ok(())
-    }
-
-    /// Track/register physical expressions with constant values.
-    pub fn add_constants(
-        &mut self,
-        constants: impl IntoIterator<Item = ConstExpr>,
-    ) -> Result<()> {
-        // Add the new constant to the equivalence group:
-        for constant in constants {
-            self.eq_group.add_constant(constant);
-        }
-        // TODO: Normalization point.
-        // Discover any new orderings based on the constants:
-        for ordering in self.normalized_oeq_class() {
-            let leading = Arc::clone(&ordering[0].expr);
-            self.discover_new_orderings(leading)?;
+        if !other_eq_group.is_empty() {
+            self.eq_group.extend(other_eq_group);
+            // Renormalize orderings if the equivalence group changes:
+            let normal_cls = mem::take(&mut self.oeq_cache.normal_cls);
+            let normal_orderings = normal_cls
+                .into_iter()
+                .map(|o| self.eq_group.normalize_sort_exprs(o));
+            self.oeq_cache.normal_cls = OrderingEquivalenceClass::new(normal_orderings);
+            self.oeq_cache.update_map();
+            // Discover any new orderings based on the new equivalence classes:
+            let leading_exprs: Vec<_> =
+                self.oeq_cache.leading_map.keys().cloned().collect();
+            for expr in leading_exprs {
+                self.discover_new_orderings(expr)?;
+            }
         }
         Ok(())
     }
@@ -306,27 +363,76 @@ impl EquivalenceProperties {
             .into()
     }
 
+    /// Adds a new equality condition into the existing equivalence group.
+    /// If the given equality defines a new equivalence class, adds this new
+    /// equivalence class to the equivalence group.
+    pub fn add_equal_conditions(
+        &mut self,
+        left: Arc<dyn PhysicalExpr>,
+        right: Arc<dyn PhysicalExpr>,
+    ) -> Result<()> {
+        // Add equal expressions to the state:
+        if self.eq_group.add_equal_conditions(Arc::clone(&left), right) {
+            // Renormalize orderings if the equivalence group changes:
+            let normal_cls = mem::take(&mut self.oeq_cache.normal_cls);
+            let normal_orderings = normal_cls
+                .into_iter()
+                .map(|o| self.eq_group.normalize_sort_exprs(o));
+            self.oeq_cache.normal_cls = OrderingEquivalenceClass::new(normal_orderings);
+            self.oeq_cache.update_map();
+            // Discover any new orderings:
+            self.discover_new_orderings(left)?;
+        }
+        Ok(())
+    }
+
+    /// Track/register physical expressions with constant values.
+    pub fn add_constants(
+        &mut self,
+        constants: impl IntoIterator<Item = ConstExpr>,
+    ) -> Result<()> {
+        // Add the new constant to the equivalence group:
+        for constant in constants {
+            self.eq_group.add_constant(constant);
+        }
+        // Renormalize the orderings after adding new constants by removing
+        // the constants from existing orderings:
+        let normal_cls = mem::take(&mut self.oeq_cache.normal_cls);
+        let normal_orderings = normal_cls.into_iter().map(|ordering| {
+            ordering.into_iter().filter(|sort_expr| {
+                self.eq_group.is_expr_constant(&sort_expr.expr).is_none()
+            })
+        });
+        self.oeq_cache.normal_cls = OrderingEquivalenceClass::new(normal_orderings);
+        self.oeq_cache.update_map();
+        // Discover any new orderings based on the constants:
+        let leading_exprs: Vec<_> = self.oeq_cache.leading_map.keys().cloned().collect();
+        for expr in leading_exprs {
+            self.discover_new_orderings(expr)?;
+        }
+        Ok(())
+    }
+
     /// Discover new valid orderings in light of a new equality. Accepts a single
     /// argument (`expr`) which is used to determine the orderings to update.
     /// When constants or equivalence classes change, there may be new orderings
     /// that can be discovered with the new equivalence properties.
     /// For a discussion, see: <https://github.com/apache/datafusion/issues/9812>
-    fn discover_new_orderings(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        let normal_expr = self.eq_group.normalize_expr(expr);
+    fn discover_new_orderings(
+        &mut self,
+        normal_expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<()> {
+        let Some(ordering_idxs) = self.oeq_cache.leading_map.get(&normal_expr) else {
+            return Ok(());
+        };
         let eq_class = self
             .eq_group
             .get_equivalence_class(&normal_expr)
-            .map_or_else(
-                || vec![Arc::clone(&normal_expr)],
-                |class| class.clone().into(),
-            );
+            .map_or_else(|| vec![normal_expr], |class| class.clone().into());
 
         let mut new_orderings = vec![];
-        for ordering in self.normalized_oeq_class() {
-            if !ordering[0].expr.eq(&normal_expr) {
-                continue;
-            }
-
+        for idx in ordering_idxs {
+            let ordering = &self.oeq_cache.normal_cls[*idx];
             let leading_ordering_options = ordering[0].options;
 
             'exprs: for equivalent_expr in &eq_class {
@@ -368,7 +474,9 @@ impl EquivalenceProperties {
             }
         }
 
-        self.add_orderings(new_orderings);
+        if !new_orderings.is_empty() {
+            self.add_orderings(new_orderings);
+        }
         Ok(())
     }
 
@@ -1020,9 +1128,14 @@ impl EquivalenceProperties {
     /// `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
         let eq_group = self.eq_group.project(mapping);
-        let orderings = self.projected_orderings(mapping, self.normalized_oeq_class());
-        // TODO: Normalization point.
+        let orderings =
+            self.projected_orderings(mapping, self.oeq_cache.normal_cls.clone());
+        let normal_orderings = orderings
+            .iter()
+            .cloned()
+            .map(|o| eq_group.normalize_sort_exprs(o));
         Self {
+            oeq_cache: OrderingEquivalenceCache::new(normal_orderings),
             oeq_class: OrderingEquivalenceClass::new(orderings),
             constraints: self.projected_constraints(mapping).unwrap_or_default(),
             schema: output_schema,
@@ -1146,9 +1259,8 @@ impl EquivalenceProperties {
             .unwrap_or_else(|_| ExprProperties::new_unknown())
     }
 
-    /// Transforms this `EquivalenceProperties` into a new `EquivalenceProperties`
-    /// by mapping columns in the original schema to columns in the new schema
-    /// by index.
+    /// Transforms this `EquivalenceProperties` by mapping columns in the
+    /// original schema to columns in the new schema by index.
     pub fn with_new_schema(mut self, schema: SchemaRef) -> Result<Self> {
         // The new schema and the original schema is aligned when they have the
         // same number of columns, and fields at the same index have the same
@@ -1191,30 +1303,15 @@ impl EquivalenceProperties {
             }
             eq_classes.push(eq_class);
         }
+        self.eq_group = eq_classes.into();
 
         // Rewrite orderings according to new schema:
-        let new_orderings = self
-            .oeq_class
-            .into_iter()
-            .map(|ordering| {
-                ordering
-                    .into_iter()
-                    .map(|mut sort_expr| {
-                        sort_expr.expr = with_new_schema(sort_expr.expr, &schema)?;
-                        Ok(sort_expr)
-                    })
-                    .collect::<Result<Vec<_>>>()
-                    // The following `unwrap` is safe because the vector will always
-                    // be non-empty.
-                    .map(|v| LexOrdering::new(v).unwrap())
-            })
-            .collect::<Result<Vec<_>>>()?;
+        self.oeq_class = self.oeq_class.with_new_schema(&schema)?;
+        self.oeq_cache.normal_cls = self.oeq_cache.normal_cls.with_new_schema(&schema)?;
 
-        // Update the schema, the equivalence group and the ordering equivalence
-        // class:
+        // Update the schema:
         self.schema = schema;
-        self.eq_group = eq_classes.into();
-        self.oeq_class = new_orderings.into();
+
         Ok(self)
     }
 }
@@ -1290,7 +1387,7 @@ fn update_properties(
     let normal_expr = eq_properties
         .eq_group
         .normalize_expr(Arc::clone(&node.expr));
-    let oeq_class = eq_properties.normalized_oeq_class();
+    let oeq_class = &eq_properties.oeq_cache.normal_cls;
     if eq_properties.is_expr_constant(&normal_expr).is_some()
         || oeq_class.is_expr_partial_const(&normal_expr)
     {

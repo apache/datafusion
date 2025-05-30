@@ -20,9 +20,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
+use crate::expressions::with_new_schema;
 use crate::{add_offset_to_physical_sort_exprs, LexOrdering, PhysicalExpr};
 
 use arrow::compute::SortOptions;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::{HashSet, Result};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -173,6 +175,31 @@ impl OrderingEquivalenceClass {
             self.orderings.extend(LexOrdering::new(ordering_result?));
         }
         Ok(())
+    }
+
+    /// Transforms this `OrderingEquivalenceClass` by mapping columns in the
+    /// original schema to columns in the new schema by index. The new schema
+    /// and the original schema needs to be aligned; i.e. they should have the
+    /// same number of columns, and fields at the same index have the same type
+    /// in both schemas.
+    pub fn with_new_schema(mut self, schema: &SchemaRef) -> Result<Self> {
+        self.orderings = self
+            .orderings
+            .into_iter()
+            .map(|ordering| {
+                ordering
+                    .into_iter()
+                    .map(|mut sort_expr| {
+                        sort_expr.expr = with_new_schema(sort_expr.expr, schema)?;
+                        Ok(sort_expr)
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    // The following `unwrap` is safe because the vector will always
+                    // be non-empty.
+                    .map(|v| LexOrdering::new(v).unwrap())
+            })
+            .collect::<Result<_>>()?;
+        Ok(self)
     }
 
     /// Gets sort options associated with this expression if it is a leading

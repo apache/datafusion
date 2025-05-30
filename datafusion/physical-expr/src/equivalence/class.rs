@@ -356,11 +356,13 @@ impl EquivalenceGroup {
 
     /// Removes constant expressions that may change across partitions.
     /// This method should be used when merging data from different partitions.
-    pub fn clear_per_partition_constants(&mut self) {
-        let mut idx = 0;
+    /// Returns whether any change was made to the equivalence group.
+    pub fn clear_per_partition_constants(&mut self) -> bool {
+        let (mut idx, mut change) = (0, false);
         while idx < self.classes.len() {
             let cls = &mut self.classes[idx];
             if let Some(AcrossPartitions::Heterogeneous) = cls.constant {
+                change = true;
                 if cls.len() == 1 {
                     // If this class becomes trivial, remove it entirely:
                     self.remove_class_at_idx(idx);
@@ -371,6 +373,7 @@ impl EquivalenceGroup {
             }
             idx += 1;
         }
+        change
     }
 
     /// Adds the equality `left` = `right` to this equivalence group. New
@@ -454,45 +457,53 @@ impl EquivalenceGroup {
         }
     }
 
-    /// Removes redundant entries from this group.
-    fn remove_redundant_entries(&mut self) {
+    /// Removes redundant entries from this group. Returns whether any change
+    /// was made to the equivalence group.
+    fn remove_redundant_entries(&mut self) -> bool {
         // First, remove trivial equivalence classes:
+        let mut change = false;
         for idx in (0..self.classes.len()).rev() {
             if self.classes[idx].is_trivial() {
                 self.remove_class_at_idx(idx);
+                change = true;
             }
         }
         // Then, unify/bridge groups that have common expressions:
-        self.bridge_classes()
+        self.bridge_classes() || change
     }
 
     /// This utility function unifies/bridges classes that have common expressions.
     /// For example, assume that we have [`EquivalenceClass`]es `[a, b]` and `[b, c]`.
     /// Since both classes contain `b`, columns `a`, `b` and `c` are actually all
     /// equal and belong to one class. This utility converts merges such classes.
-    fn bridge_classes(&mut self) {
-        let mut idx = 0;
+    /// Returns whether any change was made to the equivalence group.
+    fn bridge_classes(&mut self) -> bool {
+        let (mut idx, mut change) = (0, false);
         'scan: while idx < self.classes.len() {
             for other_idx in (idx + 1..self.classes.len()).rev() {
                 if self.classes[idx].contains_any(&self.classes[other_idx]) {
                     let extension = self.remove_class_at_idx(other_idx);
                     Self::update_lookup_table(&mut self.map, &extension, idx);
                     self.classes[idx].extend(extension);
+                    change = true;
                     continue 'scan;
                 }
             }
             idx += 1;
         }
+        change
     }
 
     /// Extends this equivalence group with the `other` equivalence group.
-    pub fn extend(&mut self, other: Self) {
+    /// Returns whether any equivalence classes were unified/bridged as a
+    /// result of the extension process.
+    pub fn extend(&mut self, other: Self) -> bool {
         for (idx, cls) in other.classes.iter().enumerate() {
             // Update the lookup table for the new class:
             Self::update_lookup_table(&mut self.map, cls, idx);
         }
         self.classes.extend(other.classes);
-        self.remove_redundant_entries();
+        self.bridge_classes()
     }
 
     /// Normalizes the given physical expression according to this group. The
@@ -964,8 +975,7 @@ mod tests {
             EquivalenceClass::new([lit(30)]),
             EquivalenceClass::new([c(2), c(3), c(4)]),
         ];
-        let mut eq_groups = EquivalenceGroup::new(entries);
-        eq_groups.remove_redundant_entries();
+        let eq_groups = EquivalenceGroup::new(entries);
         assert_eq!(eq_groups.classes, expected);
         Ok(())
     }

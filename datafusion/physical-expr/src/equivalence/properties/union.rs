@@ -26,15 +26,15 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, Result};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-/// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
-/// of  `lhs` and `rhs` according to the schema of `lhs`.
+/// Computes the union (in the sense of `UnionExec`) `EquivalenceProperties`
+/// of `lhs` and `rhs` according to the schema of `lhs`.
 ///
-/// Rules: The UnionExec does not interleave its inputs: instead it passes each
-/// input partition from the children as its own output.
+/// Rules: The `UnionExec` does not interleave its inputs, instead it passes
+/// each input partition from the children as its own output.
 ///
 /// Since the output equivalence properties are properties that are true for
 /// *all* output partitions, that is the same as being true for all *input*
-/// partitions
+/// partitions.
 fn calculate_union_binary(
     lhs: EquivalenceProperties,
     mut rhs: EquivalenceProperties,
@@ -147,7 +147,7 @@ impl UnionEquivalentOrderingBuilder {
     ) -> Result<()> {
         let constants = source.constants();
         let properties_constants = properties.constants();
-        for mut ordering in source.normalized_oeq_class() {
+        for mut ordering in source.oeq_cache.normal_cls.clone() {
             // Progressively shorten the ordering to search for a satisfied prefix:
             loop {
                 ordering = match self.try_add_ordering(
@@ -844,20 +844,13 @@ mod tests {
             constants: Vec<&str>,
             schema: &SchemaRef,
         ) -> Result<EquivalenceProperties> {
-            let orderings = orderings
-                .iter()
-                .map(|ordering| {
-                    ordering
-                        .iter()
-                        .map(|name| parse_sort_expr(name, schema))
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
+            let orderings = orderings.iter().map(|ordering| {
+                ordering.iter().map(|name| parse_sort_expr(name, schema))
+            });
 
             let constants = constants
                 .iter()
-                .map(|col_name| ConstExpr::from(col(col_name, schema).unwrap()))
-                .collect::<Vec<_>>();
+                .map(|col_name| ConstExpr::from(col(col_name, schema).unwrap()));
 
             let mut props =
                 EquivalenceProperties::new_with_orderings(Arc::clone(schema), orderings);
