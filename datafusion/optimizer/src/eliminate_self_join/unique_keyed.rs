@@ -20,11 +20,11 @@
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::{
     tree_node::{Transformed, TreeNode, TreeNodeRecursion},
-    Column, Result,
+    DFSchema, Result, TableReference,
 };
 use datafusion_expr::{
-    expr::Alias, Expr, Join, JoinType, LogicalPlan, LogicalPlanBuilder, Projection,
-    SubqueryAlias, TableScan,
+    Expr, Join, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, SubqueryAlias,
+    TableScan,
 };
 use indexmap::IndexSet;
 
@@ -125,133 +125,125 @@ fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<OptimizationResul
     }
 }
 
-#[derive(Debug)]
-struct Resolution {
-    /// `TableScan`
-    table_scan: TableScan,
-    /// Column indexes into `TableScan` that form a unique index
-    column_indexes: IndexSet<usize>,
+fn try_resolve_join_on_columns_to_indexes(
+    join: &Join,
+    schema: &DFSchema,
+    source: &TableReference,
+    left_alias: Option<&TableReference>,
+    right_alias: Option<&TableReference>,
+) -> Option<IndexSet<usize>> {
+    let length = join.on.len();
+    let mut on_idx = IndexSet::with_capacity(length);
+
+    for on in &join.on {
+        let (left_col, right_col) = match on {
+            (Expr::Column(left_col), Expr::Column(right_col)) => (left_col, right_col),
+            _ => return None,
+        };
+        let source_ref = Some(source);
+
+        // If LHS column's alias isn't LHS's alias or table name then bail
+        let left_ref = left_col.relation.as_ref();
+        if left_ref != left_alias && left_ref != source_ref {
+            return None;
+        }
+        // If RHS column's alias isn't RHS's alias or table name then bail
+        let right_ref = right_col.relation.as_ref();
+        if right_ref != right_alias && right_ref != source_ref {
+            return None;
+        }
+
+        // It's safe to resolve column's without their qualifiers as we know source `TableSource` are the same.
+        let left_idx = schema.index_of_column_by_name(None, left_col.name())?;
+        let right_idx = schema.index_of_column_by_name(None, right_col.name())?;
+
+        // If LHS and RHS are different then optimization is impossible
+        if left_idx != right_idx {
+            return None;
+        }
+        on_idx.insert(left_idx);
+    }
+    Some(on_idx)
 }
 
-fn resolve_columns_to_indexes(
-    branch: &LogicalPlan,
-    mut columns: Vec<Column>,
-) -> Resolution {
-    let mut column_indexes = IndexSet::with_capacity(columns.len());
-    let mut scan = None;
+#[derive(Debug)]
+struct Resolution {
+    /// Source `TableScan`
+    table_scan: TableScan,
+    /// Column indexes into `TableScan` that form a unique index
+    alias: Option<TableReference>,
+}
+
+fn try_resolve_to_table_scan_alias(branch: &LogicalPlan) -> Option<Resolution> {
+    let mut maybe_alias = None;
+    let mut table_scan = None;
     branch
         .apply_with_subqueries(|plan| match plan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-                columns.iter_mut().for_each(|item| match &item.relation {
-                    Some(table_ref) if alias == table_ref => {
-                        item.relation = None;
-                    }
-                    _ => {}
-                });
+                maybe_alias = Some(alias.clone());
                 Ok(TreeNodeRecursion::Continue)
             }
-            LogicalPlan::Projection(Projection { expr, schema, .. }) => {
-                let mut aliases = Vec::with_capacity(columns.len());
-                for col in &mut columns {
-                    let Ok(idx) = schema.index_of_column(col) else {
-                        continue;
-                    };
-                    match &expr[idx] {
-                        Expr::Column(column) => {
-                            aliases.push(column.clone());
-                        }
-                        Expr::Alias(Alias {
-                            expr,
-                            relation,
-                            name,
-                            ..
-                        }) => {
-                            assert!(
-                                relation.is_none(),
-                                "what to do with `Alias` relation"
-                            );
-                            assert_eq!(
-                                name.as_str(),
-                                col.name.as_str(),
-                                "`Alias` and `Column` mismatch"
-                            );
-                            if let Expr::Column(column) = expr.as_ref() {
-                                aliases.push(column.clone());
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                columns = aliases;
-                Ok(TreeNodeRecursion::Continue)
-            }
-            LogicalPlan::TableScan(
-                table_scan @ TableScan {
-                    projected_schema, ..
-                },
-            ) => {
-                let schema = projected_schema.as_ref();
-                for col in &mut columns {
-                    let idx = schema.index_of_column_by_name(None, col.name()).unwrap();
-                    column_indexes.insert(idx);
-                }
-                scan = Some(table_scan.clone());
+            LogicalPlan::TableScan(source) => {
+                table_scan = Some(source.clone());
                 Ok(TreeNodeRecursion::Continue)
             }
             _ => Ok(TreeNodeRecursion::Continue),
         })
         .unwrap();
 
-    let table_scan = scan.expect("Join children without a `TableScan`");
-
-    Resolution {
+    let table_scan = table_scan?;
+    Some(Resolution {
         table_scan,
-        column_indexes,
-    }
+        alias: maybe_alias,
+    })
 }
 
-fn is_join_on_unique_index(join: &Join) -> bool {
-    let left_unique = unique_indexes(join.left.schema().as_ref());
-    let right_unique = unique_indexes(join.right.schema().as_ref());
+fn try_eliminate_unique_keyed_self_join(join: &Join) -> Option<OptimizationResult> {
+    let left_schema = join.left.schema().as_ref();
+    let right_schema = join.right.schema().as_ref();
+
+    // Ensure LHS and RHS have the same schema
+    if left_schema.inner() != right_schema.inner()
+        || left_schema.functional_dependencies() != right_schema.functional_dependencies()
+    {
+        return None;
+    }
+
+    let left_unique = unique_indexes(left_schema);
+    let right_unique = unique_indexes(right_schema);
     // If either of the sides doesn't have a unique constraint then elimination is impossible
     if left_unique.is_empty() || right_unique.is_empty() {
-        return false;
+        return None;
     }
 
-    // Resolve join-on to table scan indexes
-    let (left_on, right_on) = join
-        .on
-        .iter()
-        .cloned()
-        .map(|on| match on {
-            (Expr::Column(left_col), Expr::Column(right_col)) => (left_col, right_col),
-            _ => {
-                unreachable!("Join condition is not a column equality");
-            }
-        })
-        .collect::<(Vec<_>, Vec<_>)>();
-    let left_resolved = resolve_columns_to_indexes(&join.left, left_on.clone());
-    let right_resolved = resolve_columns_to_indexes(&join.right, right_on.clone());
+    let Resolution {
+        table_scan: left_scan,
+        alias: left_alias,
+    } = try_resolve_to_table_scan_alias(&join.left)?;
+    let Resolution {
+        table_scan: right_scan,
+        alias: right_alias,
+    } = try_resolve_to_table_scan_alias(&join.right)?;
 
-    if !is_table_scan_same(&left_resolved.table_scan, &right_resolved.table_scan)
-        && left_resolved.column_indexes == right_resolved.column_indexes
-    {
-        return false;
+    if !is_table_scan_same(&left_scan, &right_scan) {
+        return None;
     }
 
-    let left_unique_index = left_unique
+    let column_index = try_resolve_join_on_columns_to_indexes(
+        join,
+        left_schema,
+        &left_scan.table_name,
+        left_alias.as_ref(),
+        right_alias.as_ref(),
+    )?;
+    let forms_unique_constraint = left_unique
         .iter()
-        .find(|unique| left_resolved.column_indexes.is_superset(unique));
-    let right_unique_index = right_unique
-        .iter()
-        .find(|unique| right_resolved.column_indexes.is_superset(unique));
-
-    match (left_unique_index, right_unique_index) {
-        (Some(left_unique_index), Some(right_unique_index)) => {
-            left_unique_index == right_unique_index
-        }
-        _ => false,
+        .any(|unique_constraint| column_index.is_superset(unique_constraint));
+    if !forms_unique_constraint {
+        return None;
     }
+
+    optimize(&join.left, &join.right)
 }
 
 impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
@@ -279,32 +271,39 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
             ..
         } = plan
             .transform_up(|plan| {
-                match &plan {
-                    LogicalPlan::Join(
-                        join @ Join {
-                            left,
-                            right,
-                            join_type,
-                            filter: None,
-                            ..
-                        },
-                    ) if *join_type == JoinType::Inner
-                        && is_join_on_unique_index(join) =>
-                    {
-                        // If we reach here, it means we can eliminate the self join
-                        if let Some(OptimizationResult {
-                            plan,
-                            renamed_alias,
-                        }) = optimize(left.as_ref(), right.as_ref())
-                        {
-                            renamed = renamed_alias;
-                            Ok(Transformed::yes(plan))
-                        } else {
-                            Ok(Transformed::no(plan))
-                        }
-                    }
-                    // This is called `EliminateSelfJoin` after all
-                    _ => Ok(Transformed::no(plan)),
+                let projection = match &plan {
+                    LogicalPlan::Projection(projection) => projection,
+                    _ => return Ok(Transformed::no(plan)),
+                };
+                let join = match projection.input.as_ref() {
+                    LogicalPlan::Join(join) if join.join_type == JoinType::Inner => join,
+                    _ => return Ok(Transformed::no(plan)),
+                };
+                // If we reach here, it means we can eliminate the self join
+                if let Some(OptimizationResult {
+                    plan,
+                    renamed_alias,
+                }) = try_eliminate_unique_keyed_self_join(join)
+                {
+                    let projection_expr = projection
+                        .expr
+                        .iter()
+                        .cloned()
+                        .map(|expr| {
+                            if let Some(renamed_alias) = &renamed_alias {
+                                renamed_alias.rewrite_expression(expr).unwrap().data
+                            } else {
+                                expr
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    renamed = renamed_alias;
+
+                    let plan = Projection::try_new(projection_expr, plan.into()).unwrap();
+                    let plan = LogicalPlan::Projection(plan);
+                    Ok(Transformed::yes(plan))
+                } else {
+                    Ok(Transformed::no(plan))
                 }
             })
             .unwrap();
