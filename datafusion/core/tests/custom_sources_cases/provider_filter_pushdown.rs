@@ -179,12 +179,12 @@ impl TableProvider for CustomProvider {
         match &filters[0] {
             Expr::BinaryExpr(BinaryExpr { right, .. }) => {
                 let int_value = match &**right {
-                    Expr::Literal(ScalarValue::Int8(Some(i))) => *i as i64,
-                    Expr::Literal(ScalarValue::Int16(Some(i))) => *i as i64,
-                    Expr::Literal(ScalarValue::Int32(Some(i))) => *i as i64,
-                    Expr::Literal(ScalarValue::Int64(Some(i))) => *i,
+                    Expr::Literal(ScalarValue::Int8(Some(i)), _) => *i as i64,
+                    Expr::Literal(ScalarValue::Int16(Some(i)), _) => *i as i64,
+                    Expr::Literal(ScalarValue::Int32(Some(i)), _) => *i as i64,
+                    Expr::Literal(ScalarValue::Int64(Some(i)), _) => *i,
                     Expr::Cast(Cast { expr, data_type: _ }) => match expr.deref() {
-                        Expr::Literal(lit_value) => match lit_value {
+                        Expr::Literal(lit_value, _) => match lit_value {
                             ScalarValue::Int8(Some(v)) => *v as i64,
                             ScalarValue::Int16(Some(v)) => *v as i64,
                             ScalarValue::Int32(Some(v)) => *v as i64,

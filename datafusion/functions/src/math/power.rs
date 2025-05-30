@@ -156,12 +156,15 @@ impl ScalarUDFImpl for PowerFunc {
 
         let exponent_type = info.get_data_type(&exponent)?;
         match exponent {
-            Expr::Literal(value) if value == ScalarValue::new_zero(&exponent_type)? => {
+            Expr::Literal(value, _)
+                if value == ScalarValue::new_zero(&exponent_type)? =>
+            {
                 Ok(ExprSimplifyResult::Simplified(Expr::Literal(
                     ScalarValue::new_one(&info.get_data_type(&base)?)?,
+                    None,
                 )))
             }
-            Expr::Literal(value) if value == ScalarValue::new_one(&exponent_type)? => {
+            Expr::Literal(value, _) if value == ScalarValue::new_one(&exponent_type)? => {
                 Ok(ExprSimplifyResult::Simplified(base))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })

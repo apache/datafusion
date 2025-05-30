@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::ScalarFunctionExpr;
@@ -111,14 +112,42 @@ pub fn create_physical_expr(
     let input_schema: &Schema = &input_dfschema.into();
 
     match e {
-        Expr::Alias(Alias { expr, .. }) => {
-            Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+        Expr::Alias(Alias { expr, metadata, .. }) => {
+            if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
+                let mut new_metadata = prior_metadata
+                    .as_ref()
+                    .map(|m| {
+                        m.iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect::<HashMap<String, String>>()
+                    })
+                    .unwrap_or_default();
+                if let Some(metadata) = metadata {
+                    new_metadata.extend(metadata.clone());
+                }
+                let new_metadata = match new_metadata.is_empty() {
+                    true => None,
+                    false => Some(new_metadata),
+                };
+
+                Ok(Arc::new(Literal::new_with_metadata(
+                    v.clone(),
+                    new_metadata,
+                )))
+            } else {
+                Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+            }
         }
         Expr::Column(c) => {
             let idx = input_dfschema.index_of_column(c)?;
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
+        Expr::Literal(value, metadata) => Ok(Arc::new(Literal::new_with_metadata(
+            value.clone(),
+            metadata
+                .as_ref()
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        ))),
         Expr::ScalarVariable(_, variable_names) => {
             if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {
@@ -168,7 +197,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(ScalarValue::Boolean(None), None),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
@@ -176,7 +205,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(ScalarValue::Boolean(None), None),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
@@ -347,7 +376,7 @@ pub fn create_physical_expr(
             list,
             negated,
         }) => match expr.as_ref() {
-            Expr::Literal(ScalarValue::Utf8(None)) => {
+            Expr::Literal(ScalarValue::Utf8(None), _) => {
                 Ok(expressions::lit(ScalarValue::Boolean(None)))
             }
             _ => {

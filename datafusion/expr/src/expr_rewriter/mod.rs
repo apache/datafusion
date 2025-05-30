@@ -354,6 +354,7 @@ mod test {
     use std::ops::Add;
 
     use super::*;
+    use crate::literal::lit_with_metadata;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeRewriter;
@@ -383,13 +384,17 @@ mod test {
         // rewrites all "foo" string literals to "bar"
         let transformer = |expr: Expr| -> Result<Transformed<Expr>> {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
+                Expr::Literal(ScalarValue::Utf8(Some(utf8_val)), metadata) => {
                     let utf8_val = if utf8_val == "foo" {
                         "bar".to_string()
                     } else {
                         utf8_val
                     };
-                    Ok(Transformed::yes(lit(utf8_val)))
+                    Ok(Transformed::yes(lit_with_metadata(
+                        utf8_val,
+                        metadata
+                            .map(|m| m.into_iter().collect::<HashMap<String, String>>()),
+                    )))
                 }
                 // otherwise, return None
                 _ => Ok(Transformed::no(expr)),

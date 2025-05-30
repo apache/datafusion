@@ -96,6 +96,7 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         let nano = now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000);
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::Time64Nanosecond(nano),
+            None,
         )))
     }
 

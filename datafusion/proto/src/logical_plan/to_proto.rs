@@ -217,7 +217,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Alias(alias)),
             }
         }
-        Expr::Literal(value) => {
+        Expr::Literal(value, _) => {
             let pb_value: protobuf::ScalarValue = value.try_into()?;
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Literal(pb_value)),

@@ -422,7 +422,7 @@ pub(crate) fn date_part_to_sql(
     match (style, date_part_args.len()) {
         (DateFieldExtractStyle::Extract, 2) => {
             let date_expr = unparser.expr_to_sql(&date_part_args[1])?;
-            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+            if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => ast::DateTimeField::Year,
                     "month" => ast::DateTimeField::Month,
@@ -443,7 +443,7 @@ pub(crate) fn date_part_to_sql(
         (DateFieldExtractStyle::Strftime, 2) => {
             let column = unparser.expr_to_sql(&date_part_args[1])?;
 
-            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+            if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => "%Y",
                     "month" => "%m",
@@ -531,7 +531,7 @@ pub(crate) fn sqlite_from_unixtime_to_sql(
         "datetime",
         &[
             from_unixtime_args[0].clone(),
-            Expr::Literal(ScalarValue::Utf8(Some("unixepoch".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("unixepoch".to_string())), None),
         ],
     )?))
 }
@@ -554,7 +554,7 @@ pub(crate) fn sqlite_date_trunc_to_sql(
         );
     }
 
-    if let Expr::Literal(ScalarValue::Utf8(Some(unit))) = &date_trunc_args[0] {
+    if let Expr::Literal(ScalarValue::Utf8(Some(unit)), _) = &date_trunc_args[0] {
         let format = match unit.to_lowercase().as_str() {
             "year" => "%Y",
             "month" => "%Y-%m",
@@ -568,7 +568,7 @@ pub(crate) fn sqlite_date_trunc_to_sql(
         return Ok(Some(unparser.scalar_function_to_sql(
             "strftime",
             &[
-                Expr::Literal(ScalarValue::Utf8(Some(format.to_string()))),
+                Expr::Literal(ScalarValue::Utf8(Some(format.to_string())), None),
                 date_trunc_args[1].clone(),
             ],
         )?));
