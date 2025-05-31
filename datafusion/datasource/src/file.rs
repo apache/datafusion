@@ -28,7 +28,7 @@ use crate::file_stream::FileOpener;
 use crate::schema_adapter::SchemaAdapterFactory;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, Statistics};
+use datafusion_common::{not_impl_err, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -126,19 +126,26 @@ pub trait FileSource: Send + Sync {
     /// Set optional schema adapter factory.
     ///
     /// [`SchemaAdapterFactory`] allows user to specify how fields from the
-    /// file get mapped to that of the table schema. The default implementation
-    /// returns the original source.
+    /// file get mapped to that of the table schema.  If you implement this
+    /// method, you should also implement [`schema_adapter_factory`].
     ///
-    /// Note: You can implement this method and `schema_adapter_factory`
-    /// automatically using the [`crate::impl_schema_adapter_methods`] macro.
+    /// The default implementation returns a not implemented error.
+    ///
+    /// [`schema_adapter_factory`]: Self::schema_adapter_factory
     fn with_schema_adapter_factory(
         &self,
-        factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Arc<dyn FileSource>;
+        _factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        not_impl_err!(
+            "FileSource {} does not support schema adapter factory",
+            self.file_type()
+        )
+    }
 
     /// Returns the current schema adapter factory if set
     ///
-    /// Note: You can implement this method and `with_schema_adapter_factory`
-    /// automatically using the [`crate::impl_schema_adapter_methods`] macro.
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>>;
+    /// Default implementation returns `None`.
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        None
+    }
 }

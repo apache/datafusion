@@ -37,7 +37,6 @@ pub mod file_meta;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
-pub mod macros;
 pub mod memory;
 pub mod schema_adapter;
 pub mod sink;

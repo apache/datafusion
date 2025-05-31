@@ -423,7 +423,7 @@ impl FileFormat for ParquetFormat {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
         // Apply schema adapter factory before building the new config
-        let file_source = source.apply_schema_adapter(&conf);
+        let file_source = source.apply_schema_adapter(&conf)?;
 
         let conf = FileScanConfigBuilder::from(conf)
             .with_source(file_source)

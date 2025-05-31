@@ -122,7 +122,8 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
         let source = ParquetSource::default()
-            .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}));
+            .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}))
+            .unwrap();
         let base_conf = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             schema,
