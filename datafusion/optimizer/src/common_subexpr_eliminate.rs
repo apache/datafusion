@@ -1740,7 +1740,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 AS test.c BETWEEN test.a + test.b AND Int32(10), __common_expr_1 AS test.c BETWEEN test.b + test.a AND Int32(10)
+        Projection: __common_expr_1 AS test.c BETWEEN (test.a + test.b) AND Int32(10), __common_expr_1 AS test.c BETWEEN (test.b + test.a) AND Int32(10)
           Projection: test.c BETWEEN test.a + test.b AND Int32(10) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
