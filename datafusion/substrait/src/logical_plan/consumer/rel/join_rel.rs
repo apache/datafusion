@@ -65,13 +65,21 @@ pub async fn from_join_rel(
                 (left_cols, right_cols),
                 join_filter,
                 nulls_equal_nulls,
+                vec![],
             )?
             .build()
         }
         None => {
             let on: Vec<String> = vec![];
-            left.join_detailed(right.build()?, join_type, (on.clone(), on), None, false)?
-                .build()
+            left.join_detailed(
+                right.build()?,
+                join_type,
+                (on.clone(), on),
+                None,
+                false,
+                vec![],
+            )?
+            .build()
         }
     }
 }

@@ -656,6 +656,8 @@ impl LogicalPlan {
                 on,
                 schema: _,
                 null_equals_null,
+                dependent_join,
+                outer_ref_columns,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -677,6 +679,8 @@ impl LogicalPlan {
                     filter,
                     schema: DFSchemaRef::new(schema),
                     null_equals_null,
+                    dependent_join,
+                    outer_ref_columns,
                 }))
             }
             LogicalPlan::Subquery(_) => Ok(self),
@@ -934,6 +938,8 @@ impl LogicalPlan {
                     filter: filter_expr,
                     schema: DFSchemaRef::new(schema),
                     null_equals_null: *null_equals_null,
+                    dependent_join: false,
+                    outer_ref_columns: vec![],
                 }))
             }
             LogicalPlan::Subquery(Subquery {
@@ -3697,6 +3703,11 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+    // TODO: maybe it's better to add a new logical plan: DependentJoin.
+    /// DependentJoin is intermediate state of correlated subquery rewriting.
+    pub dependent_join: bool,
+    /// The outer references used in the subquery
+    pub outer_ref_columns: Vec<Expr>,
 }
 
 impl Join {
@@ -3738,6 +3749,8 @@ impl Join {
             join_constraint,
             schema: Arc::new(join_schema),
             null_equals_null,
+            dependent_join: false,
+            outer_ref_columns: vec![],
         })
     }
 
@@ -3771,6 +3784,8 @@ impl Join {
             join_constraint: original_join.join_constraint,
             schema: Arc::new(join_schema),
             null_equals_null: original_join.null_equals_null,
+            dependent_join: false,
+            outer_ref_columns: vec![],
         })
     }
 }
@@ -4879,6 +4894,8 @@ mod tests {
                 join_constraint: JoinConstraint::On,
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equals_null: false,
+                dependent_join: false,
+                outer_ref_columns: vec![],
             }))
         }
 
