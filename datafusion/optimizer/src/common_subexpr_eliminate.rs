@@ -1757,7 +1757,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 AS my_udf(test.a + test.b), __common_expr_1 AS my_udf(test.b + test.a)
+        Projection: __common_expr_1 AS my_udf((test.a + test.b)), __common_expr_1 AS my_udf((test.b + test.a))
           Projection: my_udf(test.a + test.b) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "

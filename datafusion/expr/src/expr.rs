@@ -3588,7 +3588,7 @@ mod test {
         let expr = -(lit(1) + (lit(2)));
         assert_eq!(
             format!("{}", SchemaDisplay(&expr)),
-            "(- (Int32(1) + (Int32(2)))"
+            "(- (Int32(1) + Int32(2)))"
         );
     }
 

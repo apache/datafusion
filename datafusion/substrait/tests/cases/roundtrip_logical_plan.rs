@@ -800,7 +800,7 @@ async fn simple_intersect() -> Result<()> {
     check_constant("count(2)", "count(Int64(2))").await?;
     check_constant(
         "count(1 + 2)",
-        "count(Int64(3)) AS count(Int64(1) + Int64(2))",
+        "count(Int64(3)) AS count((Int64(1) + Int64(2)))",
     )
     .await?;
     Ok(())
@@ -983,7 +983,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     check_constant("count(2)", "count(Int64(2))").await?;
     check_constant(
         "count(1 + 2)",
-        "count(Int64(3)) AS count(Int64(1) + Int64(2))",
+        "count(Int64(3)) AS count((Int64(1) + Int64(2)))",
     )
     .await?;
 
