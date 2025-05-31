@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::cast::as_int32_array;
-use datafusion_common::ScalarValue;
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
@@ -70,6 +70,10 @@ impl SimplifyInfo for MyInfo {
 
     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
         expr.get_type(self.schema.as_ref())
+    }
+
+    fn get_schema(&self) -> Option<&DFSchema> {
+        Some(self.schema.as_ref())
     }
 }
 
