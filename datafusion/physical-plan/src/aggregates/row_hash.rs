@@ -31,7 +31,7 @@ use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
-use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::{RecordBatchStreamAdapter, YieldStream};
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -448,6 +448,10 @@ impl GroupedHashAggregateStream {
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(&context))?;
+
+        // Yield control back to tokio after a certain number of batches so it can check for cancellation.
+        let input = Box::pin(YieldStream::new(input)) as SendableRecordBatchStream;
+
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
 
         let timer = baseline_metrics.elapsed_compute().timer();
