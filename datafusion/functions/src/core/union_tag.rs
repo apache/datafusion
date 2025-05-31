@@ -180,7 +180,7 @@ mod tests {
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(scalar)],
                 number_rows: 1,
-                return_field: &Field::new("res", return_type, true),
+                return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
             })
             .unwrap();
@@ -202,7 +202,7 @@ mod tests {
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(scalar)],
                 number_rows: 1,
-                return_field: &Field::new("res", return_type, true),
+                return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
             })
             .unwrap();

@@ -25,7 +25,7 @@ use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
@@ -81,12 +81,12 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
     /// The output field associated with this expression
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
-        Ok(Field::new(
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
             format!("{self}"),
             self.data_type(input_schema)?,
             self.nullable(input_schema)?,
-        ))
+        )))
     }
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
@@ -469,7 +469,7 @@ where
 /// # use std::fmt::Formatter;
 /// # use std::sync::Arc;
 /// # use arrow::array::RecordBatch;
-/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 /// # use datafusion_common::Result;
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
@@ -479,7 +479,7 @@ where
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
 /// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
-/// # fn return_field(&self, input_schema: &Schema) -> Result<Field> { unimplemented!() }
+/// # fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> { unimplemented!() }
 /// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
 /// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }

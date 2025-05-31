@@ -58,8 +58,60 @@ use datafusion_physical_plan::filter_pushdown::{
 /// Requires `Debug` to assist debugging
 ///
 /// [`FileScanConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html
-/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest//datafusion/datasource/memory/struct.MemorySourceConfig.html
+/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemorySourceConfig.html
 /// [`FileSource`]: crate::file::FileSource
+/// [`FileFormat``]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/index.html
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+///
+/// The following diagram shows how DataSource, FileSource, and DataSourceExec are related
+/// ```text
+///                       ┌─────────────────────┐                              -----► execute path
+///                       │                     │                              ┄┄┄┄┄► init path
+///                       │   DataSourceExec    │  
+///                       │                     │    
+///                       └───────▲─────────────┘
+///                               ┊  │
+///                               ┊  │
+///                       ┌──────────▼──────────┐                            ┌──────────-──────────┐
+///                       │                     │                            |                     |
+///                       │  DataSource(trait)  │                            | TableProvider(trait)|
+///                       │                     │                            |                     |
+///                       └───────▲─────────────┘                            └─────────────────────┘
+///                               ┊  │                                                  ┊
+///               ┌───────────────┿──┴────────────────┐                                 ┊
+///               |   ┌┄┄┄┄┄┄┄┄┄┄┄┘                   |                                 ┊
+///               |   ┊                               |                                 ┊
+///    ┌──────────▼──────────┐             ┌──────────▼──────────┐                      ┊
+///    │                     │             │                     │           ┌──────────▼──────────┐
+///    │   FileScanConfig    │             │ MemorySourceConfig  │           |                     |
+///    │                     │             │                     │           |  FileFormat(trait)  |
+///    └──────────────▲──────┘             └─────────────────────┘           |                     |
+///               │   ┊                                                      └─────────────────────┘
+///               │   ┊                                                                 ┊
+///               │   ┊                                                                 ┊
+///    ┌──────────▼──────────┐                                               ┌──────────▼──────────┐
+///    │                     │                                               │     ArrowSource     │
+///    │ FileSource(trait)   ◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│          ...        │
+///    │                     │                                               │    ParquetSource    │
+///    └─────────────────────┘                                               └─────────────────────┘
+///               │
+///               │
+///               │
+///               │
+///    ┌──────────▼──────────┐
+///    │     ArrowSource     │
+///    │          ...        │
+///    │    ParquetSource    │
+///    └─────────────────────┘
+///               |
+/// FileOpener (called by FileStream)
+///               │
+///    ┌──────────▼──────────┐
+///    │                     │
+///    │     RecordBatch     │
+///    │                     │
+///    └─────────────────────┘
+/// ```
 pub trait DataSource: Send + Sync + Debug {
     fn open(
         &self,
