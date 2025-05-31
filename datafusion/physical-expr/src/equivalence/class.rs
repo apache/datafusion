@@ -21,8 +21,9 @@ use crate::{
     PhysicalSortExpr, PhysicalSortRequirement,
 };
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinType, ScalarValue};
+use datafusion_common::{HashMap, JoinType, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use itertools::Itertools;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::vec::IntoIter;
@@ -420,6 +421,110 @@ impl EquivalenceGroup {
         });
         // Unify/bridge groups that have common expressions:
         self.bridge_classes()
+    }
+
+    /// Creates a mapping from expressions to their positions in the equivalence group.
+    ///
+    /// This function builds a HashMap that maps each expression to a tuple containing:
+    /// 1. A unique index for the expression (based on insertion order)
+    /// 2. The ID of the equivalence class it belongs to
+    ///
+    /// # Returns
+    ///
+    /// A HashMap where:
+    /// - Key: Reference to a physical expression
+    /// - Value: A tuple (expr_index, class_id) where:
+    ///   - expr_index: A unique index for the expression (0-based, based on insertion order)
+    ///   - class_id: The index of the equivalence class containing this expression
+    ///
+    /// # Example
+    ///
+    /// For an equivalence group with classes:
+    /// - Class 0: [a, b]
+    /// - Class 1: [c, d]
+    ///
+    /// The function returns:
+    /// {
+    ///   a -> (0, 0),
+    ///   b -> (1, 0),
+    ///   c -> (2, 1),
+    ///   d -> (3, 1)
+    /// }
+    fn expressions(&self) -> HashMap<&Arc<dyn PhysicalExpr>, (usize, usize)> {
+        let mut map = HashMap::new();
+        for (cls_id, cls) in self.classes.iter().enumerate() {
+            for expr in cls.exprs.iter() {
+                map.insert(expr, (map.len(), cls_id));
+            }
+        }
+        map
+    }
+
+    /// Computes the intersection of two equivalence groups.
+    ///
+    /// This function finds all expressions that are equivalent in both groups by:
+    /// 1. Creating a mapping of expressions to their positions in the first group
+    /// 2. For each equivalence class in the second group:
+    ///    - Find all expressions that exist in both groups
+    ///    - Sort them by their position in the first group
+    ///    - Group consecutive expressions that belong to the same equivalence class in the first group
+    ///
+    /// Computational Complexity: O(NlogN) where N is the total number of expressions in both groups.
+    /// # Arguments
+    ///
+    /// * `other` - The other equivalence group to intersect with
+    ///
+    /// # Returns
+    ///
+    /// A new equivalence group containing only the expressions that are equivalent
+    /// in both input groups.
+    ///
+    /// # Example
+    ///
+    ///
+    /// Group1: [a, b, c]  // a=b=c
+    /// Group2: [b, c, d]  // b=c=d
+    ///
+    /// Result: [b, c]     // b=c in both groups
+    ///
+    pub fn intersect(&self, other: &Self) -> Self {
+        let self_exprs = self.expressions();
+
+        let mut new_classes = Vec::new();
+        for cls in other.classes.iter() {
+            let exprs = cls
+                .exprs
+                .iter()
+                .flat_map(|expr| {
+                    self_exprs
+                        .get(expr)
+                        .map(|(expr_id, cls_id)| (expr, *expr_id, *cls_id))
+                })
+                .sorted_by_key(|(_, expr_id, _)| *expr_id)
+                .collect::<Vec<_>>();
+            let mut start = 0;
+            if exprs.len() <= 1 {
+                continue;
+            }
+            for i in 0..exprs.len() - 1 {
+                let cls_id = exprs[i].2;
+                let next_cls_id = exprs[i + 1].2;
+                if cls_id != next_cls_id && i > start {
+                    new_classes.push(EquivalenceClass::new(
+                        (start..=i).map(|idx| Arc::clone(exprs[idx].0)).collect(),
+                    ));
+                    start = i + 1;
+                }
+            }
+            if exprs.len() > start + 1 {
+                new_classes.push(EquivalenceClass::new(
+                    (start..exprs.len())
+                        .map(|idx| Arc::clone(exprs[idx].0))
+                        .collect(),
+                ));
+            }
+        }
+        Self::new(new_classes)
     }
 
     /// This utility function unifies/bridges classes that have common expressions.
@@ -1096,6 +1201,29 @@ mod tests {
 
         assert!(first_normalized.eq(&second_normalized));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_eq_group_intersect() -> Result<()> {
+        let eq_group1 = EquivalenceGroup::new(vec![
+            EquivalenceClass::new(vec![lit(1), lit(2), lit(3)]),
+            EquivalenceClass::new(vec![lit(5), lit(6), lit(7)]),
+        ]);
+        let eq_group2 = EquivalenceGroup::new(vec![
+            EquivalenceClass::new(vec![lit(2), lit(3), lit(4)]),
+            EquivalenceClass::new(vec![lit(6), lit(7), lit(8)]),
+        ]);
+        let intersect = eq_group1.intersect(&eq_group2);
+
+        assert_eq!(intersect.len(), 2);
+        for cls in intersect.classes.iter() {
+            assert_eq!(cls.exprs.len(), 2);
+            assert!(
+                (cls.exprs.contains(&lit(2)) && cls.exprs.contains(&lit(3)))
+                    || (cls.exprs.contains(&lit(6)) && cls.exprs.contains(&lit(7)))
+            );
+        }
         Ok(())
     }
 }

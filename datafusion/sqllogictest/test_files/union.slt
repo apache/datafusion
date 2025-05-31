@@ -39,6 +39,17 @@ CREATE TABLE t2(
   (3, 'John')
 ;
 
+# union with equivalence class
+query TT rowsort
+(SELECT name, name as __name FROM t1) UNION ALL (SELECT name, name as __name FROM t1) ORDER BY __name;
+----
+Alex Alex
+Alex Alex
+Alice Alice
+Alice Alice
+Bob Bob
+Bob Bob
+
 # union with EXCEPT(JOIN)
 query T rowsort
 (   
