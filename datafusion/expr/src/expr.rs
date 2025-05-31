@@ -1196,10 +1196,10 @@ impl Expr {
     /// ```
     /// # use datafusion_expr::{col, lit};
     /// let expr = col("foo").eq(lit(42));
-    /// assert_eq!("foo = Int32(42)", expr.schema_name().to_string());
+    /// assert_eq!("(foo = Int32(42))", expr.schema_name().to_string());
     ///
     /// let expr = col("foo").alias("bar").eq(lit(11));
-    /// assert_eq!("bar = Int32(11)", expr.schema_name().to_string());
+    /// assert_eq!("(bar = Int32(11))", expr.schema_name().to_string());
     /// ```
     ///
     /// [`Schema`]: arrow::datatypes::Schema

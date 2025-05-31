@@ -1024,7 +1024,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: UInt32(1) + test.a, UInt32(1) + __common_expr_2 AS col1, UInt32(1) - __common_expr_2 AS col2, __common_expr_4 AS avg((UInt32(1) + test.a)), UInt32(1) + __common_expr_3 AS col3, UInt32(1) - __common_expr_3 AS col4, __common_expr_5 AS my_agg((UInt32(1) + test.a))
+        Projection: (UInt32(1) + test.a), UInt32(1) + __common_expr_2 AS col1, UInt32(1) - __common_expr_2 AS col2, __common_expr_4 AS avg((UInt32(1) + test.a)), UInt32(1) + __common_expr_3 AS col3, UInt32(1) - __common_expr_3 AS col4, __common_expr_5 AS my_agg((UInt32(1) + test.a))
           Aggregate: groupBy=[[__common_expr_1 AS (UInt32(1) + test.a)]], aggr=[[avg(__common_expr_1) AS __common_expr_2, my_agg(__common_expr_1) AS __common_expr_3, avg(__common_expr_1 AS (UInt32(1) + test.a)) AS __common_expr_4, my_agg(__common_expr_1 AS (UInt32(1) + test.a)) AS __common_expr_5]]
             Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
@@ -1724,7 +1724,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 AS test.a + test.b BETWEEN Int32(0) AND Int32(10), __common_expr_1 AS test.b + test.a BETWEEN Int32(0) AND Int32(10)
+        Projection: __common_expr_1 AS (test.a + test.b) BETWEEN Int32(0) AND Int32(10), __common_expr_1 AS (test.b + test.a) BETWEEN Int32(0) AND Int32(10)
           Projection: test.a + test.b BETWEEN Int32(0) AND Int32(10) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "

@@ -1866,7 +1866,7 @@ mod tests {
           LeftSemi Join:  Filter: UInt32(1) + __correlated_sq_1.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [(sq.b + sq.c):UInt32, a:UInt32]
-              Distinct: [(sq.b + sq.c:UInt32), a:UInt32]
+              Distinct: [(sq.b + sq.c):UInt32, a:UInt32]
                 Projection: sq.b + sq.c, sq.a [(sq.b + sq.c):UInt32, a:UInt32]
                   TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
         "

@@ -65,7 +65,7 @@ Projection: CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END 
     assert_snapshot!(
         format!("{plan}"),
     @r#"
-    Projection: CASE WHEN test.col_uint32 > UInt32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_uint32 > Int64(0) THEN Int64(1) ELSE Int64(0) END
+    Projection: CASE WHEN test.col_uint32 > UInt32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN (test.col_uint32 > Int64(0)) THEN Int64(1) ELSE Int64(0) END
       TableScan: test projection=[col_uint32]
     "#
     );
@@ -109,7 +109,7 @@ fn case_when_aggregate() -> Result<()> {
     format!("{plan}"),
     @r#"
         Projection: test.col_utf8, sum(CASE WHEN (test.col_int32 > Int64(0)) THEN Int64(1) ELSE Int64(0) END) AS n
-          Aggregate: groupBy=[[test.col_utf8]], aggr=[[sum(CASE WHEN (test.col_int32 > Int32(0)) THEN Int64(1) ELSE Int64(0) END) AS sum(CASE WHEN (test.col_int32 > Int64(0)) THEN Int64(1) ELSE Int64(0) END)]]
+          Aggregate: groupBy=[[test.col_utf8]], aggr=[[sum(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS sum(CASE WHEN (test.col_int32 > Int64(0)) THEN Int64(1) ELSE Int64(0) END)]]
             TableScan: test projection=[col_int32, col_utf8]
         "#
     );
