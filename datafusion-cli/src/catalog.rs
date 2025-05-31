@@ -199,7 +199,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                     &state,
                     table_url.scheme(),
                     url,
-                    &state.default_table_options(),
+                    state.default_table_options().extensions,
                 )
                 .await?;
                 state.runtime_env().register_object_store(url, store);

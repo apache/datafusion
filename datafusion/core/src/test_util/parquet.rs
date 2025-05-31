@@ -149,7 +149,7 @@ impl TestParquetFile {
     ///   (DataSourceExec)
     /// ```
     ///
-    /// Otherwise if `maybe_filter` is None, return just a `DataSourceExec`
+    /// Otherwise, if `maybe_filter` is None, return just a `DataSourceExec`
     pub async fn create_scan(
         &self,
         ctx: &SessionContext,
