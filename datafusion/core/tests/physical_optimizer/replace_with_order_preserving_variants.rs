@@ -18,8 +18,10 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    check_integrity, create_test_schema3, sort_preserving_merge_exec,
-    stream_exec_ordered_with_projection,
+    check_integrity, coalesce_batches_exec, coalesce_partitions_exec,
+    create_test_schema3, parquet_exec_with_sort, sort_exec,
+    sort_exec_with_preserve_partitioning, sort_preserving_merge_exec,
+    sort_preserving_merge_exec_with_fetch, stream_exec_ordered_with_projection,
 };
 
 use datafusion::prelude::SessionContext;
@@ -27,30 +29,26 @@ use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
+use datafusion_common::{assert_contains, Result};
+use datafusion_common::config::ConfigOptions;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
+use datafusion_expr::{JoinType, Operator};
+use datafusion_physical_expr::expressions::{self, col, Column};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{
+    plan_with_order_breaking_variants, plan_with_order_preserving_variants, replace_with_order_preserving_variants, OrderPreservationContext
+};
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::collect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::{
-    displayable, get_plan_string, ExecutionPlan, Partitioning,
+    collect, displayable, get_plan_string, ExecutionPlan, Partitioning,
 };
-use datafusion::datasource::source::DataSourceExec;
-use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::{assert_contains, Result};
-use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::expressions::{self, col, Column};
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{plan_with_order_breaking_variants, plan_with_order_preserving_variants, replace_with_order_preserving_variants, OrderPreservationContext};
-use datafusion_common::config::ConfigOptions;
 
-use crate::physical_optimizer::enforce_sorting::parquet_exec_sorted;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use object_store::memory::InMemory;
 use object_store::ObjectStore;
 use rstest::rstest;
@@ -192,16 +190,15 @@ async fn test_replace_multiple_input_repartition_1(
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let sort_exprs: LexOrdering = [sort_expr("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs.clone())
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, sort_exprs.clone())
     };
     let repartition = repartition_exec_hash(repartition_exec_round_robin(source));
-    let sort = sort_exec(vec![sort_expr("a", &schema)], repartition, true);
-
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let sort = sort_exec_with_preserve_partitioning(sort_exprs.clone(), repartition);
+    let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -261,27 +258,22 @@ async fn test_with_inter_children_change_only(
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr_default("a", &schema)];
+    let ordering: LexOrdering = [sort_expr_default("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, ordering.clone())
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-    let sort = sort_exec(
-        vec![sort_expr_default("a", &coalesce_partitions.schema())],
-        coalesce_partitions,
-        false,
-    );
+    let sort = sort_exec(ordering.clone(), coalesce_partitions);
     let repartition_rr2 = repartition_exec_round_robin(sort);
     let repartition_hash2 = repartition_exec_hash(repartition_rr2);
     let filter = filter_exec(repartition_hash2);
-    let sort2 = sort_exec(vec![sort_expr_default("a", &filter.schema())], filter, true);
+    let sort2 = sort_exec_with_preserve_partitioning(ordering.clone(), filter);
 
-    let physical_plan =
-        sort_preserving_merge_exec(vec![sort_expr_default("a", &sort2.schema())], sort2);
+    let physical_plan = sort_preserving_merge_exec(ordering, sort2);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -364,18 +356,17 @@ async fn test_replace_multiple_input_repartition_2(
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, ordering.clone())
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let filter = filter_exec(repartition_rr);
     let repartition_hash = repartition_exec_hash(filter);
-    let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash, true);
-
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let sort = sort_exec_with_preserve_partitioning(ordering.clone(), repartition_hash);
+    let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -440,19 +431,19 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, ordering.clone())
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let filter = filter_exec(repartition_hash);
-    let coalesce_batches_exec: Arc<dyn ExecutionPlan> = coalesce_batches_exec(filter);
-    let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec, true);
-
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let coalesce_batches_exec = coalesce_batches_exec(filter, 8192);
+    let sort =
+        sort_exec_with_preserve_partitioning(ordering.clone(), coalesce_batches_exec);
+    let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -522,20 +513,20 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, ordering.clone())
     };
     let repartition_rr = repartition_exec_round_robin(source);
-    let coalesce_batches_exec_1 = coalesce_batches_exec(repartition_rr);
+    let coalesce_batches_exec_1 = coalesce_batches_exec(repartition_rr, 8192);
     let repartition_hash = repartition_exec_hash(coalesce_batches_exec_1);
     let filter = filter_exec(repartition_hash);
-    let coalesce_batches_exec_2 = coalesce_batches_exec(filter);
-    let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec_2, true);
-
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let coalesce_batches_exec_2 = coalesce_batches_exec(filter, 8192);
+    let sort =
+        sort_exec_with_preserve_partitioning(ordering.clone(), coalesce_batches_exec_2);
+    let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -610,19 +601,17 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, ordering)
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, ordering)
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let filter = filter_exec(repartition_hash);
-    let coalesce_batches_exec: Arc<dyn ExecutionPlan> = coalesce_batches_exec(filter);
-
-    let physical_plan: Arc<dyn ExecutionPlan> =
-        coalesce_partitions_exec(coalesce_batches_exec);
+    let coalesce_batches_exec = coalesce_batches_exec(filter, 8192);
+    let physical_plan = coalesce_partitions_exec(coalesce_batches_exec);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -683,20 +672,19 @@ async fn test_with_multiple_replacable_repartitions(
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, ordering.clone())
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let filter = filter_exec(repartition_hash);
-    let coalesce_batches = coalesce_batches_exec(filter);
+    let coalesce_batches = coalesce_batches_exec(filter, 8192);
     let repartition_hash_2 = repartition_exec_hash(coalesce_batches);
-    let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash_2, true);
-
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let sort = sort_exec_with_preserve_partitioning(ordering.clone(), repartition_hash_2);
+    let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -770,23 +758,21 @@ async fn test_not_replace_with_different_orderings(
     #[values(false, true)] source_unbounded: bool,
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
+    use datafusion_physical_expr::LexOrdering;
+
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let ordering_a = [sort_expr("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, ordering_a)
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, ordering_a)
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
-    let sort = sort_exec(
-        vec![sort_expr_default("c", &repartition_hash.schema())],
-        repartition_hash,
-        true,
-    );
-
-    let physical_plan =
-        sort_preserving_merge_exec(vec![sort_expr_default("c", &sort.schema())], sort);
+    let ordering_c: LexOrdering =
+        [sort_expr_default("c", &repartition_hash.schema())].into();
+    let sort = sort_exec_with_preserve_partitioning(ordering_c.clone(), repartition_hash);
+    let physical_plan = sort_preserving_merge_exec(ordering_c, sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -843,17 +829,16 @@ async fn test_with_lost_ordering(
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, ordering.clone())
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, ordering.clone())
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-    let physical_plan =
-        sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions, false);
+    let physical_plan = sort_exec(ordering, coalesce_partitions);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -912,28 +897,26 @@ async fn test_with_lost_and_kept_ordering(
     #[values(false, true)] source_unbounded: bool,
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {
+    use datafusion_physical_expr::LexOrdering;
+
     let schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let ordering_a = [sort_expr("a", &schema)].into();
     let source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, ordering_a)
     } else {
-        memory_exec_sorted(&schema, sort_exprs)
+        memory_exec_sorted(&schema, ordering_a)
     };
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-    let sort = sort_exec(
-        vec![sort_expr_default("c", &coalesce_partitions.schema())],
-        coalesce_partitions,
-        false,
-    );
+    let ordering_c: LexOrdering =
+        [sort_expr_default("c", &coalesce_partitions.schema())].into();
+    let sort = sort_exec(ordering_c.clone(), coalesce_partitions);
     let repartition_rr2 = repartition_exec_round_robin(sort);
     let repartition_hash2 = repartition_exec_hash(repartition_rr2);
     let filter = filter_exec(repartition_hash2);
-    let sort2 = sort_exec(vec![sort_expr_default("c", &filter.schema())], filter, true);
-
-    let physical_plan =
-        sort_preserving_merge_exec(vec![sort_expr_default("c", &sort2.schema())], sort2);
+    let sort2 = sort_exec_with_preserve_partitioning(ordering_c.clone(), filter);
+    let physical_plan = sort_preserving_merge_exec(ordering_c, sort2);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -1019,22 +1002,22 @@ async fn test_with_multiple_child_trees(
 ) -> Result<()> {
     let schema = create_test_schema()?;
 
-    let left_sort_exprs = vec![sort_expr("a", &schema)];
+    let left_ordering = [sort_expr("a", &schema)].into();
     let left_source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, left_sort_exprs)
+        stream_exec_ordered_with_projection(&schema, left_ordering)
     } else {
-        memory_exec_sorted(&schema, left_sort_exprs)
+        memory_exec_sorted(&schema, left_ordering)
     };
     let left_repartition_rr = repartition_exec_round_robin(left_source);
     let left_repartition_hash = repartition_exec_hash(left_repartition_rr);
     let left_coalesce_partitions =
         Arc::new(CoalesceBatchesExec::new(left_repartition_hash, 4096));
 
-    let right_sort_exprs = vec![sort_expr("a", &schema)];
+    let right_ordering = [sort_expr("a", &schema)].into();
     let right_source = if source_unbounded {
-        stream_exec_ordered_with_projection(&schema, right_sort_exprs)
+        stream_exec_ordered_with_projection(&schema, right_ordering)
     } else {
-        memory_exec_sorted(&schema, right_sort_exprs)
+        memory_exec_sorted(&schema, right_ordering)
     };
     let right_repartition_rr = repartition_exec_round_robin(right_source);
     let right_repartition_hash = repartition_exec_hash(right_repartition_rr);
@@ -1043,14 +1026,9 @@ async fn test_with_multiple_child_trees(
 
     let hash_join_exec =
         hash_join_exec(left_coalesce_partitions, right_coalesce_partitions);
-    let sort = sort_exec(
-        vec![sort_expr_default("a", &hash_join_exec.schema())],
-        hash_join_exec,
-        true,
-    );
-
-    let physical_plan =
-        sort_preserving_merge_exec(vec![sort_expr_default("a", &sort.schema())], sort);
+    let ordering: LexOrdering = [sort_expr_default("a", &hash_join_exec.schema())].into();
+    let sort = sort_exec_with_preserve_partitioning(ordering.clone(), hash_join_exec);
+    let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -1149,18 +1127,6 @@ fn sort_expr_options(
     }
 }
 
-fn sort_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    input: Arc<dyn ExecutionPlan>,
-    preserve_partitioning: bool,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(
-        SortExec::new(sort_exprs, input)
-            .with_preserve_partitioning(preserve_partitioning),
-    )
-}
-
 fn repartition_exec_round_robin(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(8)).unwrap())
 }
@@ -1186,14 +1152,6 @@ fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     )
     .unwrap();
     Arc::new(FilterExec::try_new(predicate, input).unwrap())
-}
-
-fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalesceBatchesExec::new(input, 8192))
-}
-
-fn coalesce_partitions_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalescePartitionsExec::new(input))
 }
 
 fn hash_join_exec(
@@ -1233,7 +1191,7 @@ fn create_test_schema() -> Result<SchemaRef> {
 // projection parameter is given static due to testing needs
 fn memory_exec_sorted(
     schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
 ) -> Arc<dyn ExecutionPlan> {
     pub fn make_partition(schema: &SchemaRef, sz: i32) -> RecordBatch {
         let values = (0..sz).collect::<Vec<_>>();
@@ -1249,7 +1207,6 @@ fn memory_exec_sorted(
 
     let rows = 5;
     let partitions = 1;
-    let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new({
         let data: Vec<Vec<_>> = (0..partitions)
             .map(|_| vec![make_partition(schema, rows)])
@@ -1258,7 +1215,7 @@ fn memory_exec_sorted(
         DataSourceExec::new(Arc::new(
             MemorySourceConfig::try_new(&data, schema.clone(), Some(projection))
                 .unwrap()
-                .try_with_sort_information(vec![sort_exprs])
+                .try_with_sort_information(vec![ordering])
                 .unwrap(),
         ))
     })
@@ -1268,12 +1225,11 @@ fn memory_exec_sorted(
 fn test_plan_with_order_preserving_variants_preserves_fetch() -> Result<()> {
     // Create a schema
     let schema = create_test_schema3()?;
-    let parquet_sort_exprs = vec![crate::physical_optimizer::test_utils::sort_expr(
-        "a", &schema,
-    )];
-    let parquet_exec = parquet_exec_sorted(&schema, parquet_sort_exprs);
-    let coalesced =
-        Arc::new(CoalescePartitionsExec::new(parquet_exec.clone()).with_fetch(Some(10)));
+    let parquet_sort_exprs = vec![[sort_expr("a", &schema)].into()];
+    let parquet_exec = parquet_exec_with_sort(schema, parquet_sort_exprs);
+    let coalesced = coalesce_partitions_exec(parquet_exec.clone())
+        .with_fetch(Some(10))
+        .unwrap();
 
     // Test sort's fetch is greater than coalesce fetch, return error because it's not reasonable
     let requirements = OrderPreservationContext::new(
@@ -1315,17 +1271,15 @@ fn test_plan_with_order_preserving_variants_preserves_fetch() -> Result<()> {
 #[test]
 fn test_plan_with_order_breaking_variants_preserves_fetch() -> Result<()> {
     let schema = create_test_schema3()?;
-    let parquet_sort_exprs = vec![crate::physical_optimizer::test_utils::sort_expr(
-        "a", &schema,
-    )];
-    let parquet_exec = parquet_exec_sorted(&schema, parquet_sort_exprs.clone());
-    let spm = SortPreservingMergeExec::new(
-        LexOrdering::new(parquet_sort_exprs),
+    let parquet_sort_exprs: LexOrdering = [sort_expr("a", &schema)].into();
+    let parquet_exec = parquet_exec_with_sort(schema, vec![parquet_sort_exprs.clone()]);
+    let spm = sort_preserving_merge_exec_with_fetch(
+        parquet_sort_exprs,
         parquet_exec.clone(),
-    )
-    .with_fetch(Some(10));
+        10,
+    );
     let requirements = OrderPreservationContext::new(
-        Arc::new(spm),
+        spm,
         true,
         vec![OrderPreservationContext::new(
             parquet_exec.clone(),

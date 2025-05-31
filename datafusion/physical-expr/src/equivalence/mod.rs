@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Borrow;
 use std::sync::Arc;
 
-use crate::expressions::Column;
-use crate::{LexRequirement, PhysicalExpr};
+use crate::PhysicalExpr;
 
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use arrow::compute::SortOptions;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 mod class;
 mod ordering;
@@ -34,50 +35,34 @@ pub use properties::{
     calculate_union, join_equivalence_properties, EquivalenceProperties,
 };
 
-/// This function constructs a duplicate-free `LexOrderingReq` by filtering out
-/// duplicate entries that have same physical expression inside. For example,
-/// `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a Some(ASC)]`.
-///
-/// It will also filter out entries that are ordered if the next entry is;
-/// for instance, `vec![floor(a) Some(ASC), a Some(ASC)]` will be collapsed to
-/// `vec![a Some(ASC)]`.
-#[deprecated(since = "45.0.0", note = "Use LexRequirement::collapse")]
-pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
-    input.collapse()
+// Convert each tuple to a `PhysicalSortExpr` and construct a vector.
+pub fn convert_to_sort_exprs<T: Borrow<Arc<dyn PhysicalExpr>>>(
+    args: &[(T, SortOptions)],
+) -> Vec<PhysicalSortExpr> {
+    args.iter()
+        .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr.borrow()), *options))
+        .collect()
 }
 
-/// Adds the `offset` value to `Column` indices inside `expr`. This function is
-/// generally used during the update of the right table schema in join operations.
-pub fn add_offset_to_expr(
-    expr: Arc<dyn PhysicalExpr>,
-    offset: usize,
-) -> Arc<dyn PhysicalExpr> {
-    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
-        Some(col) => Ok(Transformed::yes(Arc::new(Column::new(
-            col.name(),
-            offset + col.index(),
-        )))),
-        None => Ok(Transformed::no(e)),
-    })
-    .data()
-    .unwrap()
-    // Note that we can safely unwrap here since our transform always returns
-    // an `Ok` value.
+// Convert each vector of tuples to a `LexOrdering`.
+pub fn convert_to_orderings<T: Borrow<Arc<dyn PhysicalExpr>>>(
+    args: &[Vec<(T, SortOptions)>],
+) -> Vec<LexOrdering> {
+    args.iter()
+        .filter_map(|sort_exprs| LexOrdering::new(convert_to_sort_exprs(sort_exprs)))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::expressions::col;
-    use crate::PhysicalSortExpr;
+    use crate::expressions::{col, Column};
+    use crate::{LexRequirement, PhysicalSortExpr};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{plan_datafusion_err, Result};
-    use datafusion_physical_expr_common::sort_expr::{
-        LexOrdering, PhysicalSortRequirement,
-    };
+    use datafusion_common::{plan_err, Result};
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
     /// Converts a string to a physical sort expression
     ///
@@ -114,27 +99,21 @@ mod tests {
         mapping: &ProjectionMapping,
         input_schema: &Arc<Schema>,
     ) -> Result<SchemaRef> {
-        // Calculate output schema
-        let fields: Result<Vec<Field>> = mapping
-            .iter()
-            .map(|(source, target)| {
-                let name = target
-                    .as_any()
-                    .downcast_ref::<Column>()
-                    .ok_or_else(|| plan_datafusion_err!("Expects to have column"))?
-                    .name();
-                let field = Field::new(
-                    name,
-                    source.data_type(input_schema)?,
-                    source.nullable(input_schema)?,
-                );
-
-                Ok(field)
-            })
-            .collect();
+        // Calculate output schema:
+        let mut fields = vec![];
+        for (source, targets) in mapping.iter() {
+            let data_type = source.data_type(input_schema)?;
+            let nullable = source.nullable(input_schema)?;
+            for (target, _) in targets.iter() {
+                let Some(column) = target.as_any().downcast_ref::<Column>() else {
+                    return plan_err!("Expects to have column");
+                };
+                fields.push(Field::new(column.name(), data_type.clone(), nullable));
+            }
+        }
 
         let output_schema = Arc::new(Schema::new_with_metadata(
-            fields?,
+            fields,
             input_schema.metadata().clone(),
         ));
 
@@ -163,15 +142,15 @@ mod tests {
     /// Column [a=c] (e.g they are aliases).
     pub fn create_test_params() -> Result<(SchemaRef, EquivalenceProperties)> {
         let test_schema = create_test_schema()?;
-        let col_a = &col("a", &test_schema)?;
-        let col_b = &col("b", &test_schema)?;
-        let col_c = &col("c", &test_schema)?;
-        let col_d = &col("d", &test_schema)?;
-        let col_e = &col("e", &test_schema)?;
-        let col_f = &col("f", &test_schema)?;
-        let col_g = &col("g", &test_schema)?;
+        let col_a = col("a", &test_schema)?;
+        let col_b = col("b", &test_schema)?;
+        let col_c = col("c", &test_schema)?;
+        let col_d = col("d", &test_schema)?;
+        let col_e = col("e", &test_schema)?;
+        let col_f = col("f", &test_schema)?;
+        let col_g = col("g", &test_schema)?;
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
-        eq_properties.add_equal_conditions(col_a, col_c)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_c))?;
 
         let option_asc = SortOptions {
             descending: false,
@@ -194,68 +173,19 @@ mod tests {
             ],
         ];
         let orderings = convert_to_orderings(&orderings);
-        eq_properties.add_new_orderings(orderings);
+        eq_properties.add_orderings(orderings);
         Ok((test_schema, eq_properties))
     }
 
-    // Convert each tuple to PhysicalSortRequirement
+    // Convert each tuple to a `PhysicalSortRequirement` and construct a
+    // a `LexRequirement` from them.
     pub fn convert_to_sort_reqs(
-        in_data: &[(&Arc<dyn PhysicalExpr>, Option<SortOptions>)],
+        args: &[(&Arc<dyn PhysicalExpr>, Option<SortOptions>)],
     ) -> LexRequirement {
-        in_data
-            .iter()
-            .map(|(expr, options)| {
-                PhysicalSortRequirement::new(Arc::clone(*expr), *options)
-            })
-            .collect()
-    }
-
-    // Convert each tuple to PhysicalSortExpr
-    pub fn convert_to_sort_exprs(
-        in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> LexOrdering {
-        in_data
-            .iter()
-            .map(|(expr, options)| PhysicalSortExpr {
-                expr: Arc::clone(*expr),
-                options: *options,
-            })
-            .collect()
-    }
-
-    // Convert each inner tuple to PhysicalSortExpr
-    pub fn convert_to_orderings(
-        orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
-    ) -> Vec<LexOrdering> {
-        orderings
-            .iter()
-            .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
-            .collect()
-    }
-
-    // Convert each tuple to PhysicalSortExpr
-    pub fn convert_to_sort_exprs_owned(
-        in_data: &[(Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> LexOrdering {
-        LexOrdering::new(
-            in_data
-                .iter()
-                .map(|(expr, options)| PhysicalSortExpr {
-                    expr: Arc::clone(expr),
-                    options: *options,
-                })
-                .collect(),
-        )
-    }
-
-    // Convert each inner tuple to PhysicalSortExpr
-    pub fn convert_to_orderings_owned(
-        orderings: &[Vec<(Arc<dyn PhysicalExpr>, SortOptions)>],
-    ) -> Vec<LexOrdering> {
-        orderings
-            .iter()
-            .map(|sort_exprs| convert_to_sort_exprs_owned(sort_exprs))
-            .collect()
+        let exprs = args.iter().map(|(expr, options)| {
+            PhysicalSortRequirement::new(Arc::clone(*expr), *options)
+        });
+        LexRequirement::new(exprs).unwrap()
     }
 
     #[test]
@@ -269,49 +199,49 @@ mod tests {
         ]));
 
         let mut eq_properties = EquivalenceProperties::new(schema);
-        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
-        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
-        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
-        let col_x_expr = Arc::new(Column::new("x", 3)) as Arc<dyn PhysicalExpr>;
-        let col_y_expr = Arc::new(Column::new("y", 4)) as Arc<dyn PhysicalExpr>;
+        let col_a = Arc::new(Column::new("a", 0)) as _;
+        let col_b = Arc::new(Column::new("b", 1)) as _;
+        let col_c = Arc::new(Column::new("c", 2)) as _;
+        let col_x = Arc::new(Column::new("x", 3)) as _;
+        let col_y = Arc::new(Column::new("y", 4)) as _;
 
         // a and b are aliases
-        eq_properties.add_equal_conditions(&col_a_expr, &col_b_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_b))?;
         assert_eq!(eq_properties.eq_group().len(), 1);
 
         // This new entry is redundant, size shouldn't increase
-        eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_b), Arc::clone(&col_a))?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 2);
-        assert!(eq_groups.contains(&col_a_expr));
-        assert!(eq_groups.contains(&col_b_expr));
+        assert!(eq_groups.contains(&col_a));
+        assert!(eq_groups.contains(&col_b));
 
         // b and c are aliases. Existing equivalence class should expand,
         // however there shouldn't be any new equivalence class
-        eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_b), Arc::clone(&col_c))?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 3);
-        assert!(eq_groups.contains(&col_a_expr));
-        assert!(eq_groups.contains(&col_b_expr));
-        assert!(eq_groups.contains(&col_c_expr));
+        assert!(eq_groups.contains(&col_a));
+        assert!(eq_groups.contains(&col_b));
+        assert!(eq_groups.contains(&col_c));
 
         // This is a new set of equality. Hence equivalent class count should be 2.
-        eq_properties.add_equal_conditions(&col_x_expr, &col_y_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_y))?;
         assert_eq!(eq_properties.eq_group().len(), 2);
 
         // This equality bridges distinct equality sets.
         // Hence equivalent class count should decrease from 2 to 1.
-        eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_a))?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 5);
-        assert!(eq_groups.contains(&col_a_expr));
-        assert!(eq_groups.contains(&col_b_expr));
-        assert!(eq_groups.contains(&col_c_expr));
-        assert!(eq_groups.contains(&col_x_expr));
-        assert!(eq_groups.contains(&col_y_expr));
+        assert!(eq_groups.contains(&col_a));
+        assert!(eq_groups.contains(&col_b));
+        assert!(eq_groups.contains(&col_c));
+        assert!(eq_groups.contains(&col_x));
+        assert!(eq_groups.contains(&col_y));
 
         Ok(())
     }

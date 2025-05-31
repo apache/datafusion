@@ -25,9 +25,7 @@ use std::sync::{Arc, Mutex};
 use crate::{SchemaProvider, TableProvider, TableProviderFactory};
 
 use crate::Session;
-use datafusion_common::{
-    Constraints, DFSchema, DataFusionError, HashMap, TableReference,
-};
+use datafusion_common::{DFSchema, DataFusionError, HashMap, TableReference};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -143,7 +141,7 @@ impl ListingSchemaProvider {
                             order_exprs: vec![],
                             unbounded: false,
                             options: Default::default(),
-                            constraints: Constraints::empty(),
+                            constraints: Default::default(),
                             column_defaults: Default::default(),
                         },
                     )

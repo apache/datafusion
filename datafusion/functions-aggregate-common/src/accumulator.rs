@@ -19,7 +19,7 @@ use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::Result;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use std::sync::Arc;
 
 /// [`AccumulatorArgs`] contains information about how an aggregate
@@ -50,9 +50,7 @@ pub struct AccumulatorArgs<'a> {
     /// ```sql
     /// SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
     /// ```
-    ///
-    /// If no `ORDER BY` is specified, `ordering_req` will be empty.
-    pub ordering_req: &'a LexOrdering,
+    pub order_bys: &'a [PhysicalSortExpr],
 
     /// Whether the aggregation is running in reverse order
     pub is_reversed: bool,

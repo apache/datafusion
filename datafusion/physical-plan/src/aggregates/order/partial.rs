@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
+use std::mem::size_of;
+use std::sync::Arc;
+
 use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
-use arrow::datatypes::Schema;
 use arrow_ord::partition::partition;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use std::cmp::Ordering;
-use std::mem::size_of;
-use std::sync::Arc;
 
 /// Tracks grouping state when the data is ordered by some subset of
 /// the group keys.
@@ -118,17 +117,11 @@ impl State {
 
 impl GroupOrderingPartial {
     /// TODO: Remove unnecessary `input_schema` parameter.
-    pub fn try_new(
-        _input_schema: &Schema,
-        order_indices: &[usize],
-        ordering: &LexOrdering,
-    ) -> Result<Self> {
-        assert!(!order_indices.is_empty());
-        assert!(order_indices.len() <= ordering.len());
-
+    pub fn try_new(order_indices: Vec<usize>) -> Result<Self> {
+        debug_assert!(!order_indices.is_empty());
         Ok(Self {
             state: State::Start,
-            order_indices: order_indices.to_vec(),
+            order_indices,
         })
     }
 
@@ -276,29 +269,15 @@ impl GroupOrderingPartial {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::Int32Array;
-    use arrow_schema::{DataType, Field};
-    use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
-
     use super::*;
+
+    use arrow::array::Int32Array;
 
     #[test]
     fn test_group_ordering_partial() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]);
-
         // Ordered on column a
         let order_indices = vec![0];
-
-        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
-            col("a", &schema)?,
-            SortOptions::default(),
-        )]);
-
-        let mut group_ordering =
-            GroupOrderingPartial::try_new(&schema, &order_indices, &ordering)?;
+        let mut group_ordering = GroupOrderingPartial::try_new(order_indices)?;
 
         let batch_group_values: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])),

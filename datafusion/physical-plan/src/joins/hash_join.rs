@@ -532,17 +532,17 @@ impl HashJoinExec {
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
-        );
+        )?;
 
         let mut output_partitioning = match mode {
             PartitionMode::CollectLeft => {
-                asymmetric_join_output_partitioning(left, right, &join_type)
+                asymmetric_join_output_partitioning(left, right, &join_type)?
             }
             PartitionMode::Auto => Partitioning::UnknownPartitioning(
                 right.output_partitioning().partition_count(),
             ),
             PartitionMode::Partitioned => {
-                symmetric_join_output_partitioning(left, right, &join_type)
+                symmetric_join_output_partitioning(left, right, &join_type)?
             }
         };
 

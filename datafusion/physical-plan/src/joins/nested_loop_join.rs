@@ -259,10 +259,10 @@ impl NestedLoopJoinExec {
             None,
             // No on columns in nested loop join
             &[],
-        );
+        )?;
 
         let mut output_partitioning =
-            asymmetric_join_output_partitioning(left, right, &join_type);
+            asymmetric_join_output_partitioning(left, right, &join_type)?;
 
         let emission_type = if left.boundedness().is_unbounded() {
             EmissionType::Final
@@ -1088,22 +1088,18 @@ pub(crate) mod tests {
             vec![batch]
         };
 
-        let mut source =
-            TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
-        if !sorted_column_names.is_empty() {
-            let mut sort_info = LexOrdering::default();
-            for name in sorted_column_names {
-                let index = schema.index_of(name).unwrap();
-                let sort_expr = PhysicalSortExpr {
-                    expr: Arc::new(Column::new(name, index)),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                };
-                sort_info.push(sort_expr);
-            }
-            source = source.try_with_sort_information(vec![sort_info]).unwrap();
+        let mut sort_info = vec![];
+        for name in sorted_column_names {
+            let index = schema.index_of(name).unwrap();
+            let sort_expr = PhysicalSortExpr::new(
+                Arc::new(Column::new(name, index)),
+                SortOptions::new(false, false),
+            );
+            sort_info.push(sort_expr);
+        }
+        let mut source = TestMemoryExec::try_new(&[batches], schema, None).unwrap();
+        if let Some(ordering) = LexOrdering::new(sort_info) {
+            source = source.try_with_sort_information(vec![ordering]).unwrap();
         }
 
         Arc::new(TestMemoryExec::update_cache(Arc::new(source)))

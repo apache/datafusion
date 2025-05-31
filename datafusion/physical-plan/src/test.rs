@@ -40,10 +40,12 @@ use datafusion_common::{
     config::ConfigOptions, internal_err, project_schema, Result, Statistics,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, expressions::Column, utils::collect_columns,
-    EquivalenceProperties, LexOrdering, Partitioning,
+use datafusion_physical_expr::equivalence::{
+    OrderingEquivalenceClass, ProjectionMapping,
 };
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
 
 use futures::{Future, FutureExt};
 
@@ -216,7 +218,7 @@ impl TestMemoryExec {
     fn eq_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new_with_orderings(
             Arc::clone(&self.projected_schema),
-            self.sort_information.as_slice(),
+            self.sort_information.clone(),
         )
     }
 
@@ -240,7 +242,7 @@ impl TestMemoryExec {
             cache: PlanProperties::new(
                 EquivalenceProperties::new_with_orderings(
                     Arc::clone(&projected_schema),
-                    vec![].as_slice(),
+                    Vec::<LexOrdering>::new(),
                 ),
                 Partitioning::UnknownPartitioning(partitions.len()),
                 EmissionType::Incremental,
@@ -324,24 +326,21 @@ impl TestMemoryExec {
 
         // If there is a projection on the source, we also need to project orderings
         if let Some(projection) = &self.projection {
-            let base_eqp = EquivalenceProperties::new_with_orderings(
-                self.original_schema(),
-                &sort_information,
-            );
-            let proj_exprs = projection
-                .iter()
-                .map(|idx| {
-                    let base_schema = self.original_schema();
-                    let name = base_schema.field(*idx).name();
-                    (Arc::new(Column::new(name, *idx)) as _, name.to_string())
-                })
-                .collect::<Vec<_>>();
+            let base_schema = self.original_schema();
+            let proj_exprs = projection.iter().map(|idx| {
+                let name = base_schema.field(*idx).name();
+                (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+            });
             let projection_mapping =
-                ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
-            sort_information = base_eqp
-                .project(&projection_mapping, Arc::clone(&self.projected_schema))
-                .into_oeq_class()
-                .into_inner();
+                ProjectionMapping::try_new(proj_exprs, &base_schema)?;
+            let base_eqp = EquivalenceProperties::new_with_orderings(
+                Arc::clone(&base_schema),
+                sort_information,
+            );
+            let proj_eqp =
+                base_eqp.project(&projection_mapping, Arc::clone(&self.projected_schema));
+            let oeq_class: OrderingEquivalenceClass = proj_eqp.into();
+            sort_information = oeq_class.into();
         }
 
         self.sort_information = sort_information;

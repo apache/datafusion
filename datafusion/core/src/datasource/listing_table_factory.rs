@@ -201,7 +201,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options: HashMap::from([("format.has_header".into(), "true".into())]),
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
@@ -241,7 +241,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();

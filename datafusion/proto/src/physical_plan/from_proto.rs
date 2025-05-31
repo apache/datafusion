@@ -102,13 +102,13 @@ pub fn parse_physical_sort_exprs(
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<LexOrdering> {
+) -> Result<Vec<PhysicalSortExpr>> {
     proto
         .iter()
         .map(|sort_expr| {
             parse_physical_sort_expr(sort_expr, registry, input_schema, codec)
         })
-        .collect::<Result<LexOrdering>>()
+        .collect()
 }
 
 /// Parses a physical window expr from a protobuf.
@@ -175,7 +175,7 @@ pub fn parse_physical_window_expr(
         name,
         &window_node_expr,
         &partition_by,
-        order_by.as_ref(),
+        &order_by,
         Arc::new(window_frame),
         &extended_schema,
         false,
@@ -528,13 +528,13 @@ pub fn parse_protobuf_file_scan_config(
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
-        let sort_expr = parse_physical_sort_exprs(
+        let sort_exprs = parse_physical_sort_exprs(
             &node_collection.physical_sort_expr_nodes,
             registry,
             &schema,
             codec,
         )?;
-        output_ordering.push(sort_expr);
+        output_ordering.extend(LexOrdering::new(sort_exprs));
     }
 
     let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)

@@ -24,23 +24,23 @@ use std::sync::Arc;
 use super::{StandardWindowFunctionExpr, WindowExpr};
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
-use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
+use crate::{EquivalenceProperties, PhysicalExpr};
+
 use arrow::array::{new_empty_array, ArrayRef};
-use arrow::compute::SortOptions;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 /// A window expr that takes the form of a [`StandardWindowFunctionExpr`].
 #[derive(Debug)]
 pub struct StandardWindowExpr {
     expr: Arc<dyn StandardWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
-    order_by: LexOrdering,
+    order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
 }
 
@@ -49,13 +49,13 @@ impl StandardWindowExpr {
     pub fn new(
         expr: Arc<dyn StandardWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: &LexOrdering,
+        order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             expr,
             partition_by: partition_by.to_vec(),
-            order_by: order_by.clone(),
+            order_by: order_by.to_vec(),
             window_frame,
         }
     }
@@ -70,15 +70,19 @@ impl StandardWindowExpr {
     /// If `self.expr` doesn't have an ordering, ordering equivalence properties
     /// are not updated. Otherwise, ordering equivalence properties are updated
     /// by the ordering of `self.expr`.
-    pub fn add_equal_orderings(&self, eq_properties: &mut EquivalenceProperties) {
+    pub fn add_equal_orderings(
+        &self,
+        eq_properties: &mut EquivalenceProperties,
+    ) -> Result<()> {
         let schema = eq_properties.schema();
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
             add_new_ordering_expr_with_partition_by(
                 eq_properties,
                 fn_res_ordering,
                 &self.partition_by,
-            );
+            )?;
         }
+        Ok(())
     }
 }
 
@@ -104,16 +108,15 @@ impl WindowExpr for StandardWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> &LexOrdering {
-        self.order_by.as_ref()
+    fn order_by(&self) -> &[PhysicalSortExpr] {
+        &self.order_by
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
         if evaluator.uses_window_frame() {
-            let sort_options: Vec<SortOptions> =
-                self.order_by.iter().map(|o| o.options).collect();
+            let sort_options = self.order_by.iter().map(|o| o.options).collect();
             let mut row_wise_results = vec![];
 
             let mut values = self.evaluate_args(batch)?;
@@ -253,7 +256,11 @@ impl WindowExpr for StandardWindowExpr {
             Arc::new(StandardWindowExpr::new(
                 reverse_expr,
                 &self.partition_by.clone(),
-                reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                &self
+                    .order_by
+                    .iter()
+                    .map(|e| e.reverse())
+                    .collect::<Vec<_>>(),
                 Arc::new(self.window_frame.reverse()),
             )) as _
         })
@@ -276,10 +283,10 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
     eqp: &mut EquivalenceProperties,
     expr: PhysicalSortExpr,
     partition_by: &[Arc<dyn PhysicalExpr>],
-) {
+) -> Result<()> {
     if partition_by.is_empty() {
         // In the absence of a PARTITION BY, ordering of `self.expr` is global:
-        eqp.add_new_orderings([LexOrdering::new(vec![expr])]);
+        eqp.add_ordering([expr]);
     } else {
         // If we have a PARTITION BY, standard functions can not introduce
         // a global ordering unless the existing ordering is compatible
@@ -287,10 +294,11 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
         // expressions and existing ordering expressions are equal (w.r.t.
         // set equality), we can prefix the ordering of `self.expr` with
         // the existing ordering.
-        let (mut ordering, _) = eqp.find_longest_permutation(partition_by);
+        let (mut ordering, _) = eqp.find_longest_permutation(partition_by)?;
         if ordering.len() == partition_by.len() {
             ordering.push(expr);
-            eqp.add_new_orderings([ordering]);
+            eqp.add_ordering(ordering);
         }
     }
+    Ok(())
 }

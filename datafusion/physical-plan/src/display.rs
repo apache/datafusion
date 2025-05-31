@@ -1034,27 +1034,22 @@ impl fmt::Display for ProjectSchemaDisplay<'_> {
 }
 
 pub fn display_orderings(f: &mut Formatter, orderings: &[LexOrdering]) -> fmt::Result {
-    if let Some(ordering) = orderings.first() {
-        if !ordering.is_empty() {
-            let start = if orderings.len() == 1 {
-                ", output_ordering="
-            } else {
-                ", output_orderings=["
-            };
-            write!(f, "{start}")?;
-            for (idx, ordering) in
-                orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
-            {
-                match idx {
-                    0 => write!(f, "[{ordering}]")?,
-                    _ => write!(f, ", [{ordering}]")?,
-                }
+    if !orderings.is_empty() {
+        let start = if orderings.len() == 1 {
+            ", output_ordering="
+        } else {
+            ", output_orderings=["
+        };
+        write!(f, "{start}")?;
+        for (idx, ordering) in orderings.iter().enumerate() {
+            match idx {
+                0 => write!(f, "[{ordering}]")?,
+                _ => write!(f, ", [{ordering}]")?,
             }
-            let end = if orderings.len() == 1 { "" } else { "]" };
-            write!(f, "{end}")?;
         }
+        let end = if orderings.len() == 1 { "" } else { "]" };
+        write!(f, "{end}")?;
     }
-
     Ok(())
 }
 

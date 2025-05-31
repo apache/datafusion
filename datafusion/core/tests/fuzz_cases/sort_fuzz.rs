@@ -232,18 +232,15 @@ impl SortTest {
             .expect("at least one batch");
         let schema = first_batch.schema();
 
-        let sort_ordering = LexOrdering::new(
-            self.sort_columns
-                .iter()
-                .map(|c| PhysicalSortExpr {
-                    expr: col(c, &schema).unwrap(),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: true,
-                    },
-                })
-                .collect(),
-        );
+        let sort_ordering =
+            LexOrdering::new(self.sort_columns.iter().map(|c| PhysicalSortExpr {
+                expr: col(c, &schema).unwrap(),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            }))
+            .unwrap();
 
         let exec = MemorySourceConfig::try_new_exec(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::new(sort_ordering, exec));

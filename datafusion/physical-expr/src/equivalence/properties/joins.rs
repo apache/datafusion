@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{equivalence::OrderingEquivalenceClass, PhysicalExprRef};
-use arrow::datatypes::SchemaRef;
-use datafusion_common::{JoinSide, JoinType};
-
 use super::EquivalenceProperties;
+use crate::{equivalence::OrderingEquivalenceClass, PhysicalExprRef};
+
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{JoinSide, JoinType, Result};
 
 /// Calculate ordering equivalence properties for the given join operation.
 pub fn join_equivalence_properties(
@@ -30,7 +30,7 @@ pub fn join_equivalence_properties(
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
-) -> EquivalenceProperties {
+) -> Result<EquivalenceProperties> {
     let left_size = left.schema.fields.len();
     let mut result = EquivalenceProperties::new(join_schema);
     result.add_equivalence_group(left.eq_group().join(
@@ -38,15 +38,13 @@ pub fn join_equivalence_properties(
         join_type,
         left_size,
         on,
-    ));
+    )?)?;
 
     let EquivalenceProperties {
-        constants: left_constants,
         oeq_class: left_oeq_class,
         ..
     } = left;
     let EquivalenceProperties {
-        constants: right_constants,
         oeq_class: mut right_oeq_class,
         ..
     } = right;
@@ -59,7 +57,7 @@ pub fn join_equivalence_properties(
                     &mut right_oeq_class,
                     join_type,
                     left_size,
-                );
+                )?;
 
                 // Right side ordering equivalence properties should be prepended
                 // with those of the left side while constructing output ordering
@@ -70,9 +68,9 @@ pub fn join_equivalence_properties(
                 // then we should add `a ASC, b ASC` to the ordering equivalences
                 // of the join output.
                 let out_oeq_class = left_oeq_class.join_suffix(&right_oeq_class);
-                result.add_ordering_equivalence_class(out_oeq_class);
+                result.add_orderings(out_oeq_class);
             } else {
-                result.add_ordering_equivalence_class(left_oeq_class);
+                result.add_orderings(left_oeq_class);
             }
         }
         [false, true] => {
@@ -80,7 +78,7 @@ pub fn join_equivalence_properties(
                 &mut right_oeq_class,
                 join_type,
                 left_size,
-            );
+            )?;
             // In this special case, left side ordering can be prefixed with
             // the right side ordering.
             if let (Some(JoinSide::Right), JoinType::Inner) = (probe_side, join_type) {
@@ -93,25 +91,16 @@ pub fn join_equivalence_properties(
                 // then we should add `b ASC, a ASC` to the ordering equivalences
                 // of the join output.
                 let out_oeq_class = right_oeq_class.join_suffix(&left_oeq_class);
-                result.add_ordering_equivalence_class(out_oeq_class);
+                result.add_orderings(out_oeq_class);
             } else {
-                result.add_ordering_equivalence_class(right_oeq_class);
+                result.add_orderings(right_oeq_class);
             }
         }
         [false, false] => {}
         [true, true] => unreachable!("Cannot maintain ordering of both sides"),
         _ => unreachable!("Join operators can not have more than two children"),
     }
-    match join_type {
-        JoinType::LeftAnti | JoinType::LeftSemi => {
-            result = result.with_constants(left_constants);
-        }
-        JoinType::RightAnti | JoinType::RightSemi => {
-            result = result.with_constants(right_constants);
-        }
-        _ => {}
-    }
-    result
+    Ok(result)
 }
 
 /// In the context of a join, update the right side `OrderingEquivalenceClass`
@@ -125,28 +114,29 @@ pub fn updated_right_ordering_equivalence_class(
     right_oeq_class: &mut OrderingEquivalenceClass,
     join_type: &JoinType,
     left_size: usize,
-) {
+) -> Result<()> {
     if matches!(
         join_type,
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right
     ) {
-        right_oeq_class.add_offset(left_size);
+        right_oeq_class.add_offset(left_size as _)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-
     use std::sync::Arc;
 
     use super::*;
-    use crate::equivalence::add_offset_to_expr;
-    use crate::equivalence::tests::{convert_to_orderings, create_test_schema};
+    use crate::equivalence::convert_to_orderings;
+    use crate::equivalence::tests::create_test_schema;
     use crate::expressions::col;
-    use datafusion_common::Result;
+    use crate::physical_expr::add_offset_to_expr;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Fields, Schema};
+    use datafusion_common::Result;
 
     #[test]
     fn test_join_equivalence_properties() -> Result<()> {
@@ -154,9 +144,9 @@ mod tests {
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
-        let offset = schema.fields.len();
-        let col_a2 = &add_offset_to_expr(Arc::clone(col_a), offset);
-        let col_b2 = &add_offset_to_expr(Arc::clone(col_b), offset);
+        let offset = schema.fields.len() as _;
+        let col_a2 = &add_offset_to_expr(Arc::clone(col_a), offset)?;
+        let col_b2 = &add_offset_to_expr(Arc::clone(col_b), offset)?;
         let option_asc = SortOptions {
             descending: false,
             nulls_first: false,
@@ -205,8 +195,8 @@ mod tests {
             let left_orderings = convert_to_orderings(&left_orderings);
             let right_orderings = convert_to_orderings(&right_orderings);
             let expected = convert_to_orderings(&expected);
-            left_eq_properties.add_new_orderings(left_orderings);
-            right_eq_properties.add_new_orderings(right_orderings);
+            left_eq_properties.add_orderings(left_orderings);
+            right_eq_properties.add_orderings(right_orderings);
             let join_eq = join_equivalence_properties(
                 left_eq_properties,
                 right_eq_properties,
@@ -215,7 +205,7 @@ mod tests {
                 &[true, false],
                 Some(JoinSide::Left),
                 &[],
-            );
+            )?;
             let err_msg =
                 format!("expected: {:?}, actual:{:?}", expected, &join_eq.oeq_class);
             assert_eq!(join_eq.oeq_class.len(), expected.len(), "{err_msg}");
@@ -253,7 +243,7 @@ mod tests {
         ];
         let orderings = convert_to_orderings(&orderings);
         // Right child ordering equivalences
-        let mut right_oeq_class = OrderingEquivalenceClass::new(orderings);
+        let mut right_oeq_class = OrderingEquivalenceClass::from(orderings);
 
         let left_columns_len = 4;
 
@@ -264,24 +254,24 @@ mod tests {
 
         // Join Schema
         let schema = Schema::new(fields);
-        let col_a = &col("a", &schema)?;
-        let col_d = &col("d", &schema)?;
-        let col_x = &col("x", &schema)?;
-        let col_y = &col("y", &schema)?;
-        let col_z = &col("z", &schema)?;
-        let col_w = &col("w", &schema)?;
+        let col_a = col("a", &schema)?;
+        let col_d = col("d", &schema)?;
+        let col_x = col("x", &schema)?;
+        let col_y = col("y", &schema)?;
+        let col_z = col("z", &schema)?;
+        let col_w = col("w", &schema)?;
 
         let mut join_eq_properties = EquivalenceProperties::new(Arc::new(schema));
         // a=x and d=w
-        join_eq_properties.add_equal_conditions(col_a, col_x)?;
-        join_eq_properties.add_equal_conditions(col_d, col_w)?;
+        join_eq_properties.add_equal_conditions(col_a, Arc::clone(&col_x))?;
+        join_eq_properties.add_equal_conditions(col_d, Arc::clone(&col_w))?;
 
         updated_right_ordering_equivalence_class(
             &mut right_oeq_class,
             &join_type,
             left_columns_len,
-        );
-        join_eq_properties.add_ordering_equivalence_class(right_oeq_class);
+        )?;
+        join_eq_properties.add_orderings(right_oeq_class);
         let result = join_eq_properties.oeq_class().clone();
 
         // [x ASC, y ASC], [z ASC, w ASC]
@@ -290,7 +280,7 @@ mod tests {
             vec![(col_z, option_asc), (col_w, option_asc)],
         ];
         let orderings = convert_to_orderings(&orderings);
-        let expected = OrderingEquivalenceClass::new(orderings);
+        let expected = OrderingEquivalenceClass::from(orderings);
 
         assert_eq!(result, expected);
 

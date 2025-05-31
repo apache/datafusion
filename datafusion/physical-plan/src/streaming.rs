@@ -27,7 +27,7 @@ use crate::execution_plan::{Boundedness, EmissionType};
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    all_alias_free_columns, new_projections_for_columns, update_expr, ProjectionExec,
+    all_alias_free_columns, new_projections_for_columns, update_ordering, ProjectionExec,
 };
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
@@ -35,7 +35,7 @@ use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -99,7 +99,7 @@ impl StreamingTableExec {
             projected_output_ordering.into_iter().collect::<Vec<_>>();
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
-            &projected_output_ordering,
+            projected_output_ordering.clone(),
             &partitions,
             infinite,
         );
@@ -146,7 +146,7 @@ impl StreamingTableExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        orderings: &[LexOrdering],
+        orderings: Vec<LexOrdering>,
         partitions: &[Arc<dyn PartitionStream>],
         infinite: bool,
     ) -> PlanProperties {
@@ -306,20 +306,11 @@ impl ExecutionPlan for StreamingTableExec {
         );
 
         let mut lex_orderings = vec![];
-        for lex_ordering in self.projected_output_ordering().into_iter() {
-            let mut orderings = LexOrdering::default();
-            for order in lex_ordering {
-                let Some(new_ordering) =
-                    update_expr(&order.expr, projection.expr(), false)?
-                else {
-                    return Ok(None);
-                };
-                orderings.push(PhysicalSortExpr {
-                    expr: new_ordering,
-                    options: order.options,
-                });
-            }
-            lex_orderings.push(orderings);
+        for ordering in self.projected_output_ordering().into_iter() {
+            let Some(ordering) = update_ordering(ordering, projection.expr())? else {
+                return Ok(None);
+            };
+            lex_orderings.push(ordering);
         }
 
         StreamingTableExec::try_new(

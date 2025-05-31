@@ -179,10 +179,6 @@ impl AggregateUDFImpl for BoolAnd {
         }
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
     }
@@ -317,10 +313,6 @@ impl AggregateUDFImpl for BoolOr {
                 args.return_field.data_type()
             ),
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {

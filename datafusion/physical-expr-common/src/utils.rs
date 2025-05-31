@@ -17,15 +17,13 @@
 
 use std::sync::Arc;
 
+use crate::physical_expr::PhysicalExpr;
+use crate::tree_node::ExprContext;
+
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
-
 use datafusion_common::Result;
 use datafusion_expr_common::sort_properties::ExprProperties;
-
-use crate::physical_expr::PhysicalExpr;
-use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
-use crate::tree_node::ExprContext;
 
 /// Represents a [`PhysicalExpr`] node with associated properties (order and
 /// range) in a context where properties are tracked.
@@ -91,16 +89,6 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 
     let data = mutable.freeze();
     Ok(make_array(data))
-}
-
-/// Reverses the ORDER BY expression, which is useful during equivalent window
-/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
-/// 'ORDER BY a DESC, NULLS FIRST'.
-pub fn reverse_order_bys(order_bys: &LexOrdering) -> LexOrdering {
-    order_bys
-        .iter()
-        .map(|e| PhysicalSortExpr::new(Arc::clone(&e.expr), !e.options))
-        .collect()
 }
 
 #[cfg(test)]

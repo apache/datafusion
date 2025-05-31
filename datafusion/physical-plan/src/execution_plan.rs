@@ -51,8 +51,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -139,7 +139,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![None; self.children().len()]
     }
 
@@ -1153,16 +1153,16 @@ pub enum CardinalityEffect {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;
 
+    use super::*;
+    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
+
+    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-
-    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
     #[derive(Debug)]
     pub struct EmptyExec;

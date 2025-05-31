@@ -36,35 +36,31 @@ pub enum Constraint {
 }
 
 /// This object encapsulates a list of functional constraints:
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, PartialOrd)]
 pub struct Constraints {
     inner: Vec<Constraint>,
 }
 
 impl Constraints {
-    /// Create empty constraints
-    pub fn empty() -> Self {
-        Constraints::new_unverified(vec![])
-    }
-
     /// Create a new [`Constraints`] object from the given `constraints`.
-    /// Users should use the [`Constraints::empty`] or [`SqlToRel::new_constraint_from_table_constraints`] functions
-    /// for constructing [`Constraints`]. This constructor is for internal
-    /// purposes only and does not check whether the argument is valid. The user
-    /// is responsible for supplying a valid vector of [`Constraint`] objects.
+    /// Users should use the [`Constraints::default`] or [`SqlToRel::new_constraint_from_table_constraints`]
+    /// functions for constructing [`Constraints`] instances. This constructor
+    /// is for internal purposes only and does not check whether the argument
+    /// is valid. The user is responsible for supplying a valid vector of
+    /// [`Constraint`] objects.
     ///
     /// [`SqlToRel::new_constraint_from_table_constraints`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/struct.SqlToRel.html#method.new_constraint_from_table_constraints
     pub fn new_unverified(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
     }
 
-    /// Check whether constraints is empty
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+    /// Extends the current constraints with the given `other` constraints.
+    pub fn extend(&mut self, other: Constraints) {
+        self.inner.extend(other.inner);
     }
 
-    /// Projects constraints using the given projection indices.
-    /// Returns None if any of the constraint columns are not included in the projection.
+    /// Projects constraints using the given projection indices. Returns `None`
+    /// if any of the constraint columns are not included in the projection.
     pub fn project(&self, proj_indices: &[usize]) -> Option<Self> {
         let projected = self
             .inner
@@ -74,14 +70,14 @@ impl Constraints {
                     Constraint::PrimaryKey(indices) => {
                         let new_indices =
                             update_elements_with_matching_indices(indices, proj_indices);
-                        // Only keep constraint if all columns are preserved
+                        // Only keep the constraint if all columns are preserved:
                         (new_indices.len() == indices.len())
                             .then_some(Constraint::PrimaryKey(new_indices))
                     }
                     Constraint::Unique(indices) => {
                         let new_indices =
                             update_elements_with_matching_indices(indices, proj_indices);
-                        // Only keep constraint if all columns are preserved
+                        // Only keep the constraint if all columns are preserved:
                         (new_indices.len() == indices.len())
                             .then_some(Constraint::Unique(new_indices))
                     }
@@ -93,15 +89,9 @@ impl Constraints {
     }
 }
 
-impl Default for Constraints {
-    fn default() -> Self {
-        Constraints::empty()
-    }
-}
-
 impl IntoIterator for Constraints {
     type Item = Constraint;
-    type IntoIter = IntoIter<Constraint>;
+    type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.inner.into_iter()

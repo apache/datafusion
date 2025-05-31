@@ -30,6 +30,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, Result};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -410,16 +411,17 @@ fn assert_plan(plan: &dyn ExecutionPlan, expected_lines: Vec<&str>) {
 async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
     let schema = create_test_schema();
     let source = memory_exec(&schema);
-    let sort_exprs = vec![sort_expr_options(
+    let ordering: LexOrdering = [sort_expr_options(
         "c9",
         &source.schema(),
         SortOptions {
             descending: false,
             nulls_first: false,
         },
-    )];
-    let sort = sort_exec(sort_exprs.clone(), source);
-    let bw = bounded_window_exec("c9", sort_exprs, sort);
+    )]
+    .into();
+    let sort = sort_exec(ordering.clone(), source);
+    let bw = bounded_window_exec("c9", ordering, sort);
     assert_plan(bw.as_ref(), vec![
         "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]",
@@ -458,7 +460,7 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
 async fn test_global_limit_single_partition() -> Result<()> {
     let schema = create_test_schema();
     let source = memory_exec(&schema);
-    let limit = global_limit_exec(source);
+    let limit = global_limit_exec(source, 0, Some(100));
 
     assert_plan(
         limit.as_ref(),
@@ -477,7 +479,7 @@ async fn test_global_limit_single_partition() -> Result<()> {
 async fn test_global_limit_multi_partition() -> Result<()> {
     let schema = create_test_schema();
     let source = memory_exec(&schema);
-    let limit = global_limit_exec(repartition_exec(source));
+    let limit = global_limit_exec(repartition_exec(source), 0, Some(100));
 
     assert_plan(
         limit.as_ref(),
@@ -497,7 +499,7 @@ async fn test_global_limit_multi_partition() -> Result<()> {
 async fn test_local_limit() -> Result<()> {
     let schema = create_test_schema();
     let source = memory_exec(&schema);
-    let limit = local_limit_exec(source);
+    let limit = local_limit_exec(source, 100);
 
     assert_plan(
         limit.as_ref(),
@@ -518,12 +520,12 @@ async fn test_sort_merge_join_satisfied() -> Result<()> {
     let source1 = memory_exec(&schema1);
     let source2 = memory_exec(&schema2);
     let sort_opts = SortOptions::default();
-    let sort_exprs1 = vec![sort_expr_options("c9", &source1.schema(), sort_opts)];
-    let sort_exprs2 = vec![sort_expr_options("a", &source2.schema(), sort_opts)];
-    let left = sort_exec(sort_exprs1, source1);
-    let right = sort_exec(sort_exprs2, source2);
-    let left_jcol = col("c9", &left.schema()).unwrap();
-    let right_jcol = col("a", &right.schema()).unwrap();
+    let ordering1 = [sort_expr_options("c9", &source1.schema(), sort_opts)].into();
+    let ordering2 = [sort_expr_options("a", &source2.schema(), sort_opts)].into();
+    let left = sort_exec(ordering1, source1);
+    let right = sort_exec(ordering2, source2);
+    let left_jcol = col("c9", &left.schema())?;
+    let right_jcol = col("a", &right.schema())?;
     let left = Arc::new(RepartitionExec::try_new(
         left,
         Partitioning::Hash(vec![left_jcol.clone()], 10),
@@ -562,15 +564,16 @@ async fn test_sort_merge_join_order_missing() -> Result<()> {
     let schema2 = create_test_schema2();
     let source1 = memory_exec(&schema1);
     let right = memory_exec(&schema2);
-    let sort_exprs1 = vec![sort_expr_options(
+    let ordering1 = [sort_expr_options(
         "c9",
         &source1.schema(),
         SortOptions::default(),
-    )];
-    let left = sort_exec(sort_exprs1, source1);
+    )]
+    .into();
+    let left = sort_exec(ordering1, source1);
     // Missing sort of the right child here..
-    let left_jcol = col("c9", &left.schema()).unwrap();
-    let right_jcol = col("a", &right.schema()).unwrap();
+    let left_jcol = col("c9", &left.schema())?;
+    let right_jcol = col("a", &right.schema())?;
     let left = Arc::new(RepartitionExec::try_new(
         left,
         Partitioning::Hash(vec![left_jcol.clone()], 10),
@@ -610,16 +613,16 @@ async fn test_sort_merge_join_dist_missing() -> Result<()> {
     let source1 = memory_exec(&schema1);
     let source2 = memory_exec(&schema2);
     let sort_opts = SortOptions::default();
-    let sort_exprs1 = vec![sort_expr_options("c9", &source1.schema(), sort_opts)];
-    let sort_exprs2 = vec![sort_expr_options("a", &source2.schema(), sort_opts)];
-    let left = sort_exec(sort_exprs1, source1);
-    let right = sort_exec(sort_exprs2, source2);
+    let ordering1 = [sort_expr_options("c9", &source1.schema(), sort_opts)].into();
+    let ordering2 = [sort_expr_options("a", &source2.schema(), sort_opts)].into();
+    let left = sort_exec(ordering1, source1);
+    let right = sort_exec(ordering2, source2);
     let right = Arc::new(RepartitionExec::try_new(
         right,
         Partitioning::RoundRobinBatch(10),
     )?);
-    let left_jcol = col("c9", &left.schema()).unwrap();
-    let right_jcol = col("a", &right.schema()).unwrap();
+    let left_jcol = col("c9", &left.schema())?;
+    let right_jcol = col("a", &right.schema())?;
     let left = Arc::new(RepartitionExec::try_new(
         left,
         Partitioning::Hash(vec![left_jcol.clone()], 10),

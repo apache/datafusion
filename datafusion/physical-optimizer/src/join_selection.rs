@@ -459,7 +459,7 @@ fn hash_join_convert_symmetric_subrule(
                             JoinSide::Right => hash_join.right().output_ordering(),
                             JoinSide::None => unreachable!(),
                         }
-                        .map(|p| LexOrdering::new(p.to_vec()))
+                        .cloned()
                     })
                     .flatten()
             };

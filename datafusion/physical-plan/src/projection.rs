@@ -46,11 +46,10 @@ use datafusion_common::{internal_err, JoinSide, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
-use itertools::Itertools;
 use log::trace;
 
 /// Execution plan for a projection
@@ -98,7 +97,7 @@ impl ProjectionExec {
         ));
 
         // Construct a map from the input expressions to the output expression of the Projection
-        let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
+        let projection_mapping = ProjectionMapping::try_new(expr.clone(), &input_schema)?;
         let cache =
             Self::compute_properties(&input, &projection_mapping, Arc::clone(&schema))?;
         Ok(Self {
@@ -127,14 +126,12 @@ impl ProjectionExec {
         schema: SchemaRef,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let mut input_eq_properties = input.equivalence_properties().clone();
-        input_eq_properties.substitute_oeq_class(projection_mapping)?;
+        let input_eq_properties = input.equivalence_properties();
         let eq_properties = input_eq_properties.project(projection_mapping, schema);
-
         // Calculate output partitioning, which needs to respect aliases:
-        let input_partition = input.output_partitioning();
-        let output_partitioning =
-            input_partition.project(projection_mapping, &input_eq_properties);
+        let output_partitioning = input
+            .output_partitioning()
+            .project(projection_mapping, input_eq_properties);
 
         Ok(PlanProperties::new(
             eq_properties,
@@ -622,7 +619,7 @@ pub fn update_expr(
     let mut state = RewriteState::Unchanged;
 
     let new_expr = Arc::clone(expr)
-        .transform_up(|expr: Arc<dyn PhysicalExpr>| {
+        .transform_up(|expr| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
             }
@@ -666,6 +663,42 @@ pub fn update_expr(
     new_expr.map(|e| (state == RewriteState::RewrittenValid).then_some(e))
 }
 
+/// Updates the given lexicographic ordering according to given projected
+/// expressions using the [`update_expr`] function.
+pub fn update_ordering(
+    ordering: LexOrdering,
+    projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
+) -> Result<Option<LexOrdering>> {
+    let mut updated_exprs = vec![];
+    for mut sort_expr in ordering.into_iter() {
+        let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
+        else {
+            return Ok(None);
+        };
+        sort_expr.expr = updated_expr;
+        updated_exprs.push(sort_expr);
+    }
+    Ok(LexOrdering::new(updated_exprs))
+}
+
+/// Updates the given lexicographic requirement according to given projected
+/// expressions using the [`update_expr`] function.
+pub fn update_ordering_requirement(
+    reqs: LexRequirement,
+    projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
+) -> Result<Option<LexRequirement>> {
+    let mut updated_exprs = vec![];
+    for mut sort_expr in reqs.into_iter() {
+        let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
+        else {
+            return Ok(None);
+        };
+        sort_expr.expr = updated_expr;
+        updated_exprs.push(sort_expr);
+    }
+    Ok(LexRequirement::new(updated_exprs))
+}
+
 /// Downcasts all the expressions in `exprs` to `Column`s. If any of the given
 /// expressions is not a `Column`, returns `None`.
 pub fn physical_to_column_exprs(
@@ -700,7 +733,7 @@ pub fn new_join_children(
                     alias.clone(),
                 )
             })
-            .collect_vec(),
+            .collect(),
         Arc::clone(left_child),
     )?;
     let left_size = left_child.schema().fields().len() as i32;
@@ -718,7 +751,7 @@ pub fn new_join_children(
                     alias.clone(),
                 )
             })
-            .collect_vec(),
+            .collect(),
         Arc::clone(right_child),
     )?;
 

@@ -2581,7 +2581,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     |               |         TableScan: t1 projection=[b]                                                                       |
     | physical_plan | ProjectionExec: expr=[b@0 as b, count(*)@1 as count(*)]                                                    |
     |               |   SortPreservingMergeExec: [count(Int64(1))@2 ASC NULLS LAST]                                              |
-    |               |     SortExec: expr=[count(Int64(1))@2 ASC NULLS LAST], preserve_partitioning=[true]                        |
+    |               |     SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]                               |
     |               |       ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*), count(Int64(1))@1 as count(Int64(1))] |
     |               |         AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))]                       |
     |               |           CoalesceBatchesExec: target_batch_size=8192                                                      |

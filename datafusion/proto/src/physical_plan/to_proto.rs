@@ -21,8 +21,9 @@ use std::sync::Arc;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::physical_plan::FileSink;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_expr_common::physical_expr::snapshot_physical_expr;
+use datafusion::physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
@@ -53,11 +54,8 @@ pub fn serialize_physical_aggr_expr(
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
-    let ordering_req = match aggr_expr.order_bys() {
-        Some(order) => order.clone(),
-        None => LexOrdering::default(),
-    };
-    let ordering_req = serialize_physical_sort_exprs(ordering_req, codec)?;
+    let order_bys =
+        serialize_physical_sort_exprs(aggr_expr.order_bys().iter().cloned(), codec)?;
 
     let name = aggr_expr.fun().name().to_string();
     let mut buf = Vec::new();
@@ -67,7 +65,7 @@ pub fn serialize_physical_aggr_expr(
             protobuf::PhysicalAggregateExprNode {
                 aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
                 expr: expressions,
-                ordering_req,
+                ordering_req: order_bys,
                 distinct: aggr_expr.is_distinct(),
                 ignore_nulls: aggr_expr.ignore_nulls(),
                 fun_definition: (!buf.is_empty()).then_some(buf),

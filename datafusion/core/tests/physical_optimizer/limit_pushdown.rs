@@ -17,28 +17,26 @@
 
 use std::sync::Arc;
 
+use crate::physical_optimizer::test_utils::{
+    coalesce_batches_exec, coalesce_partitions_exec, global_limit_exec, local_limit_exec,
+    sort_exec, sort_preserving_merge_exec, stream_exec,
+};
+
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::expressions::{col, lit};
-use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
+use datafusion_physical_expr::expressions::{col, lit, BinaryExpr};
+use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{get_plan_string, ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
 fn create_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -46,48 +44,6 @@ fn create_schema() -> SchemaRef {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Int32, true),
     ]))
-}
-
-fn streaming_table_exec(schema: SchemaRef) -> Result<Arc<dyn ExecutionPlan>> {
-    Ok(Arc::new(StreamingTableExec::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(DummyStreamPartition { schema }) as _],
-        None,
-        None,
-        true,
-        None,
-    )?))
-}
-
-fn global_limit_exec(
-    input: Arc<dyn ExecutionPlan>,
-    skip: usize,
-    fetch: Option<usize>,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(GlobalLimitExec::new(input, skip, fetch))
-}
-
-fn local_limit_exec(
-    input: Arc<dyn ExecutionPlan>,
-    fetch: usize,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(LocalLimitExec::new(input, fetch))
-}
-
-fn sort_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    input: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortExec::new(sort_exprs, input))
-}
-
-fn sort_preserving_merge_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    input: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
 }
 
 fn projection_exec(
@@ -118,16 +74,6 @@ fn filter_exec(
     )?))
 }
 
-fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalesceBatchesExec::new(input, 8192))
-}
-
-fn coalesce_partitions_exec(
-    local_limit: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalescePartitionsExec::new(local_limit))
-}
-
 fn repartition_exec(
     streaming_table: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -141,24 +87,11 @@ fn empty_exec(schema: SchemaRef) -> Arc<dyn ExecutionPlan> {
     Arc::new(EmptyExec::new(schema))
 }
 
-#[derive(Debug)]
-struct DummyStreamPartition {
-    schema: SchemaRef,
-}
-impl PartitionStream for DummyStreamPartition {
-    fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        unreachable!()
-    }
-}
-
 #[test]
 fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> Result<()>
 {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(schema)?;
+    let streaming_table = stream_exec(&schema);
     let global_limit = global_limit_exec(streaming_table, 0, Some(5));
 
     let initial = get_plan_string(&global_limit);
@@ -183,7 +116,7 @@ fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> 
 fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_limit_when_skip_is_nonzero(
 ) -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(schema)?;
+    let streaming_table = stream_exec(&schema);
     let global_limit = global_limit_exec(streaming_table, 2, Some(5));
 
     let initial = get_plan_string(&global_limit);
@@ -209,10 +142,10 @@ fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_li
 fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit(
 ) -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let streaming_table = stream_exec(&schema);
     let repartition = repartition_exec(streaming_table)?;
     let filter = filter_exec(schema, repartition)?;
-    let coalesce_batches = coalesce_batches_exec(filter);
+    let coalesce_batches = coalesce_batches_exec(filter, 8192);
     let local_limit = local_limit_exec(coalesce_batches, 5);
     let coalesce_partitions = coalesce_partitions_exec(local_limit);
     let global_limit = global_limit_exec(coalesce_partitions, 0, Some(5));
@@ -247,7 +180,7 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
 #[test]
 fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let streaming_table = stream_exec(&schema);
     let filter = filter_exec(Arc::clone(&schema), streaming_table)?;
     let projection = projection_exec(schema, filter)?;
     let global_limit = global_limit_exec(projection, 0, Some(5));
@@ -279,8 +212,8 @@ fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
 fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version(
 ) -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema)).unwrap();
-    let coalesce_batches = coalesce_batches_exec(streaming_table);
+    let streaming_table = stream_exec(&schema);
+    let coalesce_batches = coalesce_batches_exec(streaming_table, 8192);
     let projection = projection_exec(schema, coalesce_batches)?;
     let global_limit = global_limit_exec(projection, 0, Some(5));
 
@@ -310,18 +243,17 @@ fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batc
 #[test]
 fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema)).unwrap();
-    let coalesce_batches = coalesce_batches_exec(streaming_table);
+    let streaming_table = stream_exec(&schema);
+    let coalesce_batches = coalesce_batches_exec(streaming_table, 8192);
     let projection = projection_exec(Arc::clone(&schema), coalesce_batches)?;
     let repartition = repartition_exec(projection)?;
-    let sort = sort_exec(
-        vec![PhysicalSortExpr {
-            expr: col("c1", &schema)?,
-            options: SortOptions::default(),
-        }],
-        repartition,
-    );
-    let spm = sort_preserving_merge_exec(sort.output_ordering().unwrap().to_vec(), sort);
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let sort = sort_exec(ordering.clone(), repartition);
+    let spm = sort_preserving_merge_exec(ordering, sort);
     let global_limit = global_limit_exec(spm, 0, Some(5));
 
     let initial = get_plan_string(&global_limit);
@@ -357,7 +289,7 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
 fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> Result<()>
 {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let streaming_table = stream_exec(&schema);
     let repartition = repartition_exec(streaming_table)?;
     let filter = filter_exec(schema, repartition)?;
     let coalesce_partitions = coalesce_partitions_exec(filter);
