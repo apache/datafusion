@@ -53,6 +53,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{internal_err, Result};
 
+use super::plan::DependentJoin;
+
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
@@ -348,6 +350,27 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            LogicalPlan::DependentJoin(DependentJoin {
+                schema,
+                correlated_columns,
+                subquery_expr,
+                subquery_depth,
+                subquery_name,
+                lateral_join_condition,
+                left,
+                right,
+            }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
+                LogicalPlan::DependentJoin(DependentJoin {
+                    schema,
+                    correlated_columns,
+                    subquery_expr,
+                    subquery_depth,
+                    subquery_name,
+                    lateral_join_condition,
+                    left,
+                    right,
+                })
+            }),
         })
     }
 }
@@ -400,6 +423,23 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
         match self {
+            LogicalPlan::DependentJoin(DependentJoin {
+                correlated_columns,
+                subquery_expr,
+                lateral_join_condition,
+                ..
+            }) => {
+                let correlated_column_exprs = correlated_columns
+                    .iter()
+                    .map(|(_, c)| c.clone())
+                    .collect::<Vec<_>>();
+                let maybe_lateral_join_condition = match lateral_join_condition {
+                    Some((_, condition)) => Some(condition.clone()),
+                    None => None,
+                };
+                (&correlated_column_exprs, &maybe_lateral_join_condition)
+                    .apply_ref_elements(f)
+            }
             LogicalPlan::Projection(Projection { expr, .. }) => expr.apply_elements(f),
             LogicalPlan::Values(Values { values, .. }) => values.apply_elements(f),
             LogicalPlan::Filter(Filter { predicate, .. }) => f(predicate),
@@ -487,6 +527,7 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
+            LogicalPlan::DependentJoin(DependentJoin { .. }) => todo!(),
             LogicalPlan::Projection(Projection {
                 expr,
                 input,
