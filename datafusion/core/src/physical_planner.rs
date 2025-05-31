@@ -1108,6 +1108,8 @@ impl DefaultPhysicalPlanner {
                             join_filter,
                             join_type,
                             None,
+                            null_equals_null,
+                            Some(join_on),
                         )?)
                     }
                 } else if session_state.config().target_partitions() > 1
