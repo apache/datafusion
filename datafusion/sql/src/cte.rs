@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 
 use arrow::datatypes::Schema;
 use datafusion_common::{
@@ -25,7 +25,9 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion},
     Result,
 };
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
+use datafusion_expr::{
+    planner_context::PlannerContext, LogicalPlan, LogicalPlanBuilder, TableSource,
+};
 use sqlparser::ast::{Query, SetExpr, SetOperator, With};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {

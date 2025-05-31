@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::planner_context::PlannerContext;
 use crate::var_provider::{VarProvider, VarType};
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion_common::alias::AliasGenerator;
@@ -37,6 +38,7 @@ pub struct ExecutionProps {
     pub alias_generator: Arc<AliasGenerator>,
     /// Providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
+    pub planner_context: Option<PlannerContext>,
 }
 
 impl Default for ExecutionProps {
@@ -54,6 +56,7 @@ impl ExecutionProps {
             query_execution_start_time: Utc.timestamp_nanos(0),
             alias_generator: Arc::new(AliasGenerator::new()),
             var_providers: None,
+            planner_context: None,
         }
     }
 
@@ -64,6 +67,13 @@ impl ExecutionProps {
     ) -> Self {
         self.query_execution_start_time = query_execution_start_time;
         self
+    }
+
+    pub fn set_planner_context(
+        &mut self,
+        planner_context: Option<PlannerContext>,
+    ) {
+        self.planner_context = planner_context;
     }
 
     /// Marks the execution of query started timestamp.

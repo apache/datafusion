@@ -17,13 +17,14 @@
 
 use std::sync::Arc;
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
@@ -184,7 +185,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let old_from_schema = planner_context
             .set_outer_from_schema(None)
             .unwrap_or_else(|| Arc::new(DFSchema::empty()));
-        let new_query_schema = match planner_context.outer_query_schema() {
+        // TODO
+        let _new_query_schema = match planner_context.outer_query_schema() {
             Some(old_query_schema) => {
                 let mut new_query_schema = old_from_schema.as_ref().clone();
                 new_query_schema.merge(old_query_schema);
@@ -192,12 +194,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             None => Some(Arc::clone(&old_from_schema)),
         };
-        let old_query_schema = planner_context.set_outer_query_schema(new_query_schema);
+        // let old_query_schema = planner_context.set_outer_query_schema(new_query_schema);
 
         let plan = self.create_relation(subquery, planner_context)?;
         let outer_ref_columns = plan.all_out_ref_exprs();
 
-        planner_context.set_outer_query_schema(old_query_schema);
+        // planner_context.set_outer_query_schema(old_query_schema);
         planner_context.set_outer_from_schema(Some(old_from_schema));
 
         // We can omit the subquery wrapper if there are no columns
@@ -206,12 +208,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(plan);
         }
 
+        // TODO: handle depth
         match plan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 subquery_alias(
                     LogicalPlan::Subquery(Subquery {
                         subquery: input,
                         outer_ref_columns,
+                        depth: 1,
                         spans: Spans::new(),
                     }),
                     alias,
@@ -220,6 +224,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan => Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(plan),
                 outer_ref_columns,
+                depth: 1,
                 spans: Spans::new(),
             })),
         }
