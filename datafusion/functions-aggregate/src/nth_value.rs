@@ -24,7 +24,7 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
@@ -164,11 +164,11 @@ impl AggregateUDFImpl for NthValueAgg {
         .map(|acc| Box::new(acc) as _)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new_list_field(args.input_types[0].clone(), true),
+            Field::new_list_field(args.input_fields[0].data_type().clone(), true),
             false,
         )];
         let orderings = args.ordering_fields.to_vec();
@@ -179,7 +179,7 @@ impl AggregateUDFImpl for NthValueAgg {
                 false,
             ));
         }
-        Ok(fields)
+        Ok(fields.into_iter().map(Arc::new).collect())
     }
 
     fn aliases(&self) -> &[String] {
@@ -400,7 +400,6 @@ impl Accumulator for NthValueAccumulator {
 impl NthValueAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
-        let struct_field = Fields::from(fields.clone());
 
         let mut column_wise_ordering_values = vec![];
         let num_columns = fields.len();
@@ -418,6 +417,7 @@ impl NthValueAccumulator {
             column_wise_ordering_values.push(array);
         }
 
+        let struct_field = Fields::from(fields);
         let ordering_array =
             StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
 

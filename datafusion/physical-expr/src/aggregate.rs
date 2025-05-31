@@ -41,7 +41,7 @@ use std::sync::Arc;
 use crate::expressions::Column;
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
@@ -106,7 +106,7 @@ impl AggregateExprBuilder {
     /// ```
     /// # use std::any::Any;
     /// # use std::sync::Arc;
-    /// # use arrow::datatypes::DataType;
+    /// # use arrow::datatypes::{DataType, FieldRef};
     /// # use datafusion_common::{Result, ScalarValue};
     /// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility, Expr};
     /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
@@ -143,7 +143,7 @@ impl AggregateExprBuilder {
     /// #         unimplemented!()
     /// #         }
     /// #     
-    /// #     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    /// #     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
     /// #         unimplemented!()
     /// #     }
     /// #     
@@ -213,18 +213,18 @@ impl AggregateExprBuilder {
                 utils::ordering_fields(ordering_req.as_ref(), &ordering_types);
         }
 
-        let input_exprs_types = args
+        let input_exprs_fields = args
             .iter()
-            .map(|arg| arg.data_type(&schema))
+            .map(|arg| arg.return_field(&schema))
             .collect::<Result<Vec<_>>>()?;
 
         check_arg_count(
             fun.name(),
-            &input_exprs_types,
+            &input_exprs_fields,
             &fun.signature().type_signature,
         )?;
 
-        let data_type = fun.return_type(&input_exprs_types)?;
+        let return_field = fun.return_field(&input_exprs_fields)?;
         let is_nullable = fun.is_nullable();
         let name = match alias {
             None => {
@@ -238,7 +238,7 @@ impl AggregateExprBuilder {
         Ok(AggregateFunctionExpr {
             fun: Arc::unwrap_or_clone(fun),
             args,
-            data_type,
+            return_field,
             name,
             human_display,
             schema: Arc::unwrap_or_clone(schema),
@@ -246,7 +246,7 @@ impl AggregateExprBuilder {
             ignore_nulls,
             ordering_fields,
             is_distinct,
-            input_types: input_exprs_types,
+            input_fields: input_exprs_fields,
             is_reversed,
             is_nullable,
         })
@@ -310,8 +310,8 @@ impl AggregateExprBuilder {
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
-    /// Output / return type of this aggregate
-    data_type: DataType,
+    /// Output / return field of this aggregate
+    return_field: FieldRef,
     /// Output column name that this expression creates
     name: String,
     /// Simplified name for `tree` explain.
@@ -322,10 +322,10 @@ pub struct AggregateFunctionExpr {
     // Whether to ignore null values
     ignore_nulls: bool,
     // fields used for order sensitive aggregation functions
-    ordering_fields: Vec<Field>,
+    ordering_fields: Vec<FieldRef>,
     is_distinct: bool,
     is_reversed: bool,
-    input_types: Vec<DataType>,
+    input_fields: Vec<FieldRef>,
     is_nullable: bool,
 }
 
@@ -372,8 +372,12 @@ impl AggregateFunctionExpr {
     }
 
     /// the field of the final result of this aggregation.
-    pub fn field(&self) -> Field {
-        Field::new(&self.name, self.data_type.clone(), self.is_nullable)
+    pub fn field(&self) -> FieldRef {
+        self.return_field
+            .as_ref()
+            .clone()
+            .with_name(&self.name)
+            .into()
     }
 
     /// the accumulator used to accumulate values from the expressions.
@@ -381,7 +385,7 @@ impl AggregateFunctionExpr {
     /// return states with the same description as `state_fields`
     pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let acc_args = AccumulatorArgs {
-            return_type: &self.data_type,
+            return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: self.ordering_req.as_ref(),
@@ -395,11 +399,11 @@ impl AggregateFunctionExpr {
     }
 
     /// the field of the final result of this aggregation.
-    pub fn state_fields(&self) -> Result<Vec<Field>> {
+    pub fn state_fields(&self) -> Result<Vec<FieldRef>> {
         let args = StateFieldsArgs {
             name: &self.name,
-            input_types: &self.input_types,
-            return_type: &self.data_type,
+            input_fields: &self.input_fields,
+            return_field: Arc::clone(&self.return_field),
             ordering_fields: &self.ordering_fields,
             is_distinct: self.is_distinct,
         };
@@ -472,7 +476,7 @@ impl AggregateFunctionExpr {
     /// Creates accumulator implementation that supports retract
     pub fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let args = AccumulatorArgs {
-            return_type: &self.data_type,
+            return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: self.ordering_req.as_ref(),
@@ -541,7 +545,7 @@ impl AggregateFunctionExpr {
     /// `[Self::create_groups_accumulator`] will be called.
     pub fn groups_accumulator_supported(&self) -> bool {
         let args = AccumulatorArgs {
-            return_type: &self.data_type,
+            return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: self.ordering_req.as_ref(),
@@ -560,7 +564,7 @@ impl AggregateFunctionExpr {
     /// implemented in addition to [`Accumulator`].
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         let args = AccumulatorArgs {
-            return_type: &self.data_type,
+            return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: self.ordering_req.as_ref(),
@@ -640,7 +644,7 @@ impl AggregateFunctionExpr {
     /// output_field is the name of the column produced by this aggregate
     ///
     /// Note: this is used to use special aggregate implementations in certain conditions
-    pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+    pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
         self.fun.is_descending().map(|flag| (self.field(), flag))
     }
 
@@ -685,7 +689,7 @@ pub struct AggregatePhysicalExpressions {
 impl PartialEq for AggregateFunctionExpr {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
-            && self.data_type == other.data_type
+            && self.return_field == other.return_field
             && self.fun == other.fun
             && self.args.len() == other.args.len()
             && self

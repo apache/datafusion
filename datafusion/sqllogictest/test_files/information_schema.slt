@@ -307,7 +307,7 @@ datafusion.sql_parser.collect_spans false
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
 datafusion.sql_parser.enable_options_value_normalization false
-datafusion.sql_parser.map_varchar_to_utf8view false
+datafusion.sql_parser.map_varchar_to_utf8view true
 datafusion.sql_parser.parse_float_as_decimal false
 datafusion.sql_parser.recursion_limit 50
 datafusion.sql_parser.support_varchar_with_length true
@@ -326,7 +326,7 @@ datafusion.catalog.location NULL Location scanned to load tables for `default` s
 datafusion.catalog.newlines_in_values false Specifies whether newlines in (quoted) CSV values are supported. This is the default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement. Parsing newlines in quoted values may be affected by execution behaviour such as parallel file scanning. Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
-datafusion.execution.collect_statistics false Should DataFusion collect statistics after listing files
+datafusion.execution.collect_statistics false Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Applies to the default `ListingTableProvider` in DataFusion. Defaults to false.
 datafusion.execution.enable_recursive_ctes true Should DataFusion support recursive CTEs
 datafusion.execution.enforce_batch_size_in_joins false Should DataFusion enforce batch size in joins or not. By default, DataFusion will not enforce batch size in joins. Enforcing batch size in joins can reduce memory usage when joining large tables with a highly-selective join filter, but is also slightly slower.
 datafusion.execution.keep_partition_by_columns false Should DataFusion keep the columns used for partition_by in the output RecordBatches
@@ -417,7 +417,7 @@ datafusion.sql_parser.collect_spans false When set to true, the source locations
 datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
 datafusion.sql_parser.enable_ident_normalization true When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
 datafusion.sql_parser.enable_options_value_normalization false When set to true, SQL parser will normalize options value (convert value to lowercase). Note that this option is ignored and will be removed in the future. All case-insensitive values are normalized automatically.
-datafusion.sql_parser.map_varchar_to_utf8view false If true, `VARCHAR` is mapped to `Utf8View` during SQL planning. If false, `VARCHAR` is mapped to `Utf8`  during SQL planning. Default is false.
+datafusion.sql_parser.map_varchar_to_utf8view true If true, `VARCHAR` is mapped to `Utf8View` during SQL planning. If false, `VARCHAR` is mapped to `Utf8`  during SQL planning. Default is false.
 datafusion.sql_parser.parse_float_as_decimal false When set to true, SQL parser will parse float as decimal type
 datafusion.sql_parser.recursion_limit 50 Specifies the recursion depth limit when parsing complex SQL Queries
 datafusion.sql_parser.support_varchar_with_length true If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but ignore the length. If false, error if a `VARCHAR` with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.

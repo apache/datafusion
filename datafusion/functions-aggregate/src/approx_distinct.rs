@@ -23,7 +23,7 @@ use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{
-    ArrowPrimitiveType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    ArrowPrimitiveType, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
     UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
@@ -322,12 +322,13 @@ impl AggregateUDFImpl for ApproxDistinct {
         Ok(DataType::UInt64)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![Field::new(
             format_state_name(args.name, "hll_registers"),
             DataType::Binary,
             false,
-        )])
+        )
+        .into()])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

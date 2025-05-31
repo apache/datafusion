@@ -25,18 +25,16 @@ use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{instant::Instant, Result};
+use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryPool, UnboundedMemoryPool,
 };
 use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
-use rand::seq::SliceRandom;
 use std::time::Duration;
 
-use datafusion_execution::{
-    disk_manager::DiskManagerConfig, memory_pool::FairSpillPool,
-    runtime_env::RuntimeEnvBuilder,
-};
+use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
+use rand::prelude::IndexedRandom;
 use rand::Rng;
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -199,16 +197,16 @@ impl SortQueryFuzzer {
         // Execute until either`max_rounds` or `time_limit` is reached
         let max_rounds = self.max_rounds.unwrap_or(usize::MAX);
         for round in 0..max_rounds {
-            let init_seed = self.runner_rng.gen();
+            let init_seed = self.runner_rng.random();
             for query_i in 0..self.queries_per_round {
-                let query_seed = self.runner_rng.gen();
+                let query_seed = self.runner_rng.random();
                 let mut expected_results: Option<Vec<RecordBatch>> = None; // use first config's result as the expected result
                 for config_i in 0..self.config_variations_per_query {
                     if self.should_stop_due_to_time_limit(start_time, round, query_i) {
                         return Ok(());
                     }
 
-                    let config_seed = self.runner_rng.gen();
+                    let config_seed = self.runner_rng.random();
 
                     println!(
                         "[SortQueryFuzzer] Round {round}, Query {query_i} (Config {config_i})"
@@ -299,7 +297,7 @@ impl SortFuzzerTestGenerator {
         let mut rng = StdRng::seed_from_u64(rng_seed);
         let min_ncol = min(candidate_columns.len(), 5);
         let max_ncol = min(candidate_columns.len(), 10);
-        let amount = rng.gen_range(min_ncol..=max_ncol);
+        let amount = rng.random_range(min_ncol..=max_ncol);
         let selected_columns = candidate_columns
             .choose_multiple(&mut rng, amount)
             .cloned()
@@ -326,7 +324,7 @@ impl SortFuzzerTestGenerator {
     /// memory table should be generated with more partitions, due to https://github.com/apache/datafusion/issues/15088
     fn init_partitioned_staggered_batches(&mut self, rng_seed: u64) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
-        let num_partitions = rng.gen_range(1..=self.max_partitions);
+        let num_partitions = rng.random_range(1..=self.max_partitions);
 
         let max_batch_size = self.num_rows / num_partitions / 50;
         let target_partition_size = self.num_rows / num_partitions;
@@ -343,7 +341,7 @@ impl SortFuzzerTestGenerator {
                 // Generate a random batch of size between 1 and max_batch_size
 
                 // Let edge case (1-row batch) more common
-                let (min_nrow, max_nrow) = if rng.gen_bool(0.1) {
+                let (min_nrow, max_nrow) = if rng.random_bool(0.1) {
                     (1, 3)
                 } else {
                     (1, max_batch_size)
@@ -354,7 +352,7 @@ impl SortFuzzerTestGenerator {
                     max_nrow,
                     self.selected_columns.clone(),
                 )
-                .with_seed(rng.gen());
+                .with_seed(rng.random());
 
                 let record_batch = record_batch_generator.generate().unwrap();
                 num_rows += record_batch.num_rows();
@@ -372,9 +370,9 @@ impl SortFuzzerTestGenerator {
         }
 
         // After all partitions are created, optionally make one partition have 0/1 batch
-        if num_partitions > 2 && rng.gen_bool(0.1) {
-            let partition_index = rng.gen_range(0..num_partitions);
-            if rng.gen_bool(0.5) {
+        if num_partitions > 2 && rng.random_bool(0.1) {
+            let partition_index = rng.random_range(0..num_partitions);
+            if rng.random_bool(0.5) {
                 // 0 batch
                 partitions[partition_index] = Vec::new();
             } else {
@@ -423,7 +421,7 @@ impl SortFuzzerTestGenerator {
     pub fn generate_random_query(&self, rng_seed: u64) -> (String, Option<usize>) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
-        let num_columns = rng.gen_range(1..=3).min(self.selected_columns.len());
+        let num_columns = rng.random_range(1..=3).min(self.selected_columns.len());
         let selected_columns: Vec<_> = self
             .selected_columns
             .choose_multiple(&mut rng, num_columns)
@@ -432,12 +430,12 @@ impl SortFuzzerTestGenerator {
         let mut order_by_clauses = Vec::new();
         for col in selected_columns {
             let mut clause = col.name.clone();
-            if rng.gen_bool(0.5) {
-                let order = if rng.gen_bool(0.5) { "ASC" } else { "DESC" };
+            if rng.random_bool(0.5) {
+                let order = if rng.random_bool(0.5) { "ASC" } else { "DESC" };
                 clause.push_str(&format!(" {order}"));
             }
-            if rng.gen_bool(0.5) {
-                let nulls = if rng.gen_bool(0.5) {
+            if rng.random_bool(0.5) {
+                let nulls = if rng.random_bool(0.5) {
                     "NULLS FIRST"
                 } else {
                     "NULLS LAST"
@@ -449,14 +447,14 @@ impl SortFuzzerTestGenerator {
 
         let dataset_size = self.dataset_state.as_ref().unwrap().dataset_size;
 
-        let limit = if rng.gen_bool(0.2) {
+        let limit = if rng.random_bool(0.2) {
             // Prefer edge cases for k like 1, dataset_size, etc.
-            Some(if rng.gen_bool(0.5) {
+            Some(if rng.random_bool(0.5) {
                 let edge_cases =
                     [1, 2, 3, dataset_size - 1, dataset_size, dataset_size + 1];
                 *edge_cases.choose(&mut rng).unwrap()
             } else {
-                rng.gen_range(1..=dataset_size)
+                rng.random_range(1..=dataset_size)
             })
         } else {
             None
@@ -486,12 +484,12 @@ impl SortFuzzerTestGenerator {
 
         // 30% to 200% of the dataset size (if `with_memory_limit` is false, config
         // will use the default unbounded pool to override it later)
-        let memory_limit = rng.gen_range(
+        let memory_limit = rng.random_range(
             (dataset_size as f64 * 0.5) as usize..=(dataset_size as f64 * 2.0) as usize,
         );
         // 10% to 20% of the per-partition memory limit size
         let per_partition_mem_limit = memory_limit / num_partitions;
-        let sort_spill_reservation_bytes = rng.gen_range(
+        let sort_spill_reservation_bytes = rng.random_range(
             (per_partition_mem_limit as f64 * 0.2) as usize
                 ..=(per_partition_mem_limit as f64 * 0.3) as usize,
         );
@@ -504,7 +502,7 @@ impl SortFuzzerTestGenerator {
             0
         } else {
             let dataset_size = self.dataset_state.as_ref().unwrap().dataset_size;
-            rng.gen_range(0..=dataset_size * 2_usize)
+            rng.random_range(0..=dataset_size * 2_usize)
         };
 
         // Set up strings for printing
@@ -548,7 +546,7 @@ impl SortFuzzerTestGenerator {
 
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(memory_pool)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(DiskManagerBuilder::default())
             .build_arc()?;
 
         let ctx = SessionContext::new_with_config_rt(config, runtime);

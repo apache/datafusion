@@ -83,23 +83,22 @@ impl TestParquetFile {
         props: WriterProperties,
         batches: impl IntoIterator<Item = RecordBatch>,
     ) -> Result<Self> {
-        let file = File::create(&path).unwrap();
+        let file = File::create(&path)?;
 
         let mut batches = batches.into_iter();
         let first_batch = batches.next().expect("need at least one record batch");
         let schema = first_batch.schema();
 
-        let mut writer =
-            ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))?;
 
-        writer.write(&first_batch).unwrap();
+        writer.write(&first_batch)?;
         let mut num_rows = first_batch.num_rows();
 
         for batch in batches {
-            writer.write(&batch).unwrap();
+            writer.write(&batch)?;
             num_rows += batch.num_rows();
         }
-        writer.close().unwrap();
+        writer.close()?;
 
         println!("Generated test dataset with {num_rows} rows");
 
