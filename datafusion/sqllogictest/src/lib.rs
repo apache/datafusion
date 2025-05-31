@@ -34,6 +34,7 @@ pub use engines::DFColumnType;
 pub use engines::DFOutput;
 pub use engines::DFSqlLogicTestError;
 pub use engines::DataFusion;
+pub use engines::DataFusionSubstraitRoundTrip;
 
 #[cfg(feature = "postgres")]
 pub use engines::Postgres;
