@@ -49,6 +49,7 @@ datafusion-macros = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
+hashbrown = { workspace = true }
 log = { workspace = true }
 paste = "1.0.14"
 
