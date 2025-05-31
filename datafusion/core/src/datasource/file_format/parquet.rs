@@ -196,7 +196,8 @@ mod tests {
         let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
         let stats =
-            fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
+            fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None, None)
+                .await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -204,7 +205,8 @@ mod tests {
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
-        let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
+        let stats =
+            fetch_statistics(store.as_ref(), schema, &meta[1], None, None).await?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
         let c2_stats = &stats.column_statistics[1];
@@ -376,9 +378,14 @@ mod tests {
 
         // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
         // for the remaining metadata
-        fetch_parquet_metadata(store.as_ref() as &dyn ObjectStore, &meta[0], Some(9))
-            .await
-            .expect("error reading metadata with hint");
+        fetch_parquet_metadata(
+            store.as_ref() as &dyn ObjectStore,
+            &meta[0],
+            Some(9),
+            None,
+        )
+        .await
+        .expect("error reading metadata with hint");
 
         assert_eq!(store.request_count(), 2);
 
@@ -396,9 +403,14 @@ mod tests {
             .await
             .unwrap();
 
-        let stats =
-            fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
-                .await?;
+        let stats = fetch_statistics(
+            store.upcast().as_ref(),
+            schema.clone(),
+            &meta[0],
+            Some(9),
+            None,
+        )
+        .await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -413,7 +425,7 @@ mod tests {
         // Use the file size as the hint so we can get the full metadata from the first fetch
         let size_hint = meta[0].size as usize;
 
-        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
+        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint), None)
             .await
             .expect("error reading metadata with hint");
 
@@ -432,6 +444,7 @@ mod tests {
             schema.clone(),
             &meta[0],
             Some(size_hint),
+            None,
         )
         .await?;
 
@@ -448,7 +461,7 @@ mod tests {
         // Use the a size hint larger than the file size to make sure we don't panic
         let size_hint = (meta[0].size + 100) as usize;
 
-        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
+        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint), None)
             .await
             .expect("error reading metadata with hint");
 
@@ -487,7 +500,8 @@ mod tests {
         let schema = format.infer_schema(&state, &store, &files).await.unwrap();
 
         // Fetch statistics for first file
-        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
+        let pq_meta =
+            fetch_parquet_metadata(store.as_ref(), &files[0], None, None).await?;
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
 
@@ -545,7 +559,8 @@ mod tests {
         };
 
         // Fetch statistics for first file
-        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
+        let pq_meta =
+            fetch_parquet_metadata(store.as_ref(), &files[0], None, None).await?;
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
@@ -571,7 +586,8 @@ mod tests {
         assert_eq!(c2_stats.min_value, Precision::Exact(null_i64.clone()));
 
         // Fetch statistics for second file
-        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
+        let pq_meta =
+            fetch_parquet_metadata(store.as_ref(), &files[1], None, None).await?;
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null
