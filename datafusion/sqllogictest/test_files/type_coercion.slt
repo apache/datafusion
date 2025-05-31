@@ -208,12 +208,12 @@ EXPLAIN SELECT cast(0.0 + a as integer) FROM (select 1 a) x GROUP BY 1
 ----
 logical_plan
 01)Union
-02)--Projection: CAST(Float64(0) + x.a AS Float64) AS Float64(0) + x.a
+02)--Projection: CAST((Float64(0) + x.a) AS Float64) AS (Float64(0) + x.a)
 03)----Aggregate: groupBy=[[CAST(Float64(0) + CAST(x.a AS Float64) AS Int32)]], aggr=[[]]
 04)------SubqueryAlias: x
 05)--------Projection: Int64(1) AS a
 06)----------EmptyRelation
-07)--Projection: Float64(2.1) + x.a AS Float64(0) + x.a
+07)--Projection: (Float64(2.1) + x.a) AS (Float64(0) + x.a)
 08)----Aggregate: groupBy=[[Float64(2.1) + CAST(x.a AS Float64)]], aggr=[[]]
 09)------SubqueryAlias: x
 10)--------Projection: Int64(1) AS a
