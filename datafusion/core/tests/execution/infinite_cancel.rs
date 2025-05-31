@@ -17,6 +17,7 @@
 
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow_schema::SortOptions;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::functions_aggregate::sum;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
@@ -30,6 +31,9 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::SessionContext;
 use datafusion::{common, physical_plan};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use futures::{Stream, StreamExt};
 use std::any::Any;
 use std::error::Error;
@@ -37,6 +41,7 @@ use std::fmt::Formatter;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use tokio::select;
 
 struct InfiniteStream {
     batch: RecordBatch,
@@ -152,11 +157,7 @@ async fn test_infinite_agg_cancel() -> Result<(), Box<dyn Error>> {
         vec![Arc::new(
             AggregateExprBuilder::new(
                 sum::sum_udaf(),
-                vec![Arc::new(
-                    datafusion::physical_expr::expressions::Column::new_with_schema(
-                        "value", &schema,
-                    )?,
-                )],
+                vec![Arc::new(Column::new_with_schema("value", &schema)?)],
             )
             .schema(inf.schema())
             .alias("sum")
@@ -172,7 +173,7 @@ async fn test_infinite_agg_cancel() -> Result<(), Box<dyn Error>> {
     const TIMEOUT: u64 = 1;
 
     // 4) drive the stream inline in select!
-    let result = tokio::select! {
+    let result = select! {
         batch_opt = stream.next() => batch_opt,
         _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => {
             None
@@ -180,5 +181,56 @@ async fn test_infinite_agg_cancel() -> Result<(), Box<dyn Error>> {
     };
 
     assert!(result.is_none(), "Expected timeout, but got a result");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_infinite_sort_cancel() -> Result<(), Box<dyn Error>> {
+    // 1) build session & schema & sample batch
+    let session_ctx = SessionContext::new();
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    )]));
+    let mut builder = Int64Array::builder(8192);
+    for v in 0..8192 {
+        builder.append_value(v);
+    }
+    let array = builder.finish();
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)])?;
+
+    // 2) set up the infinite source
+    let inf = Arc::new(InfiniteExec::new(&batch));
+
+    // 3) set up a SortExec that will never finish because input is infinite
+    let sort_options = SortOptions {
+        descending: false,
+        nulls_first: true,
+    };
+    let sort_expr = PhysicalSortExpr::new(
+        Arc::new(Column::new_with_schema("value", &schema)?),
+        sort_options,
+    );
+    // LexOrdering is just Vec<PhysicalSortExpr>
+    let lex_ordering: datafusion::physical_expr::LexOrdering = vec![sort_expr].into();
+    let sort_exec = Arc::new(SortExec::new(lex_ordering, inf.clone()));
+
+    // 4) get the stream
+    let mut stream = physical_plan::execute_stream(sort_exec, session_ctx.task_ctx())?;
+    const TIMEOUT: u64 = 1;
+
+    // 5) drive the stream inline in select!
+    let result = select! {
+        batch_opt = stream.next() => batch_opt,
+        _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => {
+            None
+        }
+    };
+
+    assert!(
+        result.is_none(),
+        "Expected timeout for sort, but got a result"
+    );
     Ok(())
 }
