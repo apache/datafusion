@@ -6712,7 +6712,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[count(Int64(1))@0 * count(Int64(2))@1 as count(Int64(1)) * count(Int64(2))]
+01)ProjectionExec: expr=[count(Int64(1))@0 * count(Int64(2))@1 as (count(Int64(1)) * count(Int64(2)))]
 02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
