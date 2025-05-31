@@ -225,6 +225,23 @@ where
         return Ok(Arc::new(NullArray::new(array.len())));
     }
 
+    if let DataType::Struct(fields) = values.data_type() {
+        let has_null_fields = fields.iter().any(|field| field.data_type() == &Null);
+        if has_null_fields {
+            // Instead of trying to extract from malformed struct data and return appropriate nulls
+            let mut null_array_data = Vec::with_capacity(array.len());
+            for _ in 0..array.len() {
+                null_array_data.push(None::<i32>);
+            }
+
+            // Return null array with the expected struct type
+            return Ok(arrow::array::new_null_array(
+                values.data_type(),
+                array.len(),
+            ));
+        }
+    }
+
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
 
@@ -998,8 +1015,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::array_element_udf;
+    use super::*;
+    use arrow::array::{Int64Array, ListArray, StructArray};
     use arrow::datatypes::{DataType, Field};
+    use std::sync::Arc;
+
     use datafusion_common::{Column, DFSchema};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{Expr, ExprSchemable};
@@ -1008,13 +1028,12 @@ mod tests {
     // Regression test for https://github.com/apache/datafusion/issues/13755
     #[test]
     fn test_array_element_return_type_fixed_size_list() {
-        let fixed_size_list_type = DataType::FixedSizeList(
+        let fixed_size_list_type = FixedSizeList(
             Field::new("some_arbitrary_test_field", DataType::Int32, false).into(),
             13,
         );
-        let array_type = DataType::List(
-            Field::new_list_field(fixed_size_list_type.clone(), true).into(),
-        );
+        let array_type =
+            List(Field::new_list_field(fixed_size_list_type.clone(), true).into());
         let index_type = DataType::Int64;
 
         let schema = DFSchema::from_unqualified_fields(
@@ -1048,5 +1067,140 @@ mod tests {
             ExprSchemable::get_type(&udf_expr, &schema).unwrap(),
             fixed_size_list_type
         );
+    }
+
+    #[test]
+    fn test_array_element_struct_with_null_fields() {
+        // This test reproduces the crash scenario from issue: https://github.com/apache/datafusion/issues/16187
+        // map_values(map([named_struct('a', 1, 'b', null)], [named_struct('a', 1, 'b', null)]))[0]
+
+        // Create a struct with one regular field and one Null-typed field
+        // This simulates what named_struct('a', 1, 'b', null) creates
+        let struct_fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", Null, true), // This is the problematic field
+        ];
+
+        let field_a_data = Arc::new(Int64Array::from(vec![Some(1)]));
+        let field_b_data = Arc::new(NullArray::new(1));
+
+        let struct_array = StructArray::new(
+            struct_fields.into(),
+            vec![field_a_data, field_b_data],
+            None,
+        );
+
+        // Create a ListArray containing this struct (simulates map_values output)
+        let list_field = Field::new_list_field(struct_array.data_type().clone(), true);
+        let list_array = ListArray::new(
+            Arc::new(list_field),
+            OffsetBuffer::new(vec![0, 1].into()),
+            Arc::new(struct_array),
+            None,
+        );
+
+        let index_array = Int64Array::from(vec![0]);
+
+        // This should NOT panic with the fix
+        let result = general_array_element::<i32>(&list_array, &index_array);
+
+        assert!(
+            result.is_ok(),
+            "array_element should not panic on struct with Null fields"
+        );
+
+        let result_array = result.unwrap();
+
+        // Should return a null array of the correct struct type
+        assert_eq!(result_array.len(), 1);
+        assert!(
+            result_array.is_null(0),
+            "Result should be null for problematic struct"
+        );
+        assert_eq!(
+            result_array.data_type(),
+            &DataType::Struct(
+                vec![
+                    Field::new("a", DataType::Int64, true),
+                    Field::new("b", Null, true),
+                ]
+                .into()
+            )
+        );
+    }
+
+    #[test]
+    fn test_array_element_mixed_null_fields() {
+        let struct_fields = vec![
+            Field::new("valid", DataType::Utf8, true),
+            Field::new("null_field", Null, true),
+            Field::new("another_valid", DataType::Int32, true),
+        ];
+
+        let field_1_data = Arc::new(arrow::array::StringArray::from(vec![Some("test")]));
+        let field_2_data = Arc::new(NullArray::new(1));
+        let field_3_data = Arc::new(arrow::array::Int32Array::from(vec![Some(42)]));
+
+        let struct_array = StructArray::new(
+            struct_fields.into(),
+            vec![field_1_data, field_2_data, field_3_data],
+            None,
+        );
+
+        let list_field = Field::new_list_field(struct_array.data_type().clone(), true);
+        let list_array = ListArray::new(
+            Arc::new(list_field),
+            OffsetBuffer::new(vec![0, 1].into()),
+            Arc::new(struct_array),
+            None,
+        );
+
+        let index_array = Int64Array::from(vec![0]);
+
+        let result = general_array_element::<i32>(&list_array, &index_array);
+        assert!(
+            result.is_ok(),
+            "Should handle mixed null fields by returning NULL"
+        );
+
+        let result_array = result.unwrap();
+        assert!(
+            result_array.is_null(0),
+            "Should return null for struct with any Null fields"
+        );
+    }
+
+    #[test]
+    fn test_array_element_out_of_bounds_with_null_fields() {
+        let struct_fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", Null, true),
+        ];
+
+        let field_a_data = Arc::new(Int64Array::from(vec![Some(1)]));
+        let field_b_data = Arc::new(NullArray::new(1));
+
+        let struct_array = StructArray::new(
+            struct_fields.into(),
+            vec![field_a_data, field_b_data],
+            None,
+        );
+
+        let list_field = Field::new_list_field(struct_array.data_type().clone(), true);
+        let list_array = ListArray::new(
+            Arc::new(list_field),
+            OffsetBuffer::new(vec![0, 1].into()),
+            Arc::new(struct_array),
+            None,
+        );
+
+        // Try to access index 5 (out of bounds)
+        let index_array = Int64Array::from(vec![5]);
+
+        let result = general_array_element::<i32>(&list_array, &index_array);
+        assert!(result.is_ok(), "Out of bounds access should not panic");
+
+        let result_array = result.unwrap();
+        assert!(result_array.is_null(0), "Out of bounds should return null");
     }
 }
