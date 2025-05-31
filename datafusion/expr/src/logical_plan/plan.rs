@@ -1491,6 +1491,30 @@ impl LogicalPlan {
         let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
 
         self.apply_with_subqueries(|plan| {
+            if let LogicalPlan::Limit(Limit {
+                fetch: Some(f),
+                skip,
+                ..
+            }) = plan
+            {
+                if let Expr::Placeholder(Placeholder { id, data_type }) = &**f {
+                    // Valid assumption, https://github.com/apache/datafusion/blob/41e7aed3a943134c40d1b18cb9d424b358b5e5b1/datafusion/optimizer/src/analyzer/type_coercion.rs#L242
+                    param_types.insert(
+                        id.clone(),
+                        Some(data_type.as_ref().cloned().unwrap_or(DataType::Int64)),
+                    );
+                }
+
+                if let Some(s) = skip {
+                    if let Expr::Placeholder(Placeholder { id, data_type }) = &**s {
+                        // Valid assumption, https://github.com/apache/datafusion/blob/41e7aed3a943134c40d1b18cb9d424b358b5e5b1/datafusion/optimizer/src/analyzer/type_coercion.rs#L242
+                        param_types.insert(
+                            id.clone(),
+                            Some(data_type.as_ref().cloned().unwrap_or(DataType::Int64)),
+                        );
+                    }
+                }
+            }
             plan.apply_expressions(|expr| {
                 expr.apply(|expr| {
                     if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
@@ -1503,6 +1527,10 @@ impl LogicalPlan {
                             }
                             (_, Some(dt)) => {
                                 param_types.insert(id.clone(), Some(dt.clone()));
+                            }
+                            (Some(Some(_)), None) => {
+                                // we have already inferred the datatype like
+                                // the LIMIT case handled specially above.
                             }
                             _ => {
                                 param_types.insert(id.clone(), None);
@@ -4019,6 +4047,89 @@ mod tests {
             .filter(in_subquery(col("state"), Arc::new(plan1)))?
             .project(vec![col("id")])?
             .build()
+    }
+
+    #[test]
+    fn test_resolved_placeholder_limit() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("A", DataType::Int32, true)]));
+        let source = Arc::new(LogicalTableSource::new(Arc::clone(&schema)));
+
+        let placeholders = ["$1", "$2"];
+
+        // SELECT * FROM my_table LIMIT $1 OFFSET $2
+        let plan = LogicalPlan::Limit(Limit {
+            skip: Some(Box::new(Expr::Placeholder(Placeholder {
+                id: placeholders[1].to_string(),
+                data_type: None,
+            }))),
+            fetch: Some(Box::new(Expr::Placeholder(Placeholder {
+                id: placeholders[0].to_string(),
+                data_type: None,
+            }))),
+            input: Arc::new(LogicalPlan::TableScan(TableScan {
+                table_name: TableReference::from("my_table"),
+                source,
+                projected_schema: Arc::new(DFSchema::try_from(Arc::clone(&schema))?),
+                projection: None,
+                filters: vec![],
+                fetch: None,
+            })),
+        });
+
+        // try to infer the placeholder datatypes for the plan
+        let schema = DFSchema::try_from(Arc::clone(&schema))?;
+        let plan = plan
+            .map_expressions(|e| {
+                let (e, has_placeholder) = e.infer_placeholder_types(&schema)?;
+                Ok(if !has_placeholder {
+                    Transformed::no(e)
+                } else {
+                    Transformed::yes(e)
+                })
+            })
+            .expect("map expressions")
+            .data;
+
+        let LogicalPlan::Limit(Limit {
+            fetch: Some(f),
+            skip: Some(s),
+            ..
+        }) = &plan
+        else {
+            panic!("plan is not Limit with fetch and skip");
+        };
+
+        if !matches!(
+            (&**f, &**s),
+            (
+                Expr::Placeholder(Placeholder {
+                    data_type: None,
+                    ..
+                }),
+                Expr::Placeholder(Placeholder {
+                    data_type: None,
+                    ..
+                })
+            )
+        ) {
+            panic!(
+                "expected fetch and skip to be placeholders with datatypes uninferred"
+            );
+        }
+
+        let params = plan.get_parameter_types().expect("to infer type");
+        assert_eq!(params.len(), 2);
+
+        for placeholder in placeholders {
+            let parameter_type = params
+                .clone()
+                .get(placeholder)
+                .expect("to get fetch type")
+                .clone();
+            assert_eq!(parameter_type, Some(DataType::Int64));
+        }
+
+        Ok(())
     }
 
     #[test]
