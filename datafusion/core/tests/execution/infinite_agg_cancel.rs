@@ -156,11 +156,11 @@ async fn test_infinite_agg_cancel() -> Result<(), Box<dyn Error>> {
 
     // 4) drive the stream inline in select!
     let result = tokio::select! {
-    batch_opt = stream.next() => batch_opt,
-    _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => {
-        None
-    }
-};
+        batch_opt = stream.next() => batch_opt,
+        _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => {
+            None
+        }
+    };
 
     assert!(result.is_none(), "Expected timeout, but got a result");
     Ok(())

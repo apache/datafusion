@@ -15,5 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod logical_plan;
 mod infinite_agg_cancel;
+mod logical_plan;
