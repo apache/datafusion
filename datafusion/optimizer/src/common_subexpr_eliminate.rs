@@ -863,7 +863,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * Int32(1) - test.b), sum(__common_expr_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]
+        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS (test.a * (Int32(1) - test.b))), sum(__common_expr_1 AS (test.a * (Int32(1) - test.b)) * (Int32(1) + test.c))]]
           Projection: test.a * (Int32(1) - test.b) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -884,7 +884,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 - test.c AS alias1 * __common_expr_1 AS test.a + test.b, __common_expr_1 AS test.a + test.b
+        Projection: __common_expr_1 - test.c AS alias1 * __common_expr_1 AS (test.a + test.b), __common_expr_1 AS (test.a + test.b)
           Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -1000,7 +1000,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]
+        Aggregate: groupBy=[[__common_expr_1 AS (UInt32(1) + test.a)]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]
           Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -1024,8 +1024,8 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: UInt32(1) + test.a, UInt32(1) + __common_expr_2 AS col1, UInt32(1) - __common_expr_2 AS col2, __common_expr_4 AS avg(UInt32(1) + test.a), UInt32(1) + __common_expr_3 AS col3, UInt32(1) - __common_expr_3 AS col4, __common_expr_5 AS my_agg(UInt32(1) + test.a)
-          Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[avg(__common_expr_1) AS __common_expr_2, my_agg(__common_expr_1) AS __common_expr_3, avg(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_4, my_agg(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_5]]
+        Projection: UInt32(1) + test.a, UInt32(1) + __common_expr_2 AS col1, UInt32(1) - __common_expr_2 AS col2, __common_expr_4 AS avg((UInt32(1) + test.a)), UInt32(1) + __common_expr_3 AS col3, UInt32(1) - __common_expr_3 AS col4, __common_expr_5 AS my_agg((UInt32(1) + test.a))
+          Aggregate: groupBy=[[__common_expr_1 AS (UInt32(1) + test.a)]], aggr=[[avg(__common_expr_1) AS __common_expr_2, my_agg(__common_expr_1) AS __common_expr_3, avg(__common_expr_1 AS (UInt32(1) + test.a)) AS __common_expr_4, my_agg(__common_expr_1 AS (UInt32(1) + test.a)) AS __common_expr_5]]
             Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
@@ -1052,8 +1052,8 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: table.test.col.a, UInt32(1) + __common_expr_2 AS avg(UInt32(1) + table.test.col.a), __common_expr_2 AS avg(UInt32(1) + table.test.col.a)
-          Aggregate: groupBy=[[table.test.col.a]], aggr=[[avg(__common_expr_1 AS UInt32(1) + table.test.col.a) AS __common_expr_2]]
+        Projection: table.test.col.a, UInt32(1) + __common_expr_2 AS avg((UInt32(1) + table.test.col.a)), __common_expr_2 AS avg((UInt32(1) + table.test.col.a))
+          Aggregate: groupBy=[[table.test.col.a]], aggr=[[avg(__common_expr_1 AS (UInt32(1) + table.test.col.a)) AS __common_expr_2]]
             Projection: UInt32(1) + table.test.col.a AS __common_expr_1, table.test.col.a
               TableScan: table.test
         "
@@ -1092,7 +1092,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 AS Int32(1) + test.a, __common_expr_1 AS test.a + Int32(1)
+        Projection: __common_expr_1 AS (Int32(1) + test.a), __common_expr_1 AS (test.a + Int32(1))
           Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -1692,7 +1692,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 AS NOT test.a = test.b, __common_expr_1 AS NOT test.b = test.a
+        Projection: __common_expr_1 AS NOT (test.a = test.b), __common_expr_1 AS NOT (test.b = test.a)
           Projection: NOT test.a = test.b AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -1708,7 +1708,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: __common_expr_1 AS test.a = test.b IS NULL, __common_expr_1 AS test.b = test.a IS NULL
+        Projection: __common_expr_1 AS (test.a = test.b) IS NULL, __common_expr_1 AS (test.b = test.a) IS NULL
           Projection: test.a = test.b IS NULL AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "

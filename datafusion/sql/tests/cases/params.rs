@@ -303,7 +303,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     assert_snapshot!(
         plan_with_params,
         @r"
-    Projection: Int64(1) + Int32(10) AS Int64(1) + $1
+    Projection: Int64(1) + Int32(10) AS (Int64(1) + $1)
       EmptyRelation
     "
     );
@@ -331,7 +331,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     assert_snapshot!(
         plan_with_params,
         @r"
-    Projection: Int64(1) + Int32(10) + Float64(10) AS Int64(1) + $1 + $2
+    Projection: Int64(1) + Int32(10) + Float64(10) AS ((Int64(1) + $1) + $2)
       EmptyRelation
     "
     );

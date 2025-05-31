@@ -404,7 +404,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Projection: test.a, test.d, NOT test.b AS test.b = Boolean(false)
+        Projection: test.a, test.d, NOT test.b AS (test.b = Boolean(false))
           TableScan: test
         "
         )
@@ -424,7 +424,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b) AS max(test.b = Boolean(true)), min(test.b)]]
+        Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b) AS max((test.b = Boolean(true))), min(test.b)]]
           Projection: test.a, test.c, test.b
             TableScan: test
         "
@@ -448,7 +448,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ "Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))"
+            @ "Values: (Int32(3) AS (Int32(1) + Int32(2)), Int32(1) AS (Int32(2) - Int32(1)))"
         )
     }
 
@@ -492,7 +492,7 @@ mod tests {
 
         let actual = get_optimized_plan_formatted(plan, &time);
         let expected =
-            "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
+            "Projection: NOT test.a AS ((Boolean(true) OR Boolean(false)) != test.a)\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
@@ -857,7 +857,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Aggregate: groupBy=[[GROUPING SETS ((Int32(43) AS age, test.a), (Boolean(false) AS cond), (test.d AS e, Int32(3) AS Int32(1) + Int32(2)))]], aggr=[[]]
+        Aggregate: groupBy=[[GROUPING SETS ((Int32(43) AS age, test.a), (Boolean(false) AS cond), (test.d AS e, Int32(3) AS (Int32(1) + Int32(2))))]], aggr=[[]]
           TableScan: test
         "
         )

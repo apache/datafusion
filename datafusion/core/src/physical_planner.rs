@@ -3049,7 +3049,7 @@ mod tests {
 // display it online here: https://dreampuf.github.io/GraphvizOnline
 
 digraph {
-    1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
+    1[shape=box label="ProjectionExec: expr=[id@0 + 2 as (employee.id + Int32(2))]", tooltip=""]
     2[shape=box label="EmptyExec", tooltip=""]
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
 }

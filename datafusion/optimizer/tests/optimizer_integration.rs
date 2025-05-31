@@ -54,7 +54,7 @@ fn case_when() -> Result<()> {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-Projection: CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END
+Projection: CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN (test.col_int32 > Int64(0)) THEN Int64(1) ELSE Int64(0) END
   TableScan: test projection=[col_int32]
 "#
     );
@@ -108,8 +108,8 @@ fn case_when_aggregate() -> Result<()> {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-        Projection: test.col_utf8, sum(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END) AS n
-          Aggregate: groupBy=[[test.col_utf8]], aggr=[[sum(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS sum(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)]]
+        Projection: test.col_utf8, sum(CASE WHEN (test.col_int32 > Int64(0)) THEN Int64(1) ELSE Int64(0) END) AS n
+          Aggregate: groupBy=[[test.col_utf8]], aggr=[[sum(CASE WHEN (test.col_int32 > Int32(0)) THEN Int64(1) ELSE Int64(0) END) AS sum(CASE WHEN (test.col_int32 > Int64(0)) THEN Int64(1) ELSE Int64(0) END)]]
             TableScan: test projection=[col_int32, col_utf8]
         "#
     );
@@ -342,7 +342,7 @@ fn push_down_filter_groupby_expr_contains_alias() {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-        Projection: test.col_int32 + test.col_uint32 AS c, count(Int64(1)) AS count(*)
+        Projection: (test.col_int32 + test.col_uint32) AS c, count(Int64(1)) AS count(*)
           Aggregate: groupBy=[[CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64)]], aggr=[[count(Int64(1))]]
             Filter: CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64) > Int64(3)
               TableScan: test projection=[col_int32, col_uint32]
