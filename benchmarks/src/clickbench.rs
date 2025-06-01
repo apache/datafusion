@@ -122,6 +122,8 @@ impl RunOpt {
             // The hits_partitioned dataset specifies string columns
             // as binary due to how it was written. Force it to strings
             parquet_options.binary_as_string = true;
+            // TEST out impact of filter pushdown
+            parquet_options.pushdown_filters = true;
         }
 
         let rt_builder = self.common.runtime_env_builder()?;
