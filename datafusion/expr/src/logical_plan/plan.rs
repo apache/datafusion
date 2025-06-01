@@ -302,7 +302,7 @@ pub struct DependentJoin {
     // because RHS may reference columns provided somewhere from the above join.
     // Depths of each correlated_columns should always be gte current dependent join
     // subquery_depth
-    pub correlated_columns: Vec<(usize, Expr)>,
+    pub correlated_columns: Vec<(usize, Column, DataType)>,
     // the upper expr that containing the subquery expr
     // i.e for predicates: where outer = scalar_sq + 1
     // correlated exprs are `scalar_sq + 1`
@@ -323,12 +323,7 @@ impl Display for DependentJoin {
         let correlated_str = self
             .correlated_columns
             .iter()
-            .map(|(level, c)| {
-                if let Expr::OuterReferenceColumn(_, ref col) = c {
-                    return format!("{col} lvl {level}");
-                }
-                "".to_string()
-            })
+            .map(|(level, col, data_type)| format!("{col} lvl {level}"))
             .collect::<Vec<String>>()
             .join(", ");
         let lateral_join_info =
@@ -355,7 +350,7 @@ impl PartialOrd for DependentJoin {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
         struct ComparableJoin<'a> {
-            correlated_columns: &'a Vec<(usize, Expr)>,
+            correlated_columns: &'a Vec<(usize, Column, DataType)>,
             // the upper expr that containing the subquery expr
             // i.e for predicates: where outer = scalar_sq + 1
             // correlated exprs are `scalar_sq + 1`

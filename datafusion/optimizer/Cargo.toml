@@ -39,6 +39,7 @@ name = "datafusion_optimizer"
 
 [features]
 recursive_protection = ["dep:recursive"]
+backtrace = ["datafusion-common/backtrace"]
 
 [dependencies]
 arrow = { workspace = true }
