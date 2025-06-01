@@ -957,7 +957,6 @@ impl RepartitionExec {
             BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
         // execute the child operator
         let timer = metrics.fetch_time.timer();
-        let mut stream = input.execute(partition, context)?;
         timer.done();
 
         let mut batches_buffer = Vec::with_capacity(partitioner.num_partitions());
