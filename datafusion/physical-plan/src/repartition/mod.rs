@@ -1000,6 +1000,7 @@ impl RepartitionExec {
                 }
                 timer.done();
             }
+            batches_buffer.clear();
 
             // If the input stream is endless, we may spin forever and
             // never yield back to tokio.  See
