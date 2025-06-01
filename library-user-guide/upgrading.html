@@ -538,6 +538,23 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#the-varchar-sql-type-is-now-represented-as-utf8view-in-arrow">
+     The
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       VARCHAR
+      </span>
+     </code>
+     SQL type is now represented as
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Utf8View
+      </span>
+     </code>
+     in Arrow.
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#listingoptions-default-for-collect-stat-changed-from-true-to-false">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -847,6 +864,49 @@
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">¶</a></h1>
 <section id="datafusion-48-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">48.0.0</span></code><a class="headerlink" href="#datafusion-48-0-0" title="Link to this heading">¶</a></h2>
+<section id="the-varchar-sql-type-is-now-represented-as-utf8view-in-arrow">
+<h3>The <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> SQL type is now represented as <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> in Arrow.<a class="headerlink" href="#the-varchar-sql-type-is-now-represented-as-utf8view-in-arrow" title="Link to this heading">¶</a></h3>
+<p>The mapping of the SQL <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> type has been changed from <code class="docutils literal notranslate"><span class="pre">Utf8</span></code> to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code>
+which improves performance for many string operations. You can read more about
+<code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> in the <a class="reference external" href="https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/">DataFusion blog post on German-style strings</a></p>
+<p>This means that when you create a table with a <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> column, it will now use
+<code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> as the underlying data type. For example:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">my_table</span><span class="w"> </span><span class="p">(</span><span class="n">my_column</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">);</span>
+<span class="mi">0</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">001</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">DESCRIBE</span><span class="w"> </span><span class="n">my_table</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------------+-----------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">column_name</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">data_type</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">is_nullable</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------+-----------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">my_column</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">Utf8View</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="n">YES</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------+-----------+-------------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">000</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+<p>You can restore the old behavior of using <code class="docutils literal notranslate"><span class="pre">Utf8</span></code> by changing the
+<code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.map_varchar_to_utf8view</span></code> configuration setting. For
+example</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">set</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">sql_parser</span><span class="p">.</span><span class="n">map_varchar_to_utf8view</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">false</span><span class="p">;</span>
+<span class="mi">0</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">001</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">my_table</span><span class="w"> </span><span class="p">(</span><span class="n">my_column</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">);</span>
+<span class="mi">0</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">014</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">DESCRIBE</span><span class="w"> </span><span class="n">my_table</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------------+-----------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">column_name</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">data_type</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">is_nullable</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------+-----------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">my_column</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="n">YES</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------+-----------+-------------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">004</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+</section>
 <section id="listingoptions-default-for-collect-stat-changed-from-true-to-false">
 <h3><code class="docutils literal notranslate"><span class="pre">ListingOptions</span></code> default for <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> changed from <code class="docutils literal notranslate"><span class="pre">true</span></code> to <code class="docutils literal notranslate"><span class="pre">false</span></code><a class="headerlink" href="#listingoptions-default-for-collect-stat-changed-from-true-to-false" title="Link to this heading">¶</a></h3>
 <p>This makes it agree with the default for <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>.
