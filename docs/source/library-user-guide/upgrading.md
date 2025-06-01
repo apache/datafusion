@@ -21,7 +21,7 @@
 
 ## DataFusion `48.0.0`
 
-### `VARCHAR` SQL type changed to map to `Utf8View` Arrow type
+### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow.
 
 The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`
 which improves performance for many string operations. You can read more about
