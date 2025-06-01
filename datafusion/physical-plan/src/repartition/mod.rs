@@ -348,6 +348,9 @@ impl BatchPartitioner {
 
                     let schema = input_batches[0].schema();
 
+                    let mut indices_for_input_batch_per_output_partition: Vec<Vec<u32>> =
+                        vec![Vec::new(); *num_partitions];
+
                     for current_input_batch in input_batches {
                         if current_input_batch.num_rows() == 0 {
                             continue;
@@ -365,10 +368,6 @@ impl BatchPartitioner {
                         hash_buffer.resize(current_input_batch.num_rows(), 0);
                         create_hashes(&arrays, random_state, hash_buffer)?;
 
-                        let mut indices_for_input_batch_per_output_partition: Vec<
-                            Vec<u32>,
-                        > = vec![Vec::new(); *num_partitions];
-
                         for (row_idx, hash_val) in hash_buffer.iter().enumerate() {
                             let output_idx =
                                 (*hash_val % *num_partitions as u64) as usize;
@@ -377,9 +376,10 @@ impl BatchPartitioner {
                         }
 
                         for output_idx in 0..*num_partitions {
-                            let indices_for_current_output =
-                                indices_for_input_batch_per_output_partition[output_idx]
-                                    .clone();
+                            let indices_for_current_output = std::mem::take(
+                                &mut indices_for_input_batch_per_output_partition
+                                    [output_idx],
+                            );
                             if !indices_for_current_output.is_empty() {
                                 let indices_array: PrimitiveArray<UInt32Type> =
                                     indices_for_current_output.into();
