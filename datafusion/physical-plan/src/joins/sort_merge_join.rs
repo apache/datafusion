@@ -16,9 +16,8 @@
 // under the License.
 
 //! Defines the Sort-Merge join execution plan.
-//! A Sort-Merge join plan consumes two sorted children plan and produces
+//! A Sort-Merge join plan consumes two sorted children plans and produces
 //! joined output by given join type and other options.
-//! Sort-Merge join feature is currently experimental.
 
 use std::any::Any;
 use std::cmp::Ordering;
@@ -169,12 +168,6 @@ impl SortMergeJoinExec {
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
-
-        if join_type == JoinType::RightSemi {
-            return not_impl_err!(
-                "SortMergeJoinExec does not support JoinType::RightSemi"
-            );
-        }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
         if sort_options.len() != on.len() {
@@ -358,7 +351,7 @@ impl DisplayAs for SortMergeJoinExec {
                 let on = self
                     .on
                     .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
                 write!(
@@ -385,7 +378,7 @@ impl DisplayAs for SortMergeJoinExec {
                 if self.join_type() != JoinType::Inner {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
-                writeln!(f, "on={}", on)
+                writeln!(f, "on={on}")
             }
         }
     }
@@ -514,12 +507,19 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
+            self.left.partition_statistics(None)?,
+            self.right.partition_statistics(None)?,
             self.on.clone(),
             &self.join_type,
             &self.schema,
@@ -916,7 +916,7 @@ struct JoinedRecordBatches {
     pub batches: Vec<RecordBatch>,
     /// Filter match mask for each row(matched/non-matched)
     pub filter_mask: BooleanBuilder,
-    /// Row indices to glue together rows in `batches` and `filter_mask`
+    /// Left row indices to glue together rows in `batches` and `filter_mask`
     pub row_indices: UInt64Builder,
     /// Which unique batch id the row belongs to
     /// It is necessary to differentiate rows that are distributed the way when they point to the same
@@ -1016,7 +1016,7 @@ fn get_corrected_filter_mask(
             corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
-        JoinType::LeftSemi => {
+        JoinType::LeftSemi | JoinType::RightSemi => {
             for i in 0..row_indices_length {
                 let last_index =
                     last_index_for_row(i, row_indices, batch_ids, row_indices_length);
@@ -1145,6 +1145,7 @@ impl Stream for SortMergeJoinStream {
                                                 | JoinType::LeftSemi
                                                 | JoinType::LeftMark
                                                 | JoinType::Right
+                                                | JoinType::RightSemi
                                                 | JoinType::LeftAnti
                                                 | JoinType::RightAnti
                                                 | JoinType::Full
@@ -1250,6 +1251,7 @@ impl Stream for SortMergeJoinStream {
                                     JoinType::Left
                                         | JoinType::LeftSemi
                                         | JoinType::Right
+                                        | JoinType::RightSemi
                                         | JoinType::LeftAnti
                                         | JoinType::RightAnti
                                         | JoinType::LeftMark
@@ -1275,6 +1277,7 @@ impl Stream for SortMergeJoinStream {
                                 JoinType::Left
                                     | JoinType::LeftSemi
                                     | JoinType::Right
+                                    | JoinType::RightSemi
                                     | JoinType::LeftAnti
                                     | JoinType::RightAnti
                                     | JoinType::Full
@@ -1597,7 +1600,6 @@ impl SortMergeJoinStream {
                     self.join_type,
                     JoinType::Left
                         | JoinType::Right
-                        | JoinType::RightSemi
                         | JoinType::Full
                         | JoinType::LeftAnti
                         | JoinType::RightAnti
@@ -1607,7 +1609,10 @@ impl SortMergeJoinStream {
                 }
             }
             Ordering::Equal => {
-                if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftMark) {
+                if matches!(
+                    self.join_type,
+                    JoinType::LeftSemi | JoinType::LeftMark | JoinType::RightSemi
+                ) {
                     mark_row_as_match = matches!(self.join_type, JoinType::LeftMark);
                     // if the join filter is specified then its needed to output the streamed index
                     // only if it has not been emitted before
@@ -1827,7 +1832,10 @@ impl SortMergeJoinStream {
                 vec![Arc::new(is_not_null(&right_indices)?) as ArrayRef]
             } else if matches!(
                 self.join_type,
-                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::RightAnti
+                JoinType::LeftSemi
+                    | JoinType::LeftAnti
+                    | JoinType::RightAnti
+                    | JoinType::RightSemi
             ) {
                 vec![]
             } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
@@ -1861,7 +1869,10 @@ impl SortMergeJoinStream {
                         )?;
 
                         get_filter_column(&self.filter, &left_columns, &right_cols)
-                    } else if matches!(self.join_type, JoinType::RightAnti) {
+                    } else if matches!(
+                        self.join_type,
+                        JoinType::RightAnti | JoinType::RightSemi
+                    ) {
                         let right_cols = fetch_right_columns_by_idxs(
                             &self.buffered_data,
                             chunk.buffered_batch_idx.unwrap(),
@@ -1922,6 +1933,7 @@ impl SortMergeJoinStream {
                         JoinType::Left
                             | JoinType::LeftSemi
                             | JoinType::Right
+                            | JoinType::RightSemi
                             | JoinType::LeftAnti
                             | JoinType::RightAnti
                             | JoinType::LeftMark
@@ -2019,6 +2031,7 @@ impl SortMergeJoinStream {
                 JoinType::Left
                     | JoinType::LeftSemi
                     | JoinType::Right
+                    | JoinType::RightSemi
                     | JoinType::LeftAnti
                     | JoinType::RightAnti
                     | JoinType::LeftMark
@@ -2128,7 +2141,7 @@ impl SortMergeJoinStream {
             let output_column_indices = (0..left_columns_length).collect::<Vec<_>>();
             filtered_record_batch =
                 filtered_record_batch.project(&output_column_indices)?;
-        } else if matches!(self.join_type, JoinType::RightAnti) {
+        } else if matches!(self.join_type, JoinType::RightAnti | JoinType::RightSemi) {
             let output_column_indices = (0..right_columns_length).collect::<Vec<_>>();
             filtered_record_batch =
                 filtered_record_batch.project(&output_column_indices)?;
@@ -2574,7 +2587,7 @@ mod tests {
         JoinSide,
     };
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::disk_manager::DiskManagerConfig;
+    use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::TaskContext;
     use datafusion_expr::Operator;
@@ -3467,7 +3480,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_semi() -> Result<()> {
+    async fn join_left_semi() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 2, 3]),
             ("b1", &vec![4, 5, 5, 7]), // 7 does not exist on the right
@@ -3494,6 +3507,255 @@ mod tests {
             | 2  | 5  | 8  |
             +----+----+----+
             "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_one() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![10, 20, 30, 40]),
+            ("b1", &vec![4, 5, 5, 6]),
+            ("c1", &vec![70, 80, 90, 100]),
+        );
+        let right = build_table(
+            ("a2", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 7]),
+            ("c2", &vec![7, 8, 8, 9]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (_, batches) = join_collect(left, right, on, RightSemi).await?;
+        let expected = [
+            "+----+----+----+",
+            "| a2 | b1 | c2 |",
+            "+----+----+----+",
+            "| 1  | 4  | 7  |",
+            "| 2  | 5  | 8  |",
+            "| 2  | 5  | 8  |",
+            "+----+----+----+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_two() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 6]),
+            ("c1", &vec![70, 80, 90, 100]),
+        );
+        let right = build_table(
+            ("a1", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 7]),
+            ("c2", &vec![7, 8, 8, 9]),
+        );
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+            ),
+        ];
+
+        let (_, batches) = join_collect(left, right, on, RightSemi).await?;
+        let expected = [
+            "+----+----+----+",
+            "| a1 | b1 | c2 |",
+            "+----+----+----+",
+            "| 1  | 4  | 7  |",
+            "| 2  | 5  | 8  |",
+            "| 2  | 5  | 8  |",
+            "+----+----+----+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_two_with_filter() -> Result<()> {
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![10]), ("c1", &vec![30]));
+        let right = build_table(("a1", &vec![1]), ("b1", &vec![10]), ("c2", &vec![20]));
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+            ),
+        ];
+        let filter = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c2", 1)),
+                Operator::Lt,
+                Arc::new(Column::new("c1", 0)),
+            )),
+            vec![
+                ColumnIndex {
+                    index: 2,
+                    side: JoinSide::Left,
+                },
+                ColumnIndex {
+                    index: 2,
+                    side: JoinSide::Right,
+                },
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("c1", DataType::Int32, true),
+                Field::new("c2", DataType::Int32, true),
+            ])),
+        );
+        let (_, batches) =
+            join_collect_with_filter(left, right, on, filter, RightSemi).await?;
+        let expected = [
+            "+----+----+----+",
+            "| a1 | b1 | c2 |",
+            "+----+----+----+",
+            "| 1  | 10 | 20 |",
+            "+----+----+----+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_with_nulls() -> Result<()> {
+        let left = build_table_i32_nullable(
+            ("a1", &vec![Some(0), Some(1), Some(2), Some(2), Some(3)]),
+            ("b1", &vec![Some(3), Some(4), Some(5), None, Some(6)]),
+            ("c2", &vec![Some(60), None, Some(80), Some(85), Some(90)]),
+        );
+        let right = build_table_i32_nullable(
+            ("a1", &vec![Some(1), Some(2), Some(2), Some(3)]),
+            ("b1", &vec![Some(4), Some(5), None, Some(6)]), // null in key field
+            ("c2", &vec![Some(7), Some(8), Some(8), None]), // null in non-key field
+        );
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+            ),
+        ];
+
+        let (_, batches) = join_collect(left, right, on, RightSemi).await?;
+        let expected = [
+            "+----+----+----+",
+            "| a1 | b1 | c2 |",
+            "+----+----+----+",
+            "| 1  | 4  | 7  |",
+            "| 2  | 5  | 8  |",
+            "| 3  | 6  |    |",
+            "+----+----+----+",
+        ];
+        // The output order is important as SMJ preserves sortedness
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_with_nulls_with_options() -> Result<()> {
+        let left = build_table_i32_nullable(
+            ("a1", &vec![Some(3), Some(2), Some(1), Some(0), Some(2)]),
+            ("b1", &vec![None, Some(5), Some(4), None, Some(5)]),
+            ("c2", &vec![Some(90), Some(80), Some(70), Some(60), None]),
+        );
+        let right = build_table_i32_nullable(
+            ("a1", &vec![Some(3), Some(2), Some(2), Some(1)]),
+            ("b1", &vec![None, Some(5), Some(5), Some(4)]), // null in key field
+            ("c2", &vec![Some(9), None, Some(8), Some(7)]), // null in non-key field
+        );
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+            ),
+        ];
+
+        let (_, batches) = join_collect_with_options(
+            left,
+            right,
+            on,
+            RightSemi,
+            vec![
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                };
+                2
+            ],
+            true,
+        )
+        .await?;
+
+        let expected = [
+            "+----+----+----+",
+            "| a1 | b1 | c2 |",
+            "+----+----+----+",
+            "| 3  |    | 9  |",
+            "| 2  | 5  |    |",
+            "| 2  | 5  | 8  |",
+            "| 1  | 4  | 7  |",
+            "+----+----+----+",
+        ];
+        // The output order is important as SMJ preserves sortedness
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_output_two_batches() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 6]),
+            ("c1", &vec![70, 80, 90, 100]),
+        );
+        let right = build_table(
+            ("a1", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 7]),
+            ("c2", &vec![7, 8, 8, 9]),
+        );
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+            ),
+        ];
+
+        let (_, batches) =
+            join_collect_batch_size_equals_two(left, right, on, RightSemi).await?;
+        let expected = [
+            "+----+----+----+",
+            "| a1 | b1 | c2 |",
+            "+----+----+----+",
+            "| 1  | 4  | 7  |",
+            "| 2  | 5  | 8  |",
+            "| 2  | 5  | 8  |",
+            "+----+----+----+",
+        ];
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(batches[1].num_rows(), 1);
+        assert_batches_eq!(expected, &batches);
         Ok(())
     }
 
@@ -3856,12 +4118,16 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = vec![Inner, Left, Right, Full, LeftSemi, LeftAnti, LeftMark];
+        let join_types = vec![
+            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+        ];
 
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
             .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
@@ -3934,12 +4200,16 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = vec![Inner, Left, Right, Full, LeftSemi, LeftAnti, LeftMark];
+        let join_types = vec![
+            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+        ];
 
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
             .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
@@ -3990,12 +4260,16 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = [Inner, Left, Right, Full, LeftSemi, LeftAnti, LeftMark];
+        let join_types = [
+            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+        ];
 
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+            )
             .build_arc()?;
 
         for batch_size in [1, 50] {
@@ -4091,12 +4365,16 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = [Inner, Left, Right, Full, LeftSemi, LeftAnti, LeftMark];
+        let join_types = [
+            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+        ];
 
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(500, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+            )
             .build_arc()?;
 
         for batch_size in [1, 50] {
@@ -4475,169 +4753,177 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_left_semi_join_filtered_mask() -> Result<()> {
-        let mut joined_batches = build_joined_record_batches()?;
-        let schema = joined_batches.batches.first().unwrap().schema();
+    async fn test_semi_join_filtered_mask() -> Result<()> {
+        for join_type in [LeftSemi, RightSemi] {
+            let mut joined_batches = build_joined_record_batches()?;
+            let schema = joined_batches.batches.first().unwrap().schema();
 
-        let output = concat_batches(&schema, &joined_batches.batches)?;
-        let out_mask = joined_batches.filter_mask.finish();
-        let out_indices = joined_batches.row_indices.finish();
+            let output = concat_batches(&schema, &joined_batches.batches)?;
+            let out_mask = joined_batches.filter_mask.finish();
+            let out_indices = joined_batches.row_indices.finish();
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftSemi,
-                &UInt64Array::from(vec![0]),
-                &[0usize],
-                &BooleanArray::from(vec![true]),
-                output.num_rows()
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0]),
+                    &[0usize],
+                    &BooleanArray::from(vec![true]),
+                    output.num_rows()
+                )
+                .unwrap(),
+                BooleanArray::from(vec![true])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0]),
+                    &[0usize],
+                    &BooleanArray::from(vec![false]),
+                    output.num_rows()
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0]),
+                    &[0usize; 2],
+                    &BooleanArray::from(vec![true, true]),
+                    output.num_rows()
+                )
+                .unwrap(),
+                BooleanArray::from(vec![Some(true), None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![true, true, true]),
+                    output.num_rows()
+                )
+                .unwrap(),
+                BooleanArray::from(vec![Some(true), None, None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![true, false, true]),
+                    output.num_rows()
+                )
+                .unwrap(),
+                BooleanArray::from(vec![Some(true), None, None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![false, false, true]),
+                    output.num_rows()
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None, None, Some(true),])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![false, true, true]),
+                    output.num_rows()
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None, Some(true), None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![false, false, false]),
+                    output.num_rows()
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None, None, None])
+            );
+
+            let corrected_mask = get_corrected_filter_mask(
+                join_type,
+                &out_indices,
+                &joined_batches.batch_ids,
+                &out_mask,
+                output.num_rows(),
             )
-            .unwrap(),
-            BooleanArray::from(vec![true])
-        );
+            .unwrap();
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftSemi,
-                &UInt64Array::from(vec![0]),
-                &[0usize],
-                &BooleanArray::from(vec![false]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None])
-        );
+            assert_eq!(
+                corrected_mask,
+                BooleanArray::from(vec![
+                    Some(true),
+                    None,
+                    Some(true),
+                    None,
+                    Some(true),
+                    None,
+                    None,
+                    None
+                ])
+            );
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftSemi,
-                &UInt64Array::from(vec![0, 0]),
-                &[0usize; 2],
-                &BooleanArray::from(vec![true, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![Some(true), None])
-        );
+            let filtered_rb = filter_record_batch(&output, &corrected_mask)?;
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftSemi,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![true, true, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![Some(true), None, None])
-        );
+            assert_batches_eq!(
+                &[
+                    "+---+----+---+----+",
+                    "| a | b  | x | y  |",
+                    "+---+----+---+----+",
+                    "| 1 | 10 | 1 | 11 |",
+                    "| 1 | 11 | 1 | 12 |",
+                    "| 1 | 12 | 1 | 13 |",
+                    "+---+----+---+----+",
+                ],
+                &[filtered_rb]
+            );
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftSemi,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![true, false, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![Some(true), None, None])
-        );
+            // output null rows
+            let null_mask = arrow::compute::not(&corrected_mask)?;
+            assert_eq!(
+                null_mask,
+                BooleanArray::from(vec![
+                    Some(false),
+                    None,
+                    Some(false),
+                    None,
+                    Some(false),
+                    None,
+                    None,
+                    None
+                ])
+            );
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftSemi,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, false, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, Some(true),])
-        );
+            let null_joined_batch = filter_record_batch(&output, &null_mask)?;
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftSemi,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, true, true]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, Some(true), None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftSemi,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, false, false]),
-                output.num_rows()
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
-
-        let corrected_mask = get_corrected_filter_mask(
-            LeftSemi,
-            &out_indices,
-            &joined_batches.batch_ids,
-            &out_mask,
-            output.num_rows(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            corrected_mask,
-            BooleanArray::from(vec![
-                Some(true),
-                None,
-                Some(true),
-                None,
-                Some(true),
-                None,
-                None,
-                None
-            ])
-        );
-
-        let filtered_rb = filter_record_batch(&output, &corrected_mask)?;
-
-        assert_snapshot!(batches_to_string(&[filtered_rb]), @r#"
-                +---+----+---+----+
-                | a | b  | x | y  |
-                +---+----+---+----+
-                | 1 | 10 | 1 | 11 |
-                | 1 | 11 | 1 | 12 |
-                | 1 | 12 | 1 | 13 |
-                +---+----+---+----+
-            "#);
-
-        // output null rows
-        let null_mask = arrow::compute::not(&corrected_mask)?;
-        assert_eq!(
-            null_mask,
-            BooleanArray::from(vec![
-                Some(false),
-                None,
-                Some(false),
-                None,
-                Some(false),
-                None,
-                None,
-                None
-            ])
-        );
-
-        let null_joined_batch = filter_record_batch(&output, &null_mask)?;
-
-        assert_snapshot!(batches_to_string(&[null_joined_batch]), @r#"
-                +---+---+---+---+
-                | a | b | x | y |
-                +---+---+---+---+
-                +---+---+---+---+
-            "#);
+            assert_batches_eq!(
+                &[
+                    "+---+---+---+---+",
+                    "| a | b | x | y |",
+                    "+---+---+---+---+",
+                    "+---+---+---+---+",
+                ],
+                &[null_joined_batch]
+            );
+        }
         Ok(())
     }
 

@@ -4404,6 +4404,7 @@ sha512(expression)
 Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator
 
 - [union_extract](#union_extract)
+- [union_tag](#union_tag)
 
 ### `union_extract`
 
@@ -4431,6 +4432,33 @@ union_extract(union, field_name)
 | {b=}         |                                  |                                  |
 | {a=}         |                                  |                                  |
 +--------------+----------------------------------+----------------------------------+
+```
+
+### `union_tag`
+
+Returns the name of the currently selected field in the union
+
+```sql
+union_tag(union_expression)
+```
+
+#### Arguments
+
+- **union**: Union expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+❯ select union_column, union_tag(union_column) from table_with_union;
++--------------+-------------------------+
+| union_column | union_tag(union_column) |
++--------------+-------------------------+
+| {a=1}        | a                       |
+| {b=3.0}      | b                       |
+| {a=4}        | a                       |
+| {b=}         | b                       |
+| {a=}         | a                       |
++--------------+-------------------------+
 ```
 
 ## Other Functions

@@ -86,6 +86,10 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
+/// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
+const HASH_JOIN_SEED: RandomState =
+    RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
+
 /// HashTable and input data for the left (build side) of a join
 struct JoinLeftData {
     /// The hash table with indices into `batch`
@@ -385,7 +389,7 @@ impl HashJoinExec {
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = HASH_JOIN_SEED;
 
         let join_schema = Arc::new(join_schema);
 
@@ -660,7 +664,7 @@ impl DisplayAs for HashJoinExec {
                 let on = self
                     .on
                     .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
                 write!(
@@ -682,7 +686,7 @@ impl DisplayAs for HashJoinExec {
                 if *self.join_type() != JoinType::Inner {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
-                writeln!(f, "on={}", on)
+                writeln!(f, "on={on}")
             }
         }
     }
@@ -879,12 +883,19 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         let stats = estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
+            self.left.partition_statistics(None)?,
+            self.right.partition_statistics(None)?,
             self.on.clone(),
             &self.join_type,
             &self.join_schema,
@@ -1296,8 +1307,8 @@ fn lookup_join_hashmap(
     limit: usize,
     offset: JoinHashMapOffset,
 ) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
-    let (probe_indices, build_indices, next_offset) = build_hashmap
-        .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
+    let (probe_indices, build_indices, next_offset) =
+        build_hashmap.get_matched_indices_with_limit_offset(hashes_buffer, limit, offset);
 
     let build_indices: UInt64Array = build_indices.into();
     let probe_indices: UInt32Array = probe_indices.into();
@@ -3322,7 +3333,7 @@ mod tests {
 
     #[test]
     fn join_with_hash_collision() -> Result<()> {
-        let mut hashmap_left = HashTable::with_capacity(2);
+        let mut hashmap_left = HashTable::with_capacity(4);
         let left = build_table_i32(
             ("a", &vec![10, 20]),
             ("x", &vec![100, 200]),
@@ -3337,9 +3348,15 @@ mod tests {
             hashes_buff,
         )?;
 
-        // Create hash collisions (same hashes)
+        // Maps both values to both indices (1 and 2, representing input 0 and 1)
+        // 0 -> (0, 1)
+        // 1 -> (0, 2)
+        // The equality check will make sure only hashes[0] maps to 0 and hashes[1] maps to 1
         hashmap_left.insert_unique(hashes[0], (hashes[0], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 2), |(h, _)| *h);
+
         hashmap_left.insert_unique(hashes[1], (hashes[1], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 2), |(h, _)| *h);
 
         let next = vec![2, 0];
 
@@ -3990,10 +4007,7 @@ mod tests {
                 assert_eq!(
                     batches.len(),
                     expected_batch_count,
-                    "expected {} output batches for {} join with batch_size = {}",
-                    expected_batch_count,
-                    join_type,
-                    batch_size
+                    "expected {expected_batch_count} output batches for {join_type} join with batch_size = {batch_size}"
                 );
 
                 let expected = match join_type {
@@ -4058,12 +4072,12 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput"
             );
 
             assert_contains!(
                 err.to_string(),
-                "Failed to allocate additional 120 bytes for HashJoinInput"
+                "Failed to allocate additional 120.0 B for HashJoinInput"
             );
         }
 
@@ -4139,13 +4153,13 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
 
             );
 
             assert_contains!(
                 err.to_string(),
-                "Failed to allocate additional 120 bytes for HashJoinInput[1]"
+                "Failed to allocate additional 120.0 B for HashJoinInput[1]"
             );
         }
 

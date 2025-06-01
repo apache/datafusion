@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
+use arrow::datatypes::Field;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
@@ -151,13 +152,13 @@ pub fn parse_physical_window_expr(
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(udaf_name) => {
                 WindowFunctionDefinition::AggregateUDF(match &proto.fun_definition {
                     Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
-                    None => registry.udaf(udaf_name)?
+                    None => registry.udaf(udaf_name).or_else(|_| codec.try_decode_udaf(udaf_name, &[]))?,
                 })
             }
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(udwf_name) => {
                 WindowFunctionDefinition::WindowUDF(match &proto.fun_definition {
                     Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
-                    None => registry.udwf(udwf_name)?
+                    None => registry.udwf(udwf_name).or_else(|_| codec.try_decode_udwf(udwf_name, &[]))?
                 })
             }
         }
@@ -354,7 +355,9 @@ pub fn parse_physical_expr(
         ExprType::ScalarUdf(e) => {
             let udf = match &e.fun_definition {
                 Some(buf) => codec.try_decode_udf(&e.name, buf)?,
-                None => registry.udf(e.name.as_str())?,
+                None => registry
+                    .udf(e.name.as_str())
+                    .or_else(|_| codec.try_decode_udf(&e.name, &[]))?,
             };
             let scalar_fun_def = Arc::clone(&udf);
 
@@ -365,7 +368,7 @@ pub fn parse_physical_expr(
                     e.name.as_str(),
                     scalar_fun_def,
                     args,
-                    convert_required!(e.return_type)?,
+                    Field::new("f", convert_required!(e.return_type)?, true).into(),
                 )
                 .with_nullable(e.nullable),
             )

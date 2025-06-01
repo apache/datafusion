@@ -165,6 +165,15 @@ NULL NULL
 ff0102 false
 000102 true
 
+query ?B
+SELECT arrow_cast(column1, 'FixedSizeBinary(3)'), arrow_cast(column1, 'FixedSizeBinary(3)') = arrow_cast(arrow_cast(X'000102', 'FixedSizeBinary(3)'), 'BinaryView') FROM t;
+----
+000102 true
+003102 false
+NULL NULL
+ff0102 false
+000102 true
+
 # Plan should not have a cast of the column (should have casted the literal
 # to FixedSizeBinary as that is much faster)
 

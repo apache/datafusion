@@ -248,7 +248,7 @@ impl ExecutionPlan for UnionExec {
             }
         }
 
-        warn!("Error in Union: Partition {} not found", partition);
+        warn!("Error in Union: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in Union")
     }
@@ -258,16 +258,36 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        let stats = self
-            .inputs
-            .iter()
-            .map(|stat| stat.statistics())
-            .collect::<Result<Vec<_>>>()?;
+        self.partition_statistics(None)
+    }
 
-        Ok(stats
-            .into_iter()
-            .reduce(stats_union)
-            .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition_idx) = partition {
+            // For a specific partition, find which input it belongs to
+            let mut remaining_idx = partition_idx;
+            for input in &self.inputs {
+                let input_partition_count = input.output_partitioning().partition_count();
+                if remaining_idx < input_partition_count {
+                    // This partition belongs to this input
+                    return input.partition_statistics(Some(remaining_idx));
+                }
+                remaining_idx -= input_partition_count;
+            }
+            // If we get here, the partition index is out of bounds
+            Ok(Statistics::new_unknown(&self.schema()))
+        } else {
+            // Collect statistics from all inputs
+            let stats = self
+                .inputs
+                .iter()
+                .map(|input_exec| input_exec.partition_statistics(None))
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(stats
+                .into_iter()
+                .reduce(stats_union)
+                .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+        }
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -461,7 +481,7 @@ impl ExecutionPlan for InterleaveExec {
             )));
         }
 
-        warn!("Error in InterleaveExec: Partition {} not found", partition);
+        warn!("Error in InterleaveExec: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in InterleaveExec")
     }
@@ -471,10 +491,17 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         let stats = self
             .inputs
             .iter()
-            .map(|stat| stat.statistics())
+            .map(|stat| stat.partition_statistics(None))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(stats
@@ -513,7 +540,12 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
 
     let fields = (0..first_schema.fields().len())
         .map(|i| {
-            inputs
+            // We take the name from the left side of the union to match how names are coerced during logical planning,
+            // which also uses the left side names.
+            let base_field = first_schema.field(i).clone();
+
+            // Coerce metadata and nullability across all inputs
+            let merged_field = inputs
                 .iter()
                 .enumerate()
                 .map(|(input_idx, input)| {
@@ -535,6 +567,9 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
                 // We can unwrap this because if inputs was empty, this would've already panic'ed when we
                 // indexed into inputs[0].
                 .unwrap()
+                .with_name(base_field.name());
+
+            merged_field
         })
         .collect::<Vec<_>>();
 
@@ -897,7 +932,7 @@ mod tests {
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
         let rhs_orderings = rhs.oeq_class();
-        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
+        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{err_msg}");
         for rhs_ordering in rhs_orderings.iter() {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
         }

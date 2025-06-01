@@ -1364,7 +1364,7 @@ impl EquivalenceProperties {
             .transform_up(|expr| update_properties(expr, self))
             .data()
             .map(|node| node.data)
-            .unwrap_or(ExprProperties::new_unknown())
+            .unwrap_or_else(|_| ExprProperties::new_unknown())
     }
 
     /// Transforms this `EquivalenceProperties` into a new `EquivalenceProperties`

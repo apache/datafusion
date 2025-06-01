@@ -163,13 +163,31 @@ impl ScalarUDFImpl for ToDateFunc {
 #[cfg(test)]
 mod tests {
     use arrow::array::{Array, Date32Array, GenericStringArray, StringViewArray};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use arrow::{compute::kernels::cast_utils::Parser, datatypes::Date32Type};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
 
     use super::ToDateFunc;
+
+    fn invoke_to_date_with_args(
+        args: Vec<ColumnarValue>,
+        number_rows: usize,
+    ) -> Result<ColumnarValue, DataFusionError> {
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type(), true).into())
+            .collect::<Vec<_>>();
+
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows,
+            return_field: Field::new("f", DataType::Date32, true).into(),
+        };
+        ToDateFunc::new().invoke_with_args(args)
+    }
 
     #[test]
     fn test_to_date_without_format() {
@@ -208,12 +226,8 @@ mod tests {
         }
 
         fn test_scalar(sv: ScalarValue, tc: &TestCase) {
-            let args = datafusion_expr::ScalarFunctionArgs {
-                args: vec![ColumnarValue::Scalar(sv)],
-                number_rows: 1,
-                return_type: &DataType::Date32,
-            };
-            let to_date_result = ToDateFunc::new().invoke_with_args(args);
+            let to_date_result =
+                invoke_to_date_with_args(vec![ColumnarValue::Scalar(sv)], 1);
 
             match to_date_result {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
@@ -234,12 +248,10 @@ mod tests {
         {
             let date_array = A::from(vec![tc.date_str]);
             let batch_len = date_array.len();
-            let args = datafusion_expr::ScalarFunctionArgs {
-                args: vec![ColumnarValue::Array(Arc::new(date_array))],
-                number_rows: batch_len,
-                return_type: &DataType::Date32,
-            };
-            let to_date_result = ToDateFunc::new().invoke_with_args(args);
+            let to_date_result = invoke_to_date_with_args(
+                vec![ColumnarValue::Array(Arc::new(date_array))],
+                batch_len,
+            );
 
             match to_date_result {
                 Ok(ColumnarValue::Array(a)) => {
@@ -328,15 +340,13 @@ mod tests {
         fn test_scalar(sv: ScalarValue, tc: &TestCase) {
             let format_scalar = ScalarValue::Utf8(Some(tc.format_str.to_string()));
 
-            let args = datafusion_expr::ScalarFunctionArgs {
-                args: vec![
+            let to_date_result = invoke_to_date_with_args(
+                vec![
                     ColumnarValue::Scalar(sv),
                     ColumnarValue::Scalar(format_scalar),
                 ],
-                number_rows: 1,
-                return_type: &DataType::Date32,
-            };
-            let to_date_result = ToDateFunc::new().invoke_with_args(args);
+                1,
+            );
 
             match to_date_result {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
@@ -358,15 +368,13 @@ mod tests {
             let format_array = A::from(vec![tc.format_str]);
             let batch_len = date_array.len();
 
-            let args = datafusion_expr::ScalarFunctionArgs {
-                args: vec![
+            let to_date_result = invoke_to_date_with_args(
+                vec![
                     ColumnarValue::Array(Arc::new(date_array)),
                     ColumnarValue::Array(Arc::new(format_array)),
                 ],
-                number_rows: batch_len,
-                return_type: &DataType::Date32,
-            };
-            let to_date_result = ToDateFunc::new().invoke_with_args(args);
+                batch_len,
+            );
 
             match to_date_result {
                 Ok(ColumnarValue::Array(a)) => {
@@ -398,16 +406,14 @@ mod tests {
         let format1_scalar = ScalarValue::Utf8(Some("%Y-%m-%d".into()));
         let format2_scalar = ScalarValue::Utf8(Some("%Y/%m/%d".into()));
 
-        let args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
+        let to_date_result = invoke_to_date_with_args(
+            vec![
                 ColumnarValue::Scalar(formatted_date_scalar),
                 ColumnarValue::Scalar(format1_scalar),
                 ColumnarValue::Scalar(format2_scalar),
             ],
-            number_rows: 1,
-            return_type: &DataType::Date32,
-        };
-        let to_date_result = ToDateFunc::new().invoke_with_args(args);
+            1,
+        );
 
         match to_date_result {
             Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
@@ -431,19 +437,17 @@ mod tests {
         for date_str in test_cases {
             let formatted_date_scalar = ScalarValue::Utf8(Some(date_str.into()));
 
-            let args = datafusion_expr::ScalarFunctionArgs {
-                args: vec![ColumnarValue::Scalar(formatted_date_scalar)],
-                number_rows: 1,
-                return_type: &DataType::Date32,
-            };
-            let to_date_result = ToDateFunc::new().invoke_with_args(args);
+            let to_date_result = invoke_to_date_with_args(
+                vec![ColumnarValue::Scalar(formatted_date_scalar)],
+                1,
+            );
 
             match to_date_result {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
                     let expected = Date32Type::parse_formatted("2020-09-08", "%Y-%m-%d");
                     assert_eq!(date_val, expected, "to_date created wrong value");
                 }
-                _ => panic!("Conversion of {} failed", date_str),
+                _ => panic!("Conversion of {date_str} failed"),
             }
         }
     }
@@ -453,23 +457,18 @@ mod tests {
         let date_str = "20241231";
         let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
 
-        let args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![ColumnarValue::Scalar(date_scalar)],
-            number_rows: 1,
-            return_type: &DataType::Date32,
-        };
-        let to_date_result = ToDateFunc::new().invoke_with_args(args);
+        let to_date_result =
+            invoke_to_date_with_args(vec![ColumnarValue::Scalar(date_scalar)], 1);
 
         match to_date_result {
             Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
                 let expected = Date32Type::parse_formatted("2024-12-31", "%Y-%m-%d");
                 assert_eq!(
                     date_val, expected,
-                    "to_date created wrong value for {}",
-                    date_str
+                    "to_date created wrong value for {date_str}"
                 );
             }
-            _ => panic!("Conversion of {} failed", date_str),
+            _ => panic!("Conversion of {date_str} failed"),
         }
     }
 
@@ -478,18 +477,11 @@ mod tests {
         let date_str = "202412311";
         let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
 
-        let args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![ColumnarValue::Scalar(date_scalar)],
-            number_rows: 1,
-            return_type: &DataType::Date32,
-        };
-        let to_date_result = ToDateFunc::new().invoke_with_args(args);
+        let to_date_result =
+            invoke_to_date_with_args(vec![ColumnarValue::Scalar(date_scalar)], 1);
 
         if let Ok(ColumnarValue::Scalar(ScalarValue::Date32(_))) = to_date_result {
-            panic!(
-                "Conversion of {} succeeded, but should have failed, ",
-                date_str
-            );
+            panic!("Conversion of {date_str} succeeded, but should have failed. ");
         }
     }
 }

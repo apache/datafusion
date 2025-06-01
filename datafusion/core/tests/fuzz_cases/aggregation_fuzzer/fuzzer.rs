@@ -21,7 +21,7 @@ use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
@@ -163,7 +163,7 @@ impl AggregationFuzzer {
 
     async fn run_inner(&mut self) -> Result<()> {
         let mut join_set = JoinSet::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         // Loop to generate datasets and its query
         for _ in 0..self.data_gen_rounds {
@@ -177,7 +177,7 @@ impl AggregationFuzzer {
             let query_groups = datasets
                 .into_iter()
                 .map(|dataset| {
-                    let sql_idx = rng.gen_range(0..self.candidate_sqls.len());
+                    let sql_idx = rng.random_range(0..self.candidate_sqls.len());
                     let sql = self.candidate_sqls[sql_idx].clone();
 
                     QueryGroup { dataset, sql }
@@ -197,10 +197,7 @@ impl AggregationFuzzer {
         while let Some(join_handle) = join_set.join_next().await {
             // propagate errors
             join_handle.map_err(|e| {
-                DataFusionError::Internal(format!(
-                    "AggregationFuzzer task error: {:?}",
-                    e
-                ))
+                DataFusionError::Internal(format!("AggregationFuzzer task error: {e:?}"))
             })??;
         }
         Ok(())

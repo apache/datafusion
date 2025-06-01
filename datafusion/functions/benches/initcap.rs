@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::array::OffsetSizeTrait;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
@@ -49,14 +49,23 @@ fn criterion_benchmark(c: &mut Criterion) {
     let initcap = unicode::initcap();
     for size in [1024, 4096] {
         let args = create_args::<i32>(size, 8, true);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
         c.bench_function(
-            format!("initcap string view shorter than 12 [size={}]", size).as_str(),
+            format!("initcap string view shorter than 12 [size={size}]").as_str(),
             |b| {
                 b.iter(|| {
                     black_box(initcap.invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
+                        arg_fields: arg_fields.clone(),
                         number_rows: size,
-                        return_type: &DataType::Utf8View,
+                        return_field: Field::new("f", DataType::Utf8View, true).into(),
                     }))
                 })
             },
@@ -64,25 +73,27 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 16, true);
         c.bench_function(
-            format!("initcap string view longer than 12 [size={}]", size).as_str(),
+            format!("initcap string view longer than 12 [size={size}]").as_str(),
             |b| {
                 b.iter(|| {
                     black_box(initcap.invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
+                        arg_fields: arg_fields.clone(),
                         number_rows: size,
-                        return_type: &DataType::Utf8View,
+                        return_field: Field::new("f", DataType::Utf8View, true).into(),
                     }))
                 })
             },
         );
 
         let args = create_args::<i32>(size, 16, false);
-        c.bench_function(format!("initcap string [size={}]", size).as_str(), |b| {
+        c.bench_function(format!("initcap string [size={size}]").as_str(), |b| {
             b.iter(|| {
                 black_box(initcap.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
+                    arg_fields: arg_fields.clone(),
                     number_rows: size,
-                    return_type: &DataType::Utf8,
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 }))
             })
         });

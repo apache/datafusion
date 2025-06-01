@@ -40,6 +40,7 @@
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// #
@@ -85,8 +86,8 @@
 /// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #          unimplemented!()
 /// #      }
-/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-/// #          Ok(Field::new(field_args.name(), DataType::Int64, false))
+/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+/// #          Ok(Field::new(field_args.name(), DataType::Int64, false).into())
 /// #      }
 /// #  }
 /// #
@@ -138,6 +139,7 @@ macro_rules! get_or_init_udwf {
 /// 1. With Zero Parameters
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// # use datafusion_functions_window::{create_udwf_expr, get_or_init_udwf};
@@ -196,8 +198,8 @@ macro_rules! get_or_init_udwf {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-/// #         Ok(Field::new(field_args.name(), DataType::UInt64, false))
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+/// #         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
 /// #     }
 /// # }
 /// ```
@@ -205,6 +207,7 @@ macro_rules! get_or_init_udwf {
 /// 2. With Multiple Parameters
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// #
 /// # use datafusion_expr::{
 /// #     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDFImpl,
@@ -283,12 +286,12 @@ macro_rules! get_or_init_udwf {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
 /// #         Ok(Field::new(
 /// #             field_args.name(),
-/// #             field_args.get_input_type(0).unwrap(),
+/// #             field_args.get_input_field(0).unwrap().data_type().clone(),
 /// #             false,
-/// #         ))
+/// #         ).into())
 /// #     }
 /// # }
 /// ```
@@ -352,6 +355,7 @@ macro_rules! create_udwf_expr {
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// #
@@ -404,8 +408,8 @@ macro_rules! create_udwf_expr {
 /// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #          unimplemented!()
 /// #      }
-/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-/// #          Ok(Field::new(field_args.name(), DataType::Int64, false))
+/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+/// #          Ok(Field::new(field_args.name(), DataType::Int64, false).into())
 /// #      }
 /// #  }
 /// #
@@ -415,6 +419,7 @@ macro_rules! create_udwf_expr {
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// # use datafusion_functions_window::{create_udwf_expr, define_udwf_and_expr, get_or_init_udwf};
@@ -468,8 +473,8 @@ macro_rules! create_udwf_expr {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-/// #         Ok(Field::new(field_args.name(), DataType::UInt64, false))
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+/// #         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
 /// #     }
 /// # }
 /// ```
@@ -479,6 +484,7 @@ macro_rules! create_udwf_expr {
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// #
 /// # use datafusion_expr::{
 /// #     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDFImpl,
@@ -554,12 +560,12 @@ macro_rules! create_udwf_expr {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
 /// #         Ok(Field::new(
 /// #             field_args.name(),
-/// #             field_args.get_input_type(0).unwrap(),
+/// #             field_args.get_input_field(0).unwrap().data_type().clone(),
 /// #             false,
-/// #         ))
+/// #         ).into())
 /// #     }
 /// # }
 /// ```
@@ -567,6 +573,7 @@ macro_rules! create_udwf_expr {
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// #
 /// # use datafusion_expr::{
 /// #     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDFImpl,
@@ -643,12 +650,12 @@ macro_rules! create_udwf_expr {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
 /// #         Ok(Field::new(
 /// #             field_args.name(),
-/// #             field_args.get_input_type(0).unwrap(),
+/// #             field_args.get_input_field(0).unwrap().data_type().clone(),
 /// #             false,
-/// #         ))
+/// #         ).into())
 /// #     }
 /// # }
 /// ```

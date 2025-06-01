@@ -17,7 +17,7 @@
 
 extern crate criterion;
 
-use arrow::datatypes::{DataType, Int32Type, Int64Type};
+use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
 use arrow::util::bench_util::create_primitive_array;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
@@ -30,14 +30,15 @@ fn criterion_benchmark(c: &mut Criterion) {
     let i32_array = Arc::new(create_primitive_array::<Int32Type>(size, 0.2));
     let batch_len = i32_array.len();
     let i32_args = vec![ColumnarValue::Array(i32_array)];
-    c.bench_function(&format!("to_hex i32 array: {}", size), |b| {
+    c.bench_function(&format!("to_hex i32 array: {size}"), |b| {
         b.iter(|| {
             let args_cloned = i32_args.clone();
             black_box(
                 hex.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_fields: vec![Field::new("a", DataType::Int32, false).into()],
                     number_rows: batch_len,
-                    return_type: &DataType::Utf8,
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 })
                 .unwrap(),
             )
@@ -46,14 +47,15 @@ fn criterion_benchmark(c: &mut Criterion) {
     let i64_array = Arc::new(create_primitive_array::<Int64Type>(size, 0.2));
     let batch_len = i64_array.len();
     let i64_args = vec![ColumnarValue::Array(i64_array)];
-    c.bench_function(&format!("to_hex i64 array: {}", size), |b| {
+    c.bench_function(&format!("to_hex i64 array: {size}"), |b| {
         b.iter(|| {
             let args_cloned = i64_args.clone();
             black_box(
                 hex.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_fields: vec![Field::new("a", DataType::Int64, false).into()],
                     number_rows: batch_len,
-                    return_type: &DataType::Utf8,
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 })
                 .unwrap(),
             )

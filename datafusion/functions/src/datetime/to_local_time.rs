@@ -407,9 +407,9 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{types::TimestampNanosecondType, TimestampNanosecondArray};
+    use arrow::array::{types::TimestampNanosecondType, Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::NaiveDateTime;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -538,11 +538,13 @@ mod tests {
     }
 
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
+        let arg_field = Field::new("a", input.data_type(), true).into();
         let res = ToLocalTimeFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(input)],
+                arg_fields: vec![arg_field],
                 number_rows: 1,
-                return_type: &expected.data_type(),
+                return_field: Field::new("f", expected.data_type(), true).into(),
             })
             .unwrap();
         match res {
@@ -602,10 +604,17 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>();
             let batch_size = input.len();
+            let arg_field = Field::new("a", input.data_type().clone(), true).into();
             let args = ScalarFunctionArgs {
                 args: vec![ColumnarValue::Array(Arc::new(input))],
+                arg_fields: vec![arg_field],
                 number_rows: batch_size,
-                return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                return_field: Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    true,
+                )
+                .into(),
             };
             let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

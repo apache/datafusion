@@ -187,12 +187,17 @@ fn is_log(func: &ScalarUDF) -> bool {
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;
+    use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float64_array, as_int64_array};
 
     use super::*;
 
     #[test]
     fn test_power_f64() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, true).into(),
+            Field::new("a", DataType::Float64, true).into(),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
@@ -202,8 +207,9 @@ mod tests {
                     3.0, 2.0, 4.0, 4.0,
                 ]))), // exponent
             ],
+            arg_fields,
             number_rows: 4,
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)
@@ -227,13 +233,18 @@ mod tests {
 
     #[test]
     fn test_power_i64() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true).into(),
+            Field::new("a", DataType::Int64, true).into(),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
             ],
+            arg_fields,
             number_rows: 4,
-            return_type: &DataType::Int64,
+            return_field: Field::new("f", DataType::Int64, true).into(),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)
