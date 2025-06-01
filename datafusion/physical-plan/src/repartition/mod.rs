@@ -301,19 +301,17 @@ impl BatchPartitioner {
     ///
     /// The time spent repartitioning, not including time spent in `f` will be recorded
     /// to the [`metrics::Time`] provided on construction
-    pub fn partition<'a, F>(
-        &'a mut self,
-        input_batches: &'a [RecordBatch],
-        mut f: F,
-    ) -> Result<()>
+    #[deprecated(since = "48.0.0", note = "use partition_iter instead")]
+    pub fn partition<F>(&mut self, batch: RecordBatch, mut f: F) -> Result<()>
     where
         F: FnMut(usize, RecordBatch) -> Result<()>,
     {
-        self.partition_iter(input_batches)?
-            .try_for_each(|res| match res {
+        self.partition_iter(&[batch])?.try_for_each(
+            |res: std::result::Result<(usize, RecordBatch), DataFusionError>| match res {
                 Ok((partition, batch)) => f(partition, batch),
                 Err(e) => Err(e),
-            })
+            },
+        )
     }
 
     /// Actual implementation of [`partition`](Self::partition).
@@ -347,7 +345,6 @@ impl BatchPartitioner {
                     // Initialize a vector of vectors to hold batches for each output partition
                     let mut batches_for_output_partitions: Vec<Vec<RecordBatch>> =
                         vec![Vec::new(); *num_partitions];
-                    let mut result_vec: Vec<Result<(usize, RecordBatch)>> = Vec::new();
 
                     let schema = input_batches[0].schema();
 
@@ -404,22 +401,23 @@ impl BatchPartitioner {
                         }
                     }
 
-                    for (output_idx, batches_to_concat) in
-                        batches_for_output_partitions.iter().enumerate()
-                    {
-                        if !batches_to_concat.is_empty() {
-                            // All batches for a given output partition must have the same schema
-                            // as the first non-empty input batch.
-                            let concatenated_batch = arrow::compute::concat_batches(
-                                &schema, // Use schema from the first non-empty input batch
-                                batches_to_concat.iter(),
-                            )?;
-                            if concatenated_batch.num_rows() > 0 {
-                                result_vec.push(Ok((output_idx, concatenated_batch)));
-                            }
-                        }
-                    }
-                    Box::new(result_vec.into_iter())
+                    Box::new(
+                        batches_for_output_partitions
+                            .into_iter()
+                            .enumerate()
+                            .filter_map(move |(output_idx, batches_to_concat)| {
+                                (!batches_to_concat.is_empty()).then(|| {
+                                    // All batches for a given output partition must have the same schema
+                                    // as the first non-empty input batch.
+                                    let concatenated_batch =
+                                        arrow::compute::concat_batches(
+                                            &schema, // Use schema from the first non-empty input batch
+                                            batches_to_concat.iter(),
+                                        )?;
+                                    Ok((output_idx, concatenated_batch))
+                                })
+                            }),
+                    )
                 }
             };
         Ok(it)
