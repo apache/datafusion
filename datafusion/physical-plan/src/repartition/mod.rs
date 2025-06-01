@@ -404,9 +404,7 @@ impl BatchPartitioner {
                         }
                     }
 
-                    for output_idx in 0..*num_partitions {
-                        let batches_to_concat =
-                            &batches_for_output_partitions[output_idx];
+                    for (output_idx, batches_to_concat) in batches_for_output_partitions.iter().enumerate() {
                         if !batches_to_concat.is_empty() {
                             // All batches for a given output partition must have the same schema
                             // as the first non-empty input batch.
