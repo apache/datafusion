@@ -201,8 +201,8 @@ impl DependentJoinDecorrelator {
         format!("delim_scan_{}", self.delim_scan_id)
     }
     fn build_delim_scan(&mut self) -> Result<(LogicalPlan, String)> {
-        let id = self.delim_scan_id;
         self.delim_scan_id += 1;
+        let id = self.delim_scan_id;
         let delim_scan_relation_name = format!("delim_scan_{id}");
         Ok((
             LogicalPlanBuilder::empty(false)
