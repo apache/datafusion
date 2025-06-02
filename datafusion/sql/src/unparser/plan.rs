@@ -768,6 +768,9 @@ impl Unparser<'_> {
                                 select.selection(Some(exists_expr));
                             }
                         }
+                        if let Some(projection) = left_projection {
+                            select.projection(projection);
+                        }
                     }
                     JoinType::Inner
                     | JoinType::Left
