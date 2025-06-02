@@ -41,5 +41,6 @@ pub mod sanity_checker;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;
 pub mod utils;
+pub mod wrap_leaves_cancellation;
 
 pub use optimizer::PhysicalOptimizerRule;

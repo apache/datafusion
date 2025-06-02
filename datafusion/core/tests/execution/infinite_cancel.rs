@@ -42,6 +42,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::select;
+use datafusion_common::config::ConfigOptions;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::wrap_leaves_cancellation::WrapLeaves;
 
 struct InfiniteStream {
     batch: RecordBatch,
@@ -168,11 +171,15 @@ async fn test_infinite_agg_cancel() -> Result<(), Box<dyn Error>> {
         inf.schema(),
     )?);
 
-    // 3) get the stream
-    let mut stream = physical_plan::execute_stream(aggr, session_ctx.task_ctx())?;
+    // 3) optimize the plan with WrapLeaves to auto-insert Yield
+    let optimized = WrapLeaves::new()
+        .optimize(aggr.clone(), &ConfigOptions::new())?;
+
+    // 4) get the stream
+    let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
     const TIMEOUT: u64 = 1;
 
-    // 4) drive the stream inline in select!
+    // 5) drive the stream inline in select!
     let result = select! {
         batch_opt = stream.next() => batch_opt,
         _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => {
@@ -216,11 +223,17 @@ async fn test_infinite_sort_cancel() -> Result<(), Box<dyn Error>> {
     let lex_ordering: datafusion::physical_expr::LexOrdering = vec![sort_expr].into();
     let sort_exec = Arc::new(SortExec::new(lex_ordering, inf.clone()));
 
-    // 4) get the stream
-    let mut stream = physical_plan::execute_stream(sort_exec, session_ctx.task_ctx())?;
+
+    // 4) optimize the plan with WrapLeaves to auto-insert Yield
+    let optimized = WrapLeaves::new()
+        .optimize(sort_exec.clone(), &ConfigOptions::new())?;
+
+    // 5) get the stream
+    let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
     const TIMEOUT: u64 = 1;
 
-    // 5) drive the stream inline in select!
+
+    // 6) drive the stream inline in select!
     let result = select! {
         batch_opt = stream.next() => batch_opt,
         _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => {

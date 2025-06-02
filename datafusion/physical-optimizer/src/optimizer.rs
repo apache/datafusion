@@ -35,6 +35,7 @@ use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
+use crate::wrap_leaves_cancellation::WrapLeaves;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_physical_plan::ExecutionPlan;
@@ -137,6 +138,7 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            Arc::new(WrapLeaves::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query

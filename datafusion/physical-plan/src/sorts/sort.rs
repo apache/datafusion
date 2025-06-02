@@ -36,7 +36,7 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
-use crate::stream::{RecordBatchStreamAdapter, YieldStream};
+use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
@@ -57,6 +57,7 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
+use crate::yield_stream::YieldStream;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -1093,10 +1094,10 @@ impl ExecutionPlan for SortExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let input = self.input.execute(partition, Arc::clone(&context))?;
+        let mut input = self.input.execute(partition, Arc::clone(&context))?;
 
         // Yield control back to tokio after a certain number of batches so it can check for cancellation.
-        let mut input = Box::pin(YieldStream::new(input)) as SendableRecordBatchStream;
+        //let mut input = Box::pin(YieldStream::new(input)) as SendableRecordBatchStream;
 
         let execution_options = &context.session_config().options().execution;
 

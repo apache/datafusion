@@ -1,0 +1,185 @@
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use crate::{
+    DisplayAs, DisplayFormatType, ExecutionPlan,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+};
+use arrow::record_batch::RecordBatch;
+use arrow_schema::{Schema, SchemaRef};
+use datafusion_common::Result;
+use datafusion_execution::TaskContext;
+use futures::{stream, Stream, StreamExt, TryStreamExt};
+use crate::stream::RecordBatchStreamAdapter;
+
+/// Number of batches to yield before voluntarily returning Pending.
+/// This allows long-running operators to periodically yield control
+/// back to the executor (e.g., to handle cancellation).
+const YIELD_BATCHES: usize = 64;
+
+/// A stream that yields batches of data, yielding control back to the executor every `YIELD_BATCHES` batches
+///
+/// This can be useful to allow operators that might not yield to check for cancellation
+pub struct YieldStream {
+    inner: SendableRecordBatchStream,
+    batches_processed: usize,
+    buffer: Option<Result<RecordBatch>>,
+}
+
+impl YieldStream {
+    pub fn new(inner: SendableRecordBatchStream) -> Self {
+        Self {
+            inner,
+            batches_processed: 0,
+            buffer: None,
+        }
+    }
+}
+
+// Stream<Item = Result<RecordBatch>> to poll_next_unpin
+impl Stream for YieldStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+
+        if let Some(batch) = this.buffer.take() {
+            return Poll::Ready(Some(batch));
+        }
+
+        match this.inner.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok(batch))) => {
+                this.batches_processed += 1;
+                if this.batches_processed >= YIELD_BATCHES {
+                    this.batches_processed = 0;
+                    // We need to buffer the batch when we return Poll::Pending,
+                    // so that we can return it on the next poll.
+                    // Otherwise, the next poll will miss the batch and return None.
+                    this.buffer = Some(Ok(batch));
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Some(Ok(batch)))
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+// RecordBatchStream schema()
+impl RecordBatchStream for YieldStream {
+    fn schema(&self) -> Arc<Schema> {
+        self.inner.schema()
+    }
+}
+
+#[derive(Debug)]
+pub struct YieldStreamExec {
+    child: Arc<dyn ExecutionPlan>,
+
+    properties: PlanProperties,
+}
+
+impl YieldStreamExec {
+    pub fn new(child: Arc<dyn ExecutionPlan>) -> Self {
+        let properties = child.properties().clone();
+        Self { child, properties }
+    }
+}
+
+impl DisplayAs for YieldStreamExec {
+    fn fmt_as(
+        &self,
+        _t: DisplayFormatType,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(f, "yield({})", self.child.name())
+    }
+}
+
+impl ExecutionPlan for YieldStreamExec {
+    fn name(&self) -> &str {
+        "yield_stream_exec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> Arc<Schema> {
+        self.child.schema()
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.child]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(YieldStreamExec::new(children[0].clone())))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let child_stream = self.child.execute(partition, task_ctx.clone())?;
+        let yield_stream = YieldStream::new(child_stream);
+        Ok(Box::pin(yield_stream))
+    }
+}
+
+
+/// Helper: construct a SendableRecordBatchStream containing `n` empty batches
+fn make_empty_batches(n: usize) -> SendableRecordBatchStream {
+    let schema: SchemaRef = Arc::new(Schema::empty());
+    let schema_for_stream = Arc::clone(&schema);
+
+    let s =
+        stream::iter((0..n).map(move |_| {
+            Ok(RecordBatch::new_empty(Arc::clone(&schema_for_stream)))
+        }))
+            .boxed();
+
+    Box::pin(RecordBatchStreamAdapter::new(schema, s))
+}
+
+#[tokio::test]
+async fn yield_less_than_threshold() -> Result<()> {
+    let count = YIELD_BATCHES - 10;
+    let inner = make_empty_batches(count);
+    let out: Vec<_> = YieldStream::new(inner).try_collect::<Vec<_>>().await?;
+    assert_eq!(out.len(), count);
+    Ok(())
+}
+
+#[tokio::test]
+async fn yield_equal_to_threshold() -> Result<()> {
+    let count = YIELD_BATCHES;
+    let inner = make_empty_batches(count);
+    let out: Vec<_> = YieldStream::new(inner).try_collect::<Vec<_>>().await?;
+    assert_eq!(out.len(), count);
+    Ok(())
+}
+
+#[tokio::test]
+async fn yield_more_than_threshold() -> Result<()> {
+    let count = YIELD_BATCHES + 20;
+    let inner = make_empty_batches(count);
+    let out: Vec<_> = YieldStream::new(inner).try_collect::<Vec<_>>().await?;
+    assert_eq!(out.len(), count);
+    Ok(())
+}
