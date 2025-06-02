@@ -7202,8 +7202,7 @@ logical_plan
 02)--EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[true as array_has_all(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(1),Int64(3)))]
-02)--YieldStreamExec child=PlaceholderRowExec
-03)----PlaceholderRowExec
+02)--PlaceholderRowExec
 
 # array containment operator with scalars #2 (arrow at)
 query BBBBBBB
@@ -7226,8 +7225,7 @@ logical_plan
 02)--EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[true as array_has_all(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(1),Int64(3)))]
-02)--YieldStreamExec child=PlaceholderRowExec
-03)----PlaceholderRowExec
+02)--PlaceholderRowExec
 
 ### Array casting tests
 

@@ -43,17 +43,13 @@ EXPLAIN SELECT c1 FROM (SELECT c1 FROM sink_table ORDER BY c2) AS ttt
 logical_plan
 01)SubqueryAlias: ttt
 02)--TableScan: sink_table projection=[c1]
-physical_plan
-01)YieldStreamExec child=DataSourceExec
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
 
 query TT
 EXPLAIN SELECT c1 FROM (SELECT c1 FROM sink_table ORDER BY c2)
 ----
 logical_plan TableScan: sink_table projection=[c1]
-physical_plan
-01)YieldStreamExec child=DataSourceExec
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
 
 
 # Do not remove ordering when it's with limit

@@ -18,6 +18,7 @@
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::yield_stream::YieldStreamExec;
 use datafusion_physical_plan::ExecutionPlan;
 use std::fmt::{Debug, Formatter};
@@ -44,22 +45,30 @@ impl WrapLeaves {
     fn wrap_recursive(
         &self,
         plan: Arc<dyn ExecutionPlan>,
+        has_pipeline_breaking_above: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let children = plan.children();
+
+        let is_pipeline_breaker = plan.properties().emission_type == EmissionType::Final;
+        let should_wrap = has_pipeline_breaking_above;
+
         if children.is_empty() {
             // Leaf node: wrap it in `YieldStreamExec`
-            let wrapped = Arc::new(YieldStreamExec::new(plan));
-            Ok(wrapped)
+            if should_wrap {
+                Ok(Arc::new(YieldStreamExec::new(plan)))
+            } else {
+                Ok(plan)
+            }
         } else {
-            // Non-leaf: first process all children recursively
             let mut new_children = Vec::with_capacity(children.len());
             for child in children {
-                let wrapped_child = self.wrap_recursive(Arc::clone(child))?;
-                new_children.push(wrapped_child);
+                let new_child = self.wrap_recursive(
+                    Arc::clone(child),
+                    has_pipeline_breaking_above || is_pipeline_breaker,
+                )?;
+                new_children.push(new_child);
             }
-            // Rebuild this node with the new children
-            let new_plan = plan.with_new_children(new_children)?;
-            Ok(new_plan)
+            Ok(plan.with_new_children(new_children)?)
         }
     }
 }
@@ -87,7 +96,7 @@ impl PhysicalOptimizerRule for WrapLeaves {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.wrap_recursive(plan)
+        self.wrap_recursive(plan, false)
     }
 
     /// Since we only add `YieldStreamExec` wrappers (which preserve schema), schema_check remains true.
