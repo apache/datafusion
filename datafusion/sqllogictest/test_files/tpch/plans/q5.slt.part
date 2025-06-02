@@ -64,8 +64,8 @@ logical_plan
 19)------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
 20)--------------TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
 21)----------Projection: region.r_regionkey
-22)------------Filter: region.r_name = Utf8("ASIA")
-23)--------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("ASIA")]
+22)------------Filter: region.r_name = Utf8View("ASIA")
+23)--------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8View("ASIA")]
 physical_plan
 01)SortPreservingMergeExec: [revenue@1 DESC]
 02)--SortExec: expr=[revenue@1 DESC], preserve_partitioning=[true]
