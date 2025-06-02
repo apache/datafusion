@@ -37,7 +37,8 @@ logical_plan
 04)------EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[1 as count()]
-02)--PlaceholderRowExec
+02)--YieldStreamExec child=PlaceholderRowExec
+03)----PlaceholderRowExec
 
 query TT
 EXPLAIN SELECT t1.a, COUNT() FROM t1 GROUP BY t1.a;
@@ -53,7 +54,8 @@ physical_plan
 04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------------YieldStreamExec child=DataSourceExec
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT t1.a, COUNT() AS cnt FROM t1 GROUP BY t1.a HAVING COUNT() > 0;
@@ -72,7 +74,8 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)--------------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----------------YieldStreamExec child=DataSourceExec
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.a, COUNT() AS cnt FROM t1 GROUP BY t1.a HAVING COUNT() > 1;
@@ -90,7 +93,8 @@ physical_plan
 01)ProjectionExec: expr=[a@0 as a, count(Int64(1)) PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as count_a]
 02)--WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 03)----SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------YieldStreamExec child=DataSourceExec
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT a, COUNT() OVER (PARTITION BY a) AS count_a FROM t1 ORDER BY a;

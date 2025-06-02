@@ -184,7 +184,8 @@ logical_plan
 02)--TableScan: source_table projection=[col1, col2]
 physical_plan
 01)DataSinkExec: sink=ParquetSink(file_groups=[])
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+02)--YieldStreamExec child=DataSourceExec
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Error case
 query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension! Use STORED AS to define file format.
@@ -198,7 +199,8 @@ logical_plan
 02)--TableScan: source_table projection=[col1, col2]
 physical_plan
 01)DataSinkExec: sink=ParquetSink(file_groups=[])
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+02)--YieldStreamExec child=DataSourceExec
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Copy to directory as partitioned files with keep_partition_by_columns enabled
 query I
@@ -656,7 +658,8 @@ logical_plan
 03)----TableScan: t projection=[], fetch=10
 physical_plan
 01)DataSinkExec: sink=CsvSink(file_groups=[])
-02)--DataSourceExec: partitions=1, partition_sizes=[0], fetch=10
+02)--YieldStreamExec child=DataSourceExec
+03)----DataSourceExec: partitions=1, partition_sizes=[0], fetch=10
 
 statement count 0
 drop table t;
