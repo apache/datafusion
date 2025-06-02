@@ -21,7 +21,7 @@ use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{ColumnarValue, Documentation, Expr, Signature};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -34,7 +34,7 @@ use std::sync::Arc;
 ///
 /// A scalar function produces a single row output for each row of input. This
 /// struct contains the information DataFusion needs to plan and invoke
-/// functions you supply such name, type signature, return type, and actual
+/// functions you supply such as name, type signature, return type, and actual
 /// implementation.
 ///
 /// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
@@ -42,11 +42,11 @@ use std::sync::Arc;
 /// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
 ///    access (examples in  [`advanced_udf.rs`]).
 ///
-/// See [`Self::call`] to invoke a `ScalarUDF` with arguments.
+/// See [`Self::call`] to create an `Expr` which invokes a `ScalarUDF` with arguments.
 ///
 /// # API Note
 ///
-/// This is a separate struct from `ScalarUDFImpl` to maintain backwards
+/// This is a separate struct from [`ScalarUDFImpl`] to maintain backwards
 /// compatibility with the older API.
 ///
 /// [`create_udf`]: crate::expr_fn::create_udf
@@ -170,7 +170,7 @@ impl ScalarUDF {
     ///
     ///  # Notes
     ///
-    /// If a function implement [`ScalarUDFImpl::return_type_from_args`],
+    /// If a function implement [`ScalarUDFImpl::return_field_from_args`],
     /// its [`ScalarUDFImpl::return_type`] should raise an error.
     ///
     /// See [`ScalarUDFImpl::return_type`] for more details.
@@ -180,9 +180,9 @@ impl ScalarUDF {
 
     /// Return the datatype this function returns given the input argument types.
     ///
-    /// See [`ScalarUDFImpl::return_type_from_args`] for more details.
-    pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        self.inner.return_type_from_args(args)
+    /// See [`ScalarUDFImpl::return_field_from_args`] for more details.
+    pub fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        self.inner.return_field_from_args(args)
     }
 
     /// Do the function rewrite
@@ -293,14 +293,25 @@ where
 
 /// Arguments passed to [`ScalarUDFImpl::invoke_with_args`] when invoking a
 /// scalar function.
-pub struct ScalarFunctionArgs<'a> {
+pub struct ScalarFunctionArgs {
     /// The evaluated arguments to the function
     pub args: Vec<ColumnarValue>,
+    /// Field associated with each arg, if it exists
+    pub arg_fields: Vec<FieldRef>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
-    /// The return type of the scalar function returned (from `return_type` or `return_type_from_args`)
-    /// when creating the physical expression from the logical expression
-    pub return_type: &'a DataType,
+    /// The return field of the scalar function returned (from `return_type`
+    /// or `return_field_from_args`) when creating the physical expression
+    /// from the logical expression
+    pub return_field: FieldRef,
+}
+
+impl ScalarFunctionArgs {
+    /// The return type of the function. See [`Self::return_field`] for more
+    /// details.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
 }
 
 /// Information about arguments passed to the function
@@ -309,64 +320,18 @@ pub struct ScalarFunctionArgs<'a> {
 /// such as the type of the arguments, any scalar arguments and if the
 /// arguments can (ever) be null
 ///
-/// See [`ScalarUDFImpl::return_type_from_args`] for more information
+/// See [`ScalarUDFImpl::return_field_from_args`] for more information
 #[derive(Debug)]
-pub struct ReturnTypeArgs<'a> {
+pub struct ReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
-    pub arg_types: &'a [DataType],
-    /// Is argument `i` to the function a scalar (constant)
+    pub arg_fields: &'a [FieldRef],
+    /// Is argument `i` to the function a scalar (constant)?
     ///
-    /// If argument `i` is not a scalar, it will be None
+    /// If the argument `i` is not a scalar, it will be None
     ///
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
     pub scalar_arguments: &'a [Option<&'a ScalarValue>],
-    /// Can argument `i` (ever) null?
-    pub nullables: &'a [bool],
-}
-
-/// Return metadata for this function.
-///
-/// See [`ScalarUDFImpl::return_type_from_args`] for more information
-#[derive(Debug)]
-pub struct ReturnInfo {
-    return_type: DataType,
-    nullable: bool,
-}
-
-impl ReturnInfo {
-    pub fn new(return_type: DataType, nullable: bool) -> Self {
-        Self {
-            return_type,
-            nullable,
-        }
-    }
-
-    pub fn new_nullable(return_type: DataType) -> Self {
-        Self {
-            return_type,
-            nullable: true,
-        }
-    }
-
-    pub fn new_non_nullable(return_type: DataType) -> Self {
-        Self {
-            return_type,
-            nullable: false,
-        }
-    }
-
-    pub fn return_type(&self) -> &DataType {
-        &self.return_type
-    }
-
-    pub fn nullable(&self) -> bool {
-        self.nullable
-    }
-
-    pub fn into_parts(self) -> (DataType, bool) {
-        (self.return_type, self.nullable)
-    }
 }
 
 /// Trait for implementing user defined scalar functions.
@@ -480,7 +445,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Notes
     ///
-    /// If you provide an implementation for [`Self::return_type_from_args`],
+    /// If you provide an implementation for [`Self::return_field_from_args`],
     /// DataFusion will not call `return_type` (this function). In such cases
     /// is recommended to return [`DataFusionError::Internal`].
     ///
@@ -494,15 +459,37 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Notes
     ///
-    /// Most UDFs should implement [`Self::return_type`] and not this
-    /// function as the output type for most functions only depends on the types
-    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
+    /// For the majority of UDFs, implementing [`Self::return_type`] is sufficient,
+    /// as the result type is typically a deterministic function of the input types
+    /// (e.g., `sqrt(f32)` consistently yields `f32`). Implementing this method directly
+    /// is generally unnecessary unless the return type depends on runtime values.
     ///
     /// This function can be used for more advanced cases such as:
     ///
     /// 1. specifying nullability
     /// 2. return types based on the **values** of the arguments (rather than
     ///    their **types**.
+    ///
+    /// # Example creating `Field`
+    ///
+    /// Note the name of the [`Field`] is ignored, except for structured types such as
+    /// `DataType::Struct`.
+    ///
+    /// ```rust
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, FieldRef};
+    /// # use datafusion_common::Result;
+    /// # use datafusion_expr::ReturnFieldArgs;
+    /// # struct Example{}
+    /// # impl Example {
+    /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+    ///   // report output is only nullable if any one of the arguments are nullable
+    ///   let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+    ///   let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
+    ///   Ok(field)
+    /// }
+    /// # }
+    /// ```
     ///
     /// # Output Type based on Values
     ///
@@ -518,14 +505,20 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function **must** consistently return the same type for the same
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        let return_type = self.return_type(args.arg_types)?;
-        Ok(ReturnInfo::new_nullable(return_type))
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type())
+            .cloned()
+            .collect::<Vec<_>>();
+        let return_type = self.return_type(&data_types)?;
+        Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
 
     #[deprecated(
         since = "45.0.0",
-        note = "Use `return_type_from_args` instead. if you use `is_nullable` that returns non-nullable with `return_type`, you would need to switch to `return_type_from_args`, you might have error"
+        note = "Use `return_field_from_args` instead. if you use `is_nullable` that returns non-nullable with `return_type`, you would need to switch to `return_field_from_args`, you might have error"
     )]
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
         true
@@ -584,13 +577,15 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
-    /// and thus any side effects (like divide by zero) may not be encountered
-    /// Setting this to true prevents certain optimizations such as common subexpression elimination
+    /// and thus any side effects (like divide by zero) may not be encountered.
+    ///
+    /// Setting this to true prevents certain optimizations such as common
+    /// subexpression elimination
     fn short_circuits(&self) -> bool {
         false
     }
 
-    /// Computes the output interval for a [`ScalarUDFImpl`], given the input
+    /// Computes the output [`Interval`] for a [`ScalarUDFImpl`], given the input
     /// intervals.
     ///
     /// # Parameters
@@ -606,9 +601,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Interval::make_unbounded(&DataType::Null)
     }
 
-    /// Updates bounds for child expressions, given a known interval for this
-    /// function. This is used to propagate constraints down through an expression
-    /// tree.
+    /// Updates bounds for child expressions, given a known [`Interval`]s for this
+    /// function.
+    ///
+    /// This function is used to propagate constraints down through an
+    /// expression tree.
     ///
     /// # Parameters
     ///
@@ -657,19 +654,24 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         }
     }
 
-    /// Whether the function preserves lexicographical ordering based on the input ordering
+    /// Returns true if the function preserves lexicographical ordering based on
+    /// the input ordering.
+    ///
+    /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
     fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(false)
     }
 
     /// Coerce arguments of a function call to types that the function can evaluate.
     ///
-    /// This function is only called if [`ScalarUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
-    /// UDFs should return one of the other variants of `TypeSignature` which handle common
-    /// cases
+    /// This function is only called if [`ScalarUDFImpl::signature`] returns
+    /// [`crate::TypeSignature::UserDefined`]. Most UDFs should return one of
+    /// the other variants of [`TypeSignature`] which handle common cases.
     ///
     /// See the [type coercion module](crate::type_coercion)
     /// documentation for more details on type coercion
+    ///
+    /// [`TypeSignature`]: crate::TypeSignature
     ///
     /// For example, if your function requires a floating point arguments, but the user calls
     /// it like `my_func(1::int)` (i.e. with `1` as an integer), coerce_types can return `[DataType::Float64]`
@@ -714,8 +716,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Returns the documentation for this Scalar UDF.
     ///
-    /// Documentation can be accessed programmatically as well as
-    /// generating publicly facing documentation.
+    /// Documentation can be accessed programmatically as well as generating
+    /// publicly facing documentation.
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
@@ -765,16 +767,16 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type(arg_types)
     }
 
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        self.inner.return_type_from_args(args)
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        self.inner.return_field_from_args(args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         self.inner.invoke_with_args(args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn simplify(

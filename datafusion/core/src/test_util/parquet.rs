@@ -37,6 +37,7 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
+use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use object_store::path::Path;
@@ -82,23 +83,22 @@ impl TestParquetFile {
         props: WriterProperties,
         batches: impl IntoIterator<Item = RecordBatch>,
     ) -> Result<Self> {
-        let file = File::create(&path).unwrap();
+        let file = File::create(&path)?;
 
         let mut batches = batches.into_iter();
         let first_batch = batches.next().expect("need at least one record batch");
         let schema = first_batch.schema();
 
-        let mut writer =
-            ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))?;
 
-        writer.write(&first_batch).unwrap();
+        writer.write(&first_batch)?;
         let mut num_rows = first_batch.num_rows();
 
         for batch in batches {
-            writer.write(&batch).unwrap();
+            writer.write(&batch)?;
             num_rows += batch.num_rows();
         }
-        writer.close().unwrap();
+        writer.close()?;
 
         println!("Generated test dataset with {num_rows} rows");
 
@@ -182,10 +182,11 @@ impl TestParquetFile {
             let physical_filter_expr =
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
 
-            let source = Arc::new(ParquetSource::new(parquet_options).with_predicate(
-                Arc::clone(&self.schema),
-                Arc::clone(&physical_filter_expr),
-            ));
+            let source = Arc::new(
+                ParquetSource::new(parquet_options)
+                    .with_predicate(Arc::clone(&physical_filter_expr)),
+            )
+            .with_schema(Arc::clone(&self.schema));
             let config = scan_config_builder.with_source(source).build();
             let parquet_exec = DataSourceExec::from_data_source(config);
 

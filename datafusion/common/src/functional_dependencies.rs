@@ -113,7 +113,7 @@ impl Display for Constraints {
         let pk = self
             .inner
             .iter()
-            .map(|c| format!("{:?}", c))
+            .map(|c| format!("{c:?}"))
             .collect::<Vec<_>>();
         let pk = pk.join(", ");
         write!(f, "constraints=[{pk}]")

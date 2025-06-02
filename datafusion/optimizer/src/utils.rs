@@ -241,7 +241,7 @@ mod tests {
             let join_cols_of_predicate = std::iter::once(&column_a);
             let actual =
                 is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
-            assert_eq!(actual, expected, "{}", predicate);
+            assert_eq!(actual, expected, "{predicate}");
         }
 
         Ok(())

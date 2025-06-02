@@ -21,9 +21,10 @@ use std::sync::Arc;
 use super::{ParquetAccessPlan, ParquetFileMetrics};
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::Schema;
+use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
-use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion_physical_optimizer::pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
@@ -1265,7 +1266,7 @@ mod tests {
 
         let expr = col(r#""String""#).in_list(
             (1..25)
-                .map(|i| lit(format!("Hello_Not_Exists{}", i)))
+                .map(|i| lit(format!("Hello_Not_Exists{i}")))
                 .collect::<Vec<_>>(),
             false,
         );

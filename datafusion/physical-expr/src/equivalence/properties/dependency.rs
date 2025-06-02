@@ -39,10 +39,10 @@ impl Display for Dependencies {
         write!(f, "[")?;
         let mut iter = self.inner.iter();
         if let Some(dep) = iter.next() {
-            write!(f, "{}", dep)?;
+            write!(f, "{dep}")?;
         }
         for dep in iter {
-            write!(f, ", {}", dep)?;
+            write!(f, ", {dep}")?;
         }
         write!(f, "]")
     }
@@ -279,7 +279,7 @@ impl DependencyNode {
 impl Display for DependencyNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(target) = &self.target_sort_expr {
-            write!(f, "(target: {}, ", target)?;
+            write!(f, "(target: {target}, ")?;
         } else {
             write!(f, "(")?;
         }
@@ -764,7 +764,7 @@ mod tests {
                 "expr:{:?}, expected: {:?}, actual: {:?}, leading_orderings: {leading_orderings:?}",
                 expr, expected, expr_props.sort_properties
             );
-            assert_eq!(expr_props.sort_properties, expected, "{}", err_msg);
+            assert_eq!(expr_props.sort_properties, expected, "{err_msg}");
         }
 
         Ok(())
@@ -1224,7 +1224,7 @@ mod tests {
             "concat",
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            DataType::Utf8,
+            Field::new("f", DataType::Utf8, true).into(),
         ));
 
         // Assume existing ordering is [c ASC, a ASC, b ASC]
@@ -1315,7 +1315,7 @@ mod tests {
             "concat",
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            DataType::Utf8,
+            Field::new("f", DataType::Utf8, true).into(),
         ));
 
         // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]
@@ -1735,9 +1735,7 @@ mod tests {
             for ordering in &satisfied_orderings {
                 assert!(
                     !eq_properties.ordering_satisfy(ordering),
-                    "{}: ordering {:?} should not be satisfied before adding constraints",
-                    name,
-                    ordering
+                    "{name}: ordering {ordering:?} should not be satisfied before adding constraints"
                 );
             }
 
@@ -1752,9 +1750,7 @@ mod tests {
             for ordering in &satisfied_orderings {
                 assert!(
                     eq_properties.ordering_satisfy(ordering),
-                    "{}: ordering {:?} should be satisfied after adding constraints",
-                    name,
-                    ordering
+                    "{name}: ordering {ordering:?} should be satisfied after adding constraints"
                 );
             }
 
@@ -1762,9 +1758,7 @@ mod tests {
             for ordering in &unsatisfied_orderings {
                 assert!(
                     !eq_properties.ordering_satisfy(ordering),
-                    "{}: ordering {:?} should not be satisfied after adding constraints",
-                    name,
-                    ordering
+                    "{name}: ordering {ordering:?} should not be satisfied after adding constraints"
                 );
             }
         }

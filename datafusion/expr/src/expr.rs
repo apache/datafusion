@@ -24,6 +24,7 @@ use std::mem;
 use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
+use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
@@ -312,27 +313,7 @@ pub enum Expr {
     Negative(Box<Expr>),
     /// Whether an expression is between a given range.
     Between(Between),
-    /// The CASE expression is similar to a series of nested if/else and there are two forms that
-    /// can be used. The first form consists of a series of boolean "when" expressions with
-    /// corresponding "then" expressions, and an optional "else" expression.
-    ///
-    /// ```text
-    /// CASE WHEN condition THEN result
-    ///      [WHEN ...]
-    ///      [ELSE result]
-    /// END
-    /// ```
-    ///
-    /// The second form uses a base expression and then a series of "when" clauses that match on a
-    /// literal value.
-    ///
-    /// ```text
-    /// CASE expression
-    ///     WHEN value THEN result
-    ///     [WHEN ...]
-    ///     [ELSE result]
-    /// END
-    /// ```
+    /// A CASE expression (see docs on [`Case`])
     Case(Case),
     /// Casts the expression to a given type and will return a runtime error if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
@@ -340,7 +321,7 @@ pub enum Expr {
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
-    /// Represents the call of a scalar function with a set of arguments.
+    /// Call a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Calls an aggregate function with arguments, and optional
     /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
@@ -349,8 +330,8 @@ pub enum Expr {
     ///
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     AggregateFunction(AggregateFunction),
-    /// Represents the call of a window function with arguments.
-    WindowFunction(WindowFunction),
+    /// Call a window function with a set of arguments.
+    WindowFunction(Box<WindowFunction>),
     /// Returns whether the list contains the expr value.
     InList(InList),
     /// EXISTS subquery
@@ -378,7 +359,7 @@ pub enum Expr {
     /// A place holder for parameters in a prepared statement
     /// (e.g. `$foo` or `$1`)
     Placeholder(Placeholder),
-    /// A place holder which hold a reference to a qualified field
+    /// A placeholder which holds a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
     /// Unnest expression
@@ -395,6 +376,13 @@ impl Default for Expr {
 impl From<Column> for Expr {
     fn from(value: Column) -> Self {
         Expr::Column(value)
+    }
+}
+
+/// Create an [`Expr`] from a [`WindowFunction`]
+impl From<WindowFunction> for Expr {
+    fn from(value: WindowFunction) -> Self {
+        Expr::WindowFunction(Box::new(value))
     }
 }
 
@@ -551,6 +539,28 @@ impl Display for BinaryExpr {
 }
 
 /// CASE expression
+///
+/// The CASE expression is similar to a series of nested if/else and there are two forms that
+/// can be used. The first form consists of a series of boolean "when" expressions with
+/// corresponding "then" expressions, and an optional "else" expression.
+///
+/// ```text
+/// CASE WHEN condition THEN result
+///      [WHEN ...]
+///      [ELSE result]
+/// END
+/// ```
+///
+/// The second form uses a base expression and then a series of "when" clauses that match on a
+/// literal value.
+///
+/// ```text
+/// CASE expression
+///     WHEN value THEN result
+///     [WHEN ...]
+///     [ELSE result]
+/// END
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Case {
     /// Optional base expression that can be compared to literal values in the "when" expressions
@@ -631,7 +641,9 @@ impl Between {
     }
 }
 
-/// ScalarFunction expression invokes a built-in scalar function
+/// Invoke a [`ScalarUDF`] with a set of arguments
+///
+/// [`ScalarUDF`]: crate::ScalarUDF
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
@@ -648,7 +660,9 @@ impl ScalarFunction {
 }
 
 impl ScalarFunction {
-    /// Create a new ScalarFunction expression with a user-defined function (UDF)
+    /// Create a new `ScalarFunction` from a [`ScalarUDF`]
+    ///
+    /// [`ScalarUDF`]: crate::ScalarUDF
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
         Self { func: udf, args }
     }
@@ -838,19 +852,19 @@ pub enum WindowFunctionDefinition {
 
 impl WindowFunctionDefinition {
     /// Returns the datatype of the window function
-    pub fn return_type(
+    pub fn return_field(
         &self,
-        input_expr_types: &[DataType],
+        input_expr_fields: &[FieldRef],
         _input_expr_nullable: &[bool],
         display_name: &str,
-    ) -> Result<DataType> {
+    ) -> Result<FieldRef> {
         match self {
             WindowFunctionDefinition::AggregateUDF(fun) => {
-                fun.return_type(input_expr_types)
+                fun.return_field(input_expr_fields)
             }
-            WindowFunctionDefinition::WindowUDF(fun) => fun
-                .field(WindowUDFFieldArgs::new(input_expr_types, display_name))
-                .map(|field| field.data_type().clone()),
+            WindowFunctionDefinition::WindowUDF(fun) => {
+                fun.field(WindowUDFFieldArgs::new(input_expr_fields, display_name))
+            }
         }
     }
 
@@ -867,6 +881,16 @@ impl WindowFunctionDefinition {
         match self {
             WindowFunctionDefinition::WindowUDF(fun) => fun.name(),
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
+        }
+    }
+
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        match self {
+            WindowFunctionDefinition::AggregateUDF(_) => None,
+            WindowFunctionDefinition::WindowUDF(udwf) => udwf.simplify(),
         }
     }
 }
@@ -939,6 +963,13 @@ impl WindowFunction {
                 null_treatment: None,
             },
         }
+    }
+
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        self.fun.simplify()
     }
 }
 
@@ -1747,23 +1778,38 @@ impl Expr {
     pub fn infer_placeholder_types(self, schema: &DFSchema) -> Result<(Expr, bool)> {
         let mut has_placeholder = false;
         self.transform(|mut expr| {
-            // Default to assuming the arguments are the same type
-            if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
-                rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
-                rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
-            };
-            if let Expr::Between(Between {
-                expr,
-                negated: _,
-                low,
-                high,
-            }) = &mut expr
-            {
-                rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
-                rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
-            }
-            if let Expr::Placeholder(_) = &expr {
-                has_placeholder = true;
+            match &mut expr {
+                // Default to assuming the arguments are the same type
+                Expr::BinaryExpr(BinaryExpr { left, op: _, right }) => {
+                    rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
+                    rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
+                }
+                Expr::Between(Between {
+                    expr,
+                    negated: _,
+                    low,
+                    high,
+                }) => {
+                    rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
+                    rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
+                }
+                Expr::InList(InList {
+                    expr,
+                    list,
+                    negated: _,
+                }) => {
+                    for item in list.iter_mut() {
+                        rewrite_placeholder(item, expr.as_ref(), schema)?;
+                    }
+                }
+                Expr::Like(Like { expr, pattern, .. })
+                | Expr::SimilarTo(Like { expr, pattern, .. }) => {
+                    rewrite_placeholder(pattern.as_mut(), expr.as_ref(), schema)?;
+                }
+                Expr::Placeholder(_) => {
+                    has_placeholder = true;
+                }
+                _ => {}
             }
             Ok(Transformed::yes(expr))
         })
@@ -2065,32 +2111,29 @@ impl NormalizeEq for Expr {
                         _ => false,
                     }
             }
-            (
-                Expr::WindowFunction(WindowFunction {
+            (Expr::WindowFunction(left), Expr::WindowFunction(other)) => {
+                let WindowFunction {
                     fun: self_fun,
-                    params: self_params,
-                }),
-                Expr::WindowFunction(WindowFunction {
+                    params:
+                        WindowFunctionParams {
+                            args: self_args,
+                            window_frame: self_window_frame,
+                            partition_by: self_partition_by,
+                            order_by: self_order_by,
+                            null_treatment: self_null_treatment,
+                        },
+                } = left.as_ref();
+                let WindowFunction {
                     fun: other_fun,
-                    params: other_params,
-                }),
-            ) => {
-                let (
-                    WindowFunctionParams {
-                        args: self_args,
-                        window_frame: self_window_frame,
-                        partition_by: self_partition_by,
-                        order_by: self_order_by,
-                        null_treatment: self_null_treatment,
-                    },
-                    WindowFunctionParams {
-                        args: other_args,
-                        window_frame: other_window_frame,
-                        partition_by: other_partition_by,
-                        order_by: other_order_by,
-                        null_treatment: other_null_treatment,
-                    },
-                ) = (self_params, other_params);
+                    params:
+                        WindowFunctionParams {
+                            args: other_args,
+                            window_frame: other_window_frame,
+                            partition_by: other_partition_by,
+                            order_by: other_order_by,
+                            null_treatment: other_null_treatment,
+                        },
+                } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
                     && self_window_frame == other_window_frame
@@ -2335,14 +2378,18 @@ impl HashNode for Expr {
                 distinct.hash(state);
                 null_treatment.hash(state);
             }
-            Expr::WindowFunction(WindowFunction { fun, params }) => {
-                let WindowFunctionParams {
-                    args: _args,
-                    partition_by: _,
-                    order_by: _,
-                    window_frame,
-                    null_treatment,
-                } = params;
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params:
+                        WindowFunctionParams {
+                            args: _args,
+                            partition_by: _,
+                            order_by: _,
+                            window_frame,
+                            null_treatment,
+                        },
+                } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
                 null_treatment.hash(state);
@@ -2443,7 +2490,7 @@ impl Display for SchemaDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -2594,7 +2641,7 @@ impl Display for SchemaDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -2625,52 +2672,62 @@ impl Display for SchemaDisplay<'_> {
 
                 Ok(())
             }
-            Expr::WindowFunction(WindowFunction { fun, params }) => match fun {
-                WindowFunctionDefinition::AggregateUDF(fun) => {
-                    match fun.window_function_schema_name(params) {
-                        Ok(name) => {
-                            write!(f, "{name}")
-                        }
-                        Err(e) => {
-                            write!(f, "got error from window_function_schema_name {}", e)
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction { fun, params } = window_fun.as_ref();
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(fun) => {
+                        match fun.window_function_schema_name(params) {
+                            Ok(name) => {
+                                write!(f, "{name}")
+                            }
+                            Err(e) => {
+                                write!(
+                                    f,
+                                    "got error from window_function_schema_name {e}"
+                                )
+                            }
                         }
                     }
-                }
-                _ => {
-                    let WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    } = params;
+                    _ => {
+                        let WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                        } = params;
 
-                    write!(
-                        f,
-                        "{}({})",
-                        fun,
-                        schema_name_from_exprs_comma_separated_without_space(args)?
-                    )?;
-
-                    if let Some(null_treatment) = null_treatment {
-                        write!(f, " {}", null_treatment)?;
-                    }
-
-                    if !partition_by.is_empty() {
                         write!(
                             f,
-                            " PARTITION BY [{}]",
-                            schema_name_from_exprs(partition_by)?
+                            "{}({})",
+                            fun,
+                            schema_name_from_exprs_comma_separated_without_space(args)?
                         )?;
+
+                        if let Some(null_treatment) = null_treatment {
+                            write!(f, " {null_treatment}")?;
+                        }
+
+                        if !partition_by.is_empty() {
+                            write!(
+                                f,
+                                " PARTITION BY [{}]",
+                                schema_name_from_exprs(partition_by)?
+                            )?;
+                        }
+
+                        if !order_by.is_empty() {
+                            write!(
+                                f,
+                                " ORDER BY [{}]",
+                                schema_name_from_sorts(order_by)?
+                            )?;
+                        };
+
+                        write!(f, " {window_frame}")
                     }
-
-                    if !order_by.is_empty() {
-                        write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
-                    };
-
-                    write!(f, " {window_frame}")
                 }
-            },
+            }
         }
     }
 }
@@ -2847,7 +2904,7 @@ impl Display for SqlDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -3005,54 +3062,60 @@ impl Display for Expr {
             // Expr::ScalarFunction(ScalarFunction { func, args }) => {
             //     write!(f, "{}", func.display_name(args).unwrap())
             // }
-            Expr::WindowFunction(WindowFunction { fun, params }) => match fun {
-                WindowFunctionDefinition::AggregateUDF(fun) => {
-                    match fun.window_function_display_name(params) {
-                        Ok(name) => {
-                            write!(f, "{}", name)
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction { fun, params } = window_fun.as_ref();
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(fun) => {
+                        match fun.window_function_display_name(params) {
+                            Ok(name) => {
+                                write!(f, "{name}")
+                            }
+                            Err(e) => {
+                                write!(
+                                    f,
+                                    "got error from window_function_display_name {e}"
+                                )
+                            }
                         }
-                        Err(e) => {
-                            write!(f, "got error from window_function_display_name {}", e)
+                    }
+                    WindowFunctionDefinition::WindowUDF(fun) => {
+                        let WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                        } = params;
+
+                        fmt_function(f, &fun.to_string(), false, args, true)?;
+
+                        if let Some(nt) = null_treatment {
+                            write!(f, "{nt}")?;
                         }
+
+                        if !partition_by.is_empty() {
+                            write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
+                        }
+                        if !order_by.is_empty() {
+                            write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+                        }
+                        write!(
+                            f,
+                            " {} BETWEEN {} AND {}",
+                            window_frame.units,
+                            window_frame.start_bound,
+                            window_frame.end_bound
+                        )
                     }
                 }
-                WindowFunctionDefinition::WindowUDF(fun) => {
-                    let WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    } = params;
-
-                    fmt_function(f, &fun.to_string(), false, args, true)?;
-
-                    if let Some(nt) = null_treatment {
-                        write!(f, "{}", nt)?;
-                    }
-
-                    if !partition_by.is_empty() {
-                        write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
-                    }
-                    if !order_by.is_empty() {
-                        write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
-                    }
-                    write!(
-                        f,
-                        " {} BETWEEN {} AND {}",
-                        window_frame.units,
-                        window_frame.start_bound,
-                        window_frame.end_bound
-                    )
-                }
-            },
+            }
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.display_name(params) {
                     Ok(name) => {
-                        write!(f, "{}", name)
+                        write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from display_name {}", e)
+                        write!(f, "got error from display_name {e}")
                     }
                 }
             }
@@ -3185,9 +3248,116 @@ mod test {
         case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
     };
+    use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};
     use std::any::Any;
+
+    #[test]
+    fn infer_placeholder_in_clause() {
+        // SELECT * FROM employees WHERE department_id IN ($1, $2, $3);
+        let column = col("department_id");
+        let param_placeholders = vec![
+            Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                data_type: None,
+            }),
+            Expr::Placeholder(Placeholder {
+                id: "$2".to_string(),
+                data_type: None,
+            }),
+            Expr::Placeholder(Placeholder {
+                id: "$3".to_string(),
+                data_type: None,
+            }),
+        ];
+        let in_list = Expr::InList(InList {
+            expr: Box::new(column),
+            list: param_placeholders,
+            negated: false,
+        });
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("department_id", DataType::Int32, true),
+        ]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let (inferred_expr, contains_placeholder) =
+            in_list.infer_placeholder_types(&df_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InList(in_list) => {
+                for expr in in_list.list {
+                    match expr {
+                        Expr::Placeholder(placeholder) => {
+                            assert_eq!(
+                                placeholder.data_type,
+                                Some(DataType::Int32),
+                                "Placeholder {} should infer Int32",
+                                placeholder.id
+                            );
+                        }
+                        _ => panic!("Expected Placeholder expression"),
+                    }
+                }
+            }
+            _ => panic!("Expected InList expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_like_and_similar_to() {
+        // name LIKE $1
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let like = Like {
+            expr: Box::new(col("name")),
+            pattern: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                data_type: None,
+            })),
+            negated: false,
+            case_insensitive: false,
+            escape_char: None,
+        };
+
+        let expr = Expr::Like(like.clone());
+
+        let (inferred_expr, _) = expr.infer_placeholder_types(&df_schema).unwrap();
+        match inferred_expr {
+            Expr::Like(like) => match *like.pattern {
+                Expr::Placeholder(placeholder) => {
+                    assert_eq!(placeholder.data_type, Some(DataType::Utf8));
+                }
+                _ => panic!("Expected Placeholder"),
+            },
+            _ => panic!("Expected Like"),
+        }
+
+        // name SIMILAR TO $1
+        let expr = Expr::SimilarTo(like);
+
+        let (inferred_expr, _) = expr.infer_placeholder_types(&df_schema).unwrap();
+        match inferred_expr {
+            Expr::SimilarTo(like) => match *like.pattern {
+                Expr::Placeholder(placeholder) => {
+                    assert_eq!(
+                        placeholder.data_type,
+                        Some(DataType::Utf8),
+                        "Placeholder {} should infer Utf8",
+                        placeholder.id
+                    );
+                }
+                _ => panic!("Expected Placeholder expression"),
+            },
+            _ => panic!("Expected SimilarTo expression"),
+        }
+    }
 
     #[test]
     #[allow(deprecated)]
@@ -3463,5 +3633,20 @@ mod test {
             replace: opt_replace,
             rename: opt_rename,
         }
+    }
+
+    #[test]
+    fn test_size_of_expr() {
+        // because Expr is such a widely used struct in DataFusion
+        // it is important to keep its size as small as possible
+        //
+        // If this test fails when you change `Expr`, please try
+        // `Box`ing the fields to make `Expr` smaller
+        // See https://github.com/apache/datafusion/issues/16199 for details
+        assert_eq!(size_of::<Expr>(), 144);
+        assert_eq!(size_of::<ScalarValue>(), 64);
+        assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
+        assert_eq!(size_of::<Vec<Expr>>(), 24);
+        assert_eq!(size_of::<Arc<Expr>>(), 8);
     }
 }

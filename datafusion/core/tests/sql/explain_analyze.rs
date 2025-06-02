@@ -176,9 +176,9 @@ async fn csv_explain_plans() {
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: aggregate_test_100.c1 [c1:Utf8]",
-        "    Filter: aggregate_test_100.c2 > Int64(10) [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
-        "      TableScan: aggregate_test_100 [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
+        "  Projection: aggregate_test_100.c1 [c1:Utf8View]",
+        "    Filter: aggregate_test_100.c2 > Int64(10) [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]",
+        "      TableScan: aggregate_test_100 [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -222,11 +222,11 @@ async fn csv_explain_plans() {
         "  {",
         "    graph[label=\"Detailed LogicalPlan\"]",
         "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
-        "    8[shape=box label=\"Projection: aggregate_test_100.c1\\nSchema: [c1:Utf8]\"]",
+        "    8[shape=box label=\"Projection: aggregate_test_100.c1\\nSchema: [c1:Utf8View]\"]",
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    9[shape=box label=\"Filter: aggregate_test_100.c2 > Int64(10)\\nSchema: [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    9[shape=box label=\"Filter: aggregate_test_100.c2 > Int64(10)\\nSchema: [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    10[shape=box label=\"TableScan: aggregate_test_100\\nSchema: [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100\\nSchema: [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "}",
@@ -250,9 +250,9 @@ async fn csv_explain_plans() {
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: aggregate_test_100.c1 [c1:Utf8]",
-        "    Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8, c2:Int8]",
-        "      TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8, c2:Int8]",
+        "  Projection: aggregate_test_100.c1 [c1:Utf8View]",
+        "    Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8View, c2:Int8]",
+        "      TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8View, c2:Int8]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -296,11 +296,11 @@ async fn csv_explain_plans() {
         "  {",
         "    graph[label=\"Detailed LogicalPlan\"]",
         "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
-        "    8[shape=box label=\"Projection: aggregate_test_100.c1\\nSchema: [c1:Utf8]\"]",
+        "    8[shape=box label=\"Projection: aggregate_test_100.c1\\nSchema: [c1:Utf8View]\"]",
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    9[shape=box label=\"Filter: aggregate_test_100.c2 > Int8(10)\\nSchema: [c1:Utf8, c2:Int8]\"]",
+        "    9[shape=box label=\"Filter: aggregate_test_100.c2 > Int8(10)\\nSchema: [c1:Utf8View, c2:Int8]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]\\nSchema: [c1:Utf8, c2:Int8]\"]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]\\nSchema: [c1:Utf8View, c2:Int8]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "}",
@@ -398,9 +398,9 @@ async fn csv_explain_verbose_plans() {
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: aggregate_test_100.c1 [c1:Utf8]",
-        "    Filter: aggregate_test_100.c2 > Int64(10) [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
-        "      TableScan: aggregate_test_100 [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
+        "  Projection: aggregate_test_100.c1 [c1:Utf8View]",
+        "    Filter: aggregate_test_100.c2 > Int64(10) [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]",
+        "      TableScan: aggregate_test_100 [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]",
     ];
     let formatted = dataframe.logical_plan().display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -444,11 +444,11 @@ async fn csv_explain_verbose_plans() {
         "  {",
         "    graph[label=\"Detailed LogicalPlan\"]",
         "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
-        "    8[shape=box label=\"Projection: aggregate_test_100.c1\\nSchema: [c1:Utf8]\"]",
+        "    8[shape=box label=\"Projection: aggregate_test_100.c1\\nSchema: [c1:Utf8View]\"]",
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    9[shape=box label=\"Filter: aggregate_test_100.c2 > Int64(10)\\nSchema: [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    9[shape=box label=\"Filter: aggregate_test_100.c2 > Int64(10)\\nSchema: [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    10[shape=box label=\"TableScan: aggregate_test_100\\nSchema: [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]\"]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100\\nSchema: [c1:Utf8View, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8View]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "}",
@@ -472,9 +472,9 @@ async fn csv_explain_verbose_plans() {
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: aggregate_test_100.c1 [c1:Utf8]",
-        "    Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8, c2:Int8]",
-        "      TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8, c2:Int8]",
+        "  Projection: aggregate_test_100.c1 [c1:Utf8View]",
+        "    Filter: aggregate_test_100.c2 > Int8(10) [c1:Utf8View, c2:Int8]",
+        "      TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)] [c1:Utf8View, c2:Int8]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -518,11 +518,11 @@ async fn csv_explain_verbose_plans() {
         "  {",
         "    graph[label=\"Detailed LogicalPlan\"]",
         "    7[shape=box label=\"Explain\\nSchema: [plan_type:Utf8, plan:Utf8]\"]",
-        "    8[shape=box label=\"Projection: aggregate_test_100.c1\\nSchema: [c1:Utf8]\"]",
+        "    8[shape=box label=\"Projection: aggregate_test_100.c1\\nSchema: [c1:Utf8View]\"]",
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    9[shape=box label=\"Filter: aggregate_test_100.c2 > Int8(10)\\nSchema: [c1:Utf8, c2:Int8]\"]",
+        "    9[shape=box label=\"Filter: aggregate_test_100.c2 > Int8(10)\\nSchema: [c1:Utf8View, c2:Int8]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]\\nSchema: [c1:Utf8, c2:Int8]\"]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]\\nSchema: [c1:Utf8View, c2:Int8]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "}",
@@ -561,7 +561,9 @@ async fn csv_explain_verbose_plans() {
 async fn explain_analyze_runs_optimizers(#[values("*", "1")] count_expr: &str) {
     // repro for https://github.com/apache/datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optimizer
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_collect_statistics(true),
+    );
     register_alltypes_parquet(&ctx).await;
 
     // This happens as an optimization pass where count(*)/count(1) can be
@@ -782,7 +784,7 @@ async fn explain_logical_plan_only() {
         vec!["logical_plan", "Projection: count(Int64(1)) AS count(*)\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n    SubqueryAlias: t\
-        \n      Projection: \
+        \n      Projection:\
         \n        Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"]];
     assert_eq!(expected, actual);
 }

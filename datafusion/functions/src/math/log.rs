@@ -256,6 +256,7 @@ mod tests {
 
     use arrow::array::{Float32Array, Float64Array, Int64Array};
     use arrow::compute::SortOptions;
+    use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
@@ -264,6 +265,10 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_log_invalid_base_type() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, false).into(),
+            Field::new("a", DataType::Int64, false).into(),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
@@ -271,20 +276,23 @@ mod tests {
                 ]))), // num
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
             ],
+            arg_fields,
             number_rows: 4,
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
         };
         let _ = LogFunc::new().invoke_with_args(args);
     }
 
     #[test]
     fn test_log_invalid_value() {
+        let arg_field = Field::new("a", DataType::Int64, false).into();
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
             ],
+            arg_fields: vec![arg_field],
             number_rows: 1,
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
         };
 
         let result = LogFunc::new().invoke_with_args(args);
@@ -293,12 +301,14 @@ mod tests {
 
     #[test]
     fn test_log_scalar_f32_unary() {
+        let arg_field = Field::new("a", DataType::Float32, false).into();
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0))), // num
             ],
+            arg_fields: vec![arg_field],
             number_rows: 1,
-            return_type: &DataType::Float32,
+            return_field: Field::new("f", DataType::Float32, true).into(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -320,12 +330,14 @@ mod tests {
 
     #[test]
     fn test_log_scalar_f64_unary() {
+        let arg_field = Field::new("a", DataType::Float64, false).into();
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))), // num
             ],
+            arg_fields: vec![arg_field],
             number_rows: 1,
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -347,13 +359,18 @@ mod tests {
 
     #[test]
     fn test_log_scalar_f32() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float32, false).into(),
+            Field::new("a", DataType::Float32, false).into(),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
             ],
+            arg_fields,
             number_rows: 1,
-            return_type: &DataType::Float32,
+            return_field: Field::new("f", DataType::Float32, true).into(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -375,13 +392,18 @@ mod tests {
 
     #[test]
     fn test_log_scalar_f64() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, false).into(),
+            Field::new("a", DataType::Float64, false).into(),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
             ],
+            arg_fields,
             number_rows: 1,
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -403,14 +425,16 @@ mod tests {
 
     #[test]
     fn test_log_f64_unary() {
+        let arg_field = Field::new("a", DataType::Float64, false).into();
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
                     10.0, 100.0, 1000.0, 10000.0,
                 ]))), // num
             ],
+            arg_fields: vec![arg_field],
             number_rows: 4,
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -435,14 +459,16 @@ mod tests {
 
     #[test]
     fn test_log_f32_unary() {
+        let arg_field = Field::new("a", DataType::Float32, false).into();
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Float32Array::from(vec![
                     10.0, 100.0, 1000.0, 10000.0,
                 ]))), // num
             ],
+            arg_fields: vec![arg_field],
             number_rows: 4,
-            return_type: &DataType::Float32,
+            return_field: Field::new("f", DataType::Float32, true).into(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -467,6 +493,10 @@ mod tests {
 
     #[test]
     fn test_log_f64() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, false).into(),
+            Field::new("a", DataType::Float64, false).into(),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
@@ -476,8 +506,9 @@ mod tests {
                     8.0, 4.0, 81.0, 625.0,
                 ]))), // num
             ],
+            arg_fields,
             number_rows: 4,
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -502,6 +533,10 @@ mod tests {
 
     #[test]
     fn test_log_f32() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float32, false).into(),
+            Field::new("a", DataType::Float32, false).into(),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Float32Array::from(vec![
@@ -511,8 +546,9 @@ mod tests {
                     8.0, 4.0, 81.0, 625.0,
                 ]))), // num
             ],
+            arg_fields,
             number_rows: 4,
-            return_type: &DataType::Float32,
+            return_field: Field::new("f", DataType::Float32, true).into(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)

@@ -17,12 +17,14 @@
 
 use crate::{
     file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
+    impl_schema_adapter_methods, schema_adapter::SchemaAdapterFactory,
 };
 
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{Result, Statistics};
+use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
 
@@ -31,6 +33,7 @@ use object_store::ObjectStore;
 pub(crate) struct MockSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl FileSource for MockSource {
@@ -80,4 +83,11 @@ impl FileSource for MockSource {
     fn file_type(&self) -> &str {
         "mock"
     }
+
+    impl_schema_adapter_methods!();
+}
+
+/// Create a column expression
+pub(crate) fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(Column::new_with_schema(name, schema)?))
 }

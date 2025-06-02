@@ -15,6 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Currently, the avro not support Utf8View type, so we disable the map_varchar_to_utf8view
+# After https://github.com/apache/arrow-rs/issues/7262 released, we can remove this setting
+statement ok
+set datafusion.sql_parser.map_varchar_to_utf8view = false;
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain (
@@ -253,3 +257,13 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/alltypes_plain.avro]]}, file_type=avro
+
+# test column projection order from avro file
+query ITII
+SELECT id, string_col, int_col, bigint_col FROM alltypes_plain ORDER BY id LIMIT 5
+----
+0 0 0 0
+1 1 1 10
+2 0 0 0
+3 1 1 10
+4 0 0 0

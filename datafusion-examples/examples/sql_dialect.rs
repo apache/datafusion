@@ -34,8 +34,8 @@ async fn main() -> Result<()> {
     let my_statement = my_parser.parse_statement()?;
 
     match my_statement {
-        MyStatement::DFStatement(s) => println!("df: {}", s),
-        MyStatement::MyCopyTo(s) => println!("my_copy: {}", s),
+        MyStatement::DFStatement(s) => println!("df: {s}"),
+        MyStatement::MyCopyTo(s) => println!("my_copy: {s}"),
     }
 
     Ok(())
@@ -87,8 +87,8 @@ enum MyStatement {
 impl Display for MyStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MyStatement::DFStatement(s) => write!(f, "{}", s),
-            MyStatement::MyCopyTo(s) => write!(f, "{}", s),
+            MyStatement::DFStatement(s) => write!(f, "{s}"),
+            MyStatement::MyCopyTo(s) => write!(f, "{s}"),
         }
     }
 }

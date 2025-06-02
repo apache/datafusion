@@ -72,7 +72,7 @@ impl ParserOptions {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
-            map_varchar_to_utf8view: false,
+            map_varchar_to_utf8view: true,
             enable_options_value_normalization: false,
             collect_spans: false,
         }
@@ -816,7 +816,7 @@ impl std::fmt::Display for IdentTaker {
             if !first {
                 write!(f, ".")?;
             }
-            write!(f, "{}", ident)?;
+            write!(f, "{ident}")?;
             first = false;
         }
 

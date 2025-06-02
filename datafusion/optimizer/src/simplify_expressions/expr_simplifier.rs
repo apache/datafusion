@@ -34,11 +34,11 @@ use datafusion_common::{
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
-    Operator, Volatility, WindowFunctionDefinition,
+    Operator, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
-    expr::{InList, InSubquery, WindowFunction},
+    expr::{InList, InSubquery},
     utils::{iter_conjunction, iter_conjunction_owned},
 };
 use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
@@ -520,6 +520,7 @@ struct ConstEvaluator<'a> {
 
 #[allow(dead_code)]
 /// The simplify result of ConstEvaluator
+#[allow(clippy::large_enum_variant)]
 enum ConstSimplifyResult {
     // Expr was simplified and contains the new expression
     Simplified(ScalarValue),
@@ -1522,12 +1523,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 (_, expr) => Transformed::no(expr),
             },
 
-            Expr::WindowFunction(WindowFunction {
-                fun: WindowFunctionDefinition::WindowUDF(ref udwf),
-                ..
-            }) => match (udwf.simplify(), expr) {
+            Expr::WindowFunction(ref window_fun) => match (window_fun.simplify(), expr) {
                 (Some(simplify_function), Expr::WindowFunction(wf)) => {
-                    Transformed::yes(simplify_function(wf, info)?)
+                    Transformed::yes(simplify_function(*wf, info)?)
                 }
                 (_, expr) => Transformed::no(expr),
             },
@@ -1606,8 +1604,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                 }))
                             }
                             Some(pattern_str)
-                                if !pattern_str
-                                    .contains(['%', '_', escape_char].as_ref()) =>
+                                if !like.case_insensitive
+                                    && !pattern_str
+                                        .contains(['%', '_', escape_char].as_ref()) =>
                             {
                                 // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
                                 // TODO: handle escape characters
@@ -1826,7 +1825,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     info, &left, op, &right,
                 ) && op.supports_propagation() =>
             {
-                unwrap_cast_in_comparison_for_binary(info, left, right, op)?
+                unwrap_cast_in_comparison_for_binary(info, *left, *right, op)?
             }
             // literal op try_cast/cast(expr as data_type)
             // -->
@@ -1839,8 +1838,8 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             {
                 unwrap_cast_in_comparison_for_binary(
                     info,
-                    right,
-                    left,
+                    *right,
+                    *left,
                     op.swap().unwrap(),
                 )?
             }
@@ -2142,10 +2141,13 @@ fn simplify_null_div_other_case<S: SimplifyInfo>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
+    use arrow::datatypes::FieldRef;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
+        expr::WindowFunction,
         function::{
             AccumulatorArgs, AggregateFunctionSimplification,
             WindowFunctionSimplification,
@@ -2160,8 +2162,6 @@ mod tests {
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-
-    use super::*;
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -4102,6 +4102,11 @@ mod tests {
         assert_eq!(simplify(expr), col("c1").like(lit("a_")));
         let expr = col("c1").not_like(lit("a_"));
         assert_eq!(simplify(expr), col("c1").not_like(lit("a_")));
+
+        let expr = col("c1").ilike(lit("a"));
+        assert_eq!(simplify(expr), col("c1").ilike(lit("a")));
+        let expr = col("c1").not_ilike(lit("a"));
+        assert_eq!(simplify(expr), col("c1").not_ilike(lit("a")));
     }
 
     #[test]
@@ -4382,8 +4387,7 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
+        let window_function_expr = Expr::from(WindowFunction::new(udwf, vec![]));
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -4391,8 +4395,7 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
+        let window_function_expr = Expr::from(WindowFunction::new(udwf, vec![]));
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);
@@ -4444,7 +4447,7 @@ mod tests {
             unimplemented!("not needed for tests")
         }
 
-        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!("not needed for tests")
         }
     }

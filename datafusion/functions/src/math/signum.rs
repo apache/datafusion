@@ -138,7 +138,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
@@ -157,10 +157,12 @@ mod test {
             f32::INFINITY,
             f32::NEG_INFINITY,
         ]));
+        let arg_fields = vec![Field::new("a", DataType::Float32, false).into()];
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
+            arg_fields,
             number_rows: array.len(),
-            return_type: &DataType::Float32,
+            return_field: Field::new("f", DataType::Float32, true).into(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
@@ -201,10 +203,12 @@ mod test {
             f64::INFINITY,
             f64::NEG_INFINITY,
         ]));
+        let arg_fields = vec![Field::new("a", DataType::Float64, false).into()];
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
+            arg_fields,
             number_rows: array.len(),
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)

@@ -3447,9 +3447,8 @@ fn test_parallelize_sort_preserves_fetch() -> Result<()> {
     let schema = create_test_schema3()?;
     let parquet_exec = parquet_exec(&schema);
     let coalesced = Arc::new(CoalescePartitionsExec::new(parquet_exec.clone()));
-    let top_coalesced = CoalescePartitionsExec::new(coalesced.clone())
-        .with_fetch(Some(10))
-        .unwrap();
+    let top_coalesced =
+        Arc::new(CoalescePartitionsExec::new(coalesced.clone()).with_fetch(Some(10)));
 
     let requirements = PlanWithCorrespondingCoalescePartitions::new(
         top_coalesced.clone(),

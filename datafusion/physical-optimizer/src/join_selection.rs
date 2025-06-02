@@ -65,8 +65,8 @@ pub(crate) fn should_swap_join_order(
     // Get the left and right table's total bytes
     // If both the left and right tables contain total_byte_size statistics,
     // use `total_byte_size` to determine `should_swap_join_order`, else use `num_rows`
-    let left_stats = left.statistics()?;
-    let right_stats = right.statistics()?;
+    let left_stats = left.partition_statistics(None)?;
+    let right_stats = right.partition_statistics(None)?;
     // First compare `total_byte_size` of left and right side,
     // if information in this field is insufficient fallback to the `num_rows`
     match (
@@ -91,7 +91,7 @@ fn supports_collect_by_thresholds(
 ) -> bool {
     // Currently we do not trust the 0 value from stats, due to stats collection might have bug
     // TODO check the logic in datasource::get_statistics_with_limit()
-    let Ok(stats) = plan.statistics() else {
+    let Ok(stats) = plan.partition_statistics(None) else {
         return false;
     };
 

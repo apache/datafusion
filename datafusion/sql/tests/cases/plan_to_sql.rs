@@ -698,7 +698,7 @@ fn roundtrip_statement_with_dialect_27() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3])",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
+        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS derived_projection ("UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
     );
     Ok(())
 }
@@ -720,7 +720,7 @@ fn roundtrip_statement_with_dialect_29() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]), j1",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
+        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS derived_projection ("UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
     );
     Ok(())
 }
@@ -1825,6 +1825,51 @@ fn test_order_by_to_sql_3() {
         statement,
         @r#"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"#
     );
+}
+
+#[test]
+fn test_complex_order_by_with_grouping() -> Result<()> {
+    let state = MockSessionState::default().with_aggregate_function(grouping_udaf());
+
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new(&context);
+
+    // This SQL is based on a simplified version of the TPC-DS query 36.
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql(
+            r#"SELECT
+            j1_id,
+            j1_string,
+            grouping(j1_id) + grouping(j1_string) as lochierarchy
+        FROM
+            j1
+        GROUP BY
+            ROLLUP (j1_id, j1_string)
+        ORDER BY
+            grouping(j1_id) + grouping(j1_string) DESC,
+            CASE
+                WHEN grouping(j1_id) + grouping(j1_string) = 0 THEN j1_id
+            END
+        LIMIT 100"#,
+        )?
+        .parse_statement()?;
+
+    let plan = sql_to_rel.sql_statement_to_plan(statement)?;
+    let unparser = Unparser::default();
+    let sql = unparser.plan_to_sql(&plan)?;
+    insta::with_settings!({
+        filters => vec![
+            // Force a deterministic order for the grouping pairs
+            (r#"grouping\(j1\.(?:j1_id|j1_string)\),\s*grouping\(j1\.(?:j1_id|j1_string)\)"#, "grouping(j1.j1_string), grouping(j1.j1_id)")
+        ],
+    }, {
+        assert_snapshot!(
+            sql,
+            @r#"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY (grouping(j1.j1_id) + grouping(j1.j1_string)) DESC NULLS FIRST, CASE WHEN ((grouping(j1.j1_id) + grouping(j1.j1_string)) = 0) THEN j1.j1_id END ASC NULLS LAST) LIMIT 100"#
+        );
+    });
+
+    Ok(())
 }
 
 #[test]

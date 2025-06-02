@@ -28,9 +28,10 @@ use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
 };
+use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
-use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion_physical_optimizer::pruning::PruningPredicate;
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -333,7 +334,7 @@ fn prune_pages_in_one_row_group(
     assert_eq!(page_row_counts.len(), values.len());
     let mut sum_row = *page_row_counts.first().unwrap();
     let mut selected = *values.first().unwrap();
-    trace!("Pruned to {:?} using {:?}", values, pruning_stats);
+    trace!("Pruned to {values:?} using {pruning_stats:?}");
     for (i, &f) in values.iter().enumerate().skip(1) {
         if f == selected {
             sum_row += *page_row_counts.get(i).unwrap();

@@ -341,7 +341,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
 
                 let eclipse = if values.len() > 5 { "..." } else { "" };
 
-                let values_str = format!("{}{}", str_values, eclipse);
+                let values_str = format!("{str_values}{eclipse}");
                 json!({
                     "Node Type": "Values",
                     "Values": values_str
@@ -429,7 +429,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
             }) => {
                 let op_str = options
                     .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
+                    .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>()
                     .join(", ");
                 json!({
@@ -722,13 +722,14 @@ impl<'n> TreeNodeVisitor<'n> for PgJsonVisitor<'_, '_> {
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+    use insta::assert_snapshot;
 
     use super::*;
 
     #[test]
     fn test_display_empty_schema() {
         let schema = Schema::empty();
-        assert_eq!("[]", format!("{}", display_schema(&schema)));
+        assert_snapshot!(display_schema(&schema), @"[]");
     }
 
     #[test]
@@ -738,9 +739,6 @@ mod tests {
             Field::new("first_name", DataType::Utf8, true),
         ]);
 
-        assert_eq!(
-            "[id:Int32, first_name:Utf8;N]",
-            format!("{}", display_schema(&schema))
-        );
+        assert_snapshot!(display_schema(&schema), @"[id:Int32, first_name:Utf8;N]");
     }
 }

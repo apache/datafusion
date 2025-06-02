@@ -189,17 +189,18 @@ impl Unparser<'_> {
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                params:
-                    WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        ..
-                    },
-            }) => {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params:
+                        WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            ..
+                        },
+                } = window_fun.as_ref();
                 let func_name = fun.name();
 
                 let args = self.function_args_to_sql(args)?;
@@ -1133,16 +1134,16 @@ impl Unparser<'_> {
             ScalarValue::Float16(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Float32(Some(f)) => {
                 let f_val = match f.fract() {
-                    0.0 => format!("{:.1}", f),
-                    _ => format!("{}", f),
+                    0.0 => format!("{f:.1}"),
+                    _ => format!("{f}"),
                 };
                 Ok(ast::Expr::value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float32(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::Float64(Some(f)) => {
                 let f_val = match f.fract() {
-                    0.0 => format!("{:.1}", f),
-                    _ => format!("{}", f),
+                    0.0 => format!("{f:.1}"),
+                    _ => format!("{f}"),
                 };
                 Ok(ast::Expr::value(ast::Value::Number(f_val, false)))
             }
@@ -2019,7 +2020,7 @@ mod tests {
                 "count(*) FILTER (WHERE true)",
             ),
             (
-                Expr::WindowFunction(WindowFunction {
+                Expr::from(WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
                     params: WindowFunctionParams {
                         args: vec![col("col")],
@@ -2033,7 +2034,7 @@ mod tests {
             ),
             (
                 #[expect(deprecated)]
-                Expr::WindowFunction(WindowFunction {
+                Expr::from(WindowFunction {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     params: WindowFunctionParams {
                         args: vec![Expr::Wildcard {
@@ -2228,7 +2229,7 @@ mod tests {
         for (expr, expected) in tests {
             let ast = expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             assert_eq!(actual, expected);
         }
@@ -2246,7 +2247,7 @@ mod tests {
         let expr = col("a").gt(lit(4));
         let ast = unparser.expr_to_sql(&expr)?;
 
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
 
         let expected = r#"('a' > 4)"#;
         assert_eq!(actual, expected);
@@ -2262,7 +2263,7 @@ mod tests {
         let expr = col("a").gt(lit(4));
         let ast = unparser.expr_to_sql(&expr)?;
 
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
 
         let expected = r#"(a > 4)"#;
         assert_eq!(actual, expected);
@@ -2286,7 +2287,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             let expected = format!(r#"CAST(a AS {identifier})"#);
             assert_eq!(actual, expected);
@@ -2311,7 +2312,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             let expected = format!(r#"CAST(a AS {identifier})"#);
             assert_eq!(actual, expected);
@@ -2333,7 +2334,7 @@ mod tests {
             let unparser = Unparser::new(&dialect);
             let ast = unparser.sort_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             assert_eq!(actual, expected);
         }
@@ -2583,7 +2584,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2639,7 +2640,7 @@ mod tests {
             .call(vec![Expr::Literal(ScalarValue::new_utf8(unit)), col("x")]);
 
             let ast = unparser.expr_to_sql(&expr)?;
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
 
             assert_eq!(actual, expected);
         }
@@ -2666,7 +2667,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2694,7 +2695,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2733,7 +2734,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2762,7 +2763,7 @@ mod tests {
             ));
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST('2025-01-31 01:05:49.123' AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2789,7 +2790,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"CAST(a AS {identifier})"#);
 
             assert_eq!(actual, expected);
@@ -2815,7 +2816,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = expected.to_string();
 
             assert_eq!(actual, expected);
@@ -2872,7 +2873,7 @@ mod tests {
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{}", ast);
+            let actual = format!("{ast}");
             let expected = format!(r#"round(CAST("a" AS {identifier}), 2)"#);
 
             assert_eq!(actual, expected);
@@ -2902,7 +2903,7 @@ mod tests {
             let func = WindowFunctionDefinition::WindowUDF(rank_udwf());
             let mut window_func = WindowFunction::new(func, vec![]);
             window_func.params.order_by = vec![Sort::new(col("a"), true, true)];
-            let expr = Expr::WindowFunction(window_func);
+            let expr = Expr::from(window_func);
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = ast.to_string();
@@ -3052,7 +3053,7 @@ mod tests {
         let expr = cast(col("a"), DataType::Utf8View);
         let ast = unparser.expr_to_sql(&expr)?;
 
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
         let expected = r#"CAST(a AS CHAR)"#.to_string();
 
         assert_eq!(actual, expected);
@@ -3060,7 +3061,7 @@ mod tests {
         let expr = col("a").eq(lit(ScalarValue::Utf8View(Some("hello".to_string()))));
         let ast = unparser.expr_to_sql(&expr)?;
 
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
         let expected = r#"(a = 'hello')"#.to_string();
 
         assert_eq!(actual, expected);
@@ -3068,7 +3069,7 @@ mod tests {
         let expr = col("a").is_not_null();
 
         let ast = unparser.expr_to_sql(&expr)?;
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
         let expected = r#"a IS NOT NULL"#.to_string();
 
         assert_eq!(actual, expected);
@@ -3076,7 +3077,7 @@ mod tests {
         let expr = col("a").is_null();
 
         let ast = unparser.expr_to_sql(&expr)?;
-        let actual = format!("{}", ast);
+        let actual = format!("{ast}");
         let expected = r#"a IS NULL"#.to_string();
 
         assert_eq!(actual, expected);

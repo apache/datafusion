@@ -110,7 +110,7 @@ impl Statement {
                     Statement::Prepare(Prepare {
                         name, data_types, ..
                     }) => {
-                        write!(f, "Prepare: {name:?} {data_types:?} ")
+                        write!(f, "Prepare: {name:?} {data_types:?}")
                     }
                     Statement::Execute(Execute {
                         name, parameters, ..
@@ -123,7 +123,7 @@ impl Statement {
                         )
                     }
                     Statement::Deallocate(Deallocate { name }) => {
-                        write!(f, "Deallocate: {}", name)
+                        write!(f, "Deallocate: {name}")
                     }
                 }
             }

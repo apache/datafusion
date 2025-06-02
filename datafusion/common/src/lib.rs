@@ -47,6 +47,7 @@ pub mod format;
 pub mod hash_utils;
 pub mod instant;
 pub mod parsers;
+pub mod pruning;
 pub mod rounding;
 pub mod scalar;
 pub mod spans;
@@ -185,9 +186,7 @@ mod tests {
         let expected_prefix = expected_prefix.as_ref();
         assert!(
             actual.starts_with(expected_prefix),
-            "Expected '{}' to start with '{}'",
-            actual,
-            expected_prefix
+            "Expected '{actual}' to start with '{expected_prefix}'"
         );
     }
 }

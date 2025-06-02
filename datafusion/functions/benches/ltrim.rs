@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{
     black_box, criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup,
     Criterion, SamplingMode,
@@ -26,12 +26,8 @@ use criterion::{
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
-use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
+use rand::{distr::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fmt, sync::Arc};
-
-pub fn seedable_rng() -> StdRng {
-    StdRng::seed_from_u64(42)
-}
 
 #[derive(Clone, Copy)]
 pub enum StringArrayType {
@@ -58,14 +54,14 @@ pub fn create_string_array_and_characters(
     remaining_len: usize,
     string_array_type: StringArrayType,
 ) -> (ArrayRef, ScalarValue) {
-    let rng = &mut seedable_rng();
+    let rng = &mut StdRng::seed_from_u64(42);
 
     // Create `size` rows:
     //   - 10% rows will be `None`
     //   - Other 90% will be strings with same `remaining_len` lengths
     // We will build the string array on it later.
     let string_iter = (0..size).map(|_| {
-        if rng.gen::<f32>() < 0.1 {
+        if rng.random::<f32>() < 0.1 {
             None
         } else {
             let mut value = trimmed.as_bytes().to_vec();
@@ -136,6 +132,11 @@ fn run_with_string_type<M: Measurement>(
     string_type: StringArrayType,
 ) {
     let args = create_args(size, characters, trimmed, remaining_len, string_type);
+    let arg_fields = args
+        .iter()
+        .enumerate()
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
+        .collect::<Vec<_>>();
     group.bench_function(
         format!(
             "{string_type} [size={size}, len_before={len}, len_after={remaining_len}]",
@@ -145,8 +146,9 @@ fn run_with_string_type<M: Measurement>(
                 let args_cloned = args.clone();
                 black_box(ltrim.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_fields: arg_fields.clone(),
                     number_rows: size,
-                    return_type: &DataType::Utf8,
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 }))
             })
         },

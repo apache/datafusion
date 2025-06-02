@@ -22,7 +22,9 @@ use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
     ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringArrayType,
 };
-use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
+use arrow::datatypes::{
+    ArrowNativeType, DataType, Field, FieldRef, Int32Type, Int64Type,
+};
 use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{
@@ -88,16 +90,23 @@ impl ScalarUDFImpl for StrposFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be used instead")
+        internal_err!("return_field_from_args should be used instead")
     }
 
-    fn return_type_from_args(
+    fn return_field_from_args(
         &self,
-        args: datafusion_expr::ReturnTypeArgs,
-    ) -> Result<datafusion_expr::ReturnInfo> {
-        utf8_to_int_type(&args.arg_types[0], "strpos/instr/position").map(|data_type| {
-            datafusion_expr::ReturnInfo::new(data_type, args.nullables.iter().any(|x| *x))
-        })
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        utf8_to_int_type(args.arg_fields[0].data_type(), "strpos/instr/position").map(
+            |data_type| {
+                Field::new(
+                    self.name(),
+                    data_type,
+                    args.arg_fields.iter().any(|x| x.is_nullable()),
+                )
+                .into()
+            },
+        )
     }
 
     fn invoke_with_args(
@@ -228,7 +237,7 @@ mod tests {
     use arrow::array::{Array, Int32Array, Int64Array};
     use arrow::datatypes::DataType::{Int32, Int64};
 
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -321,15 +330,15 @@ mod tests {
     fn nullable_return_type() {
         fn get_nullable(string_array_nullable: bool, substring_nullable: bool) -> bool {
             let strpos = StrposFunc::new();
-            let args = datafusion_expr::ReturnTypeArgs {
-                arg_types: &[DataType::Utf8, DataType::Utf8],
-                nullables: &[string_array_nullable, substring_nullable],
+            let args = datafusion_expr::ReturnFieldArgs {
+                arg_fields: &[
+                    Field::new("f1", DataType::Utf8, string_array_nullable).into(),
+                    Field::new("f2", DataType::Utf8, substring_nullable).into(),
+                ],
                 scalar_arguments: &[None::<&ScalarValue>, None::<&ScalarValue>],
             };
 
-            let (_, nullable) = strpos.return_type_from_args(args).unwrap().into_parts();
-
-            nullable
+            strpos.return_field_from_args(args).unwrap().is_nullable()
         }
 
         assert!(!get_nullable(false, false));

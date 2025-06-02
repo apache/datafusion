@@ -59,7 +59,7 @@ pub enum DataFusionError {
     ParquetError(ParquetError),
     /// Error when reading Avro data.
     #[cfg(feature = "avro")]
-    AvroError(AvroError),
+    AvroError(Box<AvroError>),
     /// Error when reading / writing to / from an object_store (e.g. S3 or LocalFile)
     #[cfg(feature = "object_store")]
     ObjectStore(object_store::Error),
@@ -311,7 +311,7 @@ impl From<ParquetError> for DataFusionError {
 #[cfg(feature = "avro")]
 impl From<AvroError> for DataFusionError {
     fn from(e: AvroError) -> Self {
-        DataFusionError::AvroError(e)
+        DataFusionError::AvroError(Box::new(e))
     }
 }
 
@@ -397,7 +397,7 @@ impl Error for DataFusionError {
 
 impl From<DataFusionError> for io::Error {
     fn from(e: DataFusionError) -> Self {
-        io::Error::new(io::ErrorKind::Other, e)
+        io::Error::other(e)
     }
 }
 
@@ -526,7 +526,7 @@ impl DataFusionError {
     pub fn message(&self) -> Cow<str> {
         match *self {
             DataFusionError::ArrowError(ref desc, ref backtrace) => {
-                let backtrace = backtrace.clone().unwrap_or("".to_owned());
+                let backtrace = backtrace.clone().unwrap_or_else(|| "".to_owned());
                 Cow::Owned(format!("{desc}{backtrace}"))
             }
             #[cfg(feature = "parquet")]
@@ -535,7 +535,8 @@ impl DataFusionError {
             DataFusionError::AvroError(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::IoError(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::SQL(ref desc, ref backtrace) => {
-                let backtrace: String = backtrace.clone().unwrap_or("".to_owned());
+                let backtrace: String =
+                    backtrace.clone().unwrap_or_else(|| "".to_owned());
                 Cow::Owned(format!("{desc:?}{backtrace}"))
             }
             DataFusionError::Configuration(ref desc) => Cow::Owned(desc.to_string()),
@@ -547,7 +548,7 @@ impl DataFusionError {
             DataFusionError::Plan(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::SchemaError(ref desc, ref backtrace) => {
                 let backtrace: &str =
-                    &backtrace.as_ref().clone().unwrap_or("".to_owned());
+                    &backtrace.as_ref().clone().unwrap_or_else(|| "".to_owned());
                 Cow::Owned(format!("{desc}{backtrace}"))
             }
             DataFusionError::Execution(ref desc) => Cow::Owned(desc.to_string()),
@@ -944,7 +945,7 @@ pub fn add_possible_columns_to_diag(
         .collect();
 
     for name in field_names {
-        diagnostic.add_note(format!("possible column {}", name), None);
+        diagnostic.add_note(format!("possible column {name}"), None);
     }
 }
 
@@ -1119,8 +1120,7 @@ mod test {
         );
 
         // assert wrapping other Error
-        let generic_error: GenericError =
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let generic_error: GenericError = Box::new(std::io::Error::other("io error"));
         let datafusion_error: DataFusionError = generic_error.into();
         println!("{}", datafusion_error.strip_backtrace());
         assert_eq!(
@@ -1131,13 +1131,12 @@ mod test {
 
     #[test]
     fn external_error_no_recursive() {
-        let generic_error_1: GenericError =
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let generic_error_1: GenericError = Box::new(std::io::Error::other("io error"));
         let external_error_1: DataFusionError = generic_error_1.into();
         let generic_error_2: GenericError = Box::new(external_error_1);
         let external_error_2: DataFusionError = generic_error_2.into();
 
-        println!("{}", external_error_2);
+        println!("{external_error_2}");
         assert!(external_error_2
             .to_string()
             .starts_with("External error: io error"));
