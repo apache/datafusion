@@ -180,7 +180,7 @@ impl Count {
         }
     }
 }
-fn get_primitive_type_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
+fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
     match data_type {
         // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
         DataType::Int8 => Box::new(PrimitiveDistinctCountAccumulator::<Int8Type>::new(
@@ -340,10 +340,10 @@ impl AggregateUDFImpl for Count {
 
         Ok(match data_type {
             DataType::Dictionary(_, values_type) => {
-                let inner = get_primitive_type_accumulator(values_type);
+                let inner = get_count_accumulator(values_type);
                 Box::new(DictionaryCountAccumulator::new(inner))
             }
-            _ => get_primitive_type_accumulator(data_type),
+            _ => get_count_accumulator(data_type),
         })
     }
 
