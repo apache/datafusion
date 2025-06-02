@@ -907,7 +907,7 @@ async fn window_using_aggregates() -> Result<()> {
             vec![col("c3")],
         );
 
-        Expr::WindowFunction(w)
+        Expr::from(w)
             .null_treatment(NullTreatment::IgnoreNulls)
             .order_by(vec![col("c2").sort(true, true), col("c3").sort(true, true)])
             .window_frame(WindowFrame::new_bounds(
@@ -2505,6 +2505,11 @@ async fn write_table_with_order() -> Result<()> {
     write_df = write_df
         .with_column_renamed("column1", "tablecol1")
         .unwrap();
+
+    // Ensure the column type matches the target table
+    write_df =
+        write_df.with_column("tablecol1", cast(col("tablecol1"), DataType::Utf8View))?;
+
     let sql_str =
         "create external table data(tablecol1 varchar) stored as parquet location '"
             .to_owned()

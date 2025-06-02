@@ -17,6 +17,7 @@
 
 use crate::{
     file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
+    impl_schema_adapter_methods, schema_adapter::SchemaAdapterFactory,
 };
 
 use std::sync::Arc;
@@ -32,6 +33,7 @@ use object_store::ObjectStore;
 pub(crate) struct MockSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl FileSource for MockSource {
@@ -81,6 +83,8 @@ impl FileSource for MockSource {
     fn file_type(&self) -> &str {
         "mock"
     }
+
+    impl_schema_adapter_methods!();
 }
 
 /// Create a column expression
