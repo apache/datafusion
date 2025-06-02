@@ -802,7 +802,7 @@ mod tests {
             name: "count",
             ignore_nulls: false,
             is_reversed: false,
-            return_field: &Field::new_list_field(DataType::Int64, true),
+            return_field: Arc::new(Field::new_list_field(DataType::Int64, true)),
             ordering_req: &LexOrdering::default(),
         };
 

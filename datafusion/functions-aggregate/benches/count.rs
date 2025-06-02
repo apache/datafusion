@@ -56,7 +56,7 @@ fn prepare_accumulator() -> Box<dyn Accumulator> {
         true,
     )]));
     let accumulator_args = AccumulatorArgs {
-        return_field: &Field::new_list_field(DataType::Int64, true),
+        return_field: Arc::new(Field::new_list_field(DataType::Int64, true)),
         schema: &schema,
         ignore_nulls: false,
         ordering_req: &LexOrdering::default(),
