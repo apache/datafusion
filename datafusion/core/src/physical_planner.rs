@@ -3050,10 +3050,8 @@ mod tests {
 
 digraph {
     1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
-    2[shape=box label="YieldStreamExec child=EmptyExec", tooltip=""]
+    2[shape=box label="EmptyExec", tooltip=""]
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
-    3[shape=box label="EmptyExec", tooltip=""]
-    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan
 "#;
