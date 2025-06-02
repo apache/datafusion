@@ -36,7 +36,6 @@ use std::task::{Context, Poll};
 use super::AggregateExec;
 use crate::filter::batch_filter;
 
-use crate::yield_stream::YieldStream;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
@@ -77,9 +76,6 @@ impl AggregateStream {
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
-
-        // Yield control back to tokio after a certain number of batches so it can check for cancellation.
-        //let input = Box::pin(YieldStream::new(input)) as SendableRecordBatchStream;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {

@@ -49,7 +49,6 @@ use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
-use crate::yield_stream::YieldStream;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::ready;
@@ -449,9 +448,6 @@ impl GroupedHashAggregateStream {
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(&context))?;
-
-        // Yield control back to tokio after a certain number of batches so it can check for cancellation.
-        //let input = Box::pin(YieldStream::new(input)) as SendableRecordBatchStream;
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
 

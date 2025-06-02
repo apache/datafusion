@@ -2177,7 +2177,7 @@ mod tests {
         let displayable = DisplayableExecutionPlan::new(got.as_ref());
         assert_eq!(
             displayable.indent(false).to_string(),
-            "ProjectionExec: expr=[0 as count(*)]\n  PlaceholderRowExec\n"
+            "ProjectionExec: expr=[0 as count(*)]\n  YieldStreamExec\n    PlaceholderRowExec\n"
         );
 
         Ok(())

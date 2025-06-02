@@ -531,7 +531,6 @@ mod test {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::exec_err;
-    use futures::{stream, TryStreamExt};
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]))

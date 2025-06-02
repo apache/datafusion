@@ -1,18 +1,34 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// for additional information regarding copyright ownership.  The
+// ASF licenses this file to you under the Apache License, Version
+// 2.0 (the "License"); you may not use this file except in
+// compliance with the License.  You may obtain a copy of the
+// License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 use arrow::record_batch::RecordBatch;
-use arrow_schema::{Schema, SchemaRef};
+use arrow_schema::Schema;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use futures::{stream, Stream, StreamExt, TryStreamExt};
-use crate::stream::RecordBatchStreamAdapter;
+use futures::Stream;
 
 /// Number of batches to yield before voluntarily returning Pending.
 /// This allows long-running operators to periodically yield control
@@ -52,7 +68,8 @@ impl Stream for YieldStream {
             return Poll::Ready(Some(batch));
         }
 
-        match this.inner.poll_next_unpin(cx) {
+        // Instead of `poll_next_unpin`, use `Pin::new(&mut this.inner).poll_next(cx)`
+        match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(batch))) => {
                 this.batches_processed += 1;
                 if this.batches_processed >= YIELD_BATCHES {
@@ -99,7 +116,7 @@ impl DisplayAs for YieldStreamExec {
         _t: DisplayFormatType,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        write!(f, "yield({})", self.child.name())
+        write!(f, "YieldStreamExec")
     }
 }
 
@@ -128,7 +145,8 @@ impl ExecutionPlan for YieldStreamExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(YieldStreamExec::new(children[0].clone())))
+        // Use Arc::clone on children[0] rather than calling clone() directly
+        Ok(Arc::new(YieldStreamExec::new(Arc::clone(&children[0]))))
     }
 
     fn execute(
@@ -136,50 +154,56 @@ impl ExecutionPlan for YieldStreamExec {
         partition: usize,
         task_ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let child_stream = self.child.execute(partition, task_ctx.clone())?;
+        let child_stream = self.child.execute(partition, Arc::clone(&task_ctx))?;
         let yield_stream = YieldStream::new(child_stream);
         Ok(Box::pin(yield_stream))
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stream::RecordBatchStreamAdapter;
+    use arrow_schema::SchemaRef;
+    use futures::{stream, StreamExt};
 
-/// Helper: construct a SendableRecordBatchStream containing `n` empty batches
-fn make_empty_batches(n: usize) -> SendableRecordBatchStream {
-    let schema: SchemaRef = Arc::new(Schema::empty());
-    let schema_for_stream = Arc::clone(&schema);
+    /// Helper: construct a SendableRecordBatchStream containing `n` empty batches
+    fn make_empty_batches(n: usize) -> SendableRecordBatchStream {
+        let schema: SchemaRef = Arc::new(Schema::empty());
+        let schema_for_stream = Arc::clone(&schema);
 
-    let s =
-        stream::iter((0..n).map(move |_| {
-            Ok(RecordBatch::new_empty(Arc::clone(&schema_for_stream)))
-        }))
-            .boxed();
+        let s =
+            stream::iter((0..n).map(move |_| {
+                Ok(RecordBatch::new_empty(Arc::clone(&schema_for_stream)))
+            }));
 
-    Box::pin(RecordBatchStreamAdapter::new(schema, s))
-}
+        Box::pin(RecordBatchStreamAdapter::new(schema, s))
+    }
 
-#[tokio::test]
-async fn yield_less_than_threshold() -> Result<()> {
-    let count = YIELD_BATCHES - 10;
-    let inner = make_empty_batches(count);
-    let out: Vec<_> = YieldStream::new(inner).try_collect::<Vec<_>>().await?;
-    assert_eq!(out.len(), count);
-    Ok(())
-}
+    #[tokio::test]
+    async fn yield_less_than_threshold() -> Result<()> {
+        let count = YIELD_BATCHES - 10;
+        let inner = make_empty_batches(count);
+        let out: Vec<_> = YieldStream::new(inner).collect::<Vec<_>>().await;
+        assert_eq!(out.len(), count);
+        Ok(())
+    }
 
-#[tokio::test]
-async fn yield_equal_to_threshold() -> Result<()> {
-    let count = YIELD_BATCHES;
-    let inner = make_empty_batches(count);
-    let out: Vec<_> = YieldStream::new(inner).try_collect::<Vec<_>>().await?;
-    assert_eq!(out.len(), count);
-    Ok(())
-}
+    #[tokio::test]
+    async fn yield_equal_to_threshold() -> Result<()> {
+        let count = YIELD_BATCHES;
+        let inner = make_empty_batches(count);
+        let out: Vec<_> = YieldStream::new(inner).collect::<Vec<_>>().await;
+        assert_eq!(out.len(), count);
+        Ok(())
+    }
 
-#[tokio::test]
-async fn yield_more_than_threshold() -> Result<()> {
-    let count = YIELD_BATCHES + 20;
-    let inner = make_empty_batches(count);
-    let out: Vec<_> = YieldStream::new(inner).try_collect::<Vec<_>>().await?;
-    assert_eq!(out.len(), count);
-    Ok(())
+    #[tokio::test]
+    async fn yield_more_than_threshold() -> Result<()> {
+        let count = YIELD_BATCHES + 20;
+        let inner = make_empty_batches(count);
+        let out: Vec<_> = YieldStream::new(inner).collect::<Vec<_>>().await;
+        assert_eq!(out.len(), count);
+        Ok(())
+    }
 }
