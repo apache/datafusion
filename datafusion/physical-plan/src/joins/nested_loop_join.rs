@@ -1010,7 +1010,7 @@ fn join_left_and_right_batch(
         right_side_ordered,
     )?;
 
-    // Switch around the build side and probe side for `JoinType::RightMark` 
+    // Switch around the build side and probe side for `JoinType::RightMark`
     // because in a RightMark join, we want to mark rows on the right table
     // by looking for matches in the left.
     if join_type == JoinType::RightMark {

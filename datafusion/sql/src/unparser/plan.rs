@@ -751,13 +751,17 @@ impl Unparser<'_> {
 
                         match join.join_type {
                             JoinType::LeftMark | JoinType::RightMark => {
-                                let source_schema = if join.join_type == JoinType::LeftMark {
-                                    left_plan.schema()
-                                } else {
-                                    right_plan.schema()
-                                };
+                                let source_schema =
+                                    if join.join_type == JoinType::LeftMark {
+                                        left_plan.schema()
+                                    } else {
+                                        right_plan.schema()
+                                    };
                                 let (table_ref, _) = source_schema.qualified_field(0);
-                                let column = self.col_to_sql(&Column::new(table_ref.cloned(), "mark"))?;
+                                let column = self.col_to_sql(&Column::new(
+                                    table_ref.cloned(),
+                                    "mark",
+                                ))?;
                                 select.replace_mark(&column, &exists_expr);
                             }
                             _ => {
