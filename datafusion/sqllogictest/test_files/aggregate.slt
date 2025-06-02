@@ -5026,11 +5026,12 @@ set datafusion.sql_parser.dialect = 'Generic';
 
 ## Multiple distinct aggregates and dictionaries
 statement ok
-create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)')), (1, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)')), (1, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
 
 query IT
 select * from dict_test;
 ----
+1 foo
 1 foo
 2 bar
 1 bar
@@ -5038,8 +5039,8 @@ select * from dict_test;
 query II
 select count(distinct column1), count(distinct column2) from dict_test group by column1;
 ----
-1 2
 1 1
+1 2
 
 statement ok
 drop table dict_test;
