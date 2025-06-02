@@ -30,9 +30,8 @@ use datafusion_common::tree_node::{
 use datafusion_common::{internal_err, Column, HashMap, Result};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    binary_expr, col, lit, BinaryExpr, DependentJoin, Expr, ExprFunctionExt,
-    ExprSchemable, Filter, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
-    Projection,
+    binary_expr, col, lit, BinaryExpr, DependentJoin, Expr, ExprSchemable, Filter,
+    JoinType, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
 };
 
 use indexmap::map::Entry;
@@ -79,7 +78,7 @@ impl DependentJoinDecorrelator {
                     }
                 }
             }
-            Expr::InSubquery(_) | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
+            Expr::InSubquery(_) | Expr::ScalarSubquery(_) | Expr::Exists(_) => {
                 return true;
             }
             _ => {}
@@ -137,10 +136,9 @@ impl DependentJoinDecorrelator {
             parent_propagate_nulls,
             lateral_depth,
         )?;
-        let new_right = Self::rewrite_correlated_exprs(&right)?;
         let join_condition = self.delim_join_condition(
             node,
-            new_right.schema().columns(),
+            right.schema().columns(),
             new_decorrelation.delim_scan_relation_name(),
             perform_delim,
         )?;
@@ -154,6 +152,12 @@ impl DependentJoinDecorrelator {
                 join_condition,
             )?
             .build()?;
+
+        let new_plan = Self::rewrite_outer_ref_columns(
+            new_plan,
+            &self.domains,
+            new_decorrelation.delim_scan_relation_name(),
+        )?;
         println!("{new_plan}");
         return Ok(new_plan);
     }
@@ -194,8 +198,36 @@ impl DependentJoinDecorrelator {
 
     // equivalent to RewriteCorrelatedExpressions of DuckDB
     // but with our current context we may not need this
-    fn rewrite_correlated_exprs(plan: &LogicalPlan) -> Result<LogicalPlan> {
-        Ok(plan.clone())
+    fn rewrite_outer_ref_columns(
+        plan: LogicalPlan,
+        domains: &IndexSet<Column>,
+        delim_scan_relation_name: String,
+    ) -> Result<LogicalPlan> {
+        Ok(plan
+            .transform_down(|p| {
+                if let LogicalPlan::DependentJoin(_) = &p {
+                    return internal_err!(
+                        "caling rewrite_correlated_exprs while some of \
+                    the plan is still dependent join plan"
+                    );
+                }
+                p.map_expressions(|e| {
+                    if let Expr::OuterReferenceColumn(_, col) = &e {
+                        println!("domain is {:?}, column is {col}", domains);
+                        if domains.contains(col) {
+                            println!("transformed");
+                            return Ok(Transformed::yes(Expr::Column(Column::from(
+                                format!(
+                                    "{delim_scan_relation_name}.{}",
+                                    col.name.clone()
+                                ),
+                            ))));
+                        }
+                    }
+                    Ok(Transformed::no(e))
+                })
+            })?
+            .data)
     }
     fn delim_scan_relation_name(&self) -> String {
         format!("delim_scan_{}", self.delim_scan_id)
@@ -241,20 +273,41 @@ impl DependentJoinDecorrelator {
             Ok(TreeNodeRecursion::Continue)
         })?;
 
-        // TODO: define logical plan for delim scan
-        let (delim_scan, delim_scan_relation_name) = self.build_delim_scan()?;
-        let mut exit_projection = false;
         if !*has_correlated_expr_ref {
             match subquery_input_node {
-                LogicalPlan::Projection(_) => {
-                    exit_projection = true;
-                    unimplemented!()
+                LogicalPlan::Projection(old_proj) => {
+                    let mut proj = old_proj.clone();
+                    // TODO: define logical plan for delim scan
+                    let (delim_scan, delim_scan_relation_name) =
+                        self.build_delim_scan()?;
+                    let right = self.decorrelate_plan(proj.input.deref().clone())?;
+                    let cross_join = LogicalPlanBuilder::new(delim_scan)
+                        .join(
+                            right,
+                            JoinType::Inner,
+                            (Vec::<Column>::new(), Vec::<Column>::new()),
+                            None,
+                        )?
+                        .build()?;
+                    proj.input = Arc::new(cross_join);
+
+                    for domain_col in self.domains.iter() {
+                        proj.expr.push(Expr::Column(domain_col.clone()));
+                    }
+                    let new_plan = Self::rewrite_outer_ref_columns(
+                        LogicalPlan::Projection(proj),
+                        &self.domains,
+                        delim_scan_relation_name,
+                    )?;
+
+                    return Ok(new_plan);
                 }
                 LogicalPlan::RecursiveQuery(_) => {
                     // duckdb support this
                     unimplemented!("")
                 }
                 any => {
+                    let (delim_scan, _) = self.build_delim_scan()?;
                     let right = self.decorrelate_plan(any.clone())?;
                     let cross_join = LogicalPlanBuilder::new(delim_scan)
                         .join(
@@ -276,30 +329,22 @@ impl DependentJoinDecorrelator {
                 // }
                 // bool child_is_dependent_join = plan->children[0]->type == LogicalOperatorType::LOGICAL_DEPENDENT_JOIN;
                 // parent_propagate_null_values &= !child_is_dependent_join;
-                if exit_projection {
-                    let right = self.decorrelate_plan(proj.input.deref().clone())?;
-                    let cross_join = LogicalPlanBuilder::new(delim_scan)
-                        .join(
-                            right,
-                            JoinType::Inner,
-                            (Vec::<Column>::new(), Vec::<Column>::new()),
-                            None,
-                        )?
-                        .build()?;
-                    proj.input = Arc::new(cross_join);
-                } else {
-                    let new_input = self.push_down_dependent_join(
-                        proj.input.as_ref(),
-                        parent_propagate_nulls,
-                        lateral_depth,
-                    )?;
-                    proj.input = Arc::new(new_input);
-                }
-                let new_plan = Self::rewrite_correlated_exprs(&subquery_input_node)?;
+                let new_input = self.push_down_dependent_join(
+                    proj.input.as_ref(),
+                    parent_propagate_nulls,
+                    lateral_depth,
+                )?;
+                proj.input = Arc::new(new_input);
                 for domain_col in self.domains.iter() {
                     proj.expr.push(Expr::Column(domain_col.clone()));
                 }
-                return Ok(LogicalPlan::Projection(proj));
+                let new_plan = Self::rewrite_outer_ref_columns(
+                    LogicalPlan::Projection(proj),
+                    &self.domains,
+                    self.delim_scan_relation_name(),
+                )?;
+
+                return Ok(new_plan);
             }
             LogicalPlan::Filter(old_filter) => {
                 // todo: define if any join is need
@@ -308,15 +353,37 @@ impl DependentJoinDecorrelator {
                     parent_propagate_nulls,
                     lateral_depth,
                 )?;
-
-                let new_plan = Self::rewrite_correlated_exprs(&new_input)?;
                 let mut filter = old_filter.clone();
-                filter.input = Arc::new(new_plan);
+                filter.input = Arc::new(new_input);
+                let new_plan = Self::rewrite_outer_ref_columns(
+                    LogicalPlan::Filter(filter),
+                    &self.domains,
+                    self.delim_scan_relation_name(),
+                )?;
 
-                return Ok(LogicalPlan::Filter(filter));
+                return Ok(new_plan);
             }
             LogicalPlan::Aggregate(old_agg) => {
-                let mut agg = old_agg.clone();
+                let (delim_scan, delim_scan_relation_name) = self.build_delim_scan()?;
+                let new_input = self.push_down_dependent_join_internal(
+                    old_agg.input.as_ref(),
+                    parent_propagate_nulls,
+                    lateral_depth,
+                )?;
+
+                let mut new_agg = old_agg.clone();
+                new_agg.input = Arc::new(new_input);
+                let new_plan = Self::rewrite_outer_ref_columns(
+                    LogicalPlan::Aggregate(new_agg),
+                    &self.domains,
+                    self.delim_scan_relation_name(),
+                )?;
+                let mut agg: datafusion_expr::Aggregate = match new_plan {
+                    LogicalPlan::Aggregate(agg) => agg,
+                    _ => {
+                        unreachable!()
+                    }
+                };
                 // TODO: only false in case one of the correlated columns are of type
                 // List or a struct with a subfield of type List
                 let perform_delim = true;
@@ -347,7 +414,6 @@ impl DependentJoinDecorrelator {
                     // 	join_type = JoinType::LEFT;
                     // }
 
-                    let new_plan = LogicalPlanBuilder::new(delim_scan);
                     let mut join_conditions = vec![];
                     for correlated_col in self.domains.iter() {
                         let col_name = correlated_col.name.clone();
@@ -363,22 +429,15 @@ impl DependentJoinDecorrelator {
                         // TODO: check if any agg expr is count expr, then
                         // save them into replacement_map to later on rewrite
                     }
-                    println!("agg rewrite");
-                    let b = new_plan.join(
-                        LogicalPlan::Aggregate(agg),
-                        join_type,
-                        (Vec::<Column>::new(), Vec::<Column>::new()),
-                        conjunction(join_conditions),
-                    );
-                    match b {
-                        Ok(result) => result.build(),
-                        Err(e) => {
-                            println!("e");
-                            Err(e)
-                        }
-                    }
 
-                    // .join(LogicalPlan::Aggregate(agg), join_type, join_keys, filter);
+                    LogicalPlanBuilder::new(delim_scan)
+                        .join(
+                            LogicalPlan::Aggregate(agg),
+                            join_type,
+                            (Vec::<Column>::new(), Vec::<Column>::new()),
+                            conjunction(join_conditions),
+                        )?
+                        .build()
                 } else {
                     unimplemented!()
                 }
