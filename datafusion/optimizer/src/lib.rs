@@ -64,6 +64,9 @@ pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
 pub mod utils;
+pub mod flatten_dependent_joins;
+pub mod rewrite_correlated_expressions;
+pub mod has_correlated_expressions;
 
 #[cfg(test)]
 pub mod test;

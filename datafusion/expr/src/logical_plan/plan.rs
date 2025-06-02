@@ -290,6 +290,34 @@ pub enum LogicalPlan {
     /// A node type that only exist during subquery decorrelation
     /// TODO: maybe we can avoid creating new type of LogicalPlan for this usecase
     DependentJoin(DependentJoin),
+    DelimGet(DelimGet),
+}
+
+#[derive(Debug, Clone, Eq, Hash)]
+pub struct DelimGet {
+    pub schema: DFSchemaRef,
+    pub delim_types: Vec<DataType>,
+}
+
+impl DelimGet {
+    pub fn try_new(schema: DFSchemaRef, delim_types: &Vec<DataType>) -> Self {
+        Self {
+            schema,
+            delim_types: delim_types.clone(),
+        }
+    }
+}
+
+impl PartialEq for DelimGet {
+    fn eq(&self, other: &Self) -> bool {
+        self.delim_types == other.delim_types
+    }
+}
+
+impl PartialOrd for DelimGet {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.delim_types.partial_cmp(&other.delim_types)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -388,6 +416,34 @@ impl PartialOrd for DependentJoin {
     }
 }
 
+impl DependentJoin {
+    pub fn with_new_left(self, plan: LogicalPlan) -> Self {
+        Self {
+            schema: self.schema,
+            correlated_columns: self.correlated_columns,
+            subquery_expr: self.subquery_expr,
+            subquery_depth: self.subquery_depth,
+            left: Arc::new(plan),
+            right: self.right,
+            subquery_name: self.subquery_name,
+            lateral_join_condition: self.lateral_join_condition,
+        }
+    }
+
+    pub fn with_new_left_right(self, left: LogicalPlan, right: LogicalPlan) -> Self {
+        Self {
+            schema: self.schema,
+            correlated_columns: self.correlated_columns,
+            subquery_expr: self.subquery_expr,
+            subquery_depth: self.subquery_depth,
+            left: Arc::new(left),
+            right: Arc::new(right),
+            subquery_name: self.subquery_name,
+            lateral_join_condition: self.lateral_join_condition,
+        }
+    }
+}
+
 impl Default for LogicalPlan {
     fn default() -> Self {
         LogicalPlan::EmptyRelation(EmptyRelation {
@@ -451,6 +507,7 @@ impl LogicalPlan {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
             }
+            LogicalPlan::DelimGet(DelimGet { schema, .. }) => schema,
         }
     }
 
@@ -581,7 +638,246 @@ impl LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DescribeTable(_) => vec![],
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::DelimGet { .. } => vec![],
+        }
+    }
+
+    /// Convenience method to replace input nodes with new inputs while leaving other fields unchanged
+    pub fn with_new_inputs(&self, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        match (self, inputs.len()) {
+            (LogicalPlan::Projection(Projection { expr, schema, .. }), 1) => {
+                Ok(LogicalPlan::Projection(Projection {
+                    expr: expr.clone(),
+                    input: Arc::new(inputs.into_iter().next().unwrap()),
+                    schema: schema.clone(),
+                }))
+            }
+            (LogicalPlan::Filter(Filter { predicate, .. }), 1) => {
+                Ok(LogicalPlan::Filter(Filter {
+                    predicate: predicate.clone(),
+                    input: Arc::new(inputs.into_iter().next().unwrap()),
+                }))
+            }
+            (
+                LogicalPlan::Repartition(Repartition {
+                    partitioning_scheme,
+                    ..
+                }),
+                1,
+            ) => Ok(LogicalPlan::Repartition(Repartition {
+                partitioning_scheme: partitioning_scheme.clone(),
+                input: Arc::new(inputs.into_iter().next().unwrap()),
+            })),
+            (
+                LogicalPlan::Window(Window {
+                    window_expr,
+                    schema,
+                    ..
+                }),
+                1,
+            ) => Ok(LogicalPlan::Window(Window {
+                window_expr: window_expr.clone(),
+                input: Arc::new(inputs.into_iter().next().unwrap()),
+                schema: schema.clone(),
+            })),
+            (
+                LogicalPlan::Aggregate(Aggregate {
+                    group_expr,
+                    aggr_expr,
+                    schema,
+                    ..
+                }),
+                1,
+            ) => Ok(LogicalPlan::Aggregate(Aggregate {
+                group_expr: group_expr.clone(),
+                aggr_expr: aggr_expr.clone(),
+                input: Arc::new(inputs.into_iter().next().unwrap()),
+                schema: schema.clone(),
+            })),
+            (LogicalPlan::Sort(Sort { expr, fetch, .. }), 1) => {
+                Ok(LogicalPlan::Sort(Sort {
+                    expr: expr.clone(),
+                    input: Arc::new(inputs.into_iter().next().unwrap()),
+                    fetch: *fetch,
+                }))
+            }
+            (
+                LogicalPlan::Join(Join {
+                    join_type,
+                    join_constraint,
+                    on,
+                    filter,
+                    schema,
+                    null_equals_null,
+                    ..
+                }),
+                2,
+            ) => {
+                let mut inputs = inputs.into_iter();
+                Ok(LogicalPlan::Join(Join {
+                    left: Arc::new(inputs.next().unwrap()),
+                    right: Arc::new(inputs.next().unwrap()),
+                    join_type: *join_type,
+                    join_constraint: *join_constraint,
+                    on: on.clone(),
+                    filter: filter.clone(),
+                    schema: schema.clone(),
+                    null_equals_null: *null_equals_null,
+                }))
+            }
+            (
+                LogicalPlan::DependentJoin(DependentJoin {
+                    schema,
+                    correlated_columns,
+                    subquery_expr,
+                    subquery_depth,
+                    subquery_name,
+                    lateral_join_condition,
+                    ..
+                }),
+                2,
+            ) => {
+                let mut inputs = inputs.into_iter();
+                Ok(LogicalPlan::DependentJoin(DependentJoin {
+                    left: Arc::new(inputs.next().unwrap()),
+                    right: Arc::new(inputs.next().unwrap()),
+                    schema: schema.clone(),
+                    correlated_columns: correlated_columns.clone(),
+                    subquery_expr: subquery_expr.clone(),
+                    subquery_depth: *subquery_depth,
+                    subquery_name: subquery_name.clone(),
+                    lateral_join_condition: lateral_join_condition.clone(),
+                }))
+            }
+            (LogicalPlan::Limit(Limit { skip, fetch, .. }), 1) => {
+                Ok(LogicalPlan::Limit(Limit {
+                    skip: skip.clone(),
+                    fetch: fetch.clone(),
+                    input: Arc::new(inputs.into_iter().next().unwrap()),
+                }))
+            }
+            (
+                LogicalPlan::Subquery(Subquery {
+                    outer_ref_columns,
+                    spans,
+                    ..
+                }),
+                1,
+            ) => Ok(LogicalPlan::Subquery(Subquery {
+                subquery: Arc::new(inputs.into_iter().next().unwrap()),
+                outer_ref_columns: outer_ref_columns.clone(),
+                spans: spans.clone(),
+            })),
+            (LogicalPlan::SubqueryAlias(SubqueryAlias { alias, schema, .. }), 1) => {
+                Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
+                    input: Arc::new(inputs.into_iter().next().unwrap()),
+                    alias: alias.clone(),
+                    schema: schema.clone(),
+                }))
+            }
+            (LogicalPlan::Extension(extension), n)
+                if n == extension.node.inputs().len() =>
+            {
+                // extension.node.with_new_inputs(inputs)
+                todo!()
+            }
+            (LogicalPlan::Union(Union { schema, .. }), n) if n >= 2 => {
+                Ok(LogicalPlan::Union(Union {
+                    inputs: inputs.into_iter().map(Arc::new).collect(),
+                    schema: schema.clone(),
+                }))
+            }
+            (LogicalPlan::Distinct(Distinct::All(_)), 1) => Ok(LogicalPlan::Distinct(
+                Distinct::All(Arc::new(inputs.into_iter().next().unwrap())),
+            )),
+            (
+                LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                    on_expr,
+                    select_expr,
+                    sort_expr,
+                    schema,
+                    ..
+                })),
+                1,
+            ) => Ok(LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                on_expr: on_expr.clone(),
+                select_expr: select_expr.clone(),
+                sort_expr: sort_expr.clone(),
+                input: Arc::new(inputs.into_iter().next().unwrap()),
+                schema: schema.clone(),
+            }))),
+            (LogicalPlan::Explain(explain), 1) => Ok(LogicalPlan::Explain(Explain {
+                verbose: explain.verbose,
+                plan: Arc::new(inputs.into_iter().next().unwrap()),
+                schema: explain.schema.clone(),
+                explain_format: explain.explain_format.clone(),
+                stringified_plans: explain.stringified_plans.clone(),
+                logical_optimization_succeeded: explain.logical_optimization_succeeded,
+            })),
+            (LogicalPlan::Analyze(analyze), 1) => Ok(LogicalPlan::Analyze(Analyze {
+                verbose: analyze.verbose,
+                input: Arc::new(inputs.into_iter().next().unwrap()),
+                schema: analyze.schema.clone(),
+            })),
+            (LogicalPlan::Dml(write), 1) => Ok(LogicalPlan::Dml(DmlStatement::new(
+                write.table_name.clone(),
+                write.target.clone(),
+                write.op.clone(),
+                Arc::new(inputs.into_iter().next().unwrap()),
+            ))),
+            (LogicalPlan::Copy(copy), 1) => Ok(LogicalPlan::Copy(CopyTo {
+                input: Arc::new(inputs.into_iter().next().unwrap()),
+                output_url: copy.output_url.clone(),
+                file_type: copy.file_type.clone(),
+                options: copy.options.clone(),
+                partition_by: copy.partition_by.clone(),
+            })),
+            (LogicalPlan::Ddl(ddl), n) if n == ddl.inputs().len() => {
+                // ddl.with_new_inputs(&inputs)
+                todo!()
+            }
+            (
+                LogicalPlan::Unnest(Unnest {
+                    exec_columns,
+                    list_type_columns,
+                    struct_type_columns,
+                    dependency_indices,
+                    schema,
+                    options,
+                    ..
+                }),
+                1,
+            ) => Ok(LogicalPlan::Unnest(Unnest {
+                input: Arc::new(inputs.into_iter().next().unwrap()),
+                exec_columns: exec_columns.clone(),
+                list_type_columns: list_type_columns.clone(),
+                struct_type_columns: struct_type_columns.clone(),
+                dependency_indices: dependency_indices.clone(),
+                schema: schema.clone(),
+                options: options.clone(),
+            })),
+            (
+                LogicalPlan::RecursiveQuery(RecursiveQuery {
+                    name, is_distinct, ..
+                }),
+                2,
+            ) => {
+                let mut inputs = inputs.into_iter();
+                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
+                    name: name.clone(),
+                    static_term: Arc::new(inputs.next().unwrap()),
+                    recursive_term: Arc::new(inputs.next().unwrap()),
+                    is_distinct: *is_distinct,
+                }))
+            }
+            (LogicalPlan::Statement(stmt), n) if n == stmt.inputs().len() => {
+                // stmt.with_new_inputs(&inputs)
+                todo!()
+            }
+            (plan, n) => {
+                plan_err!("Cannot replace inputs for {:?}, got {} inputs", plan, n)
+            }
         }
     }
 
@@ -694,6 +990,151 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Unnest(_) => Ok(None),
+            LogicalPlan::DelimGet(_) => todo!(),
+        }
+    }
+
+    /// Returns a new LogicalPlan based on self but with the expressions replaced with the given expressions
+    ///
+    /// exprs: The new expressions to replace the old ones
+    pub fn with_new_exprs(&self, mut exprs: Vec<Expr>) -> Result<LogicalPlan> {
+        match self {
+            LogicalPlan::Projection(Projection { input, schema, .. }) => {
+                if exprs.len() != schema.fields().len() {
+                    return plan_err!(
+                    "Projection has mismatch between number of expressions ({}) and number of fields in schema ({})",
+                    exprs.len(),
+                    schema.fields().len()
+                );
+                }
+                Ok(LogicalPlan::Projection(Projection {
+                    expr: exprs,
+                    input: Arc::clone(input),
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::Filter(Filter { input, .. }) => {
+                let predicate = if exprs.len() == 1 {
+                    exprs.remove(0)
+                } else {
+                    return plan_err!(
+                        "Filter should have exactly one expression, got {}",
+                        exprs.len()
+                    );
+                };
+                Ok(LogicalPlan::Filter(Filter {
+                    predicate,
+                    input: input.clone(),
+                }))
+            }
+            LogicalPlan::Aggregate(Aggregate {
+                input,
+                group_expr,
+                schema,
+                ..
+            }) => {
+                let group_len = group_expr.len();
+                if exprs.len() != group_len + schema.fields().len() {
+                    return plan_err!(
+                        "Aggregate has wrong number of expressions. Expected {} got {}",
+                        group_len + schema.fields().len(),
+                        exprs.len()
+                    );
+                }
+
+                let (new_group_exprs, new_agg_exprs) = exprs.split_at(group_len);
+
+                Ok(LogicalPlan::Aggregate(Aggregate {
+                    input: Arc::clone(input),
+                    group_expr: new_group_exprs.to_vec(),
+                    aggr_expr: new_agg_exprs.to_vec(),
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::Sort(Sort {
+                input,
+                fetch,
+                expr: sort_expr,
+                ..
+            }) => Ok(LogicalPlan::Sort(Sort {
+                expr: exprs
+                    .into_iter()
+                    .zip(sort_expr.iter())
+                    .map(|(expr, sort)| sort.with_expr(expr))
+                    .collect(),
+                input: Arc::clone(input),
+                fetch: *fetch,
+            })),
+            LogicalPlan::Window(Window { input, schema, .. }) => {
+                Ok(LogicalPlan::Window(Window {
+                    input: Arc::clone(input),
+                    window_expr: exprs,
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                join_type,
+                join_constraint,
+                null_equals_null,
+                schema,
+                on,
+                ..
+            }) => {
+                let equi_count = on.len() * 2;
+                if exprs.len() < equi_count {
+                    return plan_err!(
+                        "Join conditions require {} expressions, got {}",
+                        equi_count,
+                        exprs.len()
+                    );
+                }
+
+                let filter = if exprs.len() > equi_count {
+                    Some(exprs.pop().unwrap())
+                } else {
+                    None
+                };
+
+                let mut new_on = Vec::with_capacity(on.len());
+                let mut iter = exprs.into_iter();
+                while let Some(left) = iter.next() {
+                    let right = iter.next().ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Expected right side of join condition".to_string(),
+                        )
+                    })?;
+                    new_on.push((left, right));
+                }
+
+                Ok(LogicalPlan::Join(Join {
+                    left: Arc::clone(left),
+                    right: Arc::clone(right),
+                    on: new_on,
+                    filter,
+                    join_type: *join_type,
+                    join_constraint: *join_constraint,
+                    schema: Arc::clone(schema),
+                    null_equals_null: *null_equals_null,
+                }))
+            }
+            LogicalPlan::TableScan(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::DescribeTable(_) => {
+                if !exprs.is_empty() {
+                    return plan_err!(
+                        "{:?} should have no expressions, got {}",
+                        self,
+                        exprs.len()
+                    );
+                }
+                Ok(self.clone())
+            }
+            _ => plan_err!("with_new_exprs not implemented for {self:?}"),
         }
     }
 
@@ -851,6 +1292,7 @@ impl LogicalPlan {
                 // Update schema with unnested column type.
                 unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
             }
+            LogicalPlan::DelimGet(_) => todo!(),
         }
     }
 
@@ -879,7 +1321,7 @@ impl LogicalPlan {
     /// // create new plan using rewritten_exprs in same position
     /// let new_plan = plan.new_with_exprs(rewritten_exprs, new_inputs);
     /// ```
-    pub fn with_new_exprs(
+    pub fn with_new_exprs_inputs(
         &self,
         mut expr: Vec<Expr>,
         inputs: Vec<LogicalPlan>,
@@ -1244,6 +1686,7 @@ impl LogicalPlan {
                 Ok(new_plan)
             }
             LogicalPlan::DependentJoin(_) => todo!(),
+            LogicalPlan::DelimGet(_) => todo!(),
         }
     }
 
@@ -1478,6 +1921,7 @@ impl LogicalPlan {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_) => None,
+            LogicalPlan::DelimGet(_) => todo!(),
         }
     }
 
@@ -2126,6 +2570,7 @@ impl LogicalPlan {
                         expr_vec_fmt!(list_type_columns),
                         expr_vec_fmt!(struct_type_columns))
                     }
+                    LogicalPlan::DelimGet(_) => todo!()
                 }
             }
         }
@@ -2272,6 +2717,14 @@ impl Projection {
             expr,
             input,
             schema,
+        }
+    }
+
+    pub fn with_new_input(self, input: Arc<LogicalPlan>) -> Self {
+        Self {
+            expr: self.expr,
+            input,
+            schema: self.schema,
         }
     }
 }
@@ -2480,6 +2933,13 @@ impl Filter {
             }
         }
         false
+    }
+
+    pub fn with_new_input(self, input: Arc<LogicalPlan>) -> Self {
+        Self {
+            predicate: self.predicate,
+            input,
+        }
     }
 }
 
@@ -3789,6 +4249,16 @@ pub struct Sort {
     pub fetch: Option<usize>,
 }
 
+impl Sort {
+    pub fn with_new_input(self, input: Arc<LogicalPlan>) -> Self {
+        Self {
+            expr: self.expr,
+            input,
+            fetch: self.fetch,
+        }
+    }
+}
+
 /// Join two logical plans on one or more join columns
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Join {
@@ -3883,6 +4353,23 @@ impl Join {
             schema: Arc::new(join_schema),
             null_equals_null: original_join.null_equals_null,
         })
+    }
+
+    pub fn with_new_left_right(
+        self,
+        left: Arc<LogicalPlan>,
+        right: Arc<LogicalPlan>,
+    ) -> Self {
+        Self {
+            left,
+            right,
+            on: self.on,
+            filter: self.filter,
+            join_type: self.join_type,
+            join_constraint: self.join_constraint,
+            schema: self.schema,
+            null_equals_null: self.null_equals_null,
+        }
     }
 }
 
@@ -4090,6 +4577,20 @@ impl PartialOrd for Unnest {
             options: &other.options,
         };
         comparable_self.partial_cmp(&comparable_other)
+    }
+}
+
+impl Unnest {
+    pub fn with_new_input(self, input: Arc<LogicalPlan>) -> Self {
+        Self {
+            input,
+            exec_columns: self.exec_columns,
+            list_type_columns: self.list_type_columns,
+            struct_type_columns: self.struct_type_columns,
+            dependency_indices: self.dependency_indices,
+            schema: self.schema,
+            options: self.options,
+        }
     }
 }
 
@@ -4786,7 +5287,7 @@ digraph {
 
         for limit in cases {
             let new_limit = limit
-                .with_new_exprs(
+                .with_new_exprs_inputs(
                     limit.expressions(),
                     limit.inputs().into_iter().cloned().collect(),
                 )
@@ -4986,7 +5487,7 @@ digraph {
 
         {
             let join = create_test_join(vec![(col("t1.a"), (col("t2.a")))], None)?;
-            let LogicalPlan::Join(join) = join.with_new_exprs(
+            let LogicalPlan::Join(join) = join.with_new_exprs_inputs(
                 join.expressions(),
                 join.inputs().into_iter().cloned().collect(),
             )?
@@ -4999,7 +5500,7 @@ digraph {
 
         {
             let join = create_test_join(vec![], Some(col("t1.a").gt(col("t2.a"))))?;
-            let LogicalPlan::Join(join) = join.with_new_exprs(
+            let LogicalPlan::Join(join) = join.with_new_exprs_inputs(
                 join.expressions(),
                 join.inputs().into_iter().cloned().collect(),
             )?
@@ -5015,7 +5516,7 @@ digraph {
                 vec![(col("t1.a"), (col("t2.a")))],
                 Some(col("t1.b").gt(col("t2.b"))),
             )?;
-            let LogicalPlan::Join(join) = join.with_new_exprs(
+            let LogicalPlan::Join(join) = join.with_new_exprs_inputs(
                 join.expressions(),
                 join.inputs().into_iter().cloned().collect(),
             )?
@@ -5031,7 +5532,7 @@ digraph {
                 vec![(col("t1.a"), (col("t2.a"))), (col("t1.b"), (col("t2.b")))],
                 None,
             )?;
-            let LogicalPlan::Join(join) = join.with_new_exprs(
+            let LogicalPlan::Join(join) = join.with_new_exprs_inputs(
                 vec![
                     binary_expr(col("t1.a"), Operator::Plus, lit(1)),
                     binary_expr(col("t2.a"), Operator::Plus, lit(2)),

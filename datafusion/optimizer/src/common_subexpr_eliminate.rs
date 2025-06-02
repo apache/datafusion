@@ -570,6 +570,7 @@ impl OptimizerRule for CommonSubexprEliminate {
                 // manner.
                 plan.map_children(|c| self.rewrite(c, config))?
             }
+            |LogicalPlan::DelimGet(_) => todo!()
         };
 
         // If we rewrote the plan, ensure the schema stays the same

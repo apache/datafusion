@@ -128,6 +128,10 @@ impl Unparser<'_> {
             | LogicalPlan::DependentJoin(_) => {
                 not_impl_err!("Unsupported plan: {plan:?}")
             }
+            |LogicalPlan::DelimGet(_) => {
+
+                not_impl_err!("Unsupported plan: {plan:?}")
+            }
         }
     }
 

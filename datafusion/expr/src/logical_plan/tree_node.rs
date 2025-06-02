@@ -371,6 +371,7 @@ impl TreeNode for LogicalPlan {
                     right,
                 })
             }),
+            LogicalPlan::DelimGet(_) => todo!(),
         })
     }
 }
@@ -517,6 +518,7 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
+            LogicalPlan::DelimGet(_) => todo!()
         }
     }
 
@@ -698,6 +700,7 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            LogicalPlan::DelimGet(_) => todo!(),
         })
     }
 
