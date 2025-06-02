@@ -348,6 +348,31 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+<<<<<<< Updated upstream
+=======
+            LogicalPlan::DependentJoin(DependentJoin {
+                schema,
+                correlated_columns,
+                subquery_expr,
+                subquery_depth,
+                subquery_name,
+                lateral_join_condition,
+                left,
+                right,
+            }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
+                LogicalPlan::DependentJoin(DependentJoin {
+                    schema,
+                    correlated_columns,
+                    subquery_expr,
+                    subquery_depth,
+                    subquery_name,
+                    lateral_join_condition,
+                    left,
+                    right,
+                })
+            }),
+            LogicalPlan::DelimGet(_) => todo!(),
+>>>>>>> Stashed changes
         })
     }
 }
@@ -472,6 +497,7 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
+            LogicalPlan::DelimGet(_) => todo!()
         }
     }
 
@@ -652,6 +678,7 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            LogicalPlan::DelimGet(_) => todo!(),
         })
     }
 

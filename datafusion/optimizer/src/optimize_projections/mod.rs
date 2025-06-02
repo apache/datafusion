@@ -347,7 +347,8 @@ fn optimize_projections(
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Values(_)
-        | LogicalPlan::DescribeTable(_) => {
+        | LogicalPlan::DescribeTable(_)
+        | LogicalPlan::DependentJoin(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
@@ -382,6 +383,10 @@ fn optimize_projections(
                 dependency_indices.clone(),
             )]
         }
+<<<<<<< Updated upstream
+=======
+        LogicalPlan::DelimGet(_) => todo!(),
+>>>>>>> Stashed changes
     };
 
     // Required indices are currently ordered (child0, child1, ...)

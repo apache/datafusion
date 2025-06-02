@@ -717,7 +717,7 @@ impl LogicalPlanBuilder {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-                curr_plan.with_new_exprs(curr_plan.expressions(), new_inputs)
+                curr_plan.with_new_exprs_inputs(curr_plan.expressions(), new_inputs)
             }
         }
     }
