@@ -26,8 +26,8 @@ use std::mem::{size_of, size_of_val};
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{ArrowNumericType, AsArray};
-use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::ArrowPrimitiveType;
+use arrow::datatypes::{ArrowNativeType, FieldRef};
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type,
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
@@ -63,17 +63,27 @@ make_udaf_expr_and_func!(
 /// `helper` is a macro accepting (ArrowPrimitiveType, DataType)
 macro_rules! downcast_sum {
     ($args:ident, $helper:ident) => {
-        match $args.return_type {
-            DataType::UInt64 => $helper!(UInt64Type, $args.return_type),
-            DataType::Int64 => $helper!(Int64Type, $args.return_type),
-            DataType::Float64 => $helper!(Float64Type, $args.return_type),
-            DataType::Decimal128(_, _) => $helper!(Decimal128Type, $args.return_type),
-            DataType::Decimal256(_, _) => $helper!(Decimal256Type, $args.return_type),
+        match $args.return_field.data_type().clone() {
+            DataType::UInt64 => {
+                $helper!(UInt64Type, $args.return_field.data_type().clone())
+            }
+            DataType::Int64 => {
+                $helper!(Int64Type, $args.return_field.data_type().clone())
+            }
+            DataType::Float64 => {
+                $helper!(Float64Type, $args.return_field.data_type().clone())
+            }
+            DataType::Decimal128(_, _) => {
+                $helper!(Decimal128Type, $args.return_field.data_type().clone())
+            }
+            DataType::Decimal256(_, _) => {
+                $helper!(Decimal256Type, $args.return_field.data_type().clone())
+            }
             _ => {
                 not_impl_err!(
                     "Sum not supported for {}: {}",
                     $args.name,
-                    $args.return_type
+                    $args.return_field.data_type()
                 )
             }
         }
@@ -191,20 +201,22 @@ impl AggregateUDFImpl for Sum {
         }
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "sum distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.return_type.clone(), true),
+                Field::new_list_field(args.return_type().clone(), true),
                 false,
-            )])
+            )
+            .into()])
         } else {
             Ok(vec![Field::new(
                 format_state_name(args.name, "sum"),
-                args.return_type.clone(),
+                args.return_type().clone(),
                 true,
-            )])
+            )
+            .into()])
         }
     }
 

@@ -30,8 +30,8 @@ use crate::{
     InputOrderMode, PhysicalExpr,
 };
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow_schema::SortOptions;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
@@ -65,16 +65,16 @@ pub fn schema_add_window_field(
     window_fn: &WindowFunctionDefinition,
     fn_name: &str,
 ) -> Result<Arc<Schema>> {
-    let data_types = args
+    let fields = args
         .iter()
-        .map(|e| Arc::clone(e).as_ref().data_type(schema))
+        .map(|e| Arc::clone(e).as_ref().return_field(schema))
         .collect::<Result<Vec<_>>>()?;
     let nullability = args
         .iter()
         .map(|e| Arc::clone(e).as_ref().nullable(schema))
         .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_type =
-        window_fn.return_type(&data_types, &nullability, fn_name)?;
+    let window_expr_return_field =
+        window_fn.return_field(&fields, &nullability, fn_name)?;
     let mut window_fields = schema
         .fields()
         .iter()
@@ -84,11 +84,10 @@ pub fn schema_add_window_field(
     if let WindowFunctionDefinition::AggregateUDF(_) = window_fn {
         Ok(Arc::new(Schema::new(window_fields)))
     } else {
-        window_fields.extend_from_slice(&[Field::new(
-            fn_name,
-            window_expr_return_type,
-            false,
-        )]);
+        window_fields.extend_from_slice(&[window_expr_return_field
+            .as_ref()
+            .clone()
+            .with_name(fn_name)]);
         Ok(Arc::new(Schema::new(window_fields)))
     }
 }
@@ -165,15 +164,15 @@ pub fn create_udwf_window_expr(
     ignore_nulls: bool,
 ) -> Result<Arc<dyn StandardWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
-    let input_types: Vec<_> = args
+    let input_fields: Vec<_> = args
         .iter()
-        .map(|arg| arg.data_type(input_schema))
+        .map(|arg| arg.return_field(input_schema))
         .collect::<Result<_>>()?;
 
     let udwf_expr = Arc::new(WindowUDFExpr {
         fun: Arc::clone(fun),
         args: args.to_vec(),
-        input_types,
+        input_fields,
         name,
         is_reversed: false,
         ignore_nulls,
@@ -202,8 +201,8 @@ pub struct WindowUDFExpr {
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Display name
     name: String,
-    /// Types of input expressions
-    input_types: Vec<DataType>,
+    /// Fields of input expressions
+    input_fields: Vec<FieldRef>,
     /// This is set to `true` only if the user-defined window function
     /// expression supports evaluation in reverse order, and the
     /// evaluation order is reversed.
@@ -223,21 +222,21 @@ impl StandardWindowFunctionExpr for WindowUDFExpr {
         self
     }
 
-    fn field(&self) -> Result<Field> {
+    fn field(&self) -> Result<FieldRef> {
         self.fun
-            .field(WindowUDFFieldArgs::new(&self.input_types, &self.name))
+            .field(WindowUDFFieldArgs::new(&self.input_fields, &self.name))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.fun
-            .expressions(ExpressionArgs::new(&self.args, &self.input_types))
+            .expressions(ExpressionArgs::new(&self.args, &self.input_fields))
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         self.fun
             .partition_evaluator_factory(PartitionEvaluatorArgs::new(
                 &self.args,
-                &self.input_types,
+                &self.input_fields,
                 self.is_reversed,
                 self.ignore_nulls,
             ))
@@ -255,7 +254,7 @@ impl StandardWindowFunctionExpr for WindowUDFExpr {
                 fun,
                 args: self.args.clone(),
                 name: self.name.clone(),
-                input_types: self.input_types.clone(),
+                input_fields: self.input_fields.clone(),
                 is_reversed: !self.is_reversed,
                 ignore_nulls: self.ignore_nulls,
             })),
@@ -641,6 +640,7 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
 
     use arrow::compute::SortOptions;
+    use arrow_schema::{DataType, Field};
     use datafusion_execution::TaskContext;
 
     use datafusion_functions_aggregate::count::count_udaf;

@@ -65,8 +65,8 @@ logical_plan
 12)--------------------Filter: orders.o_orderdate >= Date32("1993-10-01") AND orders.o_orderdate < Date32("1994-01-01")
 13)----------------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[orders.o_orderdate >= Date32("1993-10-01"), orders.o_orderdate < Date32("1994-01-01")]
 14)--------------Projection: lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount
-15)----------------Filter: lineitem.l_returnflag = Utf8("R")
-16)------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_returnflag], partial_filters=[lineitem.l_returnflag = Utf8("R")]
+15)----------------Filter: lineitem.l_returnflag = Utf8View("R")
+16)------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_returnflag], partial_filters=[lineitem.l_returnflag = Utf8View("R")]
 17)----------TableScan: nation projection=[n_nationkey, n_name]
 physical_plan
 01)SortPreservingMergeExec: [revenue@2 DESC], fetch=10

@@ -36,6 +36,7 @@ use crate::{
 use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
@@ -56,6 +57,10 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
+
+/// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
+const AGGREGATION_HASH_SEED: ahash::RandomState =
+    ahash::RandomState::with_seeds('A' as u64, 'G' as u64, 'G' as u64, 'R' as u64);
 
 /// Aggregation modes
 ///
@@ -273,7 +278,7 @@ impl PhysicalGroupBy {
     }
 
     /// Returns the fields that are used as the grouping keys.
-    fn group_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
+    fn group_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = Vec::with_capacity(self.num_group_exprs());
         for ((expr, name), group_expr_nullable) in
             self.expr.iter().zip(self.exprs_nullable().into_iter())
@@ -284,15 +289,19 @@ impl PhysicalGroupBy {
                     expr.data_type(input_schema)?,
                     group_expr_nullable || expr.nullable(input_schema)?,
                 )
-                .with_metadata(expr.return_field(input_schema)?.metadata().clone()),
+                .with_metadata(expr.return_field(input_schema)?.metadata().clone())
+                .into(),
             );
         }
         if !self.is_single() {
-            fields.push(Field::new(
-                Aggregate::INTERNAL_GROUPING_ID,
-                Aggregate::grouping_id_type(self.expr.len()),
-                false,
-            ));
+            fields.push(
+                Field::new(
+                    Aggregate::INTERNAL_GROUPING_ID,
+                    Aggregate::grouping_id_type(self.expr.len()),
+                    false,
+                )
+                .into(),
+            );
         }
         Ok(fields)
     }
@@ -301,7 +310,7 @@ impl PhysicalGroupBy {
     ///
     /// This might be different from the `group_fields` that might contain internal expressions that
     /// should not be part of the output schema.
-    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
+    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = self.group_fields(input_schema)?;
         fields.truncate(self.num_output_exprs());
         Ok(fields)
@@ -346,6 +355,7 @@ impl PartialEq for PhysicalGroupBy {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHash(GroupedHashAggregateStream),
@@ -620,7 +630,7 @@ impl AggregateExec {
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
-    pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+    pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
         let agg_expr = self.aggr_expr.iter().exactly_one().ok()?;
         agg_expr.get_minmax_desc()
     }
@@ -733,13 +743,33 @@ impl AggregateExec {
         &self.input_order_mode
     }
 
-    fn statistics_inner(&self) -> Result<Statistics> {
+    fn statistics_inner(&self, child_statistics: Statistics) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
         // - aggregations sometimes also preserve invariants such as min, max...
-        let column_statistics = Statistics::unknown_column(&self.schema());
+
+        let column_statistics = {
+            // self.schema: [<group by exprs>, <aggregate exprs>]
+            let mut column_statistics = Statistics::unknown_column(&self.schema());
+
+            for (idx, (expr, _)) in self.group_by.expr.iter().enumerate() {
+                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                    column_statistics[idx].max_value = child_statistics.column_statistics
+                        [col.index()]
+                    .max_value
+                    .clone();
+
+                    column_statistics[idx].min_value = child_statistics.column_statistics
+                        [col.index()]
+                    .min_value
+                    .clone();
+                }
+            }
+
+            column_statistics
+        };
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
                 if self.group_by.expr.is_empty() =>
@@ -751,28 +781,18 @@ impl AggregateExec {
                 })
             }
             _ => {
-                // When the input row count is 0 or 1, we can adopt that statistic keeping its reliability.
+                // When the input row count is 1, we can adopt that statistic keeping its reliability.
                 // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
-                let num_rows = if let Some(value) = self
-                    .input()
-                    .partition_statistics(None)?
-                    .num_rows
-                    .get_value()
+                let num_rows = if let Some(value) = child_statistics.num_rows.get_value()
                 {
                     if *value > 1 {
-                        self.input()
-                            .partition_statistics(None)?
-                            .num_rows
-                            .to_inexact()
+                        child_statistics.num_rows.to_inexact()
                     } else if *value == 0 {
-                        // Aggregation on an empty table creates a null row.
-                        self.input()
-                            .partition_statistics(None)?
-                            .num_rows
-                            .add(&Precision::Exact(1))
+                        child_statistics.num_rows
                     } else {
                         // num_rows = 1 case
-                        self.input().partition_statistics(None)?.num_rows
+                        let grouping_set_num = self.group_by.groups.len();
+                        child_statistics.num_rows.map(|x| x * grouping_set_num)
                     }
                 } else {
                     Precision::Absent
@@ -991,16 +1011,11 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
+        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            // If the partition is not specified, we can use the statistics of the input plan
-            self.statistics_inner()
-        } else {
-            Ok(Statistics::new_unknown(&self.schema()))
-        }
+        self.statistics_inner(self.input().partition_statistics(partition)?)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

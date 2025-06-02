@@ -33,12 +33,14 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
         let batch_len = f32_array.len();
         let f32_args = vec![ColumnarValue::Array(f32_array)];
-        let arg_fields_owned = f32_args
+        let arg_fields = f32_args
             .iter()
             .enumerate()
-            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+        let return_field = Field::new("f", DataType::Float32, true).into();
 
         c.bench_function(&format!("signum f32 array: {size}"), |b| {
             b.iter(|| {
@@ -48,7 +50,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: f32_args.clone(),
                             arg_fields: arg_fields.clone(),
                             number_rows: batch_len,
-                            return_field: &Field::new("f", DataType::Float32, true),
+                            return_field: Arc::clone(&return_field),
                         })
                         .unwrap(),
                 )
@@ -58,12 +60,14 @@ fn criterion_benchmark(c: &mut Criterion) {
         let batch_len = f64_array.len();
 
         let f64_args = vec![ColumnarValue::Array(f64_array)];
-        let arg_fields_owned = f64_args
+        let arg_fields = f64_args
             .iter()
             .enumerate()
-            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+        let return_field = Field::new("f", DataType::Float64, true).into();
 
         c.bench_function(&format!("signum f64 array: {size}"), |b| {
             b.iter(|| {
@@ -73,7 +77,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: f64_args.clone(),
                             arg_fields: arg_fields.clone(),
                             number_rows: batch_len,
-                            return_field: &Field::new("f", DataType::Float64, true),
+                            return_field: Arc::clone(&return_field),
                         })
                         .unwrap(),
                 )

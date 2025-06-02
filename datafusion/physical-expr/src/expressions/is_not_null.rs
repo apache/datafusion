@@ -18,7 +18,7 @@
 //! IS NOT NULL expression
 
 use crate::PhysicalExpr;
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -94,7 +94,7 @@ impl PhysicalExpr for IsNotNullExpr {
         }
     }
 
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
         self.arg.return_field(input_schema)
     }
 
