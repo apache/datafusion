@@ -3544,7 +3544,8 @@ async fn test_distribute_sort_memtable() -> Result<()> {
     let expected = &[
         "SortPreservingMergeExec: [id@0 ASC NULLS LAST]",
         "  SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]",
-        "    DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]",
+        "    YieldStreamExec child=DataSourceExec",
+        "      DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]",
     ];
     plans_matches_expected!(expected, physical_plan);
 

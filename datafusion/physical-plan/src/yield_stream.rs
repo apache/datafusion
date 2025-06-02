@@ -20,13 +20,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::CardinalityEffect::Equal;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
-use datafusion_common::Result;
+use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use futures::Stream;
 
@@ -84,7 +86,10 @@ impl Stream for YieldStream {
                     Poll::Ready(Some(Ok(batch)))
                 }
             }
-            other => other,
+            other => {
+                this.batches_processed = 0; // Reset count
+                other
+            }
         }
     }
 }
@@ -157,6 +162,27 @@ impl ExecutionPlan for YieldStreamExec {
         let child_stream = self.child.execute(partition, Arc::clone(&task_ctx))?;
         let yield_stream = YieldStream::new(child_stream);
         Ok(Box::pin(yield_stream))
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_none() {
+            self.child.partition_statistics(partition)
+        } else {
+            Ok(Statistics::new_unknown(&self.schema()))
+        }
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // YieldStreamExec does not change the order of the input data
+        self.child.maintains_input_order()
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        Equal
     }
 }
 
