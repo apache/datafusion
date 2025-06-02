@@ -210,4 +210,8 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
             accumulator.evaluate()
         }
     }
+
+    fn is_constant(&self) -> bool {
+        false
+    }
 }

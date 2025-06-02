@@ -34,7 +34,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{Accumulator, WindowFrame};
+use datafusion_expr::{Accumulator, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// A window expr that takes the form of an aggregate function.
@@ -46,6 +46,7 @@ pub struct PlainAggregateWindowExpr {
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: LexOrdering,
     window_frame: Arc<WindowFrame>,
+    is_window_constant: bool,
 }
 
 impl PlainAggregateWindowExpr {
@@ -56,11 +57,13 @@ impl PlainAggregateWindowExpr {
         order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
+        let is_window_constant = Self::is_window_constant(order_by, &window_frame);
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
             order_by: order_by.clone(),
             window_frame,
+            is_window_constant,
         }
     }
 
@@ -84,6 +87,18 @@ impl PlainAggregateWindowExpr {
                 &self.partition_by,
             );
         }
+    }
+
+    fn is_window_constant(order_by: &LexOrdering, window_frame: &WindowFrame) -> bool {
+        let is_constant_bound = |bound: &WindowFrameBound| match bound {
+            WindowFrameBound::CurrentRow => {
+                window_frame.units == WindowFrameUnits::Range && order_by.is_empty()
+            }
+            _ => bound.is_unbounded(),
+        };
+
+        is_constant_bound(&window_frame.start_bound)
+            && is_constant_bound(&window_frame.end_bound)
     }
 }
 
@@ -212,5 +227,9 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
             }
             accumulator.evaluate()
         }
+    }
+
+    fn is_constant(&self) -> bool {
+        self.is_window_constant
     }
 }
