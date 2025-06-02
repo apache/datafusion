@@ -122,7 +122,7 @@ impl DisplayAs for YieldStreamExec {
 
 impl ExecutionPlan for YieldStreamExec {
     fn name(&self) -> &str {
-        "yield_stream_exec"
+        "YieldStreamExec"
     }
 
     fn as_any(&self) -> &dyn Any {
