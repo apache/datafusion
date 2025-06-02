@@ -2145,7 +2145,7 @@ mod tests {
     fn test_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let max1 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max1 = Expr::from(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.a")],
         ))
@@ -2153,7 +2153,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let max2 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max2 = Expr::from(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.b")],
         ));
