@@ -1251,6 +1251,9 @@ impl DefaultPhysicalPlanner {
                     "Optimizors have not completely remove dependent join"
                 )
             }
+            LogicalPlan::DelimGet(_) => {
+                return internal_err!("Optimizors have not completely remove delim get")
+            }
         };
         Ok(exec_node)
     }

@@ -48,7 +48,7 @@ use crate::{
 };
 
 use super::dml::InsertOp;
-use super::plan::{ColumnUnnestList, ExplainFormat};
+use super::plan::{ColumnUnnestList, DelimGet, ExplainFormat};
 use super::DependentJoin;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
@@ -394,6 +394,13 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
+    }
+
+    pub fn delim_get(table_index: usize, delim_types: &Vec<DataType>) -> Self {
+        Self::new(LogicalPlan::DelimGet(DelimGet::try_new(
+            table_index,
+            delim_types,
+        )))
     }
 
     /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)

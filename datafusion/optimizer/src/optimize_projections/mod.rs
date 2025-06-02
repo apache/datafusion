@@ -385,6 +385,7 @@ fn optimize_projections(
         LogicalPlan::DependentJoin(..) => {
             return Ok(Transformed::no(plan));
         }
+        LogicalPlan::DelimGet(_) => todo!(),
     };
 
     // Required indices are currently ordered (child0, child1, ...)

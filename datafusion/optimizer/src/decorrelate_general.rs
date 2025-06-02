@@ -53,7 +53,8 @@ struct Unnesting {
 pub struct DependentJoinDecorrelator {
     // immutable, defined when this object is constructed
     domains: IndexSet<Column>,
-    parent: Option<Box<DependentJoinDecorrelator>>,
+    pub delim_types: Vec<DataType>,
+    is_initial: bool,
     // correlated_map: init with the list of correlated column of dependent join
     // map from Column to the original index in correlated_columns v
     correlated_map: HashMap<Column, usize>,
@@ -67,6 +68,36 @@ pub struct DependentJoinDecorrelator {
 }
 
 impl DependentJoinDecorrelator {
+    fn new(
+        correlated_columns: &Vec<(usize, Column, DataType)>,
+        is_initial: bool,
+        correlated_map: HashMap<Column, usize>,
+        replacement_map: HashMap<Expr, usize>,
+        any_join: bool,
+        delim_scan_id: usize,
+    ) -> Self {
+        let domains = correlated_columns
+            .iter()
+            .map(|(_, col, _)| col.clone())
+            .unique()
+            .collect();
+
+        let delim_types = correlated_columns
+            .iter()
+            .map(|(_, _, data_type)| data_type.clone())
+            .collect();
+
+        Self {
+            domains,
+            delim_types,
+            is_initial,
+            correlated_map: HashMap::new(), // TODO
+            replacement_map: HashMap::new(),
+            any_join: false,
+            delim_scan_id: 0,
+        }
+    }
+
     fn subquery_dependent_filter(expr: &Expr) -> bool {
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -95,7 +126,7 @@ impl DependentJoinDecorrelator {
     ) -> Result<LogicalPlan> {
         let perform_delim = true;
         let left = node.left.as_ref();
-        let new_left = if let Some(ref parent) = self.parent {
+        let new_left = if !self.is_initial {
             // TODO: revisit this check
             // because after decorrelation at parent level
             // this correlated_columns list are not mutated yet
@@ -117,19 +148,14 @@ impl DependentJoinDecorrelator {
         let lateral_depth = 0;
         // let propagate_null_values = node.propagate_null_value();
         let propagate_null_values = true;
-        let mut new_decorrelation = DependentJoinDecorrelator {
-            domains: node
-                .correlated_columns
-                .iter()
-                .map(|(_, col, _)| col.clone())
-                .unique()
-                .collect(),
-            parent: Some(Box::new(self.clone())),
-            correlated_map: HashMap::new(), // TODO
-            replacement_map: HashMap::new(),
-            any_join: false,
-            delim_scan_id: 0,
-        };
+        let mut new_decorrelation = DependentJoinDecorrelator::new(
+            &node.correlated_columns,
+            false,
+            HashMap::new(), // TODO
+            HashMap::new(),
+            false,
+            0,
+        );
         self.delim_scan_id = new_decorrelation.delim_scan_id;
         let right = new_decorrelation.push_down_dependent_join(
             &node.right,
@@ -237,7 +263,7 @@ impl DependentJoinDecorrelator {
         let id = self.delim_scan_id;
         let delim_scan_relation_name = format!("delim_scan_{id}");
         Ok((
-            LogicalPlanBuilder::empty(false)
+            LogicalPlanBuilder::delim_get(self.delim_scan_id, &self.delim_types)
                 .alias(&delim_scan_relation_name)?
                 // .project(self.domains)?
                 .build()?,
@@ -1228,14 +1254,16 @@ impl OptimizerRule for Decorrelation {
         println!("{}", rewrite_result.data);
         if rewrite_result.transformed {
             println!("here");
-            let mut decorrelator = DependentJoinDecorrelator {
-                domains: IndexSet::new(),
-                parent: None,
-                correlated_map: HashMap::new(),
-                replacement_map: HashMap::new(),
-                any_join: false,
-                delim_scan_id: 0,
-            };
+            let correlated_colums = vec![];
+            let mut decorrelator = DependentJoinDecorrelator::new(
+                &correlated_colums,
+                true,
+                HashMap::new(),
+                HashMap::new(),
+                false,
+                0,
+            );
+
             return Ok(Transformed::yes(
                 decorrelator.decorrelate_plan(rewrite_result.data)?,
             ));

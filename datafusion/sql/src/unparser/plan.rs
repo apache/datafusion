@@ -125,7 +125,8 @@ impl Unparser<'_> {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::DependentJoin(_) => {
+            | LogicalPlan::DependentJoin(_)
+            | LogicalPlan::DelimGet(_) => {
                 not_impl_err!("Unsupported plan: {plan:?}")
             }
         }
