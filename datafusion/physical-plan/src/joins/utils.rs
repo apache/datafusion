@@ -34,12 +34,12 @@ pub use super::join_filter::JoinFilter;
 pub use super::join_hash_map::{JoinHashMap, JoinHashMapType};
 pub use crate::joins::{JoinOn, JoinOnRef};
 
-use arrow::array::PrimitiveBuilder;
 use arrow::array::{
     builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
     BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
     UInt32Array, UInt32Builder, UInt64Array,
 };
+use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
@@ -925,7 +925,7 @@ pub(crate) fn build_batch_from_indices(
 
     for column_index in column_indices {
         let array = if column_index.side == JoinSide::None {
-            // LeftMark join, the mark column is a true if the indices is not null, otherwise it will be false
+            // For marks joins, the mark column is a true if the indices is not null, otherwise it will be false
             Arc::new(compute::is_not_null(probe_indices)?)
         } else if column_index.side == build_side {
             let array = build_input_buffer.column(column_index.index);
@@ -998,8 +998,8 @@ pub(crate) fn adjust_indices_by_join_type(
         }
         JoinType::RightMark => {
             let right_indices = get_mark_indices(&adjust_range, &right_indices);
-            let left_indices =
-                UInt64Array::from_iter_values(adjust_range.map(|i| i as u64));
+            let left_indices_vec: Vec<u64> = adjust_range.map(|i| i as u64).collect();
+            let left_indices = UInt64Array::from(left_indices_vec);
             Ok((left_indices, right_indices))
         }
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -1160,19 +1160,21 @@ pub(crate) fn get_mark_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let mut builder = PrimitiveBuilder::<UInt32Type>::new();
+    let mut bitmap = BooleanBufferBuilder::new(range.len());
+    bitmap.append_n(range.len(), false);
+    input_indices
+        .iter()
+        .flatten()
+        .map(|v| v.as_usize())
+        .filter(|v| range.contains(v))
+        .for_each(|v| {
+            bitmap.set_bit(v - range.start, true);
+        });
 
-    for idx in range.clone() {
-        let matched = input_indices.iter().flatten().any(|v| v.as_usize() == idx);
-
-        if matched {
-            builder.append_value(0);
-        } else {
-            builder.append_null();
-        }
-    }
-
-    builder.finish()
+    PrimitiveArray::new(
+        vec![0; range.len()].into(),
+        Some(NullBuffer::new(bitmap.finish())),
+    )
 }
 
 /// Appends probe indices in order by considering the given build indices.

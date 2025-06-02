@@ -221,7 +221,7 @@ impl SortMergeJoinExec {
         // When output schema contains only the right side, probe side is right.
         // Otherwise probe side is the left side.
         match join_type {
-            // TODO: sort merge support for right mark
+            // TODO: sort merge support for right mark (tracked here: https://github.com/apache/datafusion/issues/16226)
             JoinType::Right
             | JoinType::RightSemi
             | JoinType::RightAnti

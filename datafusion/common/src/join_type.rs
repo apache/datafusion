@@ -97,7 +97,7 @@ impl JoinType {
         }
     }
 
-    /// Does the join type support swapping  inputs?
+    /// Does the join type support swapping inputs?
     pub fn supports_swap(&self) -> bool {
         matches!(
             self,
