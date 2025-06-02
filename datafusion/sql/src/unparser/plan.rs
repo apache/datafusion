@@ -753,9 +753,9 @@ impl Unparser<'_> {
                             JoinType::LeftMark | JoinType::RightMark => {
                                 let source_schema =
                                     if join.join_type == JoinType::LeftMark {
-                                        left_plan.schema()
-                                    } else {
                                         right_plan.schema()
+                                    } else {
+                                        left_plan.schema()
                                     };
                                 let (table_ref, _) = source_schema.qualified_field(0);
                                 let column = self.col_to_sql(&Column::new(
@@ -767,9 +767,6 @@ impl Unparser<'_> {
                             _ => {
                                 select.selection(Some(exists_expr));
                             }
-                        }
-                        if let Some(projection) = left_projection {
-                            select.projection(projection);
                         }
                     }
                     JoinType::Inner
