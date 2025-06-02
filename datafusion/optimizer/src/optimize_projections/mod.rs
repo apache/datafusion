@@ -383,10 +383,7 @@ fn optimize_projections(
                 dependency_indices.clone(),
             )]
         }
-<<<<<<< Updated upstream
-=======
         LogicalPlan::DelimGet(_) => todo!(),
->>>>>>> Stashed changes
     };
 
     // Required indices are currently ordered (child0, child1, ...)

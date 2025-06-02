@@ -1246,15 +1246,12 @@ impl DefaultPhysicalPlanner {
                     "Unsupported logical plan: Analyze must be root of the plan"
                 )
             }
-<<<<<<< Updated upstream
-=======
             LogicalPlan::DependentJoin(_) => {
                 return internal_err!(
                     "Optimizors have not completely remove dependent join"
                 )
             }
             LogicalPlan::DelimGet(_) => todo!()
->>>>>>> Stashed changes
         };
         Ok(exec_node)
     }

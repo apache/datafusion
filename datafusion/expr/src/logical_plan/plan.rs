@@ -287,8 +287,6 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
-<<<<<<< Updated upstream
-=======
     /// A node type that only exist during subquery decorrelation
     /// TODO: maybe we can avoid creating new type of LogicalPlan for this usecase
     DependentJoin(DependentJoin),
@@ -416,7 +414,6 @@ impl PartialOrd for DependentJoin {
         };
         comparable_self.partial_cmp(&comparable_other)
     }
->>>>>>> Stashed changes
 }
 
 impl DependentJoin {
@@ -1682,11 +1679,8 @@ impl LogicalPlan {
                     unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
-<<<<<<< Updated upstream
-=======
             LogicalPlan::DependentJoin(_) => todo!(),
             LogicalPlan::DelimGet(_) => todo!(),
->>>>>>> Stashed changes
         }
     }
 

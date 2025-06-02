@@ -348,8 +348,6 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
-<<<<<<< Updated upstream
-=======
             LogicalPlan::DependentJoin(DependentJoin {
                 schema,
                 correlated_columns,
@@ -372,7 +370,6 @@ impl TreeNode for LogicalPlan {
                 })
             }),
             LogicalPlan::DelimGet(_) => todo!(),
->>>>>>> Stashed changes
         })
     }
 }
