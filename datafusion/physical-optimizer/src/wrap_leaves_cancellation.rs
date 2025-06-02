@@ -1,7 +1,23 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
-use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::yield_stream::YieldStreamExec;
 use datafusion_physical_plan::ExecutionPlan;
 use std::fmt::{Debug, Formatter};
@@ -21,10 +37,9 @@ impl WrapLeaves {
     }
 
     /// Recursively walk the plan:
-    /// - If `plan.children()` is empty, return it unchanged.
-    /// - If `plan.properties().emission_type == EmissionType::Final`, wrap each
-    ///   direct child in `YieldStreamExec`, then recurse into that wrapper.
-    /// - Otherwise, recurse into the children normally (without wrapping).
+    /// - If `plan.children_any().is_empty()`, it’s a leaf, so wrap it.
+    /// - Otherwise, recurse into its children, rebuild the node with
+    ///   `with_new_children_any(...)`, and return that.
     #[allow(clippy::only_used_in_recursion)]
     fn wrap_recursive(
         &self,
@@ -32,31 +47,17 @@ impl WrapLeaves {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let children = plan.children();
         if children.is_empty() {
-            // Leaf: no changes
-            return Ok(plan);
-        }
-
-        // Recurse into children depending on emission_type
-        if plan.properties().emission_type == EmissionType::Final {
-            // For Final‐emission nodes, wrap each direct child in YieldStreamExec
-            let mut new_children = Vec::with_capacity(children.len());
-            for child in children {
-                // Wrap the immediate child
-                let wrapped_child = Arc::new(YieldStreamExec::new(Arc::clone(child)));
-                // Then recurse into the wrapped child, in case there are deeper Final nodes
-                let rec_wrapped = self.wrap_recursive(wrapped_child)?;
-                new_children.push(rec_wrapped);
-            }
-            // Rebuild this node with its newly wrapped children
-            let new_plan = plan.with_new_children(new_children)?;
-            Ok(new_plan)
+            // Leaf node: wrap it in `YieldStreamExec`
+            let wrapped = Arc::new(YieldStreamExec::new(plan));
+            Ok(wrapped)
         } else {
-            // Non‐Final: just recurse into children normally
+            // Non-leaf: first process all children recursively
             let mut new_children = Vec::with_capacity(children.len());
             for child in children {
-                let rec_wrapped = self.wrap_recursive(Arc::clone(child))?;
-                new_children.push(rec_wrapped);
+                let wrapped_child = self.wrap_recursive(Arc::clone(child))?;
+                new_children.push(wrapped_child);
             }
+            // Rebuild this node with the new children
             let new_plan = plan.with_new_children(new_children)?;
             Ok(new_plan)
         }
