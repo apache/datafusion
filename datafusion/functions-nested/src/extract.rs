@@ -213,6 +213,33 @@ fn array_element_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// Adjusts a 1-based array index to 0-based, handling negative indices and bounds checking
+fn adjusted_array_index<O: OffsetSizeTrait>(index: i64, len: O) -> Result<Option<O>>
+where
+    i64: TryInto<O>,
+{
+    let index: O = index.try_into().map_err(|_| {
+        DataFusionError::Execution(format!("array_element got invalid index: {index}"))
+    })?;
+
+    // Convert 1-based index to 0-based
+    let adjusted_zero_index = if index < O::usize_as(0) {
+        // Negative index: count from end
+        index + len
+    } else {
+        // Positive index: subtract 1 to make it 0-based
+        index - O::usize_as(1)
+    };
+
+    // Check bounds
+    if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
+        Ok(Some(adjusted_zero_index))
+    } else {
+        // Out of bounds
+        Ok(None)
+    }
+}
+
 fn general_array_element<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     indexes: &Int64Array,
@@ -225,21 +252,17 @@ where
         return Ok(Arc::new(NullArray::new(array.len())));
     }
 
-    if let DataType::Struct(fields) = values.data_type() {
-        let has_null_fields = fields.iter().any(|field| field.data_type() == &Null);
-        if has_null_fields {
-            // Instead of trying to extract from malformed struct data and return appropriate nulls
-            let mut null_array_data = Vec::with_capacity(array.len());
-            for _ in 0..array.len() {
-                null_array_data.push(None::<i32>);
-            }
+    // Check if we have a struct with null fields
+    let has_struct_with_null_fields = if let DataType::Struct(fields) = values.data_type()
+    {
+        fields.iter().any(|field| field.data_type() == &Null)
+    } else {
+        false
+    };
 
-            // Return null array with the expected struct type
-            return Ok(arrow::array::new_null_array(
-                values.data_type(),
-                array.len(),
-            ));
-        }
+    // If we have problematic struct fields, we'll need to handle this differently
+    if has_struct_with_null_fields {
+        return handle_struct_with_null_fields(array, indexes);
     }
 
     let original_data = values.to_data();
@@ -249,37 +272,17 @@ where
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
-    fn adjusted_array_index<O: OffsetSizeTrait>(index: i64, len: O) -> Result<Option<O>>
-    where
-        i64: TryInto<O>,
-    {
-        let index: O = index.try_into().map_err(|_| {
-            DataFusionError::Execution(format!(
-                "array_element got invalid index: {index}"
-            ))
-        })?;
-        // 0 ~ len - 1
-        let adjusted_zero_index = if index < O::usize_as(0) {
-            index + len
-        } else {
-            index - O::usize_as(1)
-        };
-
-        if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
-            Ok(Some(adjusted_zero_index))
-        } else {
-            // Out of bounds
-            Ok(None)
-        }
-    }
-
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let start = offset_window[0];
         let end = offset_window[1];
         let len = end - start;
 
-        // array is null
-        if len == O::usize_as(0) {
+        if array.is_null(row_index) || len == O::usize_as(0) {
+            mutable.extend_nulls(1);
+            continue;
+        }
+
+        if indexes.is_null(row_index) {
             mutable.extend_nulls(1);
             continue;
         }
@@ -297,6 +300,103 @@ where
 
     let data = mutable.freeze();
     Ok(arrow::array::make_array(data))
+}
+
+/// Handle structs with null fields to avoid MutableArrayData issues
+fn handle_struct_with_null_fields<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    indexes: &Int64Array,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    use arrow::array::StructArray;
+
+    let values = array.values();
+    let struct_array = values.as_any().downcast_ref::<StructArray>().unwrap();
+
+    // Build the result struct arrays
+    let mut result_columns: Vec<ArrayRef> = Vec::new();
+    let mut null_buffer_builder = NullBufferBuilder::new(array.len());
+
+    // Process each field in the struct
+    for (_field_idx, field) in struct_array.columns().iter().enumerate() {
+        if field.data_type() == &Null {
+            // For null fields, create a null array of the correct length
+            result_columns.push(Arc::new(NullArray::new(array.len())));
+        } else {
+            // For non-null fields, use MutableArrayData
+            let field_data = field.to_data();
+            let mut field_mutable = MutableArrayData::with_capacities(
+                vec![&field_data],
+                true,
+                Capacities::Array(array.len()),
+            );
+
+            for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+                let start = offset_window[0];
+                let end = offset_window[1];
+                let len = end - start;
+
+                // array is null or empty
+                if array.is_null(row_index) || len == O::usize_as(0) {
+                    field_mutable.extend_nulls(1);
+                    continue;
+                }
+
+                // Check if index is null
+                if indexes.is_null(row_index) {
+                    field_mutable.extend_nulls(1);
+                    continue;
+                }
+
+                let index = adjusted_array_index::<O>(indexes.value(row_index), len)?;
+
+                if let Some(index) = index {
+                    let actual_index = start.as_usize() + index.as_usize();
+                    field_mutable.extend(0, actual_index, actual_index + 1);
+                } else {
+                    // Index out of bounds
+                    field_mutable.extend_nulls(1);
+                }
+            }
+
+            let field_result = arrow::array::make_array(field_mutable.freeze());
+            result_columns.push(field_result);
+        }
+    }
+
+    // Determine which rows should be null in the final result
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let start = offset_window[0];
+        let end = offset_window[1];
+        let len = end - start;
+
+        if array.is_null(row_index) || len == O::usize_as(0) || indexes.is_null(row_index)
+        {
+            null_buffer_builder.append_null();
+            continue;
+        }
+
+        let index = adjusted_array_index::<O>(indexes.value(row_index), len)?;
+        if index.is_some() {
+            null_buffer_builder.append_non_null();
+        } else {
+            null_buffer_builder.append_null();
+        }
+    }
+
+    // Create the result struct array
+    if let DataType::Struct(fields) = values.data_type() {
+        let result_struct = StructArray::new(
+            fields.clone(),
+            result_columns,
+            null_buffer_builder.finish(),
+        );
+        Ok(Arc::new(result_struct))
+    } else {
+        unreachable!("Should only be called for struct types")
+    }
 }
 
 #[doc = "returns a slice of the array."]
