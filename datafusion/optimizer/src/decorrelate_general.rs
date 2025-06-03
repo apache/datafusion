@@ -111,7 +111,7 @@ impl DependentJoinDecorrelator {
             // because after decorrelation at parent level
             // this correlated_columns list are not mutated yet
             if node.correlated_columns.is_empty() {
-                self.decorrelate_independent(left)?
+                self.pushdown_independent(left)?
             } else {
                 self.push_down_dependent_join(
                     left,
@@ -123,7 +123,7 @@ impl DependentJoinDecorrelator {
             // correlated column, we actually do not need this step
             // maybe also write count(*) into case .. is null
         } else {
-            self.push_down_dependent_join(left, true, 0)?
+            self.decorrelate_plan(left.clone())?
         };
         let lateral_depth = 0;
         // let propagate_null_values = node.propagate_null_value();
@@ -291,7 +291,7 @@ impl DependentJoinDecorrelator {
             extra_expr_after_join,
         ))
     }
-    fn decorrelate_independent(&mut self, node: &LogicalPlan) -> Result<LogicalPlan> {
+    fn pushdown_independent(&mut self, node: &LogicalPlan) -> Result<LogicalPlan> {
         unimplemented!()
     }
 
@@ -358,16 +358,17 @@ impl DependentJoinDecorrelator {
     }
 
     // on recursive rewrite, make sure to update any correlated_column
+    // TODO: make all of the delim join natural join
     fn push_down_dependent_join_internal(
         &mut self,
-        subquery_input_node: &LogicalPlan,
+        node: &LogicalPlan,
         parent_propagate_nulls: bool,
         lateral_depth: usize,
     ) -> Result<LogicalPlan> {
         // TODO: is there any way to do this more efficiently
         let mut has_correlated_expr = false;
         let has_correlated_expr_ref = &mut has_correlated_expr;
-        subquery_input_node.apply(|p| {
+        node.apply(|p| {
             match p {
                 LogicalPlan::DependentJoin(join) => {
                     if !join.correlated_columns.is_empty() {
@@ -386,7 +387,7 @@ impl DependentJoinDecorrelator {
         })?;
 
         if !*has_correlated_expr_ref {
-            match subquery_input_node {
+            match node {
                 LogicalPlan::Projection(old_proj) => {
                     let mut proj = old_proj.clone();
                     // TODO: define logical plan for delim scan
@@ -433,7 +434,7 @@ impl DependentJoinDecorrelator {
                 }
             }
         }
-        match subquery_input_node {
+        match node {
             LogicalPlan::Projection(old_proj) => {
                 let mut proj = old_proj.clone();
                 // for (auto &expr : plan->expressions) {
@@ -2092,10 +2093,7 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
           Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
             Projection: outer_table.a, outer_table.b, outer_table.c, mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
               LeftMark Join:  Filter: outer_table.c = delim_scan_2.a AND outer_table.a IS NOT DISTINCT FROM delim_scan_2.a AND outer_table.b IS NOT DISTINCT FROM delim_scan_2.b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
-                Cross Join:  [a:UInt32, b:UInt32, c:UInt32]
-                  SubqueryAlias: delim_scan_1 []
-                    EmptyRelation []
-                  TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Projection: delim_scan_2.a, delim_scan_2.b, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, delim_scan_1.a, delim_scan_1.b [a:UInt32;N, b:UInt32;N, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END:Int32, a:UInt32;N, b:UInt32;N]
                   Inner Join:  Filter: outer_table.a IS NOT DISTINCT FROM delim_scan_1.a AND outer_table.b IS NOT DISTINCT FROM delim_scan_1.b [a:UInt32;N, b:UInt32;N, count(inner_table_lv1.a):Int64, a:UInt32;N, b:UInt32;N]
                     Aggregate: groupBy=[[delim_scan_2.a, delim_scan_2.b]], aggr=[[count(inner_table_lv1.a)]] [a:UInt32;N, b:UInt32;N, count(inner_table_lv1.a):Int64]
