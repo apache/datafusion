@@ -30,7 +30,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 
 /// Number of batches to yield before voluntarily returning Pending.
 /// This allows long-running operators to periodically yield control
@@ -43,7 +43,6 @@ const YIELD_BATCHES: usize = 64;
 pub struct YieldStream {
     inner: SendableRecordBatchStream,
     batches_processed: usize,
-    buffer: Option<Result<RecordBatch>>,
 }
 
 impl YieldStream {
@@ -51,7 +50,6 @@ impl YieldStream {
         Self {
             inner,
             batches_processed: 0,
-            buffer: None,
         }
     }
 }
@@ -64,32 +62,23 @@ impl Stream for YieldStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let this = &mut *self;
-
-        if let Some(batch) = this.buffer.take() {
-            return Poll::Ready(Some(batch));
+        if self.batches_processed >= YIELD_BATCHES {
+            self.batches_processed = 0;
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
         }
 
-        // Instead of `poll_next_unpin`, use `Pin::new(&mut this.inner).poll_next(cx)`
-        match Pin::new(&mut this.inner).poll_next(cx) {
+        match self.inner.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(batch))) => {
-                this.batches_processed += 1;
-                if this.batches_processed >= YIELD_BATCHES {
-                    this.batches_processed = 0;
-                    // We need to buffer the batch when we return Poll::Pending,
-                    // so that we can return it on the next poll.
-                    // Otherwise, the next poll will miss the batch and return None.
-                    this.buffer = Some(Ok(batch));
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Some(Ok(batch)))
-                }
+                self.batches_processed += 1;
+                Poll::Ready(Some(Ok(batch)))
             }
-            other => {
-                this.batches_processed = 0; // Reset count
-                other
+            Poll::Pending => {
+                self.batches_processed = 0;
+                Poll::Pending
             }
+
+            other => other,
         }
     }
 }
