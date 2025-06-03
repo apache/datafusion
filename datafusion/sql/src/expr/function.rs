@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{
@@ -24,6 +24,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions};
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::{
     expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
 };

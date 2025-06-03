@@ -49,6 +49,7 @@ pub async fn from_subquery(
                             subquery: Subquery {
                                 subquery: Arc::new(haystack_expr),
                                 outer_ref_columns: outer_refs,
+                                depth: 1,
                                 spans: Spans::new(),
                             },
                             negated: false,
@@ -68,6 +69,7 @@ pub async fn from_subquery(
                 Ok(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(plan),
                     outer_ref_columns,
+                    depth: 1,
                     spans: Spans::new(),
                 }))
             }
@@ -84,6 +86,7 @@ pub async fn from_subquery(
                             Subquery {
                                 subquery: Arc::new(plan),
                                 outer_ref_columns,
+                                depth: 1,
                                 spans: Spans::new(),
                             },
                             false,

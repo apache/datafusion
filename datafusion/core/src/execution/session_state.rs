@@ -52,6 +52,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::{ExprPlanner, TypePlanner};
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
@@ -70,7 +71,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 use datafusion_sql::parser::{DFParserBuilder, Statement};
-use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -179,6 +180,7 @@ pub struct SessionState {
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
+    planner_context: Option<PlannerContext>,
 }
 
 impl Debug for SessionState {
@@ -207,6 +209,7 @@ impl Debug for SessionState {
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
             .field("prepared_plans", &self.prepared_plans)
+            .field("planner_context", &self.planner_context)
             .finish()
     }
 }
@@ -353,6 +356,14 @@ impl SessionState {
         self.function_factory.as_ref()
     }
 
+    /// Set the planner_context.
+    pub fn set_planner_context_in_execution_props(
+        &mut self,
+        planner_context: Option<PlannerContext>,
+    ) {
+        self.execution_props.set_planner_context(planner_context);
+    }
+
     /// Get the table factories
     pub fn table_factories(&self) -> &HashMap<String, Arc<dyn TableProviderFactory>> {
         &self.table_factories
@@ -461,6 +472,7 @@ impl SessionState {
     pub async fn statement_to_plan(
         &self,
         statement: Statement,
+        planner_context: &mut PlannerContext,
     ) -> datafusion_common::Result<LogicalPlan> {
         let references = self.resolve_table_references(&statement)?;
 
@@ -482,7 +494,7 @@ impl SessionState {
         }
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-        query.statement_to_plan(statement)
+        query.statement_to_plan(statement, planner_context)
     }
 
     fn get_parser_options(&self) -> ParserOptions {
@@ -514,10 +526,11 @@ impl SessionState {
     pub async fn create_logical_plan(
         &self,
         sql: &str,
+        planner_context: &mut PlannerContext,
     ) -> datafusion_common::Result<LogicalPlan> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
         let statement = self.sql_to_statement(sql, dialect)?;
-        let plan = self.statement_to_plan(statement).await?;
+        let plan = self.statement_to_plan(statement, planner_context).await?;
         Ok(plan)
     }
 
@@ -1383,6 +1396,7 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             prepared_plans: HashMap::new(),
+            planner_context: None,
         };
 
         if let Some(file_formats) = file_formats {
@@ -1981,11 +1995,12 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::planner_context::PlannerContext;
     use datafusion_expr::Expr;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_optimizer::Optimizer;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
-    use datafusion_sql::planner::{PlannerContext, SqlToRel};
+    use datafusion_sql::planner::SqlToRel;
     use std::collections::HashMap;
     use std::sync::Arc;
 
