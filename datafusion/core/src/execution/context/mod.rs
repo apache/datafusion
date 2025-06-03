@@ -63,9 +63,9 @@ use datafusion_catalog::MemoryCatalogProvider;
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigOptions, TableOptions};
 use datafusion_common::{
-    config::{ConfigExtension, TableOptions},
+    config::ConfigExtension,
     exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,

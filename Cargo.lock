@@ -2554,6 +2554,7 @@ dependencies = [
  "log",
  "object_store",
  "parking_lot",
+ "parquet",
  "tokio",
 ]
 

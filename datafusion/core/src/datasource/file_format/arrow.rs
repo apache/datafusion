@@ -42,6 +42,7 @@ use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{root_as_message, CompressionType};
 use datafusion_catalog::Session;
+use datafusion_common::config::{ConfigFileType, OutputFormat};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
@@ -51,6 +52,7 @@ use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::ObjectWriterBuilder;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
@@ -58,7 +60,6 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
@@ -83,6 +84,14 @@ impl ArrowFormatFactory {
 }
 
 impl FileFormatFactory for ArrowFormatFactory {
+    fn options(&self) -> (Option<OutputFormat>, ConfigFileType) {
+        todo!()
+    }
+
+    fn default_from_output_format(&self, _options: OutputFormat) -> Arc<dyn FileFormat> {
+        Arc::new(ArrowFormat)
+    }
+
     fn create(
         &self,
         _state: &dyn Session,

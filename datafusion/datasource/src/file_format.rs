@@ -29,6 +29,7 @@ use crate::file_scan_config::FileScanConfig;
 use crate::file_sink_config::FileSinkConfig;
 
 use arrow::datatypes::SchemaRef;
+use datafusion_common::config::{ConfigFileType, OutputFormat, TableFormatOptions};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt, Result, Statistics};
 use datafusion_physical_expr::LexRequirement;
@@ -120,7 +121,26 @@ pub trait FileFormatFactory: Sync + Send + GetExt + fmt::Debug {
         &self,
         state: &dyn Session,
         format_options: &HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>>;
+    ) -> Result<Arc<dyn FileFormat>> {
+        let options = match self.options() {
+            (None, file_type) => {
+                let mut table_options = state.file_table_options(file_type);
+                table_options.alter_with_string_hash_map(format_options)?;
+                table_options.output_format()
+            }
+            (Some(options), _) => {
+                let mut table_options = TableFormatOptions::from_output_format(options);
+                table_options.alter_with_string_hash_map(format_options)?;
+                table_options.output_format()
+            }
+        };
+
+        Ok(self.default_from_output_format(options))
+    }
+
+    fn default_from_output_format(&self, options: OutputFormat) -> Arc<dyn FileFormat>;
+
+    fn options(&self) -> (Option<OutputFormat>, ConfigFileType);
 
     /// Initialize a [FileFormat] with all options set to default values
     fn default(&self) -> Arc<dyn FileFormat>;

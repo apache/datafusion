@@ -20,9 +20,10 @@ use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use datafusion::common::config::{
-    ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, TableOptions, Visit,
+    ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Visit,
 };
 use datafusion::common::{config_err, exec_datafusion_err, exec_err};
+use datafusion::config::Extensions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
 
@@ -396,11 +397,11 @@ pub(crate) async fn get_object_store(
     state: &SessionState,
     scheme: &str,
     url: &Url,
-    table_options: &TableOptions,
+    extensions: Extensions,
 ) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
     let store: Arc<dyn ObjectStore> = match scheme {
         "s3" => {
-            let Some(options) = table_options.extensions.get::<AwsOptions>() else {
+            let Some(options) = extensions.get::<AwsOptions>() else {
                 return exec_err!(
                     "Given table options incompatible with the 's3' scheme"
                 );
@@ -409,7 +410,7 @@ pub(crate) async fn get_object_store(
             Arc::new(builder.build()?)
         }
         "oss" => {
-            let Some(options) = table_options.extensions.get::<AwsOptions>() else {
+            let Some(options) = extensions.get::<AwsOptions>() else {
                 return exec_err!(
                     "Given table options incompatible with the 'oss' scheme"
                 );
@@ -418,7 +419,7 @@ pub(crate) async fn get_object_store(
             Arc::new(builder.build()?)
         }
         "cos" => {
-            let Some(options) = table_options.extensions.get::<AwsOptions>() else {
+            let Some(options) = extensions.get::<AwsOptions>() else {
                 return exec_err!(
                     "Given table options incompatible with the 'cos' scheme"
                 );
@@ -427,7 +428,7 @@ pub(crate) async fn get_object_store(
             Arc::new(builder.build()?)
         }
         "gs" | "gcs" => {
-            let Some(options) = table_options.extensions.get::<GcpOptions>() else {
+            let Some(options) = extensions.get::<GcpOptions>() else {
                 return exec_err!(
                     "Given table options incompatible with the 'gs'/'gcs' scheme"
                 );

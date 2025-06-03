@@ -18,7 +18,6 @@
 //! [`JsonFormat`]: Line delimited JSON [`FileFormat`] abstractions
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::BufReader;
@@ -31,7 +30,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
-use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
+use datafusion_common::config::{ConfigFileType, JsonOptions, OutputFormat};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{
     not_impl_err, GetExt, Result, Statistics, DEFAULT_JSON_EXTENSION,
@@ -83,28 +82,19 @@ impl JsonFormatFactory {
 }
 
 impl FileFormatFactory for JsonFormatFactory {
-    fn create(
-        &self,
-        state: &dyn Session,
-        format_options: &HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let json_options = match &self.options {
-            None => {
-                let mut table_options = state.default_table_options();
-                table_options.set_config_format(ConfigFileType::JSON);
-                table_options.alter_with_string_hash_map(format_options)?;
-                table_options.json
-            }
+    fn options(&self) -> (Option<OutputFormat>, ConfigFileType) {
+        match self.options.clone() {
+            None => (None, ConfigFileType::JSON),
             Some(json_options) => {
-                let mut json_options = json_options.clone();
-                for (k, v) in format_options {
-                    json_options.set(k, v)?;
-                }
-                json_options
+                (Some(OutputFormat::JSON(json_options)), ConfigFileType::JSON)
             }
-        };
-
-        Ok(Arc::new(JsonFormat::default().with_options(json_options)))
+        }
+    }
+    fn default_from_output_format(&self, options: OutputFormat) -> Arc<dyn FileFormat> {
+        Arc::new(match options {
+            OutputFormat::JSON(options) => JsonFormat::default().with_options(options),
+            _ => JsonFormat::default(),
+        })
     }
 
     fn default(&self) -> Arc<dyn FileFormat> {

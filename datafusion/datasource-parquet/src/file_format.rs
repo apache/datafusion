@@ -38,7 +38,7 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
+use datafusion_common::config::{ConfigFileType, OutputFormat, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -117,30 +117,23 @@ impl ParquetFormatFactory {
 }
 
 impl FileFormatFactory for ParquetFormatFactory {
-    fn create(
-        &self,
-        state: &dyn Session,
-        format_options: &std::collections::HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let parquet_options = match &self.options {
-            None => {
-                let mut table_options = state.default_table_options();
-                table_options.set_config_format(ConfigFileType::PARQUET);
-                table_options.alter_with_string_hash_map(format_options)?;
-                table_options.parquet
-            }
-            Some(parquet_options) => {
-                let mut parquet_options = parquet_options.clone();
-                for (k, v) in format_options {
-                    parquet_options.set(k, v)?;
-                }
-                parquet_options
-            }
-        };
+    fn options(&self) -> (Option<OutputFormat>, ConfigFileType) {
+        match self.options.clone() {
+            None => (None, ConfigFileType::PARQUET),
+            Some(parquet_options) => (
+                Some(OutputFormat::PARQUET(parquet_options)),
+                ConfigFileType::PARQUET,
+            ),
+        }
+    }
 
-        Ok(Arc::new(
-            ParquetFormat::default().with_options(parquet_options),
-        ))
+    fn default_from_output_format(&self, options: OutputFormat) -> Arc<dyn FileFormat> {
+        Arc::new(match options {
+            OutputFormat::PARQUET(options) => {
+                ParquetFormat::default().with_options(options)
+            }
+            _ => ParquetFormat::default(),
+        })
     }
 
     fn default(&self) -> Arc<dyn FileFormat> {
