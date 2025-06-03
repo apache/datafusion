@@ -32,9 +32,14 @@ use arrow::{
     compute::take_arrays,
     datatypes::UInt32Type,
 };
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{
+    EmitTo, GroupsAccumulator, GroupsAccumulatorMetadata,
+};
+use datafusion_expr_common::ordering::InputOrderMode;
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -89,11 +94,17 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 /// by first collecting the input rows for each group into a contiguous array
 /// using [`compute::take`]
 ///
+/// If we know that the group indices are contiguous we just slice the input arrays and avoiding
+/// the call to [`compute::take`]
+///
 pub struct GroupsAccumulatorAdapter {
     factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
 
     /// state for each group, stored in group_index order
     states: Vec<AccumulatorState>,
+
+    /// The metadata for the accumulators that got from [`GroupsAccumulator::register_metadata`]
+    metadata: GroupsAccumulatorMetadata,
 
     /// Current memory usage, in bytes.
     ///
@@ -139,6 +150,9 @@ impl GroupsAccumulatorAdapter {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
+
+            // Default for no assumption about the input
+            metadata: GroupsAccumulatorMetadata::default(),
         }
     }
 
@@ -163,6 +177,51 @@ impl GroupsAccumulatorAdapter {
 
     /// invokes f(accumulator, values) for each group that has values
     /// in group_indices.
+    fn invoke_per_accumulator<F>(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+        f: &F,
+    ) -> Result<()>
+    where
+        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
+    {
+        self.make_accumulators_if_needed(total_num_groups)?;
+
+        assert_eq!(values[0].len(), group_indices.len());
+
+        if group_indices.is_empty() {
+            return Ok(());
+        }
+
+        let (sizes_pre, sizes_post) =
+            if matches!(self.metadata.group_indices_ordering, InputOrderMode::Sorted) {
+                self.invoke_per_accumulator_on_contiguous_group_indices(
+                    values,
+                    group_indices,
+                    opt_filter,
+                    f,
+                )
+            } else {
+                self.invoke_per_accumulator_on_non_ordered_group_indices(
+                    values,
+                    group_indices,
+                    opt_filter,
+                    f,
+                )
+            }?;
+
+        self.adjust_allocation(sizes_pre, sizes_post);
+
+        Ok(())
+    }
+
+    /// invokes f(accumulator, values) for each group that has values
+    /// in group_indices.
+    ///
+    /// Returns (usize, usize) which is (accumulators memory before invocation, accumulators memory after invocation)
     ///
     /// This function first reorders the input and filter so that
     /// values for each group_index are contiguous and then invokes f
@@ -186,21 +245,16 @@ impl GroupsAccumulatorAdapter {
     /// logical group   values      opt_filter           logical group  values       opt_filter
     ///
     /// ```
-    fn invoke_per_accumulator<F>(
+    fn invoke_per_accumulator_on_non_ordered_group_indices<F>(
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-        f: F,
-    ) -> Result<()>
+        f: &F,
+    ) -> Result<(usize, usize)>
     where
         F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
     {
-        self.make_accumulators_if_needed(total_num_groups)?;
-
-        assert_eq!(values[0].len(), group_indices.len());
-
         // figure out which input rows correspond to which groups.
         // Note that self.state.indices starts empty for all groups
         // (it is cleared out below)
@@ -240,6 +294,7 @@ impl GroupsAccumulatorAdapter {
         // accumulator once per group with values
         let values = take_arrays(values, &batch_indices, None)?;
         let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
+        let opt_boolean_filter = opt_filter.as_ref().map(|f| f.as_boolean());
 
         // invoke each accumulator with the appropriate rows, first
         // pulling the input arguments for this group into their own
@@ -249,24 +304,94 @@ impl GroupsAccumulatorAdapter {
         let mut sizes_pre = 0;
         let mut sizes_post = 0;
         for (&group_idx, offsets) in iter {
-            let state = &mut self.states[group_idx];
-            sizes_pre += state.size();
-
-            let values_to_accumulate = slice_and_maybe_filter(
-                &values,
-                opt_filter.as_ref().map(|f| f.as_boolean()),
-                offsets,
-            )?;
-            f(state.accumulator.as_mut(), &values_to_accumulate)?;
+            sizes_pre += self.states[group_idx].size();
+            self.invoke_accumulator(group_idx, &values, offsets, opt_boolean_filter, f)?;
 
             // clear out the state so they are empty for next
             // iteration
-            state.indices.clear();
-            sizes_post += state.size();
+            self.states[group_idx].indices.clear();
+
+            sizes_post += self.states[group_idx].size();
         }
 
-        self.adjust_allocation(sizes_pre, sizes_post);
-        Ok(())
+        Ok((sizes_pre, sizes_post))
+    }
+
+    /// invokes f(accumulator, values) for each group that has values
+    /// in group_indices.
+    ///
+    /// This function is the same as [`Self::invoke_per_accumulator_on_non_ordered_group_indices`] but avoid reordering of the
+    /// input as we know that each group_index is contiguous
+    ///
+    /// Returns (usize, usize) which is (accumulators memory before invocation, accumulators memory after invocation)
+    ///
+    fn invoke_per_accumulator_on_contiguous_group_indices<F>(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        f: &F,
+    ) -> Result<(usize, usize)>
+    where
+        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
+    {
+        let mut current_group_index = group_indices[0];
+        let mut start_idx = 0;
+
+        let mut sizes_pre = 0;
+        let mut sizes_post = 0;
+
+        for (idx, &group_index) in group_indices.iter().enumerate() {
+            if group_index != current_group_index {
+                sizes_pre += self.states[current_group_index].size();
+                self.invoke_accumulator(
+                    current_group_index,
+                    values,
+                    &[start_idx, idx],
+                    opt_filter,
+                    f,
+                )?;
+
+                sizes_post += self.states[current_group_index].size();
+
+                start_idx = idx;
+                current_group_index = group_index
+            }
+        }
+
+        // Add the last group
+        sizes_pre += self.states[current_group_index].size();
+        self.invoke_accumulator(
+            current_group_index,
+            values,
+            &[start_idx, group_indices.len()],
+            opt_filter,
+            f,
+        )?;
+
+        sizes_post += self.states[current_group_index].size();
+
+        Ok((sizes_pre, sizes_post))
+    }
+
+    /// Invoke single accumulator at `group_index`
+    fn invoke_accumulator<F>(
+        &mut self,
+        group_index: usize,
+        values: &[ArrayRef],
+        offsets: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        f: F,
+    ) -> Result<()>
+    where
+        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
+    {
+        let values_to_accumulate = slice_and_maybe_filter(values, opt_filter, offsets)?;
+
+        f(
+            self.states[group_index].accumulator.as_mut(),
+            &values_to_accumulate,
+        )
     }
 
     /// Increment the allocation by `n`
@@ -299,6 +424,17 @@ impl GroupsAccumulatorAdapter {
 }
 
 impl GroupsAccumulator for GroupsAccumulatorAdapter {
+    fn register_metadata(&mut self, metadata: GroupsAccumulatorMetadata) -> Result<()> {
+        if !self.states.is_empty() {
+            return internal_err!(
+                "Cannot register metadata after the accumulator already has states"
+            );
+        }
+        self.metadata = metadata;
+
+        Ok(())
+    }
+
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -311,7 +447,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             group_indices,
             opt_filter,
             total_num_groups,
-            |accumulator, values_to_accumulate| {
+            &|accumulator, values_to_accumulate| {
                 accumulator.update_batch(values_to_accumulate)
             },
         )?;
@@ -386,7 +522,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             group_indices,
             opt_filter,
             total_num_groups,
-            |accumulator, values_to_accumulate| {
+            &|accumulator, values_to_accumulate| {
                 accumulator.merge_batch(values_to_accumulate)?;
                 Ok(())
             },
