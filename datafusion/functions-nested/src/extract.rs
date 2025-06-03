@@ -32,8 +32,7 @@ use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
-    DataFusionError, Result,
+    exec_err, internal_datafusion_err, plan_err, utils::take_function_args, Result,
 };
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
@@ -218,9 +217,10 @@ fn adjusted_array_index<O: OffsetSizeTrait>(index: i64, len: O) -> Result<Option
 where
     i64: TryInto<O>,
 {
-    let index: O = index.try_into().map_err(|_| {
-        DataFusionError::Execution(format!("array_element got invalid index: {index}"))
-    })?;
+    let index: O = match index.try_into() {
+        Ok(idx) => idx,
+        Err(_) => return exec_err!("array_element got invalid index: {}", index),
+    };
 
     // Convert 1-based index to 0-based
     let adjusted_zero_index = if index < O::usize_as(0) {
@@ -277,12 +277,8 @@ where
         let end = offset_window[1];
         let len = end - start;
 
-        if array.is_null(row_index) || len == O::usize_as(0) {
-            mutable.extend_nulls(1);
-            continue;
-        }
-
-        if indexes.is_null(row_index) {
+        if array.is_null(row_index) || len == O::usize_as(0) || indexes.is_null(row_index)
+        {
             mutable.extend_nulls(1);
             continue;
         }
@@ -320,7 +316,7 @@ where
     let mut null_buffer_builder = NullBufferBuilder::new(array.len());
 
     // Process each field in the struct
-    for (_field_idx, field) in struct_array.columns().iter().enumerate() {
+    for field in struct_array.columns().iter() {
         if field.data_type() == &Null {
             // For null fields, create a null array of the correct length
             result_columns.push(Arc::new(NullArray::new(array.len())));
