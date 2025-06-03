@@ -145,6 +145,11 @@ impl ExecutionPlan for YieldStreamExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if children.len() != 1 {
+            return Err(datafusion_common::DataFusionError::Internal(
+                "YieldStreamExec requires exactly one child".to_string(),
+            ));
+        }
         // Use Arc::clone on children[0] rather than calling clone() directly
         Ok(Arc::new(YieldStreamExec::new(Arc::clone(&children[0]))))
     }
