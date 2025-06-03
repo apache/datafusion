@@ -104,13 +104,13 @@ mod tests {
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();
-        let arg_fields = [Field::new("a", input.data_type().clone(), true)];
+        let arg_fields = vec![Field::new("a", input.data_type().clone(), true).into()];
 
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
-            arg_fields: arg_fields.iter().collect(),
-            return_field: &Field::new("f", Utf8, true),
+            arg_fields,
+            return_field: Field::new("f", Utf8, true).into(),
         };
 
         let result = match func.invoke_with_args(args)? {

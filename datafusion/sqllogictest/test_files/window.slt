@@ -1767,11 +1767,11 @@ logical_plan
 01)Projection: count(Int64(1)) AS count(*) AS global_count
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: a
-04)------Projection: 
+04)------Projection:
 05)--------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 06)----------Projection: aggregate_test_100.c1
-07)------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
-08)--------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
+07)------------Filter: aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
+08)--------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as global_count]
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]

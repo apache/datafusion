@@ -38,6 +38,7 @@ workspace = true
 name = "datafusion_functions_window"
 
 [dependencies]
+arrow = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-expr = { workspace = true }
@@ -47,6 +48,3 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 log = { workspace = true }
 paste = "1.0.15"
-
-[dev-dependencies]
-arrow = { workspace = true }

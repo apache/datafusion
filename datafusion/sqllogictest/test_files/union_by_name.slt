@@ -348,7 +348,7 @@ Schema {
     fields: [
         Field {
             name: "x",
-            data_type: Utf8,
+            data_type: Utf8View,
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,
@@ -356,7 +356,7 @@ Schema {
         },
         Field {
             name: "y",
-            data_type: Utf8,
+            data_type: Utf8View,
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,
@@ -364,7 +364,7 @@ Schema {
         },
         Field {
             name: "z",
-            data_type: Utf8,
+            data_type: Utf8View,
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,
@@ -387,7 +387,7 @@ Schema {
     fields: [
         Field {
             name: "x",
-            data_type: Utf8,
+            data_type: Utf8View,
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,
@@ -395,7 +395,7 @@ Schema {
         },
         Field {
             name: "y",
-            data_type: Utf8,
+            data_type: Utf8View,
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,
@@ -403,7 +403,7 @@ Schema {
         },
         Field {
             name: "z",
-            data_type: Utf8,
+            data_type: Utf8View,
             nullable: true,
             dict_id: 0,
             dict_is_ordered: false,

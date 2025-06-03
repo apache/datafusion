@@ -489,11 +489,11 @@ logical_plan
 04)------Limit: skip=0, fetch=3
 05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)----------SubqueryAlias: a
-07)------------Projection: 
+07)------------Projection:
 08)--------------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 09)----------------Projection: aggregate_test_100.c1
-10)------------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
-11)--------------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
+10)------------------Filter: aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
+11)--------------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
 12)----Projection: Int64(1) AS cnt
 13)------Limit: skip=0, fetch=3
 14)--------EmptyRelation
@@ -829,10 +829,10 @@ ORDER BY c1
 logical_plan
 01)Sort: c1 ASC NULLS LAST
 02)--Union
-03)----Filter: aggregate_test_100.c1 = Utf8("a")
-04)------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], partial_filters=[aggregate_test_100.c1 = Utf8("a")]
-05)----Filter: aggregate_test_100.c1 = Utf8("a")
-06)------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], partial_filters=[aggregate_test_100.c1 = Utf8("a")]
+03)----Filter: aggregate_test_100.c1 = Utf8View("a")
+04)------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], partial_filters=[aggregate_test_100.c1 = Utf8View("a")]
+05)----Filter: aggregate_test_100.c1 = Utf8View("a")
+06)------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], partial_filters=[aggregate_test_100.c1 = Utf8View("a")]
 physical_plan
 01)CoalescePartitionsExec
 02)--UnionExec

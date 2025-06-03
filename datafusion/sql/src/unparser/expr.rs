@@ -189,17 +189,18 @@ impl Unparser<'_> {
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                params:
-                    WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        ..
-                    },
-            }) => {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params:
+                        WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            ..
+                        },
+                } = window_fun.as_ref();
                 let func_name = fun.name();
 
                 let args = self.function_args_to_sql(args)?;
@@ -2019,7 +2020,7 @@ mod tests {
                 "count(*) FILTER (WHERE true)",
             ),
             (
-                Expr::WindowFunction(WindowFunction {
+                Expr::from(WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
                     params: WindowFunctionParams {
                         args: vec![col("col")],
@@ -2033,7 +2034,7 @@ mod tests {
             ),
             (
                 #[expect(deprecated)]
-                Expr::WindowFunction(WindowFunction {
+                Expr::from(WindowFunction {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     params: WindowFunctionParams {
                         args: vec![Expr::Wildcard {
@@ -2902,7 +2903,7 @@ mod tests {
             let func = WindowFunctionDefinition::WindowUDF(rank_udwf());
             let mut window_func = WindowFunction::new(func, vec![]);
             window_func.params.order_by = vec![Sort::new(col("a"), true, true)];
-            let expr = Expr::WindowFunction(window_func);
+            let expr = Expr::from(window_func);
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = ast.to_string();

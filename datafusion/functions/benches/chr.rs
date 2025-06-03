@@ -50,12 +50,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
     let input = Arc::new(input);
     let args = vec![ColumnarValue::Array(input)];
-    let arg_fields_owned = args
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
     c.bench_function("chr", |b| {
         b.iter(|| {
@@ -65,7 +64,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     })
                     .unwrap(),
             )

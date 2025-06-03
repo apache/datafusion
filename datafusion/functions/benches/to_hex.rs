@@ -36,9 +36,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 hex.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
-                    arg_fields: vec![&Field::new("a", DataType::Int32, false)],
+                    arg_fields: vec![Field::new("a", DataType::Int32, false).into()],
                     number_rows: batch_len,
-                    return_field: &Field::new("f", DataType::Utf8, true),
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 })
                 .unwrap(),
             )
@@ -53,9 +53,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 hex.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
-                    arg_fields: vec![&Field::new("a", DataType::Int64, false)],
+                    arg_fields: vec![Field::new("a", DataType::Int64, false).into()],
                     number_rows: batch_len,
-                    return_field: &Field::new("f", DataType::Utf8, true),
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 })
                 .unwrap(),
             )

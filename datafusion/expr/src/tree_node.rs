@@ -92,14 +92,16 @@ impl TreeNode for Expr {
                 (expr, when_then_expr, else_expr).apply_ref_elements(f),
             Expr::AggregateFunction(AggregateFunction { params: AggregateFunctionParams { args, filter, order_by, ..}, .. }) =>
                 (args, filter, order_by).apply_ref_elements(f),
-            Expr::WindowFunction(WindowFunction {
-                params : WindowFunctionParams {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunctionParams {
                     args,
                     partition_by,
                     order_by,
-                    ..}, ..}) => {
+                    ..
+                } = &window_fun.as_ref().params;
                 (args, partition_by, order_by).apply_ref_elements(f)
             }
+
             Expr::InList(InList { expr, list, .. }) => {
                 (expr, list).apply_ref_elements(f)
             }
@@ -230,27 +232,30 @@ impl TreeNode for Expr {
                     )))
                 })?
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                params:
-                    WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params:
+                        WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                        },
+                } = *window_fun;
+                (args, partition_by, order_by).map_elements(f)?.update_data(
+                    |(new_args, new_partition_by, new_order_by)| {
+                        Expr::from(WindowFunction::new(fun, new_args))
+                            .partition_by(new_partition_by)
+                            .order_by(new_order_by)
+                            .window_frame(window_frame)
+                            .null_treatment(null_treatment)
+                            .build()
+                            .unwrap()
                     },
-            }) => (args, partition_by, order_by).map_elements(f)?.update_data(
-                |(new_args, new_partition_by, new_order_by)| {
-                    Expr::WindowFunction(WindowFunction::new(fun, new_args))
-                        .partition_by(new_partition_by)
-                        .order_by(new_order_by)
-                        .window_frame(window_frame)
-                        .null_treatment(null_treatment)
-                        .build()
-                        .unwrap()
-                },
-            ),
+                )
+            }
             Expr::AggregateFunction(AggregateFunction {
                 func,
                 params:

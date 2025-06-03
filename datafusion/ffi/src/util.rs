@@ -19,6 +19,8 @@ use crate::arrow_wrappers::WrappedSchema;
 use abi_stable::std_types::RVec;
 use arrow::datatypes::Field;
 use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
+use arrow_schema::FieldRef;
+use std::sync::Arc;
 
 /// This macro is a helpful conversion utility to conver from an abi_stable::RResult to a
 /// DataFusion result.
@@ -66,8 +68,8 @@ macro_rules! rresult_return {
 
 /// This is a utility function to convert a slice of [`Field`] to its equivalent
 /// FFI friendly counterpart, [`WrappedSchema`]
-pub fn vec_field_to_rvec_wrapped(
-    fields: &[Field],
+pub fn vec_fieldref_to_rvec_wrapped(
+    fields: &[FieldRef],
 ) -> Result<RVec<WrappedSchema>, arrow::error::ArrowError> {
     Ok(fields
         .iter()
@@ -80,10 +82,13 @@ pub fn vec_field_to_rvec_wrapped(
 
 /// This is a utility function to convert an FFI friendly vector of [`WrappedSchema`]
 /// to their equivalent [`Field`].
-pub fn rvec_wrapped_to_vec_field(
+pub fn rvec_wrapped_to_vec_fieldref(
     fields: &RVec<WrappedSchema>,
-) -> Result<Vec<Field>, arrow::error::ArrowError> {
-    fields.iter().map(|d| Field::try_from(&d.0)).collect()
+) -> Result<Vec<FieldRef>, arrow::error::ArrowError> {
+    fields
+        .iter()
+        .map(|d| Field::try_from(&d.0).map(Arc::new))
+        .collect()
 }
 
 /// This is a utility function to convert a slice of [`DataType`] to its equivalent

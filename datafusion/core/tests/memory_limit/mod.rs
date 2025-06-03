@@ -31,7 +31,6 @@ use datafusion::assert_batches_eq;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -41,11 +40,12 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_contains, Result};
+use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::{DiskManager, TaskContext};
+use datafusion_execution::TaskContext;
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
@@ -204,7 +204,7 @@ async fn sort_merge_join_spill() {
         )
         .with_memory_limit(1_000)
         .with_config(config)
-        .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
         .run()
         .await
@@ -288,7 +288,7 @@ async fn sort_spill_reservation() {
         .with_memory_limit(mem_limit)
     // use a single partition so only a sort is needed
         .with_scenario(scenario)
-        .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_expected_plan(
             // It is important that this plan only has a SortExec, not
             // also merge, so we can ensure the sort could finish
@@ -404,6 +404,19 @@ async fn oom_with_tracked_consumer_pool() {
                 NonZeroUsize::new(1).unwrap()
             )
         ))
+        .run()
+        .await
+}
+
+#[tokio::test]
+async fn oom_grouped_hash_aggregate() {
+    TestCase::new()
+        .with_query("SELECT COUNT(*), SUM(request_bytes) FROM t GROUP BY host")
+        .with_expected_errors(vec![
+            "Failed to allocate additional",
+            "GroupedHashAggregateStream[0] (count(1), sum(t.request_bytes))",
+        ])
+        .with_memory_limit(1_000)
         .run()
         .await
 }
@@ -537,9 +550,10 @@ async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
 ) -> Result<SessionContext> {
-    let mut disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
-
-    DiskManager::set_arc_max_temp_directory_size(&mut disk_manager, disk_limit)?;
+    let disk_manager = DiskManagerBuilder::default()
+        .with_mode(DiskManagerMode::OsTmpDirectory)
+        .with_max_temp_directory_size(disk_limit)
+        .build()?;
 
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_pool(Arc::new(FairSpillPool::new(memory_pool_limit)))
@@ -548,7 +562,7 @@ async fn setup_context(
 
     let runtime = Arc::new(RuntimeEnv {
         memory_pool: runtime.memory_pool.clone(),
-        disk_manager,
+        disk_manager: Arc::new(disk_manager),
         cache_manager: runtime.cache_manager.clone(),
         object_store_registry: runtime.object_store_registry.clone(),
     });
@@ -628,7 +642,7 @@ struct TestCase {
     scenario: Scenario,
     /// How should the disk manager (that allows spilling) be
     /// configured? Defaults to `Disabled`
-    disk_manager_config: DiskManagerConfig,
+    disk_manager_builder: DiskManagerBuilder,
     /// Expected explain plan, if non-empty
     expected_plan: Vec<String>,
     /// Is the plan expected to pass? Defaults to false
@@ -644,7 +658,8 @@ impl TestCase {
             config: SessionConfig::new(),
             memory_pool: None,
             scenario: Scenario::AccessLog,
-            disk_manager_config: DiskManagerConfig::Disabled,
+            disk_manager_builder: DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Disabled),
             expected_plan: vec![],
             expected_success: false,
         }
@@ -701,11 +716,11 @@ impl TestCase {
 
     /// Specify if the disk manager should be enabled. If true,
     /// operators that support it can spill
-    pub fn with_disk_manager_config(
+    pub fn with_disk_manager_builder(
         mut self,
-        disk_manager_config: DiskManagerConfig,
+        disk_manager_builder: DiskManagerBuilder,
     ) -> Self {
-        self.disk_manager_config = disk_manager_config;
+        self.disk_manager_builder = disk_manager_builder;
         self
     }
 
@@ -724,7 +739,7 @@ impl TestCase {
             memory_pool,
             config,
             scenario,
-            disk_manager_config,
+            disk_manager_builder,
             expected_plan,
             expected_success,
         } = self;
@@ -733,7 +748,7 @@ impl TestCase {
 
         let mut builder = RuntimeEnvBuilder::new()
             // disk manager setting controls the spilling
-            .with_disk_manager(disk_manager_config)
+            .with_disk_manager_builder(disk_manager_builder)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
         if let Some(pool) = memory_pool {

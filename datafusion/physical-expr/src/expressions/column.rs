@@ -22,8 +22,9 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
+use arrow::datatypes::FieldRef;
 use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -127,8 +128,8 @@ impl PhysicalExpr for Column {
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
-        Ok(input_schema.field(self.index).clone())
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(input_schema.field(self.index).clone().into())
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

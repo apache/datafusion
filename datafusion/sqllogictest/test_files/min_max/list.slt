@@ -130,4 +130,3 @@ create table max_window_different_column as (
 ;
 
 include ./queries.slt.part
-

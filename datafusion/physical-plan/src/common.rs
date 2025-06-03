@@ -18,8 +18,7 @@
 //! Defines common code used in execution plans
 
 use std::fs;
-use std::fs::{metadata, File};
-use std::path::{Path, PathBuf};
+use std::fs::metadata;
 use std::sync::Arc;
 
 use super::SendableRecordBatchStream;
@@ -28,10 +27,9 @@ use crate::{ColumnStatistics, Statistics};
 
 use arrow::array::Array;
 use arrow::datatypes::Schema;
-use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use futures::{StreamExt, TryStreamExt};
@@ -177,77 +175,6 @@ pub fn compute_record_batch_statistics(
         num_rows: Precision::Exact(nb_rows),
         total_byte_size: Precision::Exact(total_byte_size),
         column_statistics,
-    }
-}
-
-/// Write in Arrow IPC File format.
-pub struct IPCWriter {
-    /// Path
-    pub path: PathBuf,
-    /// Inner writer
-    pub writer: FileWriter<File>,
-    /// Batches written
-    pub num_batches: usize,
-    /// Rows written
-    pub num_rows: usize,
-    /// Bytes written
-    pub num_bytes: usize,
-}
-
-impl IPCWriter {
-    /// Create new writer
-    pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
-        let file = File::create(path).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to create partition file at {path:?}: {e:?}"
-            ))
-        })?;
-        Ok(Self {
-            num_batches: 0,
-            num_rows: 0,
-            num_bytes: 0,
-            path: path.into(),
-            writer: FileWriter::try_new(file, schema)?,
-        })
-    }
-
-    /// Create new writer with IPC write options
-    pub fn new_with_options(
-        path: &Path,
-        schema: &Schema,
-        write_options: IpcWriteOptions,
-    ) -> Result<Self> {
-        let file = File::create(path).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to create partition file at {path:?}: {e:?}"
-            ))
-        })?;
-        Ok(Self {
-            num_batches: 0,
-            num_rows: 0,
-            num_bytes: 0,
-            path: path.into(),
-            writer: FileWriter::try_new_with_options(file, schema, write_options)?,
-        })
-    }
-    /// Write one single batch
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.writer.write(batch)?;
-        self.num_batches += 1;
-        self.num_rows += batch.num_rows();
-        let num_bytes: usize = batch.get_array_memory_size();
-        self.num_bytes += num_bytes;
-        Ok(())
-    }
-
-    /// Finish the writer
-    pub fn finish(&mut self) -> Result<()> {
-        self.writer.finish().map_err(Into::into)
-    }
-
-    /// Path write to
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 }
 

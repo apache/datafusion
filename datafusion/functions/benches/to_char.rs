@@ -94,11 +94,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
                         arg_fields: vec![
-                            &Field::new("a", data.data_type(), true),
-                            &Field::new("b", patterns.data_type(), true),
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", patterns.data_type(), true).into(),
                         ],
                         number_rows: batch_len,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -119,11 +119,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
                         arg_fields: vec![
-                            &Field::new("a", data.data_type(), true),
-                            &Field::new("b", patterns.data_type(), true),
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", patterns.data_type(), true).into(),
                         ],
                         number_rows: batch_len,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -150,11 +150,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), pattern.clone()],
                         arg_fields: vec![
-                            &Field::new("a", data.data_type(), true),
-                            &Field::new("b", pattern.data_type(), true),
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", pattern.data_type(), true).into(),
                         ],
                         number_rows: 1,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     })
                     .expect("to_char should work on valid values"),
             )

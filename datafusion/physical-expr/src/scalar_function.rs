@@ -38,7 +38,7 @@ use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
 use arrow::array::{Array, RecordBatch};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -53,7 +53,7 @@ pub struct ScalarFunctionExpr {
     fun: Arc<ScalarUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
-    return_field: Field,
+    return_field: FieldRef,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -73,7 +73,7 @@ impl ScalarFunctionExpr {
         name: &str,
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
-        return_field: Field,
+        return_field: FieldRef,
     ) -> Self {
         Self {
             fun,
@@ -144,7 +144,12 @@ impl ScalarFunctionExpr {
     }
 
     pub fn with_nullable(mut self, nullable: bool) -> Self {
-        self.return_field = self.return_field.with_nullable(nullable);
+        self.return_field = self
+            .return_field
+            .as_ref()
+            .clone()
+            .with_nullable(nullable)
+            .into();
         self
     }
 
@@ -180,12 +185,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
-        let arg_fields_owned = self
+        let arg_fields = self
             .args
             .iter()
             .map(|e| e.return_field(batch.schema_ref()))
             .collect::<Result<Vec<_>>>()?;
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
         let input_empty = args.is_empty();
         let input_all_scalar = args
@@ -197,7 +201,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             args,
             arg_fields,
             number_rows: batch.num_rows(),
-            return_field: &self.return_field,
+            return_field: Arc::clone(&self.return_field),
         })?;
 
         if let ColumnarValue::Array(array) = &output {
@@ -217,8 +221,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
-    fn return_field(&self, _input_schema: &Schema) -> Result<Field> {
-        Ok(self.return_field.clone())
+    fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::clone(&self.return_field))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -233,7 +237,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             &self.name,
             Arc::clone(&self.fun),
             children,
-            self.return_field.clone(),
+            Arc::clone(&self.return_field),
         )))
     }
 

@@ -4179,7 +4179,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Error building ScalarValue::Struct. Expected array with exactly one element, found array with 4 elements"
+        expected = "InvalidArgumentError(\"Incorrect array length for StructArray field \\\"bool\\\", expected 1 got 4\")"
     )]
     fn test_scalar_value_from_for_struct_should_panic() {
         let _ = ScalarStructBuilder::new()

@@ -38,8 +38,10 @@ pub use engines::DataFusion;
 #[cfg(feature = "postgres")]
 pub use engines::Postgres;
 
+mod filters;
 mod test_context;
 mod util;
 
+pub use filters::*;
 pub use test_context::TestContext;
 pub use util::*;

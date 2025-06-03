@@ -18,7 +18,7 @@
 use arrow::array::{new_null_array, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::{
@@ -82,7 +82,7 @@ impl ScalarUDFImpl for CoalesceFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // If any the arguments in coalesce is non-null, the result is non-null
         let nullable = args.arg_fields.iter().all(|f| f.is_nullable());
         let return_type = args
@@ -92,7 +92,7 @@ impl ScalarUDFImpl for CoalesceFunc {
             .find_or_first(|d| !d.is_null())
             .unwrap()
             .clone();
-        Ok(Field::new(self.name(), return_type, nullable))
+        Ok(Field::new(self.name(), return_type, nullable).into())
     }
 
     /// coalesce evaluates to the first value which is not NULL

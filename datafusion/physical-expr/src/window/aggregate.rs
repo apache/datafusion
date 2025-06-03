@@ -30,8 +30,9 @@ use crate::window::{
 use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
 
 use arrow::array::Array;
+use arrow::array::ArrayRef;
+use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -95,7 +96,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
         self
     }
 
-    fn field(&self) -> Result<Field> {
+    fn field(&self) -> Result<FieldRef> {
         Ok(self.aggregate.field())
     }
 

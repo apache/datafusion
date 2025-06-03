@@ -92,7 +92,8 @@ mod test {
     };
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::{
-        config::SessionConfig, disk_manager::DiskManagerConfig,
+        config::SessionConfig,
+        disk_manager::{DiskManagerBuilder, DiskManagerMode},
         runtime_env::RuntimeEnvBuilder,
     };
     use datafusion_physical_plan::collect;
@@ -112,7 +113,9 @@ mod test {
 
     fn get_ctx() -> Arc<SessionContext> {
         let rt = RuntimeEnvBuilder::new()
-            .with_disk_manager(DiskManagerConfig::Disabled)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
             .build_arc()
             .unwrap();
         let session_config = SessionConfig::new().with_target_partitions(1);

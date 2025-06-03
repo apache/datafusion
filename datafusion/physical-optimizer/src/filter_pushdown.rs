@@ -388,7 +388,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
     }
 
     fn name(&self) -> &str {
-        "PushdownFilter"
+        "FilterPushdown"
     }
 
     fn schema_check(&self) -> bool {

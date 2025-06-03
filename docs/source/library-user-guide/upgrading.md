@@ -21,6 +21,55 @@
 
 ## DataFusion `48.0.0`
 
+### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow.
+
+The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`
+which improves performance for many string operations. You can read more about
+`Utf8View` in the [DataFusion blog post on German-style strings]
+
+[datafusion blog post on german-style strings]: https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/
+
+This means that when you create a table with a `VARCHAR` column, it will now use
+`Utf8View` as the underlying data type. For example:
+
+```sql
+> CREATE TABLE my_table (my_column VARCHAR);
+0 row(s) fetched.
+Elapsed 0.001 seconds.
+
+> DESCRIBE my_table;
++-------------+-----------+-------------+
+| column_name | data_type | is_nullable |
++-------------+-----------+-------------+
+| my_column   | Utf8View  | YES         |
++-------------+-----------+-------------+
+1 row(s) fetched.
+Elapsed 0.000 seconds.
+```
+
+You can restore the old behavior of using `Utf8` by changing the
+`datafusion.sql_parser.map_varchar_to_utf8view` configuration setting. For
+example
+
+```sql
+> set datafusion.sql_parser.map_varchar_to_utf8view = false;
+0 row(s) fetched.
+Elapsed 0.001 seconds.
+
+> CREATE TABLE my_table (my_column VARCHAR);
+0 row(s) fetched.
+Elapsed 0.014 seconds.
+
+> DESCRIBE my_table;
++-------------+-----------+-------------+
+| column_name | data_type | is_nullable |
++-------------+-----------+-------------+
+| my_column   | Utf8      | YES         |
++-------------+-----------+-------------+
+1 row(s) fetched.
+Elapsed 0.004 seconds.
+```
+
 ### `ListingOptions` default for `collect_stat` changed from `true` to `false`
 
 This makes it agree with the default for `SessionConfig`.
@@ -36,17 +85,17 @@ ListingOptions::new(Arc::new(ParquetFormat::default()))
 # */
 ```
 
-### Processing `Field` instead of `DataType` for user defined functions
+### Processing `FieldRef` instead of `DataType` for user defined functions
 
 In order to support metadata handling and extension types, user defined functions are
-now switching to traits which use `Field` rather than a `DataType` and nullability.
+now switching to traits which use `FieldRef` rather than a `DataType` and nullability.
 This gives a single interface to both of these parameters and additionally allows
 access to metadata fields, which can be used for extension types.
 
 To upgrade structs which implement `ScalarUDFImpl`, if you have implemented
 `return_type_from_args` you need instead to implement `return_field_from_args`.
 If your functions do not need to handle metadata, this should be straightforward
-repackaging of the output data into a `Field`. The name you specify on the
+repackaging of the output data into a `FieldRef`. The name you specify on the
 field is not important. It will be overwritten during planning. `ReturnInfo`
 has been removed, so you will need to remove all references to it.
 
@@ -59,7 +108,7 @@ your function. You are not required to implement this if you do not need to
 handle metatdata.
 
 The largest change to aggregate functions happens in the accumulator arguments.
-Both the `AccumulatorArgs` and `StateFieldsArgs` now contain `Field` rather
+Both the `AccumulatorArgs` and `StateFieldsArgs` now contain `FieldRef` rather
 than `DataType`.
 
 To upgrade window functions, `ExpressionArgs` now contains input fields instead

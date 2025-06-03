@@ -400,7 +400,7 @@ logical_plan
 01)LeftSemi Join: 
 02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: 
+04)----Projection:
 05)------Filter: t1.t1_int < t1.t1_id
 06)--------TableScan: t1 projection=[t1_id, t1_int]
 
@@ -1453,7 +1453,7 @@ logical_plan
 01)LeftSemi Join: 
 02)--TableScan: t1 projection=[a]
 03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: 
+04)----Projection:
 05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)--------TableScan: t2 projection=[]
 

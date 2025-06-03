@@ -819,7 +819,7 @@ show columns FROM table_with_pk;
 ----
 datafusion public table_with_pk sn Int32 NO
 datafusion public table_with_pk ts Timestamp(Nanosecond, Some("+00:00")) NO
-datafusion public table_with_pk currency Utf8 NO
+datafusion public table_with_pk currency Utf8View NO
 datafusion public table_with_pk amount Float32 YES
 
 statement ok
@@ -835,8 +835,8 @@ CREATE TABLE t1(c1 VARCHAR(10) NOT NULL, c2 VARCHAR);
 query TTT
 DESCRIBE t1;
 ----
-c1 Utf8 NO
-c2 Utf8 YES
+c1 Utf8View NO
+c2 Utf8View YES
 
 statement ok
 set datafusion.sql_parser.map_varchar_to_utf8view = true;

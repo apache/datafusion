@@ -17,6 +17,7 @@
 
 //! Execution plan for reading CSV files
 
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use std::any::Any;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
@@ -28,7 +29,8 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    calculate_range, FileRange, ListingTableUrl, RangeCalculation,
+    as_file_source, calculate_range, impl_schema_adapter_methods, FileRange,
+    ListingTableUrl, RangeCalculation,
 };
 
 use arrow::csv;
@@ -91,6 +93,7 @@ pub struct CsvSource {
     comment: Option<u8>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl CsvSource {
@@ -212,6 +215,12 @@ impl CsvOpener {
     }
 }
 
+impl From<CsvSource> for Arc<dyn FileSource> {
+    fn from(source: CsvSource) -> Self {
+        as_file_source(source)
+    }
+}
+
 impl FileSource for CsvSource {
     fn create_file_opener(
         &self,
@@ -274,6 +283,8 @@ impl FileSource for CsvSource {
             DisplayFormatType::TreeRender => Ok(()),
         }
     }
+
+    impl_schema_adapter_methods!();
 }
 
 impl FileOpener for CsvOpener {

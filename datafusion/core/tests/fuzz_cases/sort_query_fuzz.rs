@@ -25,6 +25,7 @@ use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{instant::Instant, Result};
+use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryPool, UnboundedMemoryPool,
 };
@@ -32,10 +33,7 @@ use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use std::time::Duration;
 
-use datafusion_execution::{
-    disk_manager::DiskManagerConfig, memory_pool::FairSpillPool,
-    runtime_env::RuntimeEnvBuilder,
-};
+use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
 use rand::prelude::IndexedRandom;
 use rand::Rng;
 use rand::{rngs::StdRng, SeedableRng};
@@ -548,7 +546,7 @@ impl SortFuzzerTestGenerator {
 
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(memory_pool)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(DiskManagerBuilder::default())
             .build_arc()?;
 
         let ctx = SessionContext::new_with_config_rt(config, runtime);

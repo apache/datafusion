@@ -37,6 +37,7 @@ pub mod file_meta;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
+pub mod macros;
 pub mod memory;
 pub mod schema_adapter;
 pub mod sink;
@@ -48,6 +49,7 @@ pub mod test_util;
 
 pub mod url;
 pub mod write;
+pub use self::file::as_file_source;
 pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;

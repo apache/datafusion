@@ -19,7 +19,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use datafusion::{
     execution::{
-        disk_manager::DiskManagerConfig,
+        disk_manager::DiskManagerBuilder,
         memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool},
         runtime_env::RuntimeEnvBuilder,
     },
@@ -110,7 +110,7 @@ impl CommonOpt {
             };
             rt_builder = rt_builder
                 .with_memory_pool(pool)
-                .with_disk_manager(DiskManagerConfig::NewOs);
+                .with_disk_manager_builder(DiskManagerBuilder::default());
         }
         Ok(rt_builder)
     }
