@@ -114,6 +114,12 @@ impl DisplayAs for YieldStreamExec {
     }
 }
 
+impl YieldStreamExec {
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.child
+    }
+}
+
 impl ExecutionPlan for YieldStreamExec {
     fn name(&self) -> &str {
         "YieldStreamExec"
