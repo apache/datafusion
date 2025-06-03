@@ -17,7 +17,7 @@
 
 use crate::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
@@ -52,7 +52,7 @@ pub trait AsyncScalarUDFImpl: Debug + Send + Sync {
     ///
     /// By default, this function calls [`Self::return_type`] with the
     /// types of each argument.
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let data_types = args
             .arg_fields
             .iter()
@@ -60,7 +60,7 @@ pub trait AsyncScalarUDFImpl: Debug + Send + Sync {
             .cloned()
             .collect::<Vec<_>>();
         let return_type = self.return_type(&data_types)?;
-        Ok(Field::new(self.name(), return_type, true))
+        Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
 
     /// The ideal batch size for this function.
@@ -131,7 +131,7 @@ impl ScalarUDFImpl for AsyncScalarUDF {
         self.inner.return_type(arg_types)
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         self.inner.return_field_from_args(args)
     }
 
