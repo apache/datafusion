@@ -495,7 +495,7 @@ impl EquivalenceProperties {
             // If the ordering vanishes after normalization, it is satisfied:
             return Ok(false);
         };
-        if normal_ordering.len() != self.common_sort_prefix_length(normal_ordering)? {
+        if normal_ordering.len() != self.common_sort_prefix_length(&normal_ordering)? {
             // If the ordering is unsatisfied, replace existing orderings:
             self.clear_orderings();
             self.add_ordering(ordering_tee);
@@ -538,7 +538,7 @@ impl EquivalenceProperties {
             // If the ordering vanishes after normalization, it is satisfied:
             return Ok(true);
         };
-        Ok(normal_ordering.len() == self.common_sort_prefix_length(normal_ordering)?)
+        Ok(normal_ordering.len() == self.common_sort_prefix_length(&normal_ordering)?)
     }
 
     /// Iteratively checks whether the given sort requirement is satisfied by
@@ -619,10 +619,10 @@ impl EquivalenceProperties {
 
     /// Returns the number of consecutive sort expressions (starting from the
     /// left) that are satisfied by the existing ordering.
-    fn common_sort_prefix_length(&self, normal_ordering: LexOrdering) -> Result<usize> {
+    fn common_sort_prefix_length(&self, normal_ordering: &LexOrdering) -> Result<usize> {
         let full_length = normal_ordering.len();
         // Check whether the given ordering is satisfied by constraints:
-        if self.satisfied_by_constraints_ordering(&normal_ordering) {
+        if self.satisfied_by_constraints_ordering(normal_ordering) {
             // If constraints satisfy all sort expressions, return the full
             // length:
             return Ok(full_length);
@@ -661,7 +661,7 @@ impl EquivalenceProperties {
             // From the analysis above, we know that `[a ASC]` is satisfied. Then,
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            let const_expr = ConstExpr::from(element.expr);
+            let const_expr = ConstExpr::from(Arc::clone(&element.expr));
             eq_properties.add_constants(std::iter::once(const_expr))?
         }
         // All sort expressions are satisfied, return full length:
@@ -680,7 +680,7 @@ impl EquivalenceProperties {
             // If the ordering vanishes after normalization, it is satisfied:
             return Ok((vec![], true));
         };
-        let prefix_len = self.common_sort_prefix_length(normal_ordering.clone())?;
+        let prefix_len = self.common_sort_prefix_length(&normal_ordering)?;
         let flag = prefix_len == normal_ordering.len();
         let mut sort_exprs: Vec<_> = normal_ordering.into();
         if !flag {
