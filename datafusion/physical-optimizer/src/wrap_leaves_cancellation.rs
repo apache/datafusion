@@ -23,52 +23,53 @@ use datafusion_physical_plan::yield_stream::YieldStreamExec;
 use datafusion_physical_plan::ExecutionPlan;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 
-/// `WrapLeaves` is a `PhysicalOptimizerRule` that traverses a physical plan
-/// and, for every operator whose `emission_type` is `Final`, wraps its direct
-/// children inside a `YieldStreamExec`. This ensures that pipeline‐breaking
-/// operators (i.e. those with `Final` emission) have a “yield point” immediately
-/// upstream, without having to wait until the leaves.
+/// WrapLeaves is a PhysicalOptimizerRule that finds every
+/// pipeline‐breaking node (emission_type == Final) and then
+/// wraps all of its leaf children in YieldStreamExec.
 pub struct WrapLeaves {}
 
 impl WrapLeaves {
-    /// Create a new instance of the WrapLeaves rule.
     pub fn new() -> Self {
         Self {}
     }
 
-    /// Recursively walk the plan:
-    /// - If `plan.children_any().is_empty()`, it’s a leaf, so wrap it.
-    /// - Otherwise, recurse into its children, rebuild the node with
-    ///   `with_new_children_any(...)`, and return that.
-    #[allow(clippy::only_used_in_recursion)]
-    fn wrap_recursive(
-        &self,
+    /// This function is called on every plan node during transform_down().
+    /// If the node is a leaf (no children), we wrap it in a new YieldStreamExec
+    /// and stop recursing further under that branch (TreeNodeRecursion::Jump).
+    fn wrap_leaves(
         plan: Arc<dyn ExecutionPlan>,
-        has_pipeline_breaking_above: bool,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let children = plan.children();
-
-        let is_pipeline_breaker = plan.properties().emission_type == EmissionType::Final;
-        let should_wrap = has_pipeline_breaking_above;
-
-        if children.is_empty() {
-            // Leaf node: wrap it in `YieldStreamExec`
-            if should_wrap {
-                Ok(Arc::new(YieldStreamExec::new(plan)))
-            } else {
-                Ok(plan)
-            }
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        if plan.children().is_empty() {
+            // Leaf: wrap it in YieldStreamExec, and do not descend further
+            let wrapped = Arc::new(YieldStreamExec::new(plan));
+            Ok(Transformed::new(wrapped, /* changed */ true, TreeNodeRecursion::Jump))
         } else {
-            let mut new_children = Vec::with_capacity(children.len());
-            for child in children {
-                let new_child = self.wrap_recursive(
-                    Arc::clone(child),
-                    has_pipeline_breaking_above || is_pipeline_breaker,
-                )?;
-                new_children.push(new_child);
-            }
-            Ok(plan.with_new_children(new_children)?)
+            // Not a leaf: leave unchanged and keep recursing
+            Ok(Transformed::no(plan))
+        }
+    }
+
+    /// This function is called on every plan node during transform_down().
+    ///
+    /// If this node itself is a pipeline breaker (emission_type == Final),
+    /// we perform a second pass of transform_down with wrap_leaves. Then we
+    /// set TreeNodeRecursion::Jump so that we do not descend any deeper under
+    /// this subtree (we’ve already wrapped its leaves).
+    fn wrap_leaves_of_pipeline_breakers(
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        let is_pipeline_breaker = plan.properties().emission_type == EmissionType::Final;
+        if is_pipeline_breaker {
+            // Transform all leaf descendants of this node by calling wrap_leaves
+            let mut transformed = plan.transform_down(Self::wrap_leaves)?;
+            // Once we’ve handled the leaves of this subtree, we skip deeper recursion
+            transformed.tnr = TreeNodeRecursion::Jump;
+            Ok(transformed)
+        } else {
+            // Not a pipeline breaker: do nothing here, let transform_down recurse
+            Ok(Transformed::no(plan))
         }
     }
 }
@@ -90,17 +91,19 @@ impl PhysicalOptimizerRule for WrapLeaves {
         "wrap_leaves"
     }
 
-    /// Apply the rule by calling `wrap_recursive` on the root plan.
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.wrap_recursive(plan, false)
+        // We run a top‐level transform_down: for every node, call wrap_leaves_of_pipeline_breakers.
+        // If a node is a pipeline breaker, we then wrap all of its leaf children in YieldStreamExec.
+        plan.transform_down(Self::wrap_leaves_of_pipeline_breakers)
+            .map(|t| t.data)
     }
 
-    /// Since we only add `YieldStreamExec` wrappers (which preserve schema), schema_check remains true.
     fn schema_check(&self) -> bool {
+        // Wrapping a leaf in YieldStreamExec preserves the schema, so we’re fine
         true
     }
 }
