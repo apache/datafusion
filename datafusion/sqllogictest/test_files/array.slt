@@ -8067,3 +8067,73 @@ drop table values_all_empty;
 
 statement ok
 drop table fixed_size_col_table;
+
+query ?
+select [named_struct('a', 1, 'b', null)][0];
+----
+NULL
+
+query ?
+select [named_struct('a', 1, 'b', null)][1];
+----
+{a: 1, b: NULL} 
+
+query ?
+select [named_struct('a', 1, 'b', null)][-1];
+----
+{a: 1, b: NULL} 
+
+query ?
+select [named_struct('a', 1, 'b', null)][2];
+----
+NULL
+
+query ?
+select map_values(map([named_struct('a', 1, 'b', null)], [named_struct('a', 2, 'b', null)]))[0];
+----
+NULL
+
+query ?
+select map_values(map([named_struct('a', 1, 'b', null)], [named_struct('a', 2, 'b', null)]))[1]
+----
+{a: 2, b: NULL} 
+
+query ?
+select map_values(map([named_struct('a', 1, 'b', null)], [named_struct('a', 2, 'b', null)]))[-1]
+----
+{a: 2, b: NULL}
+
+query ?
+select map_values(map([named_struct('a', 1, 'b', null)], [named_struct('a', 2, 'b', null)]))[2]   
+----
+NULL
+
+query ?
+select map_keys(map([named_struct('a', 1, 'b', null)], [named_struct('a', 2, 'b', null)]))[0];
+----
+NULL
+
+query ?
+select map_keys(map([named_struct('a', 1, 'b', null)], [named_struct('a', 2, 'b', null)]))[1];
+----
+{a: 1, b: NULL}
+
+query ?
+select map_keys(map([named_struct('a', 1, 'b', null)], [named_struct('a', 2, 'b', null)]))[-1];
+----
+{a: 1, b: NULL}
+
+query ?
+select map_keys(map([named_struct('a', 1, 'b', null)], [named_struct('a', 2, 'b', null)]))[2]   
+----
+NULL
+
+query ?
+select [named_struct('a', null, 'b', null, 'c', null)][1];
+----
+{a: NULL, b: NULL, c: NULL}
+
+query ?
+select [null, named_struct('a', 1, 'b', 2)][1];
+----
+NULL
