@@ -17,13 +17,13 @@
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::Result;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::yield_stream::YieldStreamExec;
 use datafusion_physical_plan::ExecutionPlan;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 
 /// WrapLeaves is a PhysicalOptimizerRule that finds every
 /// pipeline‐breaking node (emission_type == Final) and then
@@ -44,7 +44,11 @@ impl WrapLeaves {
         if plan.children().is_empty() {
             // Leaf: wrap it in YieldStreamExec, and do not descend further
             let wrapped = Arc::new(YieldStreamExec::new(plan));
-            Ok(Transformed::new(wrapped, /* changed */ true, TreeNodeRecursion::Jump))
+            Ok(Transformed::new(
+                wrapped,
+                /* changed */ true,
+                TreeNodeRecursion::Jump,
+            ))
         } else {
             // Not a leaf: leave unchanged and keep recursing
             Ok(Transformed::no(plan))
