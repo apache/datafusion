@@ -18,7 +18,6 @@
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::displayable;
-use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::*;
 
 /// This example demonstrates the process of converting logical plan
