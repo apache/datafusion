@@ -1,0 +1,12 @@
+[aws]
+region = "us-west-2"
+instance_type = "c5.4xlarge"
+spot_price = 0.15
+
+[benchmarks]
+tpch_scale = 100
+runs_per_query = 5
+timeout_minutes = 60
+
+[github]
+token = "${GITHUB_TOKEN}"  # Set via environment variable
