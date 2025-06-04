@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use insta::assert_snapshot;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{

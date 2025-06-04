@@ -17,6 +17,7 @@
 
 use super::*;
 use insta::assert_snapshot;
+use regex::Regex;
 use rstest::rstest;
 
 use datafusion::config::ConfigOptions;
@@ -56,92 +57,40 @@ async fn explain_analyze_baseline_metrics() {
 
     println!("Query Output:\n\n{formatted}");
 
-    let snapshot1 = create_snapshot!(
-      &formatted,
-      "AggregateExec: mode=Partial, gby=[]",
-      "output_rows" => 3
-    );
+    let re = Regex::new(r"\|[^|]*\|([^|]?)\s\|").unwrap();
+    let actual = formatted
+        .lines()
+        .map(|line| re.replace_all(line, "$1").to_string())
+        .filter(|line| !line.is_empty() && !line.starts_with('+'))
+        .collect::<Vec<_>>()
+        .join("\n");
     insta::with_settings!({filters => vec![
     (r"\d+\.?\d*[µmn]?s", "[TIME]"),
     ]}, {
-        insta::assert_snapshot!(snapshot1,@"AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], metrics=[output_rows=3, elapsed_compute=[TIME]]");
-    });
-
-    let snapshot2 = create_snapshot!(
-      &formatted,
-      "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-      "output_rows" => 5
-    );
-    insta::with_settings!({filters => vec![
-    (r"\d+\.?\d*[µmn]?s", "[TIME]"),
-    ]}, {
-        insta::assert_snapshot!(snapshot2,@"AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[], metrics=[output_rows=5, elapsed_compute=[TIME], spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, peak_mem_used=50592]");
-    });
-
-    let snapshot3 = create_snapshot!(
-      &formatted,
-      "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-      "output_rows" => 99
-    );
-    insta::with_settings!({filters => vec![
-    (r"\d+\.?\d*[µmn]?s", "[TIME]"),
-    ]}, {
-        insta::assert_snapshot!(snapshot3,@"FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0], metrics=[output_rows=99, elapsed_compute=[TIME]]");
-    });
-
-    let snapshot4 = create_snapshot!(
-      &formatted,
-      "ProjectionExec: expr=[]",
-      "output_rows" => 5
-    );
-    insta::with_settings!({filters => vec![
-    (r"\d+\.?\d*[µmn]?s", "[TIME]"),
-    ]}, {
-        insta::assert_snapshot!(snapshot4,@"ProjectionExec: expr=[], metrics=[output_rows=5, elapsed_compute=[TIME]]");
-    });
-
-    let snapshot5 = create_snapshot!(
-      &formatted,
-      "CoalesceBatchesExec: target_batch_size=4096",
-      "output_rows" => 5
-    );
-    insta::with_settings!({filters => vec![
-    (r"\d+\.?\d*[µmn]?s", "[TIME]"),
-    ]}, {
-        insta::assert_snapshot!(snapshot5,@"CoalesceBatchesExec: target_batch_size=4096, metrics=[output_rows=5, elapsed_compute=[TIME]]");
-    });
-
-    let snapshot6 = create_snapshot!(
-      &formatted,
-      "UnionExec",
-      "output_rows" => 3
-    );
-    insta::with_settings!({filters => vec![
-    (r"\d+\.?\d*[µmn]?s", "[TIME]"),
-    ]}, {
-        insta::assert_snapshot!(snapshot6,@"UnionExec, metrics=[output_rows=3, elapsed_compute=[TIME]]");
-    });
-
-    let snapshot7 = create_snapshot!(
-      &formatted,
-      "UnionExec",
-      "output_rows" => 3
-    );
-    insta::with_settings!({filters => vec![
-    (r"\d+\.?\d*[µmn]?s", "[TIME]"),
-    ]}, {
-        insta::assert_snapshot!(snapshot7,@"UnionExec, metrics=[output_rows=3, elapsed_compute=[TIME]]");
-    });
-
-    let snapshot8 = create_snapshot!(
-      &formatted,
-      "WindowAggExec",
-      "output_rows" => 1
-    );
-    insta::with_settings!({filters => vec![
-    (r"\d+\.?\d*[µmn]?s", "[TIME]"),
-    ]}, {
-        insta::assert_snapshot!(snapshot8,@r#"BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted], metrics=[output_rows=1, elapsed_compute=[TIME]]"#);
+        insta::assert_snapshot!(actual,@r#"
+        plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+        CoalescePartitionsExec: fetch=3, metrics=[output_rows=3, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                                                        
+          UnionExec, metrics=[output_rows=3, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                                                                           
+            ProjectionExec: expr=[count(Int64(1))@0 as cnt], metrics=[output_rows=1, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                                    
+              AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], metrics=[output_rows=1, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                       
+                CoalescePartitionsExec, metrics=[output_rows=3, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                                                         
+                  AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], metrics=[output_rows=3, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                 
+                    ProjectionExec: expr=[], metrics=[output_rows=5, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                                                    
+                      AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[], metrics=[output_rows=5, elapsed_compute=[TIME], spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, peak_mem_used=50592]                                                                                                                                                                                                                                                                                                
+                        CoalesceBatchesExec: target_batch_size=4096, metrics=[output_rows=5, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                           
+                          RepartitionExec: partitioning=Hash([c1@0], 3), input_partitions=3, metrics=[fetch_time=[TIME], repartition_time=[TIME], send_time=[TIME]]                                                                                                                                                                                                                                                                                                                                     
+                            AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[], metrics=[output_rows=5, elapsed_compute=[TIME], spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, skipped_aggregation_rows=0, peak_mem_used=52216]                                                                                                                                                                                                                                                                       
+                              CoalesceBatchesExec: target_batch_size=4096, metrics=[output_rows=99, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                    
+                                FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0], metrics=[output_rows=99, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                       
+                                  RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1, metrics=[fetch_time=[TIME], repartition_time=[TIME], send_time=[TIME]]                                                                                                                                                                                                                                                                                                                                
+                                    DataSourceExec: file_groups={1 group: [[home/ian/open_source/datafusion/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true, metrics=[output_rows=100, elapsed_compute=[TIME], file_open_errors=0, file_scan_errors=0, time_elapsed_opening=[TIME], time_elapsed_processing=[TIME], time_elapsed_scanning_total=[TIME], time_elapsed_scanning_until_data=[TIME]]                                                    
+            ProjectionExec: expr=[1 as cnt], metrics=[output_rows=1, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                                                     
+              PlaceholderRowExec, metrics=[]                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+            ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt], metrics=[output_rows=1, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                        
+              BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted], metrics=[output_rows=1, elapsed_compute=[TIME]] 
+                ProjectionExec: expr=[1 as c1], metrics=[output_rows=1, elapsed_compute=[TIME]]                                                                                                                                                                                                                                                                                                                                                                                                                  
+                  PlaceholderRowExec, metrics=[]
+        "#);
     });
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
