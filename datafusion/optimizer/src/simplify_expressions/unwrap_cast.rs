@@ -69,11 +69,11 @@ use datafusion_expr::{simplify::SimplifyInfo, Cast, Expr, Operator, TryCast};
 
 pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
     info: &S,
-    cast_expr: Box<Expr>,
-    literal: Box<Expr>,
+    cast_expr: Expr,
+    literal: Expr,
     op: Operator,
 ) -> Result<Transformed<Expr>> {
-    match (*cast_expr, *literal) {
+    match (cast_expr, literal) {
         (
             Expr::TryCast(TryCast { expr, .. }) | Expr::Cast(Cast { expr, .. }),
             Expr::Literal(lit_value),

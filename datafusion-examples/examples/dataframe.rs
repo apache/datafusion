@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::catalog::MemTable;
 use datafusion::common::config::CsvOptions;
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::DataFusionError;
@@ -198,10 +199,16 @@ async fn read_memory_macro() -> Result<()> {
 /// 3. Write out a DataFrame to a csv file
 /// 4. Write out a DataFrame to a json file
 async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionError> {
-    let mut df = ctx.sql("values ('a'), ('b'), ('c')").await.unwrap();
-
-    // Ensure the column names and types match the target table
-    df = df.with_column_renamed("column1", "tablecol1").unwrap();
+    let array = StringViewArray::from(vec!["a", "b", "c"]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "tablecol1",
+        DataType::Utf8View,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)])?;
+    let mem_table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
+    ctx.register_table("initial_data", Arc::new(mem_table))?;
+    let df = ctx.table("initial_data").await?;
 
     ctx.sql(
         "create external table
