@@ -103,7 +103,6 @@ impl DataFrame {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
     use std::sync::Arc;
 
     use super::super::Result;
@@ -118,8 +117,6 @@ mod tests {
     use datafusion_expr::{col, lit};
 
     use object_store::local::LocalFileSystem;
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::properties::WriterProperties;
     use parquet::file::reader::FileReader;
     use tempfile::TempDir;
     use url::Url;
@@ -249,41 +246,7 @@ mod tests {
 
         Ok(())
     }
-
-    async fn read_parquet_test_data<T: Into<String>>(
-        path: T,
-        ctx: &SessionContext,
-    ) -> Vec<RecordBatch> {
-        ctx.read_parquet(path.into(), ParquetReadOptions::default())
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap()
-    }
-
-    pub fn write_batches(
-        path: PathBuf,
-        props: WriterProperties,
-        batches: impl IntoIterator<Item = RecordBatch>,
-    ) -> Result<usize> {
-        let mut batches = batches.into_iter();
-        let first_batch = batches.next().expect("need at least one record batch");
-        let schema = first_batch.schema();
-
-        let file = std::fs::File::create(&path)?;
-        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props))?;
-
-        writer.write(&first_batch)?;
-        let mut num_rows = first_batch.num_rows();
-
-        for batch in batches {
-            writer.write(&batch)?;
-            num_rows += batch.num_rows();
-        }
-        writer.close()?;
-        Ok(num_rows)
-    }
+    
 
     #[tokio::test]
     async fn roundtrip_parquet_with_encryption() -> Result<()> {
@@ -312,27 +275,21 @@ mod tests {
         let df = test_df.clone();
         let tmp_dir = TempDir::new()?;
         let tempfile = tmp_dir.path().join("roundtrip.parquet");
-        let output_path = "file://local/roundtrip.parquet";
-        
+        let tempfile_str = tempfile.into_os_string().into_string().unwrap();
         
         // Write encrypted parquet using write_parquet
-        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
-        let local_url = Url::parse("file://local").unwrap();
-        let ctx = &test_df.session_state;
-        ctx.runtime_env().register_object_store(&local_url, local);
         let mut options = TableParquetOptions::default();
         options.global.file_encryption_properties = Some(encrypt.clone().into());
         // Parallel writing for encryption is broken right now.
         // Rok is working on it.
         options.global.allow_single_file_parallelism = false;
         df.write_parquet(
-            output_path,
+            tempfile_str.as_str(),
             DataFrameWriteOptions::new().with_single_file_output(true),
             Some(options),
         )
             .await?;
         let num_rows_written: usize = test_df.count().await?;
-        
         
         // Read encrypted parquet
         let mut sc = SessionConfig::new();
@@ -345,14 +302,18 @@ mod tests {
         let state = SessionStateBuilder::new().with_config(sc).build();
         let ctx: SessionContext = SessionContext::new_with_state(state);
         
-        let encrypted_batches =
-            read_parquet_test_data(tempfile.into_os_string().into_string().unwrap(), &ctx)
-                .await;
-
-        let num_rows_read = encrypted_batches
-            .iter()
-            .fold(0, |acc, x| acc + x.num_rows());
-
+        ctx.register_parquet(
+            "roundtrip_parquet",
+            &tempfile_str,
+            ParquetReadOptions::default(),
+        )
+            .await?;
+        
+        let df_enc = ctx.sql(
+            "SELECT * FROM roundtrip_parquet",
+        ).await?;
+        let num_rows_read = df_enc.count().await?;
+        
         assert_eq!(num_rows_read as usize, num_rows_written as usize);
 
         Ok(())
