@@ -278,7 +278,7 @@ mod tests {
 
         // Write encrypted parquet using write_parquet
         let mut options = TableParquetOptions::default();
-        options.global.file_encryption_properties = Some(encrypt.clone().into());
+        options.global.file_encryption_properties = Some((&encrypt).into());
         // Parallel writing for encryption is broken right now.
         // Rok is working on it.
         options.global.allow_single_file_parallelism = false;
@@ -292,7 +292,7 @@ mod tests {
 
         // Read encrypted parquet
         let mut sc = SessionConfig::new();
-        let fd: ConfigFileDecryptionProperties = decrypt.clone().into();
+        let fd: ConfigFileDecryptionProperties = (&decrypt).into();
         sc.options_mut()
             .execution
             .parquet

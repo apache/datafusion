@@ -599,7 +599,7 @@ mod tests {
 
         let fep: Option<ConfigFileEncryptionProperties> =
             match props.file_encryption_properties() {
-                Some(fe) => Some(fe.clone().into()),
+                Some(fe) => Some(fe.into()),
                 None => None,
             };
 

@@ -307,8 +307,8 @@ impl Into<FileDecryptionProperties> for ConfigFileDecryptionProperties {
 }
 
 #[cfg(feature = "parquet")]
-impl From<FileDecryptionProperties> for ConfigFileDecryptionProperties {
-    fn from(f: FileDecryptionProperties) -> Self {
+impl From<&FileDecryptionProperties> for ConfigFileDecryptionProperties {
+    fn from(f: &FileDecryptionProperties) -> Self {
         let (column_names_vec, column_keys_vec) = f.column_keys();
         let column_keys_meta = Vec::new();
         let ck = EncryptionColumnKeys::new(
@@ -374,8 +374,8 @@ impl Into<FileEncryptionProperties> for ConfigFileEncryptionProperties {
 }
 
 #[cfg(feature = "parquet")]
-impl From<FileEncryptionProperties> for ConfigFileEncryptionProperties {
-    fn from(f: FileEncryptionProperties) -> Self {
+impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
+    fn from(f: &FileEncryptionProperties) -> Self {
         let (column_names_vec, column_keys_vec, column_metas_vec) = f.column_keys();
         let ck = EncryptionColumnKeys::new(
             &column_names_vec,
@@ -2312,11 +2312,7 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigField, ConfigFileDecryptionProperties,
-        ConfigFileEncryptionProperties, ConfigFileType, ExtensionOptions, Extensions,
-        TableOptions,
-    };
+    use crate::config::{ConfigEntry, ConfigExtension, ConfigField,  ConfigFileType, ExtensionOptions, Extensions, TableOptions};
     use std::any::Any;
     use std::collections::HashMap;
 
@@ -2452,6 +2448,7 @@ mod tests {
     fn parquet_table_encryption() {
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
+        use crate::config::{ConfigFileDecryptionProperties, ConfigFileEncryptionProperties};
 
         let footer_key = b"0123456789012345".to_vec(); // 128bit/16
         let column_names = vec!["double_field", "float_field"];
@@ -2473,13 +2470,13 @@ mod tests {
 
         // Test round-trip
         let config_encrypt: ConfigFileEncryptionProperties =
-            file_encryption_properties.clone().into();
+            (&file_encryption_properties).into();
         let encryption_properties_built: FileEncryptionProperties =
             config_encrypt.clone().into();
         assert_eq!(file_encryption_properties, encryption_properties_built);
 
         let config_decrypt: ConfigFileDecryptionProperties =
-            decryption_properties.clone().into();
+            (&decryption_properties).into();
         let decryption_properties_built: FileDecryptionProperties =
             config_decrypt.clone().into();
         assert_eq!(decryption_properties, decryption_properties_built);
