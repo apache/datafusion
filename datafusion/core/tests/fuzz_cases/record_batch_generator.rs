@@ -736,76 +736,7 @@ impl RecordBatchGenerator {
                 );
 
                 match key_type.as_ref() {
-                    DataType::Int8 => generate_dict!(
-                        self,
-                        num_rows,
-                        num_distinct,
-                        null_pct,
-                        batch_gen_rng,
-                        array_gen_rng,
-                        Int8Type,
-                        values
-                    ),
-                    DataType::Int16 => generate_dict!(
-                        self,
-                        num_rows,
-                        num_distinct,
-                        null_pct,
-                        batch_gen_rng,
-                        array_gen_rng,
-                        Int16Type,
-                        values
-                    ),
-                    DataType::Int32 => generate_dict!(
-                        self,
-                        num_rows,
-                        num_distinct,
-                        null_pct,
-                        batch_gen_rng,
-                        array_gen_rng,
-                        Int32Type,
-                        values
-                    ),
-                    DataType::Int64 => generate_dict!(
-                        self,
-                        num_rows,
-                        num_distinct,
-                        null_pct,
-                        batch_gen_rng,
-                        array_gen_rng,
-                        Int64Type,
-                        values
-                    ),
-                    DataType::UInt8 => generate_dict!(
-                        self,
-                        num_rows,
-                        num_distinct,
-                        null_pct,
-                        batch_gen_rng,
-                        array_gen_rng,
-                        UInt8Type,
-                        values
-                    ),
-                    DataType::UInt16 => generate_dict!(
-                        self,
-                        num_rows,
-                        num_distinct,
-                        null_pct,
-                        batch_gen_rng,
-                        array_gen_rng,
-                        UInt16Type,
-                        values
-                    ),
-                    DataType::UInt32 => generate_dict!(
-                        self,
-                        num_rows,
-                        num_distinct,
-                        null_pct,
-                        batch_gen_rng,
-                        array_gen_rng,
-                        UInt32Type,
-                        values
-                    ),
+                    // new key types can be added here
                     DataType::UInt64 => generate_dict!(
                         self,
                         num_rows,
