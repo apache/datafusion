@@ -349,7 +349,8 @@ impl TreeNode for LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::DelimGet(_) => Transformed::no(self),
             LogicalPlan::DependentJoin(DependentJoin {
                 schema,
                 correlated_columns,
@@ -511,7 +512,8 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::DelimGet(_) => Ok(TreeNodeRecursion::Continue),
         }
     }
 
@@ -692,7 +694,8 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::DependentJoin(_) => Transformed::no(self),
+            | LogicalPlan::DependentJoin(_)
+            | LogicalPlan::DelimGet(_) => Transformed::no(self),
         })
     }
 

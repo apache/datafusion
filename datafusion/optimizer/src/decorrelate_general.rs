@@ -64,7 +64,8 @@ struct CorrelatedColumnInfo {
 pub struct DependentJoinDecorrelator {
     // immutable, defined when this object is constructed
     domains: IndexSet<CorrelatedColumnInfo>,
-    parent: Option<Box<DependentJoinDecorrelator>>,
+    pub delim_types: Vec<DataType>,
+    is_initial: bool,
     // correlated_map: init with the list of correlated column of dependent join
     // map from Column to the original index in correlated_columns v
     correlated_map: HashMap<Column, usize>,
@@ -104,6 +105,39 @@ fn natural_join(
 }
 
 impl DependentJoinDecorrelator {
+    fn new(
+        correlated_columns: &Vec<(usize, Column, DataType)>,
+        is_initial: bool,
+        correlated_map: HashMap<Column, usize>,
+        replacement_map: HashMap<Expr, usize>,
+        any_join: bool,
+        delim_scan_id: usize,
+    ) -> Self {
+        let domains = correlated_columns
+            .iter()
+            .map(|(_, col, data_type)| CorrelatedColumnInfo {
+                col: col.clone(),
+                data_type: data_type.clone(),
+            })
+            .unique()
+            .collect();
+
+        let delim_types = correlated_columns
+            .iter()
+            .map(|(_, _, data_type)| data_type.clone())
+            .collect();
+
+        Self {
+            domains,
+            delim_types,
+            is_initial,
+            correlated_map: HashMap::new(), // TODO
+            replacement_map: IndexMap::new(),
+            any_join: false,
+            delim_scan_id: 0,
+        }
+    }
+
     fn subquery_dependent_filter(expr: &Expr) -> bool {
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -132,7 +166,7 @@ impl DependentJoinDecorrelator {
     ) -> Result<LogicalPlan> {
         let perform_delim = true;
         let left = node.left.as_ref();
-        let new_left = if let Some(ref parent) = self.parent {
+        let new_left = if !self.is_initial {
             // TODO: revisit this check
             // because after decorrelation at parent level
             // this correlated_columns list are not mutated yet
@@ -154,22 +188,14 @@ impl DependentJoinDecorrelator {
         let lateral_depth = 0;
         // let propagate_null_values = node.propagate_null_value();
         let propagate_null_values = true;
-        let mut new_decorrelation = DependentJoinDecorrelator {
-            domains: node
-                .correlated_columns
-                .iter()
-                .map(|(_, col, data_type)| CorrelatedColumnInfo {
-                    col: col.clone(),
-                    data_type: data_type.clone(),
-                })
-                .unique()
-                .collect(),
-            parent: Some(Box::new(self.clone())),
-            correlated_map: HashMap::new(), // TODO
-            replacement_map: IndexMap::new(),
-            any_join: false,
-            delim_scan_id: 0,
-        };
+        let mut new_decorrelation = DependentJoinDecorrelator::new(
+            &node.correlated_columns,
+            false,
+            HashMap::new(), // TODO
+            HashMap::new(),
+            false,
+            0,
+        );
         self.delim_scan_id = new_decorrelation.delim_scan_id;
         let right = new_decorrelation.push_down_dependent_join(
             &node.right,
@@ -373,12 +399,9 @@ impl DependentJoinDecorrelator {
             .collect();
         let schema = DFSchema::from_unqualified_fields(fields, StdHashMap::new())?;
         Ok((
-            LogicalPlanBuilder::new(LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row: true,
-                schema: schema.into(),
-            }))
-            .alias(&delim_scan_relation_name)?
-            .build()?,
+            LogicalPlanBuilder::delim_get(self.delim_scan_id, &self.delim_types)
+                .alias(&delim_scan_relation_name)?
+                .build()?,
             delim_scan_relation_name,
         ))
     }
@@ -1414,14 +1437,15 @@ impl OptimizerRule for Decorrelation {
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
         if rewrite_result.transformed {
             println!("dependent join plan {}", rewrite_result.data);
-            let mut decorrelator = DependentJoinDecorrelator {
-                domains: IndexSet::new(),
-                parent: None,
-                correlated_map: HashMap::new(),
-                replacement_map: IndexMap::new(),
-                any_join: false,
-                delim_scan_id: 0,
-            };
+            let correlated_colums = vec![];
+            let mut decorrelator = DependentJoinDecorrelator::new(
+                &correlated_colums,
+                true,
+                HashMap::new(),
+                HashMap::new(),
+                false,
+                0,
+            );
             return Ok(Transformed::yes(
                 decorrelator.decorrelate_plan(rewrite_result.data)?,
             ));
@@ -2029,13 +2053,13 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
               LeftMark Join:  Filter: outer_table.c = outer_ref(outer_table.b) AND outer_table.a IS NOT DISTINCT FROM delim_scan_1.a AND outer_table.b IS NOT DISTINCT FROM delim_scan_1.b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
                 Cross Join:  [a:UInt32, b:UInt32, c:UInt32]
                   SubqueryAlias: delim_scan_1 []
-                    EmptyRelation []
+                    DelimGet []
                   TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Projection: delim_scan_1.b, outer_table.a, outer_table.b [outer_ref(outer_table.b):UInt32;N]
                   Filter: inner_table_lv1.a = delim_scan_1.a AND delim_scan_1.a > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND delim_scan_1.b = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32]
                     Cross Join:  [a:UInt32, b:UInt32, c:UInt32]
                       SubqueryAlias: delim_scan_1 []
-                        EmptyRelation []
+                        DelimGet []
                       TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
         ");
 
@@ -2075,22 +2099,22 @@ Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:U
               LeftMark Join:  Filter: outer_table.b = inner_table_lv1.a [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, mark:Boolean]
                 Cross Join:  [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean]
                   SubqueryAlias: delim_scan_1 []
-                    EmptyRelation []
+                    DelimGet []
                   Projection: outer_table.a, outer_table.b, outer_table.c, inner_table_lv1.mark AS __exists_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean]
                     LeftMark Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
                       Cross Join:  [a:UInt32, b:UInt32, c:UInt32]
                         SubqueryAlias: delim_scan_2 []
-                          EmptyRelation []
+                          DelimGet []
                         TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                       Cross Join:  [a:UInt32, b:UInt32, c:UInt32]
                         SubqueryAlias: delim_scan_1 []
-                          EmptyRelation []
+                          DelimGet []
                         Filter: inner_table_lv1.a AND inner_table_lv1.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
                           TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
                 Projection: inner_table_lv1.a [a:UInt32]
                   Cross Join:  [a:UInt32, b:UInt32, c:UInt32]
                     SubqueryAlias: delim_scan_1 []
-                      EmptyRelation []
+                      DelimGet []
                     Filter: inner_table_lv1.c = Int32(2) [a:UInt32, b:UInt32, c:UInt32]
                       TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
         ");

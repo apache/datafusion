@@ -242,7 +242,7 @@ pub fn check_subquery_expr(
             | LogicalPlan::TableScan(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Join(_) 
+            | LogicalPlan::Join(_)
             | LogicalPlan::DependentJoin(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
