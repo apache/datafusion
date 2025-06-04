@@ -36,6 +36,7 @@ use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{assert_contains, assert_not_contains};
 use insta::assert_snapshot;
 use object_store::path::Path;
+use regex::Regex;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -44,7 +45,6 @@ use tempfile::TempDir;
 /// A macro to assert that some particular line contains two substrings
 ///
 /// Usage: `assert_metrics!(actual, operator_name, metrics)`
-///
 macro_rules! assert_metrics {
     ($ACTUAL: expr, $OPERATOR_NAME: expr, $METRICS: expr) => {
         let found = $ACTUAL
@@ -56,6 +56,34 @@ macro_rules! assert_metrics {
             $OPERATOR_NAME, $METRICS, $ACTUAL
         );
     };
+}
+
+/// A macro to create a snapshot of the actual output of an operator
+///
+/// Usage: `create_snapshot!(actual, operator_name, metric_name => metric_value)`
+macro_rules! create_snapshot {
+    ($ACTUAL:expr, $OPERATOR_NAME:expr, $($METRIC_NAME:expr => $MATRIC_VALUE:expr),* $(,)?) => {{
+        let re = Regex::new(r"\|[^|]*\|\s*([^|]*?)\s*\|").unwrap();
+        let target_line = $ACTUAL
+            .lines()
+            .map(|line| re.replace_all(line, "$1").to_string())
+            .filter(|line| !line.is_empty() && !line.starts_with('+'))
+            .find(|line| line.contains($OPERATOR_NAME) $(
+                && line.contains(&format!("{}={}", $METRIC_NAME, $MATRIC_VALUE))
+            )*);
+        match target_line {
+            Some(line) => line.to_string(),
+            None => {
+                let metrics = vec![$(format!("{}={}", $METRIC_NAME, $MATRIC_VALUE)),*];
+                format!(
+                    "Can not find a line with both '{}' and '{}' in\n\n{}",
+                    $OPERATOR_NAME,
+                    metrics.join(", "),
+                    $ACTUAL
+                )
+            },
+        }
+    }};
 }
 
 pub mod aggregates;
