@@ -20,13 +20,11 @@
 #[cfg(feature = "integration-tests")]
 mod tests {
     use datafusion::error::{DataFusionError, Result};
-    use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
-    use datafusion::prelude::{col, SessionContext};
+    use datafusion::prelude::SessionContext;
     use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
     use datafusion_ffi::table_provider::ForeignTableProvider;
+    use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_ffi::tests::{create_record_batch, ForeignLibraryModuleRef};
-    use datafusion_ffi::udaf::ForeignAggregateUDF;
     use std::sync::Arc;
 
     /// It is important that this test is in the `tests` directory and not in the

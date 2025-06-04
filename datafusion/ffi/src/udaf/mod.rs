@@ -224,7 +224,7 @@ unsafe extern "C" fn groups_accumulator_supported_fn_wrapper(
     ForeignAccumulatorArgs::try_from(args)
         .map(|a| udaf.groups_accumulator_supported((&a).into()))
         .unwrap_or_else(|e| {
-            log::warn!("Unable to parse accumulator args. {}", e);
+            log::warn!("Unable to parse accumulator args. {e}");
             false
         })
 }
@@ -478,7 +478,7 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         let args = match FFI_AccumulatorArgs::try_from(args) {
             Ok(v) => v,
             Err(e) => {
-                log::warn!("Attempting to convert accumulator arguments: {}", e);
+                log::warn!("Attempting to convert accumulator arguments: {e}");
                 return false;
             }
         };
@@ -684,7 +684,6 @@ mod tests {
             is_distinct: false,
         })?;
 
-        println!("{:#?}", state_fields);
         assert_eq!(state_fields.len(), 3);
         assert_eq!(state_fields[1], a_field);
         Ok(())
