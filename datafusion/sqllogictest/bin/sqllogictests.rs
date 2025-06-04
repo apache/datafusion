@@ -103,10 +103,6 @@ async fn run_tests() -> Result<()> {
         // to stdout and return OK so they can continue listing other tests.
         return Ok(());
     }
-    if options.substrait_round_trip && (options.postgres_runner || options.complete) {
-        let msg = "--substrait-round-trip option is not supported with --postgres-runner or --complete";
-        return Err(DataFusionError::External(msg.into()));
-    }
 
     options.warn_on_ignored();
 
@@ -639,6 +635,8 @@ struct Options {
 
     #[clap(
         long,
+        conflicts_with = "complete",
+        conflicts_with = "postgres_runner",
         help = "Before executing each query, convert its logical plan to Substrait and from Substrait back to its logical plan"
     )]
     substrait_round_trip: bool,
