@@ -29,7 +29,6 @@ use crate::ParquetFileReaderFactory;
 use datafusion_common::config::ConfigOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
-use datafusion_datasource::impl_schema_adapter_methods;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
@@ -415,7 +414,10 @@ impl ParquetSource {
     /// * `conf` - FileScanConfig that may contain a schema adapter factory
     /// # Returns
     /// The converted FileSource with schema adapter factory applied if provided
-    pub fn apply_schema_adapter(self, conf: &FileScanConfig) -> Arc<dyn FileSource> {
+    pub fn apply_schema_adapter(
+        self,
+        conf: &FileScanConfig,
+    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
         let file_source: Arc<dyn FileSource> = self.into();
 
         // If the FileScanConfig.file_source() has a schema adapter factory, apply it
@@ -424,7 +426,7 @@ impl ParquetSource {
                 Arc::<dyn SchemaAdapterFactory>::clone(&factory),
             )
         } else {
-            file_source
+            Ok(file_source)
         }
     }
 }
@@ -664,5 +666,18 @@ impl FileSource for ParquetSource {
         );
         Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
     }
-    impl_schema_adapter_methods!();
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
