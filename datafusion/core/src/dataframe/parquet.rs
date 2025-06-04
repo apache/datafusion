@@ -300,7 +300,7 @@ mod tests {
 
         let mut encrypt = FileEncryptionProperties::builder(footer_key.clone());
         let mut decrypt = FileDecryptionProperties::builder(footer_key.clone());
-       
+        
         for field in schema.fields().iter() {
             encrypt = encrypt.with_column_key(field.name().as_str(), column_key.clone());
             decrypt = decrypt.with_column_key(field.name().as_str(), column_key.clone());
@@ -314,49 +314,26 @@ mod tests {
         let tempfile = tmp_dir.path().join("roundtrip.parquet");
         let output_path = "file://local/roundtrip.parquet";
         
-        let num_rows_written: usize = if true {
-            // Write encrypted parquet using ArrowWriter
-            let props = WriterProperties::builder()
-                .with_file_encryption_properties(encrypt)
-                .build();
-
-            let batches = df.collect().await?;
-            write_batches(tempfile.clone(), props, batches).unwrap()
-        } else {
-            // Write encrypted parquet using write_parquet
-            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
-            let local_url = Url::parse("file://local").unwrap();
-            let ctx = &test_df.session_state;
-            ctx.runtime_env().register_object_store(&local_url, local);
-            let mut options = TableParquetOptions::default();
-            options.global.file_encryption_properties = Some(encrypt.clone().into());
-            df.write_parquet(
-                output_path,
-                DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(options),
-            )
-                .await?;
-            test_df.count().await?
-        };
+        
+        // Write encrypted parquet using write_parquet
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        let ctx = &test_df.session_state;
+        ctx.runtime_env().register_object_store(&local_url, local);
+        let mut options = TableParquetOptions::default();
+        options.global.file_encryption_properties = Some(encrypt.clone().into());
+        // Parallel writing for encryption is broken right now.
+        // Rok is working on it.
+        options.global.allow_single_file_parallelism = false;
+        df.write_parquet(
+            output_path,
+            DataFrameWriteOptions::new().with_single_file_output(true),
+            Some(options),
+        )
+            .await?;
+        let num_rows_written: usize = test_df.count().await?;
         
         
-        // Check that file actually used encryption
-        // TODO, I guess arrow-rs does not have a serialized file reader that supports encryption?
-        /*
-        let file = std::fs::File::open(tmp_dir.path().join("test.parquet"))?;
-
-        let reader =
-            parquet::file::serialized_reader::SerializedFileReader::new(file)
-                .unwrap();
-
-        let parquet_metadata = reader.metadata();
-
-        let written_compression =
-            parquet_metadata.row_group(0).column(0).compression();
-
-        assert_eq!(written_compression, parse_compression_string(compression)?);
-        */
-
         // Read encrypted parquet
         let mut sc = SessionConfig::new();
         let fd: ConfigFileDecryptionProperties = decrypt.clone().into();
@@ -375,7 +352,6 @@ mod tests {
         let num_rows_read = encrypted_batches
             .iter()
             .fold(0, |acc, x| acc + x.num_rows());
-
 
         assert_eq!(num_rows_read as usize, num_rows_written as usize);
 
