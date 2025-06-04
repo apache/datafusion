@@ -57,7 +57,8 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
     type Error = DataFusionError;
 
     fn try_from(args: AccumulatorArgs) -> Result<Self, Self::Error> {
-        let return_field = WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
+        let return_field =
+            WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
 
         let codec = DefaultPhysicalExtensionCodec {};

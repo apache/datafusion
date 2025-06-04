@@ -42,6 +42,7 @@ use datafusion::{
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
 use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
 
+use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 use crate::{
     arrow_wrappers::WrappedSchema,
     df_result, rresult, rresult_return,
@@ -49,7 +50,6 @@ use crate::{
     volatility::FFI_Volatility,
 };
 use prost::{DecodeError, Message};
-use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 
 mod accumulator;
 mod accumulator_args;
@@ -304,8 +304,15 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 
     let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
 
-    let arg_fields = arg_types.iter().map(|dt| Field::new("f", dt.clone(), true)).map(Arc::new).collect::<Vec<_>>();
-    let return_types = rresult_return!(fields_with_aggregate_udf(&arg_fields, udaf)).into_iter().map(|f| f.data_type().to_owned()).collect::<Vec<_>>();
+    let arg_fields = arg_types
+        .iter()
+        .map(|dt| Field::new("f", dt.clone(), true))
+        .map(Arc::new)
+        .collect::<Vec<_>>();
+    let return_types = rresult_return!(fields_with_aggregate_udf(&arg_fields, udaf))
+        .into_iter()
+        .map(|f| f.data_type().to_owned())
+        .collect::<Vec<_>>();
 
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
 }
@@ -432,7 +439,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         unsafe {
             let name = RStr::from_str(args.name);
             let input_fields = vec_fieldref_to_rvec_wrapped(args.input_fields)?;
-            let return_field = WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
+            let return_field =
+                WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
             let ordering_fields = args
                 .ordering_fields
                 .iter()

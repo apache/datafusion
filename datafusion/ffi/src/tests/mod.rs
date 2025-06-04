@@ -39,7 +39,10 @@ use datafusion::{
     common::record_batch,
 };
 use sync_provider::create_sync_table_provider;
-use udf_udaf_udwf::{create_ffi_abs_func, create_ffi_random_func, create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func};
+use udf_udaf_udwf::{
+    create_ffi_abs_func, create_ffi_random_func, create_ffi_stddev_func,
+    create_ffi_sum_func, create_ffi_table_func,
+};
 
 mod async_provider;
 pub mod catalog;
