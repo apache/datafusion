@@ -268,8 +268,8 @@ mod tests {
             decrypt = decrypt.with_column_key(field.name().as_str(), column_key.clone());
         }
 
-        let encrypt = encrypt.build().unwrap();
-        let decrypt = decrypt.build().unwrap();
+        let encrypt = encrypt.build()?;
+        let decrypt = decrypt.build()?;
 
         let df = test_df.clone();
         let tmp_dir = TempDir::new()?;
@@ -288,7 +288,7 @@ mod tests {
             Some(options),
         )
         .await?;
-        let num_rows_written: usize = test_df.count().await?;
+        let num_rows_written = test_df.count().await?;
 
         // Read encrypted parquet
         let mut sc = SessionConfig::new();
@@ -311,7 +311,7 @@ mod tests {
         let df_enc = ctx.sql("SELECT * FROM roundtrip_parquet").await?;
         let num_rows_read = df_enc.count().await?;
 
-        assert_eq!(num_rows_read as usize, num_rows_written as usize);
+        assert_eq!(num_rows_read, num_rows_written);
 
         Ok(())
     }
