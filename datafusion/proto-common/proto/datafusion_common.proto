@@ -108,7 +108,6 @@ message Field {
   // for complex data types like structs, unions
   repeated Field children = 4;
   map<string, string> metadata = 5;
-  bool dict_ordered = 6;
 }
 
 message Timestamp{
