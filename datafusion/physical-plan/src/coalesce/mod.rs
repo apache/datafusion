@@ -148,7 +148,7 @@ mod tests {
             // expected to behave the same as `test_concat_batches`
             .with_target_batch_size(21)
             .with_fetch(Some(100))
-            .with_expected_output_sizes(vec![24, 24, 24, 8])
+            .with_expected_output_sizes(vec![21, 21, 21, 17])
             .run();
     }
 
@@ -160,7 +160,7 @@ mod tests {
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 50
             .with_target_batch_size(21)
             .with_fetch(Some(50))
-            .with_expected_output_sizes(vec![24, 24, 2])
+            .with_expected_output_sizes(vec![21, 21, 8])
             .run();
     }
 
@@ -170,7 +170,7 @@ mod tests {
         Test::new()
             .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 48
-            .with_target_batch_size(21)
+            .with_target_batch_size(24)
             .with_fetch(Some(48))
             .with_expected_output_sizes(vec![24, 24])
             .run();
@@ -285,6 +285,14 @@ mod tests {
             while let Some(batch) = coalescer.next_completed_batch() {
                 output_batches.push(batch);
             }
+
+            let actual_output_sizes: Vec<usize> =
+                output_batches.iter().map(|b| b.num_rows()).collect();
+            assert_eq!(
+                expected_output_sizes, actual_output_sizes,
+                "Unexpected number of rows in output batches\n\
+                Expected\n{expected_output_sizes:#?}\nActual:{actual_output_sizes:#?}"
+            );
 
             // make sure we got the expected number of output batches and content
             let mut starting_idx = 0;

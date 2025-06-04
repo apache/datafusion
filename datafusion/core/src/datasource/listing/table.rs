@@ -2178,7 +2178,7 @@ mod tests {
             ParquetFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
-            2,
+            4,
         )
         .await?;
         Ok(())
