@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use insta::assert_snapshot;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
@@ -219,16 +220,35 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
     )];
     let join = hash_join_exec(left_input, right_input, on, None, &JoinType::Inner)?;
     let physical_plan = sort_exec(vec![sort_expr("a", &join.schema())], join);
+    let mut config = ConfigOptions::new();
+    config.optimizer.repartition_sorts = true;
+    let optimized_physical_plan =
+        EnforceSorting::new().optimize(physical_plan.clone(), &config)?;
+    let plan_formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+    let optimized_plan_formatted = displayable(optimized_physical_plan.as_ref())
+        .indent(true)
+        .to_string();
+    let actual = plan_formatted.trim();
+    let optimized_actual = optimized_plan_formatted.trim();
 
-    let expected_input = ["SortExec: expr=[a@2 ASC], preserve_partitioning=[false]",
-        "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
-        "    DataSourceExec: partitions=1, partition_sizes=[0]",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet"];
+    // let expected_input = ["SortExec: expr=[a@2 ASC], preserve_partitioning=[false]",
+    //     "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
+    //     "    DataSourceExec: partitions=1, partition_sizes=[0]",
+    //     "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet"];
 
-    let expected_optimized = ["HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
-        "  DataSourceExec: partitions=1, partition_sizes=[0]",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet"];
-    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    // let expected_optimized = ["HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
+    //     "  DataSourceExec: partitions=1, partition_sizes=[0]",
+    //     "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet"];
+    // assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    assert_snapshot!(
+        actual,
+        @""
+    );
+
+    assert_snapshot!(
+        optimized_actual,
+        @""
+    );
 
     Ok(())
 }
