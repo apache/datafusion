@@ -613,8 +613,7 @@ async fn test_physical_plan_display_indent() {
         "              CoalesceBatchesExec: target_batch_size=4096",
         "                FilterExec: c12@1 < 10",
         "                  RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "                    YieldStreamExec child=DataSourceExec",
-        "                      DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true",
+        "                    DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();

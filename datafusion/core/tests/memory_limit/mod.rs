@@ -294,16 +294,15 @@ async fn sort_spill_reservation() {
             // also merge, so we can ensure the sort could finish
             // given enough merging memory
             &[
-                "+---------------+---------------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                          |",
-                "+---------------+---------------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                                |",
-                "|               |   TableScan: t projection=[a, b]                                                                              |",
-                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]                                  |",
-                "|               |   YieldStreamExec child=DataSourceExec                                                                        |",
-                "|               |     DataSourceExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
-                "|               |                                                                                                               |",
-                "+---------------+---------------------------------------------------------------------------------------------------------------+",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                        |",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                              |",
+                "|               |   TableScan: t projection=[a, b]                                                                            |",
+                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]                                |",
+                "|               |   DataSourceExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
+                "|               |                                                                                                             |",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
             ]
         );
 

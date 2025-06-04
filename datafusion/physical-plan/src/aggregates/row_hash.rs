@@ -448,7 +448,6 @@ impl GroupedHashAggregateStream {
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(&context))?;
-
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
 
         let timer = baseline_metrics.elapsed_compute().timer();
