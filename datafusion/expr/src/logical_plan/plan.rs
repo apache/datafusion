@@ -297,6 +297,7 @@ pub enum LogicalPlan {
 pub struct DelimGet {
     /// The schema description of the output
     pub projected_schema: DFSchemaRef,
+    pub columns: Vec<Column>,
     pub table_index: usize,
     pub delim_types: Vec<DataType>,
 }
@@ -304,10 +305,12 @@ pub struct DelimGet {
 impl DelimGet {
     pub fn try_new(
         table_index: usize,
+        columns: Vec<Column>,
         delim_types: &Vec<DataType>,
         projected_schema: DFSchemaRef,
     ) -> Self {
         Self {
+            columns,
             projected_schema,
             table_index,
             delim_types: delim_types.clone(),
@@ -1962,8 +1965,14 @@ impl LogicalPlan {
 
                         Ok(())
                     }
-                    LogicalPlan::DelimGet(_) => {
-                        write!(f, "DelimGet")?; // TODO
+                    LogicalPlan::DelimGet(DelimGet{columns,..}) => {
+                        write!(f, "DelimGet:")?; // TODO
+                        for (i, expr_item) in columns.iter().enumerate() {
+                            if i > 0 {
+                                write!(f, ",")?;
+                            }
+                            write!(f, " {expr_item}")?;
+                        }
                         Ok(())
                     }
                     LogicalPlan::Projection(Projection { ref expr, .. }) => {

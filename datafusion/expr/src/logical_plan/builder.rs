@@ -399,10 +399,12 @@ impl LogicalPlanBuilder {
     pub fn delim_get(
         table_index: usize,
         delim_types: &Vec<DataType>,
+        columns: Vec<Column>,
         schema: DFSchemaRef,
     ) -> Self {
         Self::new(LogicalPlan::DelimGet(DelimGet::try_new(
             table_index,
+            columns,
             delim_types,
             schema,
         )))
