@@ -93,14 +93,14 @@ impl RecordBatchStream for YieldStream {
 #[derive(Debug)]
 pub struct YieldStreamExec {
     child: Arc<dyn ExecutionPlan>,
-
+    frequency: usize,
     properties: PlanProperties,
 }
 
 impl YieldStreamExec {
     pub fn new(child: Arc<dyn ExecutionPlan>) -> Self {
         let properties = child.properties().clone();
-        Self { child, properties }
+        Self { child, properties, frequency: YIELD_BATCHES }
     }
 }
 
@@ -110,7 +110,7 @@ impl DisplayAs for YieldStreamExec {
         _t: DisplayFormatType,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        write!(f, "YieldStreamExec child={}", self.child.name())
+        write!(f, "YieldStreamExec frequency={}", self.frequency)
     }
 }
 

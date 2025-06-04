@@ -3523,23 +3523,21 @@ async fn test_distribute_sort_parquet() -> Result<()> {
 /// Ensures that `DataSourceExec` has been repartitioned into `target_partitions` memtable groups
 #[tokio::test]
 async fn test_distribute_sort_memtable() -> Result<()> {
-    let mut test_config: TestConfig =
+    let test_config: TestConfig =
         TestConfig::default().with_prefer_repartition_file_scans(1000);
     assert!(
         test_config.config.optimizer.repartition_file_scans,
         "should enable scans to be repartitioned"
     );
 
-    // Enable add yield for pipeline break testing.
-    test_config
-        .config
-        .optimizer
-        .enable_add_yield_for_pipeline_break = true;
-
     let mem_table = create_memtable()?;
-    let session_config = SessionConfig::new()
+    let mut session_config = SessionConfig::new()
         .with_repartition_file_min_size(1000)
         .with_target_partitions(3);
+
+    // Enable add yield for pipeline break testing.
+    session_config.options_mut().optimizer.enable_add_yield_for_pipeline_break = true;
+
     let ctx = SessionContext::new_with_config(session_config);
     ctx.register_table("users", Arc::new(mem_table))?;
 
@@ -3550,7 +3548,7 @@ async fn test_distribute_sort_memtable() -> Result<()> {
     let expected = &[
         "SortPreservingMergeExec: [id@0 ASC NULLS LAST]",
         "  SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]",
-        "    YieldStreamExec child=DataSourceExec",
+        "    YieldStreamExec frequency=64",
         "      DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]",
     ];
     plans_matches_expected!(expected, physical_plan);
