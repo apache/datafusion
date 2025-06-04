@@ -722,6 +722,12 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+
+        /// When true, the optimizer will insert a Yield operator at the leaf nodes of any pipeline
+        /// that contains a pipeline-breaking operator, allowing the Tokio scheduler to switch to
+        /// other tasks while waiting.
+        /// Default: false (disabled).
+        pub enable_add_yield_for_pipeline_break: bool, default = false
     }
 }
 

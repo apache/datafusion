@@ -18,6 +18,7 @@
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::displayable;
+use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::*;
 
 /// This example demonstrates the process of converting logical plan
@@ -116,21 +117,18 @@ async fn to_physical_plan_step_by_step_demo(
         displayable(physical_plan.as_ref()).indent(false)
     );
 
-    // todo, the following code is commented out because it is actually not a right way to optimize based a already optimized plan.
-    // And for YieldStreamExec, it shows error when optimizing it again based on the already optimized plan which already has YieldStreamExec.
-
     // Call the physical optimizer with an existing physical plan (in this
     // case the plan is already optimized, but an unoptimized plan would
     // typically be used in this context)
     // Note that this is not part of the trait but a public method
     // on DefaultPhysicalPlanner. Not all planners will provide this feature.
-    // let planner = DefaultPhysicalPlanner::default();
-    // let physical_plan =
-    //     planner.optimize_physical_plan(physical_plan, &ctx.state(), |_, _| {})?;
-    // println!(
-    //     "Optimized physical plan:\n\n{}\n\n",
-    //     displayable(physical_plan.as_ref()).indent(false)
-    // );
+    let planner = DefaultPhysicalPlanner::default();
+    let physical_plan =
+        planner.optimize_physical_plan(physical_plan, &ctx.state(), |_, _| {})?;
+    println!(
+        "Optimized physical plan:\n\n{}\n\n",
+        displayable(physical_plan.as_ref()).indent(false)
+    );
 
     Ok(())
 }

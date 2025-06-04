@@ -565,10 +565,8 @@ logical_plan
 06)------TableScan: foo projection=[column2]
 physical_plan
 01)CrossJoinExec
-02)--YieldStreamExec child=DataSourceExec
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--YieldStreamExec child=DataSourceExec
-05)----DataSourceExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # select NaNs
 query BBBB
@@ -1381,8 +1379,7 @@ logical_plan
 02)--TableScan: table1 projection=[a]
 physical_plan
 01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--YieldStreamExec child=DataSourceExec
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # ambiguous column references in on join
 query error DataFusion error: Schema error: Ambiguous reference to unqualified field a
@@ -1531,8 +1528,7 @@ physical_plan
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------FilterExec: a@1 = 0 OR b@2 = 0
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------YieldStreamExec child=DataSourceExec
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # When ordering lost during projection, we shouldn't keep the SortExec.
 # in the final physical plan.
@@ -1560,8 +1556,7 @@ physical_plan
 06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)------------ProjectionExec: expr=[c2@0 as c2]
 08)--------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
-09)----------------YieldStreamExec child=DataSourceExec
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], file_type=csv, has_header=true
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], file_type=csv, has_header=true
 
 # FilterExec can track equality of non-column expressions.
 # plan below shouldn't have a SortExec because given column 'a' is ordered.

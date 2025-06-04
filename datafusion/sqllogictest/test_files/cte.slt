@@ -160,15 +160,13 @@ logical_plan
 physical_plan
 01)SortExec: expr=[time@0 ASC NULLS LAST, name@1 ASC NULLS LAST, account_balance@2 ASC NULLS LAST], preserve_partitioning=[false]
 02)--RecursiveQueryExec: name=balances, is_distinct=false
-03)----YieldStreamExec child=DataSourceExec
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/balance.csv]]}, projection=[time, name, account_balance], file_type=csv, has_header=true
-05)----CoalescePartitionsExec
-06)------ProjectionExec: expr=[time@0 + 1 as time, name@1 as name, account_balance@2 + 10 as account_balance]
-07)--------CoalesceBatchesExec: target_batch_size=2
-08)----------FilterExec: time@0 < 10
-09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)--------------YieldStreamExec child=WorkTableExec
-11)----------------WorkTableExec: name=balances
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/balance.csv]]}, projection=[time, name, account_balance], file_type=csv, has_header=true
+04)----CoalescePartitionsExec
+05)------ProjectionExec: expr=[time@0 + 1 as time, name@1 as name, account_balance@2 + 10 as account_balance]
+06)--------CoalesceBatchesExec: target_batch_size=2
+07)----------FilterExec: time@0 < 10
+08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------------WorkTableExec: name=balances
 
 # recursive CTE with static term derived from table works
 # note that this is run with batch size set to 2. This should produce multiple batches per iteration since the input
@@ -740,11 +738,9 @@ physical_plan
 07)--------CoalesceBatchesExec: target_batch_size=8182
 08)----------FilterExec: val@0 < 2
 09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)--------------YieldStreamExec child=WorkTableExec
-11)----------------WorkTableExec: name=recursive_cte
-12)------ProjectionExec: expr=[2 as val]
-13)--------YieldStreamExec child=PlaceholderRowExec
-14)----------PlaceholderRowExec
+10)--------------WorkTableExec: name=recursive_cte
+11)------ProjectionExec: expr=[2 as val]
+12)--------PlaceholderRowExec
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types
@@ -938,11 +934,9 @@ logical_plan
 05)------EmptyRelation
 physical_plan
 01)CrossJoinExec
-02)--YieldStreamExec child=DataSourceExec
-03)----DataSourceExec: partitions=1, partition_sizes=[0]
-04)--ProjectionExec: expr=[1 as Int64(1)]
-05)----YieldStreamExec child=PlaceholderRowExec
-06)------PlaceholderRowExec
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--ProjectionExec: expr=[1 as Int64(1)]
+04)----PlaceholderRowExec
 
 statement count 0
 drop table j1;

@@ -136,8 +136,7 @@ physical_plan
 02)--SortExec: expr=[a_str@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[CAST(a@0 AS Utf8) as a_str, b@1 as b]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------YieldStreamExec child=DataSourceExec
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
 # We cannot determine a+b is ordered from the
 # invariant [a ASC, b ASC] is satisfied. Hence
@@ -153,8 +152,7 @@ logical_plan
 02)--TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
 01)SortExec: expr=[a@0 + b@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--YieldStreamExec child=DataSourceExec
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
 # With similar reasoning above. It is not guaranteed sum_expr is ordered
 # Hence we should see a SortExec with sum_expr ASC in the plan.
@@ -173,5 +171,4 @@ physical_plan
 02)--SortExec: expr=[sum_expr@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[CAST(a@0 + b@1 AS Int64) as sum_expr, a@0 as a, b@1 as b]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------YieldStreamExec child=DataSourceExec
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true

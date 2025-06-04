@@ -172,7 +172,9 @@ async fn test_infinite_agg_cancel() -> Result<(), Box<dyn Error>> {
     )?);
 
     // 3) optimize the plan with WrapLeaves to auto-insert Yield
-    let optimized = WrapLeaves::new().optimize(aggr.clone(), &ConfigOptions::new())?;
+    let mut config = ConfigOptions::new();
+    config.optimizer.enable_add_yield_for_pipeline_break = true;
+    let optimized = WrapLeaves::new().optimize(aggr.clone(), &config)?;
 
     // 4) get the stream
     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
@@ -223,8 +225,9 @@ async fn test_infinite_sort_cancel() -> Result<(), Box<dyn Error>> {
     let sort_exec = Arc::new(SortExec::new(lex_ordering, inf.clone()));
 
     // 4) optimize the plan with WrapLeaves to auto-insert Yield
-    let optimized =
-        WrapLeaves::new().optimize(sort_exec.clone(), &ConfigOptions::new())?;
+    let mut config = ConfigOptions::new();
+    config.optimizer.enable_add_yield_for_pipeline_break = true;
+    let optimized = WrapLeaves::new().optimize(sort_exec.clone(), &config)?;
 
     // 5) get the stream
     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;

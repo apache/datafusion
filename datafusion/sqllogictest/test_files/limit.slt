@@ -379,8 +379,7 @@ physical_plan
 07)------------GlobalLimitExec: skip=6, fetch=3
 08)--------------CoalesceBatchesExec: target_batch_size=8192, fetch=9
 09)----------------FilterExec: a@0 > 3
-10)------------------YieldStreamExec child=DataSourceExec
-11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
@@ -410,8 +409,7 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
-06)----------YieldStreamExec child=DataSourceExec
-07)------------DataSourceExec: partitions=1
+06)----------DataSourceExec: partitions=1
 
 statement ok
 set datafusion.explain.show_sizes = true;
@@ -643,8 +641,7 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(ordered_table.a)]
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------YieldStreamExec child=DataSourceExec
-10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], file_type=csv, has_header=true
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], file_type=csv, has_header=true
 
 # Applying offset & limit when multiple streams from union
 # the plan must still have a global limit to apply the offset
@@ -670,13 +667,11 @@ physical_plan
 04)------SortExec: TopK(fetch=14), expr=[c@0 DESC], preserve_partitioning=[true]
 05)--------ProjectionExec: expr=[CAST(c@0 AS Int64) as c]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------YieldStreamExec child=DataSourceExec
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
-09)------SortExec: TopK(fetch=14), expr=[c@0 DESC], preserve_partitioning=[true]
-10)--------ProjectionExec: expr=[CAST(d@0 AS Int64) as c]
-11)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)------------YieldStreamExec child=DataSourceExec
-13)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[d], file_type=csv, has_header=true
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+08)------SortExec: TopK(fetch=14), expr=[c@0 DESC], preserve_partitioning=[true]
+09)--------ProjectionExec: expr=[CAST(d@0 AS Int64) as c]
+10)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[d], file_type=csv, has_header=true
 
 # Applying LIMIT & OFFSET to subquery.
 query III
@@ -749,10 +744,8 @@ physical_plan
 01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
 02)--GlobalLimitExec: skip=0, fetch=10
 03)----CrossJoinExec
-04)------YieldStreamExec child=DataSourceExec
-05)--------DataSourceExec: partitions=1, partition_sizes=[1], fetch=1
-06)------YieldStreamExec child=DataSourceExec
-07)--------DataSourceExec: partitions=1, partition_sizes=[1], fetch=10
+04)------DataSourceExec: partitions=1, partition_sizes=[1], fetch=1
+05)------DataSourceExec: partitions=1, partition_sizes=[1], fetch=10
 
 
 query IIII
@@ -775,10 +768,8 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
 02)--CrossJoinExec
-03)----YieldStreamExec child=DataSourceExec
-04)------DataSourceExec: partitions=1, partition_sizes=[1], fetch=2
-05)----YieldStreamExec child=DataSourceExec
-06)------DataSourceExec: partitions=1, partition_sizes=[1], fetch=2
+03)----DataSourceExec: partitions=1, partition_sizes=[1], fetch=2
+04)----DataSourceExec: partitions=1, partition_sizes=[1], fetch=2
 
 statement ok
 drop table testSubQueryLimit;
@@ -863,8 +854,7 @@ physical_plan
 02)--SortExec: TopK(fetch=1000), expr=[part_key@1 ASC NULLS LAST], preserve_partitioning=[false]
 03)----ProjectionExec: expr=[1 as foo, part_key@0 as part_key]
 04)------CoalescePartitionsExec: fetch=1
-05)--------YieldStreamExec child=DataSourceExec
-06)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-0.parquet:0..794], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-1.parquet:0..794], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-2.parquet:0..794]]}, projection=[part_key], limit=1, file_type=parquet
+05)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-0.parquet:0..794], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-1.parquet:0..794], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-2.parquet:0..794]]}, projection=[part_key], limit=1, file_type=parquet
 
 query I
 with selection as (

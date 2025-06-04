@@ -698,11 +698,9 @@ logical_plan
 03)--TableScan: t2 projection=[t2_id, t2_name, t2_int]
 physical_plan
 01)CrossJoinExec
-02)--YieldStreamExec child=DataSourceExec
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)----YieldStreamExec child=DataSourceExec
-06)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table IF EXISTS t1;
@@ -939,10 +937,8 @@ physical_plan
 01)CrossJoinExec
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: name@1 = Alice OR name@1 = Bob
-04)------YieldStreamExec child=DataSourceExec
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)--YieldStreamExec child=DataSourceExec
-07)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # expect no row for Carol
 query ITT
@@ -1444,9 +1440,8 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([v0@0], 4), input_partitions=4
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)------------------AggregateExec: mode=Partial, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
-11)--------------------YieldStreamExec child=DataSourceExec
-12)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
-13)------DataSourceExec: partitions=1, partition_sizes=[1]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+12)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 SELECT *

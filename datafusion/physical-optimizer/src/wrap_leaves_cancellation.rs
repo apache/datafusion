@@ -98,12 +98,16 @@ impl PhysicalOptimizerRule for WrapLeaves {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // We run a top‐level transform_down: for every node, call wrap_leaves_of_pipeline_breakers.
-        // If a node is a pipeline breaker, we then wrap all of its leaf children in YieldStreamExec.
-        plan.transform_down(Self::wrap_leaves_of_pipeline_breakers)
-            .map(|t| t.data)
+        if config.optimizer.enable_add_yield_for_pipeline_break {
+            // We run a top‐level transform_down: for every node, call wrap_leaves_of_pipeline_breakers.
+            // If a node is a pipeline breaker, we then wrap all of its leaf children in YieldStreamExec.
+            plan.transform_down(Self::wrap_leaves_of_pipeline_breakers)
+                .map(|t| t.data)
+        } else {
+            Ok(plan)
+        }
     }
 
     fn schema_check(&self) -> bool {
