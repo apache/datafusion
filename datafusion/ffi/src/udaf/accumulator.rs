@@ -32,6 +32,8 @@ use prost::Message;
 use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 
 /// A stable struct for sharing [`Accumulator`] across FFI boundaries.
+/// For an explanation of each field, see the corresponding function
+/// defined in [`Accumulator`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]

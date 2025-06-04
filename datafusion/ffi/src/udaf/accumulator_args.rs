@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::arrow_wrappers::WrappedSchema;
 use abi_stable::{
     std_types::{RString, RVec},
     StableAbi,
@@ -37,8 +38,9 @@ use datafusion_proto::{
 };
 use prost::Message;
 
-use crate::arrow_wrappers::WrappedSchema;
-
+/// A stable struct for sharing [`AccumulatorArgs`] across FFI boundaries.
+/// For an explanation of each field, see the corresponding field
+/// defined in [`AccumulatorArgs`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]

@@ -17,6 +17,10 @@
 
 use std::{ffi::c_void, ops::Deref, sync::Arc};
 
+use crate::{
+    arrow_wrappers::{WrappedArray, WrappedSchema},
+    df_result, rresult, rresult_return,
+};
 use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
     StableAbi,
@@ -31,12 +35,9 @@ use datafusion::{
     logical_expr::{EmitTo, GroupsAccumulator},
 };
 
-use crate::{
-    arrow_wrappers::{WrappedArray, WrappedSchema},
-    df_result, rresult, rresult_return,
-};
-
 /// A stable struct for sharing [`GroupsAccumulator`] across FFI boundaries.
+/// For an explanation of each field, see the corresponding function
+/// defined in [`GroupsAccumulator`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
