@@ -211,7 +211,7 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
         }
     }
 
-    fn is_constant(&self) -> bool {
+    fn is_constant_in_partition(&self) -> bool {
         false
     }
 }

@@ -188,7 +188,7 @@ pub trait AggregateWindowExpr: WindowExpr {
 
     /// Indicates whether this window function always produces the same result
     /// for all rows in the partition.
-    fn is_constant(&self) -> bool;
+    fn is_constant_in_partition(&self) -> bool;
 
     /// Evaluates the window function against the batch.
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
@@ -277,7 +277,7 @@ pub trait AggregateWindowExpr: WindowExpr {
     ) -> Result<ArrayRef> {
         let values = self.evaluate_args(record_batch)?;
 
-        if self.is_constant() {
+        if self.is_constant_in_partition() {
             accumulator.update_batch(&values)?;
             let value = accumulator.evaluate()?;
             return value.to_array_of_size(record_batch.num_rows());

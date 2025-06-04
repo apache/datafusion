@@ -46,7 +46,7 @@ pub struct PlainAggregateWindowExpr {
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: LexOrdering,
     window_frame: Arc<WindowFrame>,
-    is_window_constant: bool,
+    is_constant_in_partition: bool,
 }
 
 impl PlainAggregateWindowExpr {
@@ -57,13 +57,14 @@ impl PlainAggregateWindowExpr {
         order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
-        let is_window_constant = Self::is_window_constant(order_by, &window_frame);
+        let is_constant_in_partition = 
+            Self::is_window_constant_in_partition(order_by, &window_frame);
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
             order_by: order_by.clone(),
             window_frame,
-            is_window_constant,
+            is_constant_in_partition,
         }
     }
 
@@ -98,7 +99,10 @@ impl PlainAggregateWindowExpr {
     //  2. Bound is `CurrentRow` while using `Range` units with no order by clause
     //  This results in an invalid range specification. Following PostgreSQL’s convention,
     //  we interpret this as the entire partition being used for the current window frame.
-    fn is_window_constant(order_by: &LexOrdering, window_frame: &WindowFrame) -> bool {
+    fn is_window_constant_in_partition(
+        order_by: &LexOrdering,
+        window_frame: &WindowFrame,
+    ) -> bool {
         let is_constant_bound = |bound: &WindowFrameBound| match bound {
             WindowFrameBound::CurrentRow => {
                 window_frame.units == WindowFrameUnits::Range && order_by.is_empty()
@@ -238,7 +242,7 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
         }
     }
 
-    fn is_constant(&self) -> bool {
-        self.is_window_constant
+    fn is_constant_in_partition(&self) -> bool {
+        self.is_constant_in_partition
     }
 }
