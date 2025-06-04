@@ -25,6 +25,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     ffi::FFI_ArrowSchema,
 };
+use arrow_schema::FieldRef;
 use datafusion::{
     error::DataFusionError, logical_expr::function::AccumulatorArgs,
     physical_expr::LexOrdering, physical_plan::PhysicalExpr, prelude::SessionContext,
@@ -45,7 +46,7 @@ use crate::arrow_wrappers::WrappedSchema;
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_AccumulatorArgs {
-    return_type: WrappedSchema,
+    return_field: WrappedSchema,
     schema: WrappedSchema,
     is_reversed: bool,
     name: RString,
@@ -56,7 +57,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
     type Error = DataFusionError;
 
     fn try_from(args: AccumulatorArgs) -> Result<Self, Self::Error> {
-        let return_type = WrappedSchema(FFI_ArrowSchema::try_from(args.return_type)?);
+        let return_field = WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
 
         let codec = DefaultPhysicalExtensionCodec {};
@@ -76,7 +77,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
         let physical_expr_def = physical_expr_def.encode_to_vec().into();
 
         Ok(Self {
-            return_type,
+            return_field,
             schema,
             is_reversed: args.is_reversed,
             name: args.name.into(),
@@ -90,7 +91,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
 /// data across the FFI boundary and turn it into owned data that
 /// AccumulatorArgs can then reference.
 pub struct ForeignAccumulatorArgs {
-    pub return_type: DataType,
+    pub return_field: FieldRef,
     pub schema: Schema,
     pub ignore_nulls: bool,
     pub ordering_req: LexOrdering,
@@ -108,7 +109,7 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
             PhysicalAggregateExprNode::decode(value.physical_expr_def.as_ref())
                 .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-        let return_type = (&value.return_type.0).try_into()?;
+        let return_field = Arc::new((&value.return_field.0).try_into()?);
         let schema = Schema::try_from(&value.schema.0)?;
 
         let default_ctx = SessionContext::new();
@@ -126,7 +127,7 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
         let exprs = parse_physical_exprs(&proto_def.expr, &default_ctx, &schema, &codex)?;
 
         Ok(Self {
-            return_type,
+            return_field,
             schema,
             ignore_nulls: proto_def.ignore_nulls,
             ordering_req,
@@ -141,7 +142,7 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
 impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
     fn from(value: &'a ForeignAccumulatorArgs) -> Self {
         Self {
-            return_type: &value.return_type,
+            return_field: Arc::clone(&value.return_field),
             schema: &value.schema,
             ignore_nulls: value.ignore_nulls,
             ordering_req: &value.ordering_req,
@@ -168,7 +169,7 @@ mod tests {
     fn test_round_trip_accumulator_args() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let orig_args = AccumulatorArgs {
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
             ignore_nulls: false,
             ordering_req: &LexOrdering::new(vec![PhysicalSortExpr {

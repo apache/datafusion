@@ -25,11 +25,12 @@ use accumulator::{FFI_Accumulator, ForeignAccumulator};
 use accumulator_args::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 use arrow::datatypes::{DataType, Field};
 use arrow::ffi::FFI_ArrowSchema;
+use arrow_schema::FieldRef;
 use datafusion::{
     error::DataFusionError,
     logical_expr::{
         function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
-        type_coercion::functions::data_types_with_aggregate_udf,
+        type_coercion::functions::fields_with_aggregate_udf,
         utils::AggregateOrderSensitivity,
         Accumulator, GroupsAccumulator,
     },
@@ -48,6 +49,7 @@ use crate::{
     volatility::FFI_Volatility,
 };
 use prost::{DecodeError, Message};
+use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 
 mod accumulator;
 mod accumulator_args;
@@ -99,8 +101,8 @@ pub struct FFI_AggregateUDF {
     pub state_fields: unsafe extern "C" fn(
         udaf: &FFI_AggregateUDF,
         name: &RStr,
-        input_types: RVec<WrappedSchema>,
-        return_type: WrappedSchema,
+        input_fields: RVec<WrappedSchema>,
+        return_field: WrappedSchema,
         ordering_fields: RVec<RVec<u8>>,
         is_distinct: bool,
     ) -> RResult<RVec<RVec<u8>>, RString>,
@@ -246,27 +248,30 @@ unsafe extern "C" fn with_beneficial_ordering_fn_wrapper(
 unsafe extern "C" fn state_fields_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     name: &RStr,
-    input_types: RVec<WrappedSchema>,
-    return_type: WrappedSchema,
+    input_fields: RVec<WrappedSchema>,
+    return_field: WrappedSchema,
     ordering_fields: RVec<RVec<u8>>,
     is_distinct: bool,
 ) -> RResult<RVec<RVec<u8>>, RString> {
     let udaf = udaf.inner();
 
-    let input_types = &rresult_return!(rvec_wrapped_to_vec_datatype(&input_types));
-    let return_type = &rresult_return!(DataType::try_from(&return_type.0));
+    let input_fields = &rresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
+    let return_field = rresult_return!(Field::try_from(&return_field.0)).into();
 
     let ordering_fields = &rresult_return!(ordering_fields
         .into_iter()
         .map(|field_bytes| datafusion_proto_common::Field::decode(field_bytes.as_ref()))
         .collect::<std::result::Result<Vec<_>, DecodeError>>());
 
-    let ordering_fields = &rresult_return!(parse_proto_fields_to_fields(ordering_fields));
+    let ordering_fields = &rresult_return!(parse_proto_fields_to_fields(ordering_fields))
+        .into_iter()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
 
     let args = StateFieldsArgs {
         name: name.as_str(),
-        input_types,
-        return_type,
+        input_fields,
+        return_field,
         ordering_fields,
         is_distinct,
     };
@@ -274,6 +279,7 @@ unsafe extern "C" fn state_fields_fn_wrapper(
     let state_fields = rresult_return!(udaf.state_fields(args));
     let state_fields = rresult_return!(state_fields
         .iter()
+        .map(|f| f.as_ref())
         .map(datafusion_proto::protobuf::Field::try_from)
         .map(|v| v.map_err(DataFusionError::from))
         .collect::<Result<Vec<_>>>())
@@ -298,7 +304,8 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 
     let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
 
-    let return_types = rresult_return!(data_types_with_aggregate_udf(&arg_types, udaf));
+    let arg_fields = arg_types.iter().map(|dt| Field::new("f", dt.clone(), true)).map(Arc::new).collect::<Vec<_>>();
+    let return_types = rresult_return!(fields_with_aggregate_udf(&arg_fields, udaf)).into_iter().map(|f| f.data_type().to_owned()).collect::<Vec<_>>();
 
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
 }
@@ -421,14 +428,15 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         }
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         unsafe {
             let name = RStr::from_str(args.name);
-            let input_types = vec_datatype_to_rvec_wrapped(args.input_types)?;
-            let return_type = WrappedSchema(FFI_ArrowSchema::try_from(args.return_type)?);
+            let input_fields = vec_fieldref_to_rvec_wrapped(args.input_fields)?;
+            let return_field = WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
             let ordering_fields = args
                 .ordering_fields
                 .iter()
+                .map(|f| f.as_ref())
                 .map(datafusion_proto::protobuf::Field::try_from)
                 .map(|v| v.map_err(DataFusionError::from))
                 .collect::<Result<Vec<_>>>()?
@@ -439,8 +447,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
             let fields = df_result!((self.udaf.state_fields)(
                 &self.udaf,
                 &name,
-                input_types,
-                return_type,
+                input_fields,
+                return_field,
                 ordering_fields,
                 args.is_distinct
             ))?;
@@ -453,6 +461,7 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
                 .collect::<Result<Vec<_>>>()?;
 
             parse_proto_fields_to_fields(fields.iter())
+                .map(|fields| fields.into_iter().map(Arc::new).collect())
                 .map_err(|e| DataFusionError::Execution(e.to_string()))
         }
     }
@@ -624,7 +633,7 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
         let acc_args = AccumulatorArgs {
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
             ignore_nulls: true,
             ordering_req: &LexOrdering::new(vec![PhysicalSortExpr {
@@ -658,12 +667,12 @@ mod tests {
             AggregateOrderSensitivity::Beneficial
         );
 
-        let a_field = Field::new("a", DataType::Float64, true);
+        let a_field = Arc::new(Field::new("a", DataType::Float64, true));
         let state_fields = foreign_udaf.state_fields(StateFieldsArgs {
             name: "a",
-            input_types: &[DataType::Float64],
-            return_type: &DataType::Float64,
-            ordering_fields: &[a_field.clone()],
+            input_fields: &[Field::new("f", DataType::Float64, true).into()],
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            ordering_fields: &[Arc::clone(&a_field)],
             is_distinct: false,
         })?;
 
@@ -679,7 +688,7 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
         let acc_args = AccumulatorArgs {
-            return_type: &DataType::Float64,
+            return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
             ignore_nulls: true,
             ordering_req: &LexOrdering::new(vec![PhysicalSortExpr {
