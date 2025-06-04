@@ -76,7 +76,7 @@ repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
 rust-version = "1.82.0"
 # Define DataFusion version
-version = "47.0.0"
+version = "48.0.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -108,39 +108,39 @@ chrono = { version = "0.4.41", default-features = false }
 criterion = "0.5.1"
 ctor = "0.4.0"
 dashmap = "6.0.1"
-datafusion = { path = "datafusion/core", version = "47.0.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "47.0.0" }
-datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "47.0.0" }
-datafusion-common = { path = "datafusion/common", version = "47.0.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "47.0.0" }
-datafusion-datasource = { path = "datafusion/datasource", version = "47.0.0", default-features = false }
-datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "47.0.0", default-features = false }
-datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "47.0.0", default-features = false }
-datafusion-datasource-json = { path = "datafusion/datasource-json", version = "47.0.0", default-features = false }
-datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "47.0.0", default-features = false }
-datafusion-doc = { path = "datafusion/doc", version = "47.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "47.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "47.0.0" }
-datafusion-expr-common = { path = "datafusion/expr-common", version = "47.0.0" }
-datafusion-ffi = { path = "datafusion/ffi", version = "47.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "47.0.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "47.0.0" }
-datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "47.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "47.0.0" }
-datafusion-functions-table = { path = "datafusion/functions-table", version = "47.0.0" }
-datafusion-functions-window = { path = "datafusion/functions-window", version = "47.0.0" }
-datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "47.0.0" }
-datafusion-macros = { path = "datafusion/macros", version = "47.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "47.0.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "47.0.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "47.0.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "47.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "47.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "47.0.0" }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "47.0.0" }
-datafusion-session = { path = "datafusion/session", version = "47.0.0" }
-datafusion-spark = { path = "datafusion/spark", version = "47.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "47.0.0" }
+datafusion = { path = "datafusion/core", version = "48.0.0", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "48.0.0" }
+datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "48.0.0" }
+datafusion-common = { path = "datafusion/common", version = "48.0.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "48.0.0" }
+datafusion-datasource = { path = "datafusion/datasource", version = "48.0.0", default-features = false }
+datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "48.0.0", default-features = false }
+datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "48.0.0", default-features = false }
+datafusion-datasource-json = { path = "datafusion/datasource-json", version = "48.0.0", default-features = false }
+datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "48.0.0", default-features = false }
+datafusion-doc = { path = "datafusion/doc", version = "48.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "48.0.0" }
+datafusion-expr = { path = "datafusion/expr", version = "48.0.0" }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "48.0.0" }
+datafusion-ffi = { path = "datafusion/ffi", version = "48.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "48.0.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "48.0.0" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "48.0.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "48.0.0" }
+datafusion-functions-table = { path = "datafusion/functions-table", version = "48.0.0" }
+datafusion-functions-window = { path = "datafusion/functions-window", version = "48.0.0" }
+datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "48.0.0" }
+datafusion-macros = { path = "datafusion/macros", version = "48.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "48.0.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "48.0.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "48.0.0", default-features = false }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "48.0.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "48.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "48.0.0" }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "48.0.0" }
+datafusion-session = { path = "datafusion/session", version = "48.0.0" }
+datafusion-spark = { path = "datafusion/spark", version = "48.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "48.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"

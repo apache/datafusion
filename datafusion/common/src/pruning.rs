@@ -129,6 +129,7 @@ pub trait PruningStatistics {
 }
 
 /// Prune files based on their partition values.
+///
 /// This is used both at planning time and execution time to prune
 /// files based on their partition values.
 /// This feeds into [`CompositePruningStatistics`] to allow pruning
@@ -137,19 +138,21 @@ pub trait PruningStatistics {
 #[derive(Clone)]
 pub struct PartitionPruningStatistics {
     /// Values for each column for each container.
-    /// The outer vectors represent the columns while the inner
-    /// vectors represent the containers.
-    /// The order must match the order of the partition columns in
-    /// [`PartitionPruningStatistics::partition_schema`].
+    ///
+    /// The outer vectors represent the columns while the inner vectors
+    /// represent the containers. The order must match the order of the
+    /// partition columns in [`PartitionPruningStatistics::partition_schema`].
     partition_values: Vec<ArrayRef>,
     /// The number of containers.
+    ///
     /// Stored since the partition values are column-major and if
     /// there are no columns we wouldn't know the number of containers.
     num_containers: usize,
     /// The schema of the partition columns.
-    /// This must **not** be the schema of the entire file or table:
-    /// it must only be the schema of the partition columns,
-    /// in the same order as the values in [`PartitionPruningStatistics::partition_values`].
+    ///
+    /// This must **not** be the schema of the entire file or table: it must
+    /// only be the schema of the partition columns, in the same order as the
+    /// values in [`PartitionPruningStatistics::partition_values`].
     partition_schema: SchemaRef,
 }
 
@@ -258,7 +261,16 @@ impl PruningStatistics for PartitionPruningStatistics {
 }
 
 /// Prune a set of containers represented by their statistics.
-/// Each [`Statistics`] represents a container (e.g. a file or a partition of files).
+///
+/// Each [`Statistics`] represents a "container" -- some collection of data
+/// that has statistics of its columns.
+///
+/// It is up to the caller to decide what each container represents. For
+/// example, they can come from a file (e.g. [`PartitionedFile`]) or a set of of
+/// files (e.g. [`FileGroup`])
+///
+/// [`PartitionedFile`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.PartitionedFile.html
+/// [`FileGroup`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileGroup.html
 #[derive(Clone)]
 pub struct PrunableStatistics {
     /// Statistics for each container.

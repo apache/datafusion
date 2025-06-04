@@ -1626,12 +1626,19 @@ pub fn build_join_schema(
         join_type,
         left.fields().len(),
     );
-    let metadata = left
+
+    let (schema1, schema2) = match join_type {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
+        _ => (right, left),
+    };
+
+    let metadata = schema1
         .metadata()
         .clone()
         .into_iter()
-        .chain(right.metadata().clone())
+        .chain(schema2.metadata().clone())
         .collect();
+
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
 }
@@ -2867,6 +2874,33 @@ mod tests {
         Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]
           TableScan: employee_csv projection=[id, state, salary]
         ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_metadata() -> Result<()> {
+        let left_schema = DFSchema::new_with_metadata(
+            vec![(None, Arc::new(Field::new("a", DataType::Int32, false)))],
+            HashMap::from([("key".to_string(), "left".to_string())]),
+        )?;
+        let right_schema = DFSchema::new_with_metadata(
+            vec![(None, Arc::new(Field::new("b", DataType::Int32, false)))],
+            HashMap::from([("key".to_string(), "right".to_string())]),
+        )?;
+
+        let join_schema =
+            build_join_schema(&left_schema, &right_schema, &JoinType::Left)?;
+        assert_eq!(
+            join_schema.metadata(),
+            &HashMap::from([("key".to_string(), "left".to_string())])
+        );
+        let join_schema =
+            build_join_schema(&left_schema, &right_schema, &JoinType::Right)?;
+        assert_eq!(
+            join_schema.metadata(),
+            &HashMap::from([("key".to_string(), "right".to_string())])
+        );
 
         Ok(())
     }

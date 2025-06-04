@@ -302,18 +302,19 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::SimilarTo(pb)),
             }
         }
-        Expr::WindowFunction(expr::WindowFunction {
-            ref fun,
-            params:
-                expr::WindowFunctionParams {
-                    ref args,
-                    ref partition_by,
-                    ref order_by,
-                    ref window_frame,
-                    // TODO: support null treatment in proto
-                    null_treatment: _,
-                },
-        }) => {
+        Expr::WindowFunction(window_fun) => {
+            let expr::WindowFunction {
+                ref fun,
+                params:
+                    expr::WindowFunctionParams {
+                        ref args,
+                        ref partition_by,
+                        ref order_by,
+                        ref window_frame,
+                        // TODO: support null treatment in proto
+                        null_treatment: _,
+                    },
+            } = window_fun.as_ref();
             let mut buf = Vec::new();
             let window_function = match fun {
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
