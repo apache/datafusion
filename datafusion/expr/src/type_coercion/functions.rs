@@ -270,9 +270,8 @@ fn try_coerce_types(
         }
     }
 
-    // none possible -> Error
     plan_err!(
-        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {current_types:?} to the signature {type_signature:?} failed"
+        "Invalid argument(s) {current_types:?} for '{function_name}' function. The signature of `{function_name}` is {type_signature:?}"
     )
 }
 
