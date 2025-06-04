@@ -96,6 +96,8 @@ impl PlainAggregateWindowExpr {
     // This occurs when both bounds fall under either condition below:
     //  1. Bound is unbounded (`Preceding` or `Following`)
     //  2. Bound is `CurrentRow` while using `Range` units with no order by clause
+    //  This results in an invalid range specification. Following PostgreSQL’s convention,
+    //  we interpret this as the entire partition being used for the current window frame.
     fn is_window_constant(order_by: &LexOrdering, window_frame: &WindowFrame) -> bool {
         let is_constant_bound = |bound: &WindowFrameBound| match bound {
             WindowFrameBound::CurrentRow => {
