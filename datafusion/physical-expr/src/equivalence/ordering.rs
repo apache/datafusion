@@ -44,6 +44,13 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 ///
 /// Here, both `[a ASC, b ASC]` and `[c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent.
+///
+/// An `OrderingEquivalenceClass` is a set of such equivalent orderings, which
+/// is represented by a vector of `LexOrdering`s. The set does not store any
+/// redundant information by enforcing the invariant that no suffix of an
+/// ordering in the equivalence class is a prefix of another ordering in the
+/// equivalence class. The set can be empty, which means that there are no
+/// orderings that describe the table.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OrderingEquivalenceClass {
     orderings: Vec<LexOrdering>,
@@ -119,7 +126,9 @@ impl OrderingEquivalenceClass {
     }
 
     /// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
-    /// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
+    /// `orderings[pre_idx]`. If there is any overlap, returns a `Some(true)`
+    /// if any trimming took place, and `Some(false)` otherwise. If there is
+    /// no overlap, returns `None`.
     ///
     /// For example, if `orderings[idx]` is `[a ASC, b ASC, c DESC]` and
     /// `orderings[pre_idx]` is `[b ASC, c DESC]`, then the function will trim

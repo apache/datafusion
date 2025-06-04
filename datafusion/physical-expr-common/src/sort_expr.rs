@@ -154,7 +154,8 @@ impl PhysicalSortExpr {
 
     /// Checks whether this sort expression satisfies the given `requirement`.
     /// If sort options are unspecified in `requirement`, only expressions are
-    /// compared for inequality.
+    /// compared for inequality. See [`options_compatible`] for details on
+    /// how sort options compare with one another.
     pub fn satisfy(
         &self,
         requirement: &PhysicalSortRequirement,
@@ -171,6 +172,8 @@ impl PhysicalSortExpr {
     }
 
     /// Checks whether this sort expression satisfies the given `sort_expr`.
+    /// See [`options_compatible`] for details on how sort options compare with
+    /// one another.
     pub fn satisfy_expr(&self, sort_expr: &Self, schema: &Schema) -> bool {
         self.expr.eq(&sort_expr.expr)
             && options_compatible(
@@ -200,7 +203,10 @@ impl Display for PhysicalSortExpr {
     }
 }
 
-/// Returns whether the given two [`SortOptions`] are compatible.
+/// Returns whether the given two [`SortOptions`] are compatible. Here,
+/// compatibility means that they are either exactly equal, or they differ only
+/// in whether NULL values come in first/last, which is immaterial because the
+/// column in question is not nullable (specified by the `nullable` parameter).
 pub fn options_compatible(
     options_lhs: &SortOptions,
     options_rhs: &SortOptions,
@@ -338,12 +344,22 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 ///
 /// For example, a `vec![a ASC, b DESC]` represents a lexicographical ordering
 /// that first sorts by column `a` in ascending order, then by column `b` in
-/// descending order. The ordering is non-degenerate, meaning it contains at
-/// least one element, and it is duplicate-free, meaning it does not contain
-/// multiple entries for the same column.
+/// descending order.
+///
+/// # Invariants
+///
+/// The following always hold true for a `LexOrdering`:
+///
+/// 1. It is non-degenerate, meaning it contains at least one element.
+/// 2. It is duplicate-free, meaning it does not contain multiple entries for
+///    the same column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexOrdering {
+    /// Vector of sort expressions representing the lexicographical ordering.
     exprs: Vec<PhysicalSortExpr>,
+    /// Set of expressions in the lexicographical ordering, used to ensure
+    /// that the ordering is duplicate-free. Note that the elements in this
+    /// set are the same underlying physical expressions as in `exprs`.
     set: HashSet<Arc<dyn PhysicalExpr>>,
 }
 
@@ -365,9 +381,7 @@ impl LexOrdering {
     /// Add all elements from `iter` to the `LexOrdering`.
     pub fn extend(&mut self, sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>) {
         for sort_expr in sort_exprs {
-            if self.set.insert(Arc::clone(&sort_expr.expr)) {
-                self.exprs.push(sort_expr);
-            }
+            self.push(sort_expr);
         }
     }
 
@@ -598,7 +612,17 @@ impl From<LexRequirement> for LexOrdering {
 }
 
 /// Represents a plan's input ordering requirements. Vector elements represent
-/// alternative ordering requirements in the order of preference.
+/// alternative ordering requirements in the order of preference. The list of
+/// alternatives can be either hard or soft, depending on whether the operator
+/// can work without an input ordering.
+///
+/// # Invariants
+///
+/// The following always hold true for a `OrderingRequirements`:
+///
+/// 1. It is non-degenerate, meaning it contains at least one ordering. The
+///    absence of an input ordering requirement is represented by a `None` value
+///    in `ExecutionPlan` APIs, which return an `Option<OrderingRequirements>`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OrderingRequirements {
     /// The operator is not able to work without one of these requirements.
@@ -660,7 +684,7 @@ impl OrderingRequirements {
 
     /// Returns all alternatives as a vector of `LexRequirement` objects and a
     /// boolean value indicating softness/hardness of the requirements.
-    pub fn get_alternatives(self) -> (Vec<LexRequirement>, bool) {
+    pub fn into_alternatives(self) -> (Vec<LexRequirement>, bool) {
         match self {
             Self::Hard(alts) => (alts, false),
             Self::Soft(alts) => (alts, true),

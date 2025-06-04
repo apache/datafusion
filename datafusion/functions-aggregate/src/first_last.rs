@@ -757,6 +757,10 @@ where
     }
 }
 
+/// This accumulator is used when there is no ordering specified for the
+/// `FIRST_VALUE` aggregation. It simply returns the first value it sees
+/// according to the pre-existing ordering of the input data, and provides
+/// a fast path for this case without needing to maintain any ordering state.
 #[derive(Debug)]
 pub struct TrivialFirstValueAccumulator {
     first: ScalarValue,
@@ -1234,6 +1238,10 @@ impl AggregateUDFImpl for LastValue {
     }
 }
 
+/// This accumulator is used when there is no ordering specified for the
+/// `LAST_VALUE` aggregation. It simply updates the last value it sees
+/// according to the pre-existing ordering of the input data, and provides
+/// a fast path for this case without needing to maintain any ordering state.
 #[derive(Debug)]
 pub struct TrivialLastValueAccumulator {
     last: ScalarValue,
