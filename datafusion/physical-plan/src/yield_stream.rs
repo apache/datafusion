@@ -100,7 +100,11 @@ pub struct YieldStreamExec {
 impl YieldStreamExec {
     pub fn new(child: Arc<dyn ExecutionPlan>) -> Self {
         let properties = child.properties().clone();
-        Self { child, properties, frequency: YIELD_BATCHES }
+        Self {
+            child,
+            properties,
+            frequency: YIELD_BATCHES,
+        }
     }
 }
 

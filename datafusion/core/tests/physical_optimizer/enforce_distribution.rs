@@ -3536,7 +3536,10 @@ async fn test_distribute_sort_memtable() -> Result<()> {
         .with_target_partitions(3);
 
     // Enable add yield for pipeline break testing.
-    session_config.options_mut().optimizer.enable_add_yield_for_pipeline_break = true;
+    session_config
+        .options_mut()
+        .optimizer
+        .enable_add_yield_for_pipeline_break = true;
 
     let ctx = SessionContext::new_with_config(session_config);
     ctx.register_table("users", Arc::new(mem_table))?;
