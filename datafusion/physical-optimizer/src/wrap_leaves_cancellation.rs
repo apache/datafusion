@@ -40,10 +40,11 @@ impl WrapLeaves {
     /// and stop recursing further under that branch (TreeNodeRecursion::Jump).
     fn wrap_leaves(
         plan: Arc<dyn ExecutionPlan>,
+        yield_frequency: usize,
     ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
         if plan.children().is_empty() {
             // Leaf: wrap it in YieldStreamExec, and do not descend further
-            let wrapped = Arc::new(YieldStreamExec::new(plan));
+            let wrapped = Arc::new(YieldStreamExec::new(plan, yield_frequency));
             Ok(Transformed::new(
                 wrapped,
                 /* changed */ true,
@@ -63,11 +64,16 @@ impl WrapLeaves {
     /// this subtree (we’ve already wrapped its leaves).
     fn wrap_leaves_of_pipeline_breakers(
         plan: Arc<dyn ExecutionPlan>,
+        yield_frequency: usize,
     ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
         let is_pipeline_breaker = plan.properties().emission_type == EmissionType::Final;
         if is_pipeline_breaker {
             // Transform all leaf descendants of this node by calling wrap_leaves
-            let mut transformed = plan.transform_down(Self::wrap_leaves)?;
+            let mut transformed =
+                plan.transform_down(|child_plan: Arc<dyn ExecutionPlan>| {
+                    Self::wrap_leaves(child_plan, yield_frequency)
+                })?;
+
             // Once we’ve handled the leaves of this subtree, we skip deeper recursion
             transformed.tnr = TreeNodeRecursion::Jump;
             Ok(transformed)
@@ -101,10 +107,15 @@ impl PhysicalOptimizerRule for WrapLeaves {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if config.optimizer.enable_add_yield_for_pipeline_break {
+            let yield_frequency = config.optimizer.yield_frequency_for_pipeline_break;
+
             // We run a top‐level transform_down: for every node, call wrap_leaves_of_pipeline_breakers.
             // If a node is a pipeline breaker, we then wrap all of its leaf children in YieldStreamExec.
-            plan.transform_down(Self::wrap_leaves_of_pipeline_breakers)
-                .map(|t| t.data)
+            let new_plan = plan.transform_down(|node: Arc<dyn ExecutionPlan>| {
+                Self::wrap_leaves_of_pipeline_breakers(node, yield_frequency)
+            })?;
+
+            Ok(new_plan.data)
         } else {
             Ok(plan)
         }

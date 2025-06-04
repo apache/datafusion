@@ -1036,6 +1036,7 @@ message AvroScanExecNode {
 
 message YieldStreamExecNode {
   PhysicalPlanNode input = 1;
+  uint32 frequency = 2;
 }
 
 enum PartitionMode {

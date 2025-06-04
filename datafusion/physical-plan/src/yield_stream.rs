@@ -32,24 +32,21 @@ use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use futures::{Stream, StreamExt};
 
-/// Number of batches to yield before voluntarily returning Pending.
-/// This allows long-running operators to periodically yield control
-/// back to the executor (e.g., to handle cancellation).
-const YIELD_BATCHES: usize = 64;
-
-/// A stream that yields batches of data, yielding control back to the executor every `YIELD_BATCHES` batches
+/// A stream that yields batches of data, yielding control back to the executor every `frequency` batches
 ///
 /// This can be useful to allow operators that might not yield to check for cancellation
 pub struct YieldStream {
     inner: SendableRecordBatchStream,
     batches_processed: usize,
+    frequency: usize,
 }
 
 impl YieldStream {
-    pub fn new(inner: SendableRecordBatchStream) -> Self {
+    pub fn new(inner: SendableRecordBatchStream, frequency: usize) -> Self {
         Self {
             inner,
             batches_processed: 0,
+            frequency,
         }
     }
 }
@@ -62,7 +59,7 @@ impl Stream for YieldStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        if self.batches_processed >= YIELD_BATCHES {
+        if self.batches_processed >= self.frequency {
             self.batches_processed = 0;
             cx.waker().wake_by_ref();
             return Poll::Pending;
@@ -98,12 +95,12 @@ pub struct YieldStreamExec {
 }
 
 impl YieldStreamExec {
-    pub fn new(child: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(child: Arc<dyn ExecutionPlan>, frequency: usize) -> Self {
         let properties = child.properties().clone();
         Self {
             child,
             properties,
-            frequency: YIELD_BATCHES,
+            frequency,
         }
     }
 }
@@ -121,6 +118,12 @@ impl DisplayAs for YieldStreamExec {
 impl YieldStreamExec {
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.child
+    }
+}
+
+impl YieldStreamExec {
+    pub fn get_yield_frequency(&self) -> usize {
+        self.frequency
     }
 }
 
@@ -155,7 +158,10 @@ impl ExecutionPlan for YieldStreamExec {
             ));
         }
         // Use Arc::clone on children[0] rather than calling clone() directly
-        Ok(Arc::new(YieldStreamExec::new(Arc::clone(&children[0]))))
+        Ok(Arc::new(YieldStreamExec::new(
+            Arc::clone(&children[0]),
+            self.frequency,
+        )))
     }
 
     fn execute(
@@ -164,7 +170,7 @@ impl ExecutionPlan for YieldStreamExec {
         task_ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let child_stream = self.child.execute(partition, Arc::clone(&task_ctx))?;
-        let yield_stream = YieldStream::new(child_stream);
+        let yield_stream = YieldStream::new(child_stream, self.frequency);
         Ok(Box::pin(yield_stream))
     }
 
@@ -197,6 +203,10 @@ mod tests {
     use arrow_schema::SchemaRef;
     use futures::{stream, StreamExt};
 
+    // Frequency testing:
+    // Number of batches to yield before yielding control back to the executor
+    const YIELD_BATCHES: usize = 64;
+
     /// Helper: construct a SendableRecordBatchStream containing `n` empty batches
     fn make_empty_batches(n: usize) -> SendableRecordBatchStream {
         let schema: SchemaRef = Arc::new(Schema::empty());
@@ -214,7 +224,9 @@ mod tests {
     async fn yield_less_than_threshold() -> Result<()> {
         let count = YIELD_BATCHES - 10;
         let inner = make_empty_batches(count);
-        let out: Vec<_> = YieldStream::new(inner).collect::<Vec<_>>().await;
+        let out: Vec<_> = YieldStream::new(inner, YIELD_BATCHES)
+            .collect::<Vec<_>>()
+            .await;
         assert_eq!(out.len(), count);
         Ok(())
     }
@@ -223,7 +235,9 @@ mod tests {
     async fn yield_equal_to_threshold() -> Result<()> {
         let count = YIELD_BATCHES;
         let inner = make_empty_batches(count);
-        let out: Vec<_> = YieldStream::new(inner).collect::<Vec<_>>().await;
+        let out: Vec<_> = YieldStream::new(inner, YIELD_BATCHES)
+            .collect::<Vec<_>>()
+            .await;
         assert_eq!(out.len(), count);
         Ok(())
     }
@@ -232,7 +246,9 @@ mod tests {
     async fn yield_more_than_threshold() -> Result<()> {
         let count = YIELD_BATCHES + 20;
         let inner = make_empty_batches(count);
-        let out: Vec<_> = YieldStream::new(inner).collect::<Vec<_>>().await;
+        let out: Vec<_> = YieldStream::new(inner, YIELD_BATCHES)
+            .collect::<Vec<_>>()
+            .await;
         assert_eq!(out.len(), count);
         Ok(())
     }

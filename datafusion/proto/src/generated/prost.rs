@@ -1577,6 +1577,8 @@ pub struct AvroScanExecNode {
 pub struct YieldStreamExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(uint32, tag = "2")]
+    pub frequency: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HashJoinExecNode {

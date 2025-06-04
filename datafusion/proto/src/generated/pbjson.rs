@@ -22690,9 +22690,15 @@ impl serde::Serialize for YieldStreamExecNode {
         if self.input.is_some() {
             len += 1;
         }
+        if self.frequency != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.YieldStreamExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
+        }
+        if self.frequency != 0 {
+            struct_ser.serialize_field("frequency", &self.frequency)?;
         }
         struct_ser.end()
     }
@@ -22705,11 +22711,13 @@ impl<'de> serde::Deserialize<'de> for YieldStreamExecNode {
     {
         const FIELDS: &[&str] = &[
             "input",
+            "frequency",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
+            Frequency,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22732,6 +22740,7 @@ impl<'de> serde::Deserialize<'de> for YieldStreamExecNode {
                     {
                         match value {
                             "input" => Ok(GeneratedField::Input),
+                            "frequency" => Ok(GeneratedField::Frequency),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22752,6 +22761,7 @@ impl<'de> serde::Deserialize<'de> for YieldStreamExecNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut input__ = None;
+                let mut frequency__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -22760,10 +22770,19 @@ impl<'de> serde::Deserialize<'de> for YieldStreamExecNode {
                             }
                             input__ = map_.next_value()?;
                         }
+                        GeneratedField::Frequency => {
+                            if frequency__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("frequency"));
+                            }
+                            frequency__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(YieldStreamExecNode {
                     input: input__,
+                    frequency: frequency__.unwrap_or_default(),
                 })
             }
         }

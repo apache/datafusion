@@ -1794,7 +1794,8 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input =
             into_physical_plan(&field_stream.input, registry, runtime, extension_codec)?;
-        Ok(Arc::new(YieldStreamExec::new(input)))
+        let frequency = field_stream.frequency as usize;
+        Ok(Arc::new(YieldStreamExec::new(input, frequency)))
     }
 
     fn try_from_explain_exec(
@@ -2786,10 +2787,13 @@ impl protobuf::PhysicalPlanNode {
             extension_codec,
         )?;
 
+        let frequency = exec.get_yield_frequency();
+
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::YieldStream(Box::new(
                 protobuf::YieldStreamExecNode {
                     input: Some(Box::new(input)),
+                    frequency: frequency as u32,
                 },
             ))),
         })
