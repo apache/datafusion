@@ -396,10 +396,15 @@ impl LogicalPlanBuilder {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
 
-    pub fn delim_get(table_index: usize, delim_types: &Vec<DataType>) -> Self {
+    pub fn delim_get(
+        table_index: usize,
+        delim_types: &Vec<DataType>,
+        schema: DFSchemaRef,
+    ) -> Self {
         Self::new(LogicalPlan::DelimGet(DelimGet::try_new(
             table_index,
             delim_types,
+            schema,
         )))
     }
 

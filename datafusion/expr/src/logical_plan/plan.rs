@@ -302,9 +302,13 @@ pub struct DelimGet {
 }
 
 impl DelimGet {
-    pub fn try_new(table_index: usize, delim_types: &Vec<DataType>) -> Self {
+    pub fn try_new(
+        table_index: usize,
+        delim_types: &Vec<DataType>,
+        projected_schema: DFSchemaRef,
+    ) -> Self {
         Self {
-            projected_schema: Arc::new(DFSchema::empty()),
+            projected_schema,
             table_index,
             delim_types: delim_types.clone(),
         }
