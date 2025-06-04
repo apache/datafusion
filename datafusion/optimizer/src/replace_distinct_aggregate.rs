@@ -106,7 +106,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 sort_expr,
                 input,
                 schema,
-            })) => {
+            })) if config.function_registry().is_some() => {
                 let expr_cnt = on_expr.len();
 
                 // Construct the aggregation expression to be used to fetch the selected expressions.
