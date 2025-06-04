@@ -19,19 +19,16 @@
 
 # DataFusion sqllogictest
 
-[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
-format.
+[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate is a submodule of DataFusion that contains an implementation
-of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki).
+This crate is a submodule of DataFusion that contains an implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki).
 
 [df]: https://crates.io/crates/datafusion
 
 ## Overview
 
 This crate uses [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) to parse and run `.slt` files in the
-[`test_files`](test_files) directory of this crate or the [
-`data/sqlite`](https://github.com/apache/datafusion-testing/tree/main/data/sqlite)
+[`test_files`](test_files) directory of this crate or the [`data/sqlite`](https://github.com/apache/datafusion-testing/tree/main/data/sqlite)
 directory of the [datafusion-testing](https://github.com/apache/datafusion-testing) crate.
 
 ## Testing setup
@@ -229,8 +226,7 @@ INCLUDE_TPCH=true cargo test --test sqllogictests
 ## Running Tests: `sqlite`
 
 Test files in `data/sqlite` directory of the datafusion-testing crate were
-sourced from the [sqlite test suite](https://www.sqlite.org/sqllogictest/dir?ci=tip) and have been cleansed and updated
-to
+sourced from the [sqlite test suite](https://www.sqlite.org/sqllogictest/dir?ci=tip) and have been cleansed and updated to
 run within DataFusion's sqllogictest runner.
 
 To run the sqlite tests you need to increase the rust stack size and add
@@ -337,8 +333,7 @@ location such as `/tmp/`)
 Query records follow the format:
 
 ```sql
-#
-<test_name>
+# <test_name>
 query <type_string> <sort_mode>
 <sql_query>
 ----
@@ -348,20 +343,20 @@ query <type_string> <sort_mode>
 - `test_name`: Uniquely identify the test name (DataFusion only)
 - `type_string`: A short string that specifies the number of result columns and the expected datatype of each result
   column. There is one character in the <type_string> for each result column. The characters codes are:
-    - 'B' - **B**oolean,
-    - 'D' - **D**atetime,
-    - 'I' - **I**nteger,
-    - 'P' - timestam**P**,
-    - 'R' - floating-point results,
-    - 'T' - **T**ext,
-    - "?" - any other types
+  - 'B' - **B**oolean,
+  - 'D' - **D**atetime,
+  - 'I' - **I**nteger,
+  - 'P' - timestam**P**,
+  - 'R' - floating-point results,
+  - 'T' - **T**ext,
+  - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
-    - floating point values are rounded to the scale of "12",
-    - NULL values are rendered as `NULL`,
-    - empty strings are rendered as `(empty)`,
-    - boolean values are rendered as `true`/`false`,
-    - this list can be not exhaustive, check the `datafusion/sqllogictest/src/engines/conversion.rs` for
-      details.
+  - floating point values are rounded to the scale of "12",
+  - NULL values are rendered as `NULL`,
+  - empty strings are rendered as `(empty)`,
+  - boolean values are rendered as `true`/`false`,
+  - this list can be not exhaustive, check the `datafusion/sqllogictest/src/engines/conversion.rs` for
+    details.
 - `sort_mode`: If included, it must be one of `nosort` (**default**), `rowsort`, or `valuesort`. In `nosort` mode, the
   results appear in exactly the order in which they were received from the database engine. The `nosort` mode should
   only be used on queries that have an `ORDER BY` clause or which only have a single row of result, since otherwise the
@@ -377,15 +372,11 @@ query <type_string> <sort_mode>
 ### Example
 
 ```sql
-#
-group_by_distinct
+# group_by_distinct
 query TTI
-SELECT a, b, COUNT(DISTINCT c)
-FROM my_table
-GROUP BY a, b
-ORDER BY a, b
+SELECT a, b, COUNT(DISTINCT c) FROM my_table GROUP BY a, b ORDER BY a, b
 ----
-    foo bar 10
+foo bar 10
 foo baz 5
 foo     4
         3
