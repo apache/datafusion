@@ -3014,7 +3014,12 @@ impl Display for Expr {
                 write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
-            Expr::Literal(v, _) => write!(f, "{v:?}"),
+            Expr::Literal(v, metadata) => {
+                match metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
+                    false => write!(f, "{v:?} {:?}", metadata.as_ref().unwrap()),
+                    true => write!(f, "{v:?}"),
+                }
+            }
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {
