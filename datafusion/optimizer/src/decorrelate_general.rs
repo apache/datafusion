@@ -391,10 +391,11 @@ impl DependentJoinDecorrelator {
         parent_propagate_nulls: bool,
         lateral_depth: usize,
     ) -> Result<LogicalPlan> {
-        // TODO: is there any way to do this more efficiently
         let mut has_correlated_expr = false;
         let has_correlated_expr_ref = &mut has_correlated_expr;
+        // TODO: is there any way to do this more efficiently
         // TODO: this lookup must be associated with a list of correlated_columns
+        // (from current decorrelation context and its parent)
         // and check if the correlated expr (if any) exists in the correlated_columns
         node.apply(|p| {
             match p {
