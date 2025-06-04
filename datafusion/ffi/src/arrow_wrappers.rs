@@ -45,16 +45,19 @@ impl From<SchemaRef> for WrappedSchema {
         WrappedSchema(ffi_schema)
     }
 }
+/// Some functions are expected to always succeed, like getting the schema from a TableProvider.
+/// Since going through the FFI always has the potential to fail, we need to catch these errors,
+/// give the user a warning, and return some kind of result. In this case we default to an
+/// empty schema.
+#[cfg(not(tarpaulin_include))]
+fn catch_df_schema_error(e: ArrowError) -> Schema {
+    error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}");
+    Schema::empty()
+}
 
 impl From<WrappedSchema> for SchemaRef {
     fn from(value: WrappedSchema) -> Self {
-        let schema = match Schema::try_from(&value.0) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}");
-                Schema::empty()
-            }
-        };
+        let schema = Schema::try_from(&value.0).unwrap_or_else(catch_df_schema_error);
         Arc::new(schema)
     }
 }
