@@ -222,15 +222,29 @@ unused_qualifications = "deny"
 
 # pin to https://github.com/apache/arrow-rs/pull/7597
 [patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "ac051b7447d989fed95ad9a2815800b6ba1a8a3c" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "313ed723b2c6fadfcf4d6dfd7894adc4144135c9" }
+
+#arrow = { path= "/Users/andrewlamb/Software/arrow-rs/arrow" }
+#arrow-array = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-array" }
+#arrow-buffer = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-buffer" }
+#arrow-cast = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-cast" }
+#arrow-data = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-data" }
+#arrow-ipc = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-ipc" }
+#arrow-schema = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-schema" }
+#arrow-select = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-select" }
+#arrow-string = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-string" }
+#arrow-ord = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-ord" }
+#arrow-flight = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-flight" }
+#parquet = { path= "/Users/andrewlamb/Software/arrow-rs/parquet" }
+
