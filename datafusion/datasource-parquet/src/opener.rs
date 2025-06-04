@@ -135,8 +135,8 @@ impl FileOpener for ParquetOpener {
             // pruning predicates. Thus default to not requesting if from the
             // underlying reader.
             let mut options = ArrowReaderOptions::new().with_page_index(false);
-            if let Some(ref fd_val) = file_decryption_properties {
-                options = options.with_file_decryption_properties((**fd_val).clone());
+            if let Some(fd_val) = file_decryption_properties {
+                options = options.with_file_decryption_properties((*fd_val).clone());
             }
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
 
