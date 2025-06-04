@@ -57,7 +57,7 @@ impl PlainAggregateWindowExpr {
         order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
-        let is_constant_in_partition = 
+        let is_constant_in_partition =
             Self::is_window_constant_in_partition(order_by, &window_frame);
         Self {
             aggregate,
