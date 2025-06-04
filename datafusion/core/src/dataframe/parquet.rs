@@ -246,15 +246,14 @@ mod tests {
 
         Ok(())
     }
-    
 
     #[tokio::test]
     async fn roundtrip_parquet_with_encryption() -> Result<()> {
+        use crate::execution::SessionStateBuilder;
+        use datafusion_common::config::ConfigFileDecryptionProperties;
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
-        use datafusion_common::config::ConfigFileDecryptionProperties;
-        use crate::execution::SessionStateBuilder;
-        
+
         let test_df = test_util::test_table().await?;
 
         let schema = test_df.schema();
@@ -263,20 +262,20 @@ mod tests {
 
         let mut encrypt = FileEncryptionProperties::builder(footer_key.clone());
         let mut decrypt = FileDecryptionProperties::builder(footer_key.clone());
-        
+
         for field in schema.fields().iter() {
             encrypt = encrypt.with_column_key(field.name().as_str(), column_key.clone());
             decrypt = decrypt.with_column_key(field.name().as_str(), column_key.clone());
         }
-        
+
         let encrypt = encrypt.build().unwrap();
         let decrypt = decrypt.build().unwrap();
-        
+
         let df = test_df.clone();
         let tmp_dir = TempDir::new()?;
         let tempfile = tmp_dir.path().join("roundtrip.parquet");
         let tempfile_str = tempfile.into_os_string().into_string().unwrap();
-        
+
         // Write encrypted parquet using write_parquet
         let mut options = TableParquetOptions::default();
         options.global.file_encryption_properties = Some(encrypt.clone().into());
@@ -288,9 +287,9 @@ mod tests {
             DataFrameWriteOptions::new().with_single_file_output(true),
             Some(options),
         )
-            .await?;
+        .await?;
         let num_rows_written: usize = test_df.count().await?;
-        
+
         // Read encrypted parquet
         let mut sc = SessionConfig::new();
         let fd: ConfigFileDecryptionProperties = decrypt.clone().into();
@@ -301,19 +300,17 @@ mod tests {
 
         let state = SessionStateBuilder::new().with_config(sc).build();
         let ctx: SessionContext = SessionContext::new_with_state(state);
-        
+
         ctx.register_parquet(
             "roundtrip_parquet",
             &tempfile_str,
             ParquetReadOptions::default(),
         )
-            .await?;
-        
-        let df_enc = ctx.sql(
-            "SELECT * FROM roundtrip_parquet",
-        ).await?;
+        .await?;
+
+        let df_enc = ctx.sql("SELECT * FROM roundtrip_parquet").await?;
         let num_rows_read = df_enc.count().await?;
-        
+
         assert_eq!(num_rows_read as usize, num_rows_written as usize);
 
         Ok(())
