@@ -22,6 +22,7 @@ use crate::aggregates::{
     aggregate_expressions, evaluate_group_by, evaluate_many, AggregateExec,
     PhysicalGroupBy,
 };
+use crate::poll_budget::PollBudget;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
@@ -31,10 +32,11 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::{Stream, StreamExt};
+use futures::FutureExt;
 use log::{trace, Level};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 pub struct GroupedTopKAggregateStream {
     partition: usize,
@@ -42,6 +44,7 @@ pub struct GroupedTopKAggregateStream {
     started: bool,
     schema: SchemaRef,
     input: SendableRecordBatchStream,
+    poll_budget: PollBudget,
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     group_by: PhysicalGroupBy,
     priority_map: PriorityMap,
@@ -75,6 +78,7 @@ impl GroupedTopKAggregateStream {
             row_count: 0,
             schema: agg_schema,
             input,
+            poll_budget: PollBudget::from(context.as_ref()),
             aggregate_arguments,
             group_by,
             priority_map,
@@ -111,7 +115,10 @@ impl Stream for GroupedTopKAggregateStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
+        let mut consume_budget = self.poll_budget.consume_budget();
+
+        loop {
+            let res = ready!(self.input.poll_next_unpin(cx));
             match res {
                 // got a batch, convert to rows and append to our TreeMap
                 Some(Ok(batch)) => {
@@ -174,7 +181,8 @@ impl Stream for GroupedTopKAggregateStream {
                     return Poll::Ready(Some(Err(e)));
                 }
             }
+
+            ready!(consume_budget.poll_unpin(cx));
         }
-        Poll::Pending
     }
 }

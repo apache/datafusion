@@ -33,11 +33,11 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::AggregateExec;
 use crate::filter::batch_filter;
+use crate::poll_budget::PollBudget;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
-
-use super::AggregateExec;
 
 /// stream struct for aggregation without grouping columns
 pub(crate) struct AggregateStream {
@@ -94,7 +94,7 @@ impl AggregateStream {
         let inner = AggregateStreamInner {
             schema: Arc::clone(&agg.schema),
             mode: agg.mode,
-            input,
+            input: PollBudget::from(context.as_ref()).wrap_stream(input),
             baseline_metrics,
             aggregate_expressions,
             filter_expressions,

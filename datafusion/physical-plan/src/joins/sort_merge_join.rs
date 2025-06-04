@@ -31,7 +31,7 @@ use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::expressions::PhysicalSortExpr;
@@ -74,7 +74,8 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
-use futures::{Stream, StreamExt};
+use crate::poll_budget::PollBudget;
+use futures::{FutureExt, Stream, StreamExt};
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
@@ -499,6 +500,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             SortMergeJoinMetrics::new(partition, &self.metrics),
             reservation,
             context.runtime_env(),
+            PollBudget::from(context.as_ref()),
         )?))
     }
 
@@ -908,6 +910,7 @@ struct SortMergeJoinStream {
     pub runtime_env: Arc<RuntimeEnv>,
     /// A unique number for each batch
     pub streamed_batch_counter: AtomicUsize,
+    pub poll_budget: PollBudget,
 }
 
 /// Joined batches with attached join filter information
@@ -1125,6 +1128,9 @@ impl Stream for SortMergeJoinStream {
     ) -> Poll<Option<Self::Item>> {
         let join_time = self.join_metrics.join_time.clone();
         let _timer = join_time.timer();
+
+        let mut consume_budget = self.poll_budget.consume_budget();
+
         loop {
             match &self.state {
                 SortMergeJoinState::Init => {
@@ -1204,7 +1210,9 @@ impl Stream for SortMergeJoinStream {
                         .contains(&self.streamed_state)
                     {
                         match self.poll_streamed_row(cx)? {
-                            Poll::Ready(_) => {}
+                            Poll::Ready(_) => {
+                                ready!(consume_budget.poll_unpin(cx));
+                            }
                             Poll::Pending => return Poll::Pending,
                         }
                     }
@@ -1213,7 +1221,9 @@ impl Stream for SortMergeJoinStream {
                         .contains(&self.buffered_state)
                     {
                         match self.poll_buffered_batches(cx)? {
-                            Poll::Ready(_) => {}
+                            Poll::Ready(_) => {
+                                ready!(consume_budget.poll_unpin(cx));
+                            }
                             Poll::Pending => return Poll::Pending,
                         }
                     }
@@ -1323,6 +1333,7 @@ impl SortMergeJoinStream {
         join_metrics: SortMergeJoinMetrics,
         reservation: MemoryReservation,
         runtime_env: Arc<RuntimeEnv>,
+        poll_budget: PollBudget,
     ) -> Result<Self> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
@@ -1365,6 +1376,7 @@ impl SortMergeJoinStream {
             runtime_env,
             spill_manager,
             streamed_batch_counter: AtomicUsize::new(0),
+            poll_budget,
         })
     }
 

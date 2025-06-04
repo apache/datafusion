@@ -49,10 +49,11 @@ use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
+use crate::poll_budget::PollBudget;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use futures::ready;
 use futures::stream::{Stream, StreamExt};
+use futures::{ready, FutureExt};
 use log::debug;
 
 #[derive(Debug, Clone)]
@@ -432,6 +433,8 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
+
+    poll_budget: PollBudget,
 }
 
 impl GroupedHashAggregateStream {
@@ -620,6 +623,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
+            poll_budget: PollBudget::from(context.as_ref()),
         })
     }
 }
@@ -653,6 +657,7 @@ impl Stream for GroupedHashAggregateStream {
     ) -> Poll<Option<Self::Item>> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
+        let mut consume_budget = self.poll_budget.consume_budget();
         loop {
             match &self.exec_state {
                 ExecutionState::ReadingInput => 'reading_input: {
@@ -815,6 +820,7 @@ impl Stream for GroupedHashAggregateStream {
                     return Poll::Ready(None);
                 }
             }
+            ready!(consume_budget.poll_unpin(cx));
         }
     }
 }

@@ -81,6 +81,7 @@ use datafusion_physical_expr::equivalence::{
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
+use crate::poll_budget::PollBudget;
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -805,6 +806,7 @@ impl ExecutionPlan for HashJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
+                let poll_budget = PollBudget::from(context.as_ref());
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
 
                 let reservation =
@@ -812,7 +814,7 @@ impl ExecutionPlan for HashJoinExec {
 
                 Ok(collect_left_input(
                     self.random_state.clone(),
-                    left_stream,
+                    poll_budget.wrap_stream(left_stream),
                     on_left.clone(),
                     join_metrics.clone(),
                     reservation,
@@ -821,6 +823,7 @@ impl ExecutionPlan for HashJoinExec {
                 ))
             })?,
             PartitionMode::Partitioned => {
+                let poll_budget = PollBudget::from(context.as_ref());
                 let left_stream = self.left.execute(partition, Arc::clone(&context))?;
 
                 let reservation =
@@ -829,7 +832,7 @@ impl ExecutionPlan for HashJoinExec {
 
                 OnceFut::new(collect_left_input(
                     self.random_state.clone(),
-                    left_stream,
+                    poll_budget.wrap_stream(left_stream),
                     on_left.clone(),
                     join_metrics.clone(),
                     reservation,

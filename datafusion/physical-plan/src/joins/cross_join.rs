@@ -46,6 +46,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
+use crate::poll_budget::PollBudget;
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -302,10 +303,10 @@ impl ExecutionPlan for CrossJoinExec {
             context.session_config().enforce_batch_size_in_joins();
 
         let left_fut = self.left_fut.try_once(|| {
+            let poll_budget = PollBudget::from(context.as_ref());
             let left_stream = self.left.execute(0, context)?;
-
             Ok(load_left_input(
-                left_stream,
+                poll_budget.wrap_stream(left_stream),
                 join_metrics.clone(),
                 reservation,
             ))

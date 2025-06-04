@@ -257,6 +257,7 @@ datafusion.execution.parquet.statistics_truncate_length NULL
 datafusion.execution.parquet.write_batch_size 1024
 datafusion.execution.parquet.writer_version 1.0
 datafusion.execution.planning_concurrency 13
+datafusion.execution.poll_budget 128
 datafusion.execution.skip_partial_aggregation_probe_ratio_threshold 0.8
 datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000
 datafusion.execution.skip_physical_aggregate_schema_check false
@@ -367,6 +368,7 @@ datafusion.execution.parquet.statistics_truncate_length NULL (writing) Sets stat
 datafusion.execution.parquet.write_batch_size 1024 (writing) Sets write_batch_size in bytes
 datafusion.execution.parquet.writer_version 1.0 (writing) Sets parquet writer version valid values are "1.0" and "2.0"
 datafusion.execution.planning_concurrency 13 Fan-out during initial physical planning. This is mostly use to plan `UNION` children in parallel. Defaults to the number of CPU cores on the system
+datafusion.execution.poll_budget 128 The maximum number of times pipeline breaking operators may poll their children in a loop before yielding. Setting this to a value greater than zero ensures running queries can be cancelled in a timely fashion.
 datafusion.execution.skip_partial_aggregation_probe_ratio_threshold 0.8 Aggregation ratio (number of distinct groups / number of input rows) threshold for skipping partial aggregation. If the value is greater then partial aggregation will skip aggregation for further input
 datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000 Number of input rows partial aggregation partition should process, before aggregation ratio check and trying to switch to skipping aggregation mode
 datafusion.execution.skip_physical_aggregate_schema_check false When set to true, skips verifying that the schema produced by planning the input of `LogicalPlan::Aggregate` exactly matches the schema of the input plan. When set to false, if the schema does not match exactly (including nullability and metadata), a planning error will be raised. This is used to workaround bugs in the planner that are now caught by the new schema verification step.

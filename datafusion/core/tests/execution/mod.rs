@@ -16,3 +16,4 @@
 // under the License.
 
 mod logical_plan;
+mod yielding;

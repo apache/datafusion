@@ -63,8 +63,9 @@ use datafusion_physical_expr::window::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
+use crate::poll_budget::PollBudget;
 use futures::stream::Stream;
-use futures::{ready, StreamExt};
+use futures::{ready, FutureExt, StreamExt};
 use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
@@ -343,6 +344,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let poll_budget = PollBudget::from(context.as_ref());
         let input = self.input.execute(partition, context)?;
         let search_mode = self.get_search_algo()?;
         let stream = Box::pin(BoundedWindowAggStream::new(
@@ -351,6 +353,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             input,
             BaselineMetrics::new(&self.metrics, partition),
             search_mode,
+            poll_budget,
         )?);
         Ok(stream)
     }
@@ -916,6 +919,7 @@ pub struct BoundedWindowAggStream {
     /// Search mode for partition columns. This determines the algorithm with
     /// which we group each partition.
     search_mode: Box<dyn PartitionSearcher>,
+    poll_budget: PollBudget,
 }
 
 impl BoundedWindowAggStream {
@@ -959,6 +963,7 @@ impl BoundedWindowAggStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         search_mode: Box<dyn PartitionSearcher>,
+        poll_budget: PollBudget,
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
@@ -972,6 +977,7 @@ impl BoundedWindowAggStream {
             window_expr,
             baseline_metrics,
             search_mode,
+            poll_budget,
         })
     }
 
@@ -1017,36 +1023,41 @@ impl BoundedWindowAggStream {
             return Poll::Ready(None);
         }
 
-        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        match ready!(self.input.poll_next_unpin(cx)) {
-            Some(Ok(batch)) => {
-                // Start the timer for compute time within this operator. It will be
-                // stopped when dropped.
-                let _timer = elapsed_compute.timer();
+        let mut consume_budget = self.poll_budget.consume_budget();
 
-                self.search_mode.update_partition_batch(
-                    &mut self.input_buffer,
-                    batch,
-                    &self.window_expr,
-                    &mut self.partition_buffers,
-                )?;
-                if let Some(batch) = self.compute_aggregates()? {
-                    return Poll::Ready(Some(Ok(batch)));
-                }
-                self.poll_next_inner(cx)
-            }
-            Some(Err(e)) => Poll::Ready(Some(Err(e))),
-            None => {
-                let _timer = elapsed_compute.timer();
+        loop {
+            let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+            match ready!(self.input.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
+                    // Start the timer for compute time within this operator. It will be
+                    // stopped when dropped.
+                    let _timer = elapsed_compute.timer();
 
-                self.finished = true;
-                for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
-                    partition_batch_state.is_end = true;
+                    self.search_mode.update_partition_batch(
+                        &mut self.input_buffer,
+                        batch,
+                        &self.window_expr,
+                        &mut self.partition_buffers,
+                    )?;
+                    if let Some(batch) = self.compute_aggregates()? {
+                        return Poll::Ready(Some(Ok(batch)));
+                    }
+
+                    ready!(consume_budget.poll_unpin(cx));
                 }
-                if let Some(batch) = self.compute_aggregates()? {
-                    return Poll::Ready(Some(Ok(batch)));
+                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+                None => {
+                    let _timer = elapsed_compute.timer();
+
+                    self.finished = true;
+                    for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
+                        partition_batch_state.is_end = true;
+                    }
+                    if let Some(batch) = self.compute_aggregates()? {
+                        return Poll::Ready(Some(Ok(batch)));
+                    }
+                    return Poll::Ready(None);
                 }
-                Poll::Ready(None)
             }
         }
     }
