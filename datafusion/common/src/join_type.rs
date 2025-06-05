@@ -67,6 +67,11 @@ pub enum JoinType {
     ///
     /// [1]: http://btw2017.informatik.uni-stuttgart.de/slidesandpapers/F1-10-37/paper_web.pdf
     LeftMark,
+    /// Right Mark Join
+    ///
+    /// Same logic as the LeftMark Join above, however it returns a record for each record from the
+    /// right input.
+    RightMark,
 }
 
 impl JoinType {
@@ -87,13 +92,12 @@ impl JoinType {
             JoinType::RightSemi => JoinType::LeftSemi,
             JoinType::LeftAnti => JoinType::RightAnti,
             JoinType::RightAnti => JoinType::LeftAnti,
-            JoinType::LeftMark => {
-                unreachable!("LeftMark join type does not support swapping")
-            }
+            JoinType::LeftMark => JoinType::RightMark,
+            JoinType::RightMark => JoinType::LeftMark,
         }
     }
 
-    /// Does the join type support swapping  inputs?
+    /// Does the join type support swapping inputs?
     pub fn supports_swap(&self) -> bool {
         matches!(
             self,
@@ -121,6 +125,7 @@ impl Display for JoinType {
             JoinType::LeftAnti => "LeftAnti",
             JoinType::RightAnti => "RightAnti",
             JoinType::LeftMark => "LeftMark",
+            JoinType::RightMark => "RightMark",
         };
         write!(f, "{join_type}")
     }
@@ -141,6 +146,7 @@ impl FromStr for JoinType {
             "LEFTANTI" => Ok(JoinType::LeftAnti),
             "RIGHTANTI" => Ok(JoinType::RightAnti),
             "LEFTMARK" => Ok(JoinType::LeftMark),
+            "RIGHTMARK" => Ok(JoinType::RightMark),
             _ => _not_impl_err!("The join type {s} does not exist or is not implemented"),
         }
     }

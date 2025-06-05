@@ -220,9 +220,11 @@ impl SortMergeJoinExec {
         // When output schema contains only the right side, probe side is right.
         // Otherwise probe side is the left side.
         match join_type {
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-                JoinSide::Right
-            }
+            // TODO: sort merge support for right mark (tracked here: https://github.com/apache/datafusion/issues/16226)
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => JoinSide::Right,
             JoinType::Inner
             | JoinType::Left
             | JoinType::Full
@@ -240,7 +242,10 @@ impl SortMergeJoinExec {
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::LeftMark => vec![true, false],
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
                 vec![false, true]
             }
             _ => vec![false, false],
