@@ -7035,8 +7035,8 @@ VALUES
 query TI
 SELECT column1, COUNT(DISTINCT column2) FROM (
 VALUES
-  ('X', arrow_cast('NAN','Float64')),
-  ('X', arrow_cast('NAN','Float64'))
+  ('x', arrow_cast('NAN','Float64')),
+  ('x', arrow_cast('NAN','Float64'))
 ) GROUP BY 1 ORDER BY 1;
 ----
 x 1
