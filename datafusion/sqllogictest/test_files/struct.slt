@@ -272,7 +272,28 @@ select a from values where (a, c) = (1, 'a');
 1
 
 query I
+select a from values as v where (v.a, v.c) = (1, 'a');
+----
+1
+
+query I
+select a from values as v where (v.a, v.c) != (1, 'a');
+----
+2
+3
+
+query I
+select a from values as v where (v.a, v.c) = (1, 'b');
+----
+
+query I
 select a from values where (a, c) IN ((1, 'a'), (2, 'b'));
+----
+1
+2
+
+query I
+select a from values as v where (v.a, v.c) IN ((1, 'a'), (2, 'b'));
 ----
 1
 2

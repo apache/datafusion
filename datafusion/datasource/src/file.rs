@@ -25,15 +25,21 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
+use crate::schema_adapter::SchemaAdapterFactory;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, Statistics};
+use datafusion_common::{not_impl_err, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
 use object_store::ObjectStore;
+
+/// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
+pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
+    Arc::new(source)
+}
 
 /// file format specific behaviors for elements in [`DataSource`]
 ///
@@ -115,5 +121,31 @@ pub trait FileSource: Send + Sync {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         Ok(FilterPushdownPropagation::unsupported(filters))
+    }
+
+    /// Set optional schema adapter factory.
+    ///
+    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
+    /// file get mapped to that of the table schema.  If you implement this
+    /// method, you should also implement [`schema_adapter_factory`].
+    ///
+    /// The default implementation returns a not implemented error.
+    ///
+    /// [`schema_adapter_factory`]: Self::schema_adapter_factory
+    fn with_schema_adapter_factory(
+        &self,
+        _factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        not_impl_err!(
+            "FileSource {} does not support schema adapter factory",
+            self.file_type()
+        )
+    }
+
+    /// Returns the current schema adapter factory if set
+    ///
+    /// Default implementation returns `None`.
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        None
     }
 }

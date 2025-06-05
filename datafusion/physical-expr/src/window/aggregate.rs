@@ -34,7 +34,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{Accumulator, WindowFrame};
+use datafusion_expr::{Accumulator, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// A window expr that takes the form of an aggregate function.
@@ -46,6 +46,7 @@ pub struct PlainAggregateWindowExpr {
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: LexOrdering,
     window_frame: Arc<WindowFrame>,
+    is_constant_in_partition: bool,
 }
 
 impl PlainAggregateWindowExpr {
@@ -56,11 +57,14 @@ impl PlainAggregateWindowExpr {
         order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
+        let is_constant_in_partition =
+            Self::is_window_constant_in_partition(order_by, &window_frame);
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
             order_by: order_by.clone(),
             window_frame,
+            is_constant_in_partition,
         }
     }
 
@@ -84,6 +88,30 @@ impl PlainAggregateWindowExpr {
                 &self.partition_by,
             );
         }
+    }
+
+    // Returns true if every row in the partition has the same window frame. This allows
+    // for preventing bound + function calculation for every row due to the values being the
+    // same.
+    //
+    // This occurs when both bounds fall under either condition below:
+    //  1. Bound is unbounded (`Preceding` or `Following`)
+    //  2. Bound is `CurrentRow` while using `Range` units with no order by clause
+    //  This results in an invalid range specification. Following PostgreSQL’s convention,
+    //  we interpret this as the entire partition being used for the current window frame.
+    fn is_window_constant_in_partition(
+        order_by: &LexOrdering,
+        window_frame: &WindowFrame,
+    ) -> bool {
+        let is_constant_bound = |bound: &WindowFrameBound| match bound {
+            WindowFrameBound::CurrentRow => {
+                window_frame.units == WindowFrameUnits::Range && order_by.is_empty()
+            }
+            _ => bound.is_unbounded(),
+        };
+
+        is_constant_bound(&window_frame.start_bound)
+            && is_constant_bound(&window_frame.end_bound)
     }
 }
 
@@ -212,5 +240,9 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
             }
             accumulator.evaluate()
         }
+    }
+
+    fn is_constant_in_partition(&self) -> bool {
+        self.is_constant_in_partition
     }
 }
