@@ -88,8 +88,8 @@ use datafusion::physical_plan::{
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
-
 use datafusion::physical_plan::yield_stream::YieldStreamExec;
+
 use prost::bytes::BufMut;
 use prost::Message;
 
