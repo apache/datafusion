@@ -294,11 +294,7 @@ impl ExecutionPlan for LazyMemoryExec {
     /// we can replace a plain DataSourceExec with this same node (it already yields).
     /// Otherwise, return None.
     fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        if self.cooperative {
-            Some(self)
-        } else {
-            None
-        }
+        self.cooperative.then_some(self)
     }
 
     fn statistics(&self) -> Result<Statistics> {
