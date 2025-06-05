@@ -114,9 +114,16 @@ use std::sync::Arc;
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
-    /// Allocate rows based on a hash of one of more expressions and the specified number of
+    /// Allocate rows based on a hash of one or more expressions and the specified number of
     /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
+    /// Allocate rows based on a hash of one or more expressions and the specified number
+    /// of partitions with a selection vector column.
+    ///
+    /// The column is a boolean column called `__selection` that is used to filter out rows
+    /// that should not be included in the partition. `true` means the row should be included
+    /// and `false` means the row should be excluded.
+    HashSelectionBitmap(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
@@ -133,6 +140,14 @@ impl Display for Partitioning {
                     .join(", ");
                 write!(f, "Hash([{phy_exprs_str}], {size})")
             }
+            Partitioning::HashSelectionBitmap(phy_exprs, size) => {
+                let phy_exprs_str = phy_exprs
+                    .iter()
+                    .map(|e| format!("{e}"))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(f, "HashSelectionBitmap([{phy_exprs_str}], {size})")
+            }
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
             }
@@ -144,7 +159,10 @@ impl Partitioning {
     pub fn partition_count(&self) -> usize {
         use Partitioning::*;
         match self {
-            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
+            RoundRobinBatch(n)
+            | Hash(_, n)
+            | HashSelectionBitmap(_, n)
+            | UnknownPartitioning(n) => *n,
         }
     }
 
@@ -159,13 +177,14 @@ impl Partitioning {
             Distribution::UnspecifiedDistribution => true,
             Distribution::SinglePartition if self.partition_count() == 1 => true,
             // When partition count is 1, hash requirement is satisfied.
-            Distribution::HashPartitioned(_) if self.partition_count() == 1 => true,
-            Distribution::HashPartitioned(required_exprs) => {
+            Distribution::HashPartitioned(_, _) if self.partition_count() == 1 => true,
+            Distribution::HashPartitioned(required_exprs, _) => {
                 match self {
                     // Here we do not check the partition count for hash partitioning and assumes the partition count
                     // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
                     // then we need to have the partition count and hash functions validation.
-                    Partitioning::Hash(partition_exprs, _) => {
+                    Partitioning::Hash(partition_exprs, _)
+                    | Partitioning::HashSelectionBitmap(partition_exprs, _) => {
                         let fast_match =
                             physical_exprs_equal(required_exprs, partition_exprs);
                         // If the required exprs do not match, need to leverage the eq_properties provided by the child
@@ -247,7 +266,7 @@ pub enum Distribution {
     SinglePartition,
     /// Requires children to be distributed in such a way that the same
     /// values of the keys end up in the same partition
-    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
+    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>, HashPartitionMode),
 }
 
 impl Distribution {
@@ -258,8 +277,11 @@ impl Distribution {
                 Partitioning::UnknownPartitioning(partition_count)
             }
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
-            Distribution::HashPartitioned(expr) => {
+            Distribution::HashPartitioned(expr, HashPartitionMode::HashPartitioned) => {
                 Partitioning::Hash(expr, partition_count)
+            }
+            Distribution::HashPartitioned(expr, HashPartitionMode::SelectionBitmap) => {
+                Partitioning::HashSelectionBitmap(expr, partition_count)
             }
         }
     }
@@ -270,9 +292,32 @@ impl Display for Distribution {
         match self {
             Distribution::UnspecifiedDistribution => write!(f, "Unspecified"),
             Distribution::SinglePartition => write!(f, "SinglePartition"),
-            Distribution::HashPartitioned(exprs) => {
-                write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
+            Distribution::HashPartitioned(exprs, mode) => {
+                write!(
+                    f,
+                    "HashPartitioned[{}, {}])",
+                    format_physical_expr_list(exprs),
+                    mode
+                )
             }
+        }
+    }
+}
+
+/// The mode of hash partitioning
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum HashPartitionMode {
+    /// Hash partitioning with a selection vector. See [Partitioning::HashSelectionBitmap]
+    SelectionBitmap,
+    /// The default hash partitioning
+    HashPartitioned,
+}
+
+impl Display for HashPartitionMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            HashPartitionMode::SelectionBitmap => write!(f, "SelectionBitmap"),
+            HashPartitionMode::HashPartitioned => write!(f, "HashPartitioned"),
         }
     }
 }
@@ -306,7 +351,10 @@ mod tests {
         let distribution_types = vec![
             Distribution::UnspecifiedDistribution,
             Distribution::SinglePartition,
-            Distribution::HashPartitioned(partition_exprs1.clone()),
+            Distribution::HashPartitioned(
+                partition_exprs1.clone(),
+                HashPartitionMode::HashPartitioned,
+            ),
         ];
 
         let single_partition = Partitioning::UnknownPartitioning(1);
@@ -332,7 +380,7 @@ mod tests {
                 Distribution::SinglePartition => {
                     assert_eq!(result, (true, false, false, false, false))
                 }
-                Distribution::HashPartitioned(_) => {
+                Distribution::HashPartitioned(_, _) => {
                     assert_eq!(result, (true, false, false, true, false))
                 }
             }

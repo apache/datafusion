@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
     bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
-    repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
+    repartition_exec, repartition_selection_bitmap_exec, sort_exec, sort_expr_options,
+    sort_merge_join_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -36,6 +37,8 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{displayable, ExecutionPlan};
 
 use async_trait::async_trait;
+
+use super::test_utils::final_partition_selection_bitmap_aggregate_exec;
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -645,5 +648,39 @@ async fn test_sort_merge_join_dist_missing() -> Result<()> {
     );
     // Distribution requirement for the `SortMergeJoin` is not satisfied for right child (has round-robin partitioning). We expect to receive error during sanity check.
     assert_sanity_check(&smj, false);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_selection_bitmap_partitioning_agg() -> Result<()> {
+    let schema = create_test_schema();
+    let source = memory_exec(&schema);
+    let repartition =
+        repartition_selection_bitmap_exec(source, vec![col("c9", &schema).unwrap()]);
+    let plan = final_partition_selection_bitmap_aggregate_exec(repartition);
+    assert_plan(
+        plan.as_ref(),
+        vec![
+            "AggregateExec: mode=FinalPartitioned(SelectionBitmap), gby=[], aggr=[]",
+             "  RepartitionExec: partitioning=HashSelectionBitmap([c9@0], 1), input_partitions=1",
+              "    DataSourceExec: partitions=1, partition_sizes=[0]"
+        ],
+    );
+    assert_sanity_check(&plan, true);
+
+    let schema = create_test_schema();
+    let source = memory_exec(&schema);
+    let repartition = repartition_exec(source);
+    let plan = final_partition_selection_bitmap_aggregate_exec(repartition);
+    assert_plan(
+        plan.as_ref(),
+        vec![
+            "AggregateExec: mode=FinalPartitioned(SelectionBitmap), gby=[], aggr=[]",
+            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
+        ],
+    );
+    // final partition selection bitmap aggregate requires the input to be partitioned by selection bitmap.
+    assert_sanity_check(&plan, false);
     Ok(())
 }

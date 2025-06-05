@@ -52,7 +52,7 @@ pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
 pub use equivalence::{
     calculate_union, AcrossPartitions, ConstExpr, EquivalenceProperties,
 };
-pub use partitioning::{Distribution, Partitioning};
+pub use partitioning::{Distribution, HashPartitionMode, Partitioning};
 pub use physical_expr::{
     create_ordering, create_physical_sort_expr, create_physical_sort_exprs,
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,

@@ -41,7 +41,7 @@ use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr::{expressions, PhysicalExpr};
+use datafusion_physical_expr::{expressions, HashPartitionMode, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
 };
@@ -320,11 +320,38 @@ pub fn spr_repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionP
     )
 }
 
+pub fn repartition_selection_bitmap_exec(
+    input: Arc<dyn ExecutionPlan>,
+    keys: Vec<Arc<dyn PhysicalExpr>>,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        RepartitionExec::try_new(input, Partitioning::HashSelectionBitmap(keys, 1))
+            .unwrap(),
+    )
+}
+
 pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let schema = input.schema();
     Arc::new(
         AggregateExec::try_new(
             AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![],
+            vec![],
+            input,
+            schema,
+        )
+        .unwrap(),
+    )
+}
+
+pub fn final_partition_selection_bitmap_aggregate_exec(
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::FinalPartitioned(HashPartitionMode::SelectionBitmap),
             PhysicalGroupBy::default(),
             vec![],
             vec![],
