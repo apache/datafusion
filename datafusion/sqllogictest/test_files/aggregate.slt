@@ -5044,6 +5044,37 @@ select count(distinct d) from dict_null_test;
 statement ok
 drop table dict_null_test;
 
+statement ok
+create table dict_value_null_test as
+    select
+        arrow_cast('0', 'Dictionary(Int32, Utf8)') as d1,  -- key 0, which we'll treat as null in the dictionary
+        arrow_cast('1', 'Dictionary(Int32, Utf8)') as d2,  -- key 1
+        arrow_cast('2', 'Dictionary(Int32, Utf8)') as d3   -- key 2
+    from (values (1));
+
+query I
+select count(distinct d1), count(distinct d2), count(distinct d3) from dict_value_null_test;
+----
+0 1 0
+
+query I
+select d2, count(*) from dict_value_null_test group by d2;
+----
+1 1
+
+query I
+select coalesce(d1, 'missing') as resolved from dict_value_null_test;
+----
+missing
+
+query I
+select arrow_cast(d2, 'Utf8') from dict_value_null_test;
+----
+apple
+
+statement ok
+drop table dict_value_null_test;
+
 # avg_duration
 
 statement ok
