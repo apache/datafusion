@@ -31,6 +31,16 @@ pub enum PredicateSupport {
     Unsupported(Arc<dyn PhysicalExpr>),
 }
 
+impl PredicateSupport {
+    pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
+        match self {
+            PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => {
+                expr
+            }
+        }
+    }
+}
+
 /// A thin wrapper around [`PredicateSupport`]s that allows for easy collection of
 /// supported and unsupported filters. Inner vector stores each predicate for one node.
 #[derive(Debug, Clone)]
@@ -56,6 +66,25 @@ impl PredicateSupports {
         let pushdowns = filters
             .into_iter()
             .map(PredicateSupport::Unsupported)
+            .collect();
+        Self::new(pushdowns)
+    }
+
+    /// Create a new [`PredicateSupport`] with filterrs marked as supported if
+    /// `f` returns true and unsupported otherwise.
+    pub fn new_with_supported_check(
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        check: impl Fn(&Arc<dyn PhysicalExpr>) -> bool,
+    ) -> Self {
+        let pushdowns = filters
+            .into_iter()
+            .map(|f| {
+                if check(&f) {
+                    PredicateSupport::Supported(f)
+                } else {
+                    PredicateSupport::Unsupported(f)
+                }
+            })
             .collect();
         Self::new(pushdowns)
     }
@@ -102,6 +131,18 @@ impl PredicateSupports {
             .collect()
     }
 
+    /// Collect supported filters into a Vec, without removing them from the original
+    /// [`PredicateSupport`].
+    pub fn collect_supported(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.0
+            .iter()
+            .filter_map(|f| match f {
+                PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Unsupported(_) => None,
+            })
+            .collect()
+    }
+
     /// Collect all filters into a Vec, without removing them from the original
     /// FilterPushdowns.
     pub fn collect_all(self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -131,6 +172,20 @@ impl PredicateSupports {
     /// Check if the inner `Vec<FilterPushdown>` is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Check if all filters are supported.
+    pub fn is_all_supported(&self) -> bool {
+        self.0
+            .iter()
+            .all(|f| matches!(f, PredicateSupport::Supported(_)))
+    }
+
+    /// Check if all filters are unsupported.
+    pub fn is_all_unsupported(&self) -> bool {
+        self.0
+            .iter()
+            .all(|f| matches!(f, PredicateSupport::Unsupported(_)))
     }
 }
 
