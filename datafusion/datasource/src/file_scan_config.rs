@@ -35,6 +35,7 @@ use crate::{
     statistics::MinMaxStatistics,
     PartitionedFile,
 };
+use arrow::datatypes::FieldRef;
 use arrow::{
     array::{
         ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch,
@@ -172,7 +173,7 @@ pub struct FileScanConfig {
     /// all records after filtering are returned.
     pub limit: Option<usize>,
     /// The partitioning columns
-    pub table_partition_cols: Vec<Field>,
+    pub table_partition_cols: Vec<FieldRef>,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
@@ -253,7 +254,7 @@ pub struct FileScanConfigBuilder {
 
     limit: Option<usize>,
     projection: Option<Vec<usize>>,
-    table_partition_cols: Vec<Field>,
+    table_partition_cols: Vec<FieldRef>,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
@@ -317,7 +318,10 @@ impl FileScanConfigBuilder {
 
     /// Set the partitioning columns
     pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
-        self.table_partition_cols = table_partition_cols;
+        self.table_partition_cols = table_partition_cols
+            .into_iter()
+            .map(|f| Arc::new(f) as FieldRef)
+            .collect();
         self
     }
 
@@ -735,7 +739,9 @@ impl FileScanConfig {
                     self.file_schema.field(idx).clone()
                 } else {
                     let partition_idx = idx - self.file_schema.fields().len();
-                    self.table_partition_cols[partition_idx].clone()
+                    Arc::unwrap_or_clone(Arc::clone(
+                        &self.table_partition_cols[partition_idx],
+                    ))
                 }
             })
             .collect();
@@ -798,7 +804,10 @@ impl FileScanConfig {
     /// Set the partitioning columns of the files
     #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
     pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
-        self.table_partition_cols = table_partition_cols;
+        self.table_partition_cols = table_partition_cols
+            .into_iter()
+            .map(|f| Arc::new(f) as FieldRef)
+            .collect();
         self
     }
 
@@ -2363,6 +2372,7 @@ mod tests {
         let new_config = new_builder.build();
 
         // Verify properties match
+        let partition_cols = partition_cols.into_iter().map(Arc::new).collect::<Vec<_>>();
         assert_eq!(new_config.object_store_url, object_store_url);
         assert_eq!(new_config.file_schema, schema);
         assert_eq!(new_config.projection, Some(vec![0, 2]));
