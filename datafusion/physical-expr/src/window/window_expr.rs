@@ -186,6 +186,10 @@ pub trait AggregateWindowExpr: WindowExpr {
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue>;
 
+    /// Indicates whether this window function always produces the same result
+    /// for all rows in the partition.
+    fn is_constant_in_partition(&self) -> bool;
+
     /// Evaluates the window function against the batch.
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut accumulator = self.get_accumulator()?;
@@ -272,8 +276,13 @@ pub trait AggregateWindowExpr: WindowExpr {
         not_end: bool,
     ) -> Result<ArrayRef> {
         let values = self.evaluate_args(record_batch)?;
-        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
 
+        if self.is_constant_in_partition() {
+            accumulator.update_batch(&values)?;
+            let value = accumulator.evaluate()?;
+            return value.to_array_of_size(record_batch.num_rows());
+        }
+        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
         let most_recent_row_order_bys = most_recent_row
             .map(|batch| self.order_by_columns(batch))
             .transpose()?
