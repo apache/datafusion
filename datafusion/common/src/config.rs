@@ -732,8 +732,11 @@ config_namespace! {
         /// Yield frequency in batches, it represents how many batches to process before yielding
         /// to the Tokio scheduler. The default value is 64, which means that after processing
         /// 64 batches, the execution will yield control back to the Tokio scheduler.
-        /// This setting is only effective when `enable_add_yield_for_pipeline_break` is set to true.
-        /// This value should be greater than 0.
+        /// This value should be greater than 0 or equal to 0;
+        /// When it is greater than 0, `enable` the optimizer will insert a Yield operator at the leaf nodes of any pipeline
+        /// that contains a pipeline-breaking operator, allowing the Tokio scheduler to switch to
+        /// other tasks while waiting.
+        /// If you want to `disable` the Yield operator, you can set this value to 0.
         pub yield_frequency_for_pipeline_break: usize, default = 64
     }
 }

@@ -116,7 +116,7 @@ impl PhysicalOptimizerRule for WrapLeaves {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if config.optimizer.enable_add_yield_for_pipeline_break {
+        if config.optimizer.yield_frequency_for_pipeline_break != 0 {
             let yield_frequency = config.optimizer.yield_frequency_for_pipeline_break;
 
             // We run a top‐level transform_down: for every node, call wrap_leaves_of_pipeline_breakers.

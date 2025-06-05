@@ -75,19 +75,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// [`execute`]: ExecutionPlan::execute
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
-/// The core trait for a physical execution plan node. Every operator
-/// implements this trait. We have extended it by adding two new methods
-/// for “cooperative yielding” support:
-///
-/// 1. `yields_cooperatively()` indicates whether this operator already
-///    supports async/yield behavior internally (default: false).
-///
-/// 2. `with_cooperative_yields(self: Arc<Self>)` returns an alternate
-///    plan node that has built-in yielding; if not available, returns None.
-///
-/// Because `with_cooperative_yields` moves `Arc<Self>` into `Arc<dyn ExecutionPlan>`,
-/// we must ensure `Self: 'static`. Therefore, we add `+ 'static` here.
-pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync + 'static {
+pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
     /// Implementation note: this method can just proxy to

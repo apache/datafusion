@@ -140,9 +140,6 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
 ///
 /// This plan generates output batches lazily, it doesn't have to buffer all batches
 /// in memory up front (compared to `MemorySourceConfig`), thus consuming constant memory.
-/// We now add a `cooperative` flag to
-/// let it optionally yield back to the runtime periodically.
-/// Default is `true`, meaning it will yield back to the runtime for cooperative scheduling.
 pub struct LazyMemoryExec {
     /// Schema representing the data
     schema: SchemaRef,

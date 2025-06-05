@@ -180,9 +180,6 @@ pub trait DataSource: Send + Sync + Debug {
 /// the [`FileSource`] trait.
 ///
 /// [`FileSource`]: crate::file::FileSource
-/// We now add a `cooperative` flag to
-/// let it optionally yield back to the runtime periodically.
-/// Default is `true`, meaning it will yield back to the runtime for cooperative scheduling.
 #[derive(Clone, Debug)]
 pub struct DataSourceExec {
     /// The source of the data -- for example, `FileScanConfig` or `MemorySourceConfig`
