@@ -32,11 +32,18 @@ use datafusion::physical_plan::{
 use datafusion::prelude::SessionContext;
 use datafusion::{common, physical_plan};
 use datafusion_common::config::ConfigOptions;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_common::ScalarValue;
+use datafusion_expr_common::operator::Operator::Gt;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::wrap_leaves_cancellation::WrapLeaves;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::union::InterleaveExec;
 use futures::{Stream, StreamExt};
 use std::any::Any;
 use std::error::Error;
@@ -243,5 +250,114 @@ async fn test_infinite_sort_cancel() -> Result<(), Box<dyn Error>> {
         result.is_none(),
         "Expected timeout for sort, but got a result"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_infinite_interleave_agg_cancel() -> Result<(), Box<dyn Error>> {
+    // 1) Build session, schema, and a sample batch.
+    let session_ctx = SessionContext::new();
+    let schema: SchemaRef = Arc::new(Schema::new(Fields::from(vec![Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    )])));
+    let mut builder = Int64Array::builder(8192);
+    for v in 0..8192 {
+        builder.append_value(v);
+    }
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(builder.finish())])?;
+
+    // 2) Create N infinite sources, each filtered by a different predicate.
+    //    That way, the InterleaveExec will have multiple children.
+    let mut infinite_children: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
+    let thresholds = [
+        8192, 8111, 8030, 7949, 7868, 7787, 7706, 7625, 7544, 7463, 7382, 7301, 7220,
+        7139, 7058, 6977, 6896, 6815, 6734, 6653, 6572, 6491, 6410, 6329, 6248, 6167,
+        6086, 6005, 5924, 5843, 5762, 5681, 5600,
+    ];
+    for &thr in &thresholds {
+        // 2a) One infinite exec:
+        let inf = Arc::new(InfiniteExec::new(&batch));
+
+        // 2b) Apply a FilterExec: “value > thr”.
+        let filter_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new_with_schema("value", &schema)?),
+            Gt,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(thr)))),
+        ));
+        let filtered: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(filter_expr, inf.clone())?);
+
+        // 2c) Wrap in CoalesceBatchesExec so the upstream yields are batched.
+        let coalesced: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalesceBatchesExec::new(filtered.clone(), 8192));
+
+        // 2d) Now repartition so that all children share identical Hash partitioning
+        //     on “value” into 1 bucket. This is required for InterleaveExec::try_new.
+        let exprs: Vec<Arc<dyn PhysicalExpr>> =
+            vec![Arc::new(Column::new_with_schema("value", &schema)?)];
+        let partitioning = Partitioning::Hash(exprs.clone(), 1);
+        let hashed: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            coalesced.clone(),
+            partitioning.clone(),
+        )?);
+
+        infinite_children.push(hashed);
+    }
+
+    // 3) Build an InterleaveExec over all N children.
+    //    Since each child now has Partitioning::Hash([col "value"], 1), InterleaveExec::try_new succeeds.
+    let interleave: Arc<dyn ExecutionPlan> =
+        Arc::new(InterleaveExec::try_new(infinite_children.clone())?);
+
+    // 4) Build a global AggregateExec that sums “value” over all rows.
+    //    Because we use `AggregateMode::Single` with no GROUP BY columns, this plan will
+    //    only produce one “final” row once all inputs finish. But our inputs never finish,
+    //    so we should never get any output.
+    let aggregate_expr = AggregateExprBuilder::new(
+        sum::sum_udaf(),
+        vec![Arc::new(Column::new_with_schema("value", &schema)?)],
+    )
+    .schema(interleave.schema())
+    .alias("total")
+    .build()?;
+
+    let aggr: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new(
+            vec![], // no GROUP BY columns
+            vec![], // no GROUP BY expressions
+            vec![], // no GROUP BY physical expressions
+        ),
+        vec![Arc::new(aggregate_expr)],
+        vec![None], // no “distinct” flags
+        interleave.clone(),
+        interleave.schema(),
+    )?);
+
+    // 5) WrapLeaves will automatically insert YieldStreams beneath each “infinite” leaf.
+    //    That way, each InfiniteExec (through the FilterExec/CoalesceBatchesExec/RepartitionExec chain)
+    //    yields to the runtime periodically instead of spinning CPU.
+    let config = ConfigOptions::new();
+    let optimized = WrapLeaves::new().optimize(aggr, &config)?;
+
+    // 6) Execute the stream. Because AggregateExec(mode=Single) only emits a final batch
+    //    after all inputs finish—and those inputs are infinite—we expect no output
+    //    within 1 second (timeout → None).
+    let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
+    const TIMEOUT: u64 = 1;
+    let result = select! {
+        batch_opt = stream.next() => batch_opt,
+        _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => {
+            None
+        }
+    };
+
+    assert!(
+        result.is_none(),
+        "Expected no output for aggregate over infinite interleave, but got some batch"
+    );
+
     Ok(())
 }
