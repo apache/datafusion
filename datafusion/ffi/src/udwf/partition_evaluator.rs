@@ -17,6 +17,7 @@
 
 use std::{ffi::c_void, ops::Range};
 
+use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
@@ -29,10 +30,11 @@ use datafusion::{
 };
 use prost::Message;
 
-use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
-
 use super::range::FFI_Range;
 
+/// A stable struct for sharing [`PartitionEvaluator`] across FFI boundaries.
+/// For an explanation of each field, see the corresponding function
+/// defined in [`PartitionEvaluator`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
@@ -108,7 +110,8 @@ unsafe extern "C" fn evaluate_all_fn_wrapper(
         .collect::<Result<Vec<ArrayRef>>>();
     let values_arrays = rresult_return!(values_arrays);
 
-    let return_array = (inner.evaluate_all(&values_arrays, num_rows))
+    let return_array = inner
+        .evaluate_all(&values_arrays, num_rows)
         .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
 
     rresult!(return_array)
@@ -148,7 +151,8 @@ unsafe extern "C" fn evaluate_all_with_rank_fn_wrapper(
         .map(Range::from)
         .collect::<Vec<_>>();
 
-    let return_array = (inner.evaluate_all_with_rank(num_rows, &ranks_in_partition))
+    let return_array = inner
+        .evaluate_all_with_rank(num_rows, &ranks_in_partition)
         .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
 
     rresult!(return_array)

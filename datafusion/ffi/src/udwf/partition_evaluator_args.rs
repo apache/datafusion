@@ -17,12 +17,14 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use crate::arrow_wrappers::WrappedSchema;
 use abi_stable::{std_types::RVec, StableAbi};
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::ArrowError,
     ffi::FFI_ArrowSchema,
 };
+use arrow_schema::FieldRef;
 use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::function::PartitionEvaluatorArgs,
@@ -38,26 +40,23 @@ use datafusion_proto::{
 };
 use prost::Message;
 
-use crate::arrow_wrappers::WrappedSchema;
-
+/// A stable struct for sharing [`PartitionEvaluatorArgs`] across FFI boundaries.
+/// For an explanation of each field, see the corresponding function
+/// defined in [`PartitionEvaluatorArgs`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_PartitionEvaluatorArgs {
     input_exprs: RVec<RVec<u8>>,
-    input_types: RVec<WrappedSchema>,
+    input_fields: RVec<WrappedSchema>,
     is_reversed: bool,
     ignore_nulls: bool,
     schema: WrappedSchema,
 }
 
-
 impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
-
     type Error = DataFusionError;
-    fn try_from(
-        args: PartitionEvaluatorArgs,
-    ) -> Result<Self, DataFusionError> {
+    fn try_from(args: PartitionEvaluatorArgs) -> Result<Self, DataFusionError> {
         // This is a bit of a hack. Since PartitionEvaluatorArgs does not carry a schema
         // around, and instead passes the data types directly we are unable to decode the
         // protobuf PhysicalExpr correctly. In evaluating the code the only place these
@@ -65,24 +64,28 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
         // of the required columns and create a schema that has empty fields except for
         // the ones we require. Ideally we would enhance PartitionEvaluatorArgs to just
         // pass along the schema, but that is a larger breaking change.
-        let required_columns: HashMap<usize, (&str, &DataType)> = args.input_exprs().iter().zip(args.input_types())
-            .filter_map(|(expr, data_type)| {
-                expr.as_any().downcast_ref::<Column>().map(|column| (column.index(), (column.name(), data_type)))
+        let required_columns: HashMap<usize, (&str, &DataType)> = args
+            .input_exprs()
+            .iter()
+            .zip(args.input_fields())
+            .filter_map(|(expr, field)| {
+                expr.as_any()
+                    .downcast_ref::<Column>()
+                    .map(|column| (column.index(), (column.name(), field.data_type())))
             })
             .collect();
 
         let max_column = required_columns.keys().max().unwrap_or(&0).to_owned();
-        let fields: Vec<_> = (0..max_column).into_iter()
-            .map(|idx| {
-                match required_columns.get(&idx) {
-                    Some((name, data_type)) => {
-                        Field::new(*name, (*data_type).clone(), true)
-                    }
-                    None => {
-                        Field::new(format!("ffi_partition_evaluator_col_{idx}"), DataType::Null, true)
-                    }
-                }
-            }).collect();
+        let fields: Vec<_> = (0..max_column)
+            .map(|idx| match required_columns.get(&idx) {
+                Some((name, data_type)) => Field::new(*name, (*data_type).clone(), true),
+                None => Field::new(
+                    format!("ffi_partition_evaluator_col_{idx}"),
+                    DataType::Null,
+                    true,
+                ),
+            })
+            .collect();
         let schema = Arc::new(Schema::new(fields));
 
         let codec = DefaultPhysicalExtensionCodec {};
@@ -91,8 +94,8 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
             .map(|expr_node| expr_node.encode_to_vec().into())
             .collect();
 
-        let input_types = args
-            .input_types()
+        let input_fields = args
+            .input_fields()
             .iter()
             .map(|input_type| FFI_ArrowSchema::try_from(input_type).map(WrappedSchema))
             .collect::<Result<Vec<_>, ArrowError>>()?
@@ -102,7 +105,7 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
 
         Ok(Self {
             input_exprs,
-            input_types,
+            input_fields,
             schema,
             is_reversed: args.is_reversed(),
             ignore_nulls: args.ignore_nulls(),
@@ -116,7 +119,7 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
 /// PartitionEvaluatorArgs can then reference.
 pub struct ForeignPartitionEvaluatorArgs {
     input_exprs: Vec<Arc<dyn PhysicalExpr>>,
-    input_types: Vec<DataType>,
+    input_fields: Vec<FieldRef>,
     is_reversed: bool,
     ignore_nulls: bool,
 }
@@ -142,14 +145,14 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let input_types = input_exprs
+        let input_fields = input_exprs
             .iter()
-            .map(|expr| expr.data_type(&schema))
+            .map(|expr| expr.return_field(&schema))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             input_exprs,
-            input_types,
+            input_fields,
             is_reversed: value.is_reversed,
             ignore_nulls: value.ignore_nulls,
         })
@@ -160,7 +163,7 @@ impl<'a> From<&'a ForeignPartitionEvaluatorArgs> for PartitionEvaluatorArgs<'a> 
     fn from(value: &'a ForeignPartitionEvaluatorArgs) -> Self {
         PartitionEvaluatorArgs::new(
             &value.input_exprs,
-            &value.input_types,
+            &value.input_fields,
             value.is_reversed,
             value.ignore_nulls,
         )

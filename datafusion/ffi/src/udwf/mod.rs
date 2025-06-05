@@ -26,11 +26,12 @@ use arrow::{
     compute::SortOptions,
     datatypes::{DataType, SchemaRef},
 };
+use arrow_schema::{Field, FieldRef};
 use datafusion::{
     error::DataFusionError,
     logical_expr::{
-        function::WindowUDFFieldArgs,
-        type_coercion::functions::data_types_with_window_udf, PartitionEvaluator,
+        function::WindowUDFFieldArgs, type_coercion::functions::fields_with_window_udf,
+        PartitionEvaluator,
     },
 };
 use datafusion::{
@@ -45,6 +46,7 @@ mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
 
+use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 use crate::{
     arrow_wrappers::WrappedSchema,
     df_result, rresult, rresult_return,
@@ -130,16 +132,17 @@ unsafe extern "C" fn partition_evaluator_fn_wrapper(
 
 unsafe extern "C" fn field_fn_wrapper(
     udwf: &FFI_WindowUDF,
-    input_types: RVec<WrappedSchema>,
+    input_fields: RVec<WrappedSchema>,
     display_name: RString,
 ) -> RResult<WrappedSchema, RString> {
     let inner = udwf.inner();
 
-    let input_types = rresult_return!(rvec_wrapped_to_vec_datatype(&input_types));
+    let input_fields = rresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
 
-    let field = rresult_return!(
-        inner.field(WindowUDFFieldArgs::new(&input_types, display_name.as_str()))
-    );
+    let field = rresult_return!(inner.field(WindowUDFFieldArgs::new(
+        &input_fields,
+        display_name.as_str()
+    )));
 
     let schema = Arc::new(Schema::new(vec![field]));
 
@@ -152,9 +155,17 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 ) -> RResult<RVec<WrappedSchema>, RString> {
     let inner = udwf.inner();
 
-    let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
+    let arg_fields = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types))
+        .into_iter()
+        .map(|dt| Field::new("f", dt, false))
+        .map(Arc::new)
+        .collect::<Vec<_>>();
 
-    let return_types = rresult_return!(data_types_with_window_udf(&arg_types, inner));
+    let return_fields = rresult_return!(fields_with_window_udf(&arg_fields, inner));
+    let return_types = return_fields
+        .into_iter()
+        .map(|f| f.data_type().to_owned())
+        .collect::<Vec<_>>();
 
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
 }
@@ -300,9 +311,9 @@ impl WindowUDFImpl for ForeignWindowUDF {
         })
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<arrow::datatypes::Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         unsafe {
-            let input_types = vec_datatype_to_rvec_wrapped(field_args.input_types())?;
+            let input_types = vec_fieldref_to_rvec_wrapped(field_args.input_fields())?;
             let schema = df_result!((self.udf.field)(
                 &self.udf,
                 input_types,
@@ -314,7 +325,7 @@ impl WindowUDFImpl for ForeignWindowUDF {
                 true => Err(DataFusionError::Execution(
                     "Unable to retrieve field in WindowUDF via FFI".to_string(),
                 )),
-                false => Ok(schema.field(0).to_owned()),
+                false => Ok(schema.field(0).to_owned().into()),
             }
         }
     }

@@ -19,6 +19,9 @@ use std::ops::Range;
 
 use abi_stable::StableAbi;
 
+/// A stable struct for sharing [`Range`] across FFI boundaries.
+/// For an explanation of each field, see the corresponding function
+/// defined in [`Range`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
