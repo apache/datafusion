@@ -319,6 +319,7 @@ impl RecordBatchStream for LazyMemoryStream {
 #[cfg(test)]
 mod lazy_memory_tests {
     use super::*;
+    use crate::common::collect;
     use arrow::array::Int64Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::StreamExt;
@@ -431,6 +432,47 @@ mod lazy_memory_tests {
             result,
             Err(e) if e.to_string().contains("Invalid partition 1 for LazyMemoryExec with 1 partitions")
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_generate_series_metrics_integration() -> Result<()> {
+        // Test LazyMemoryExec metrics with different configurations
+        let test_cases = vec![
+            (10, 2, 10),    // 10 rows, batch size 2, expected 10 rows
+            (100, 10, 100), // 100 rows, batch size 10, expected 100 rows
+            (5, 1, 5),      // 5 rows, batch size 1, expected 5 rows
+        ];
+
+        for (total_rows, batch_size, expected_rows) in test_cases {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+            let generator = TestGenerator {
+                counter: 0,
+                max_batches: (total_rows + batch_size - 1) / batch_size, // ceiling division
+                batch_size: batch_size as usize,
+                schema: Arc::clone(&schema),
+            };
+
+            let exec =
+                LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
+            let task_ctx = Arc::new(TaskContext::default());
+
+            let stream = exec.execute(0, task_ctx)?;
+            let batches = collect(stream).await?;
+
+            // Verify metrics exist with actual expected numbers
+            let metrics = exec.metrics().unwrap();
+
+            // Count actual rows returned
+            let actual_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(actual_rows, expected_rows);
+
+            // Verify metrics match actual output
+            assert_eq!(metrics.output_rows().unwrap(), expected_rows);
+            assert!(metrics.elapsed_compute().unwrap() > 0);
+        }
 
         Ok(())
     }
