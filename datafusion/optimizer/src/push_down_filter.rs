@@ -36,7 +36,8 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, or, BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown,
+    and, or, BinaryExpr, Distinct, Expr, Filter, Operator, Projection,
+    TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -808,7 +809,7 @@ impl OptimizerRule for PushDownFilter {
                         .map(LogicalPlan::Filter)?;
                 insert_below(LogicalPlan::Repartition(repartition), new_filter)
             }
-            LogicalPlan::Distinct(distinct) => {
+            LogicalPlan::Distinct(distinct) if matches!(distinct, Distinct::All(_)) => {
                 let new_filter =
                     Filter::try_new(filter.predicate, Arc::clone(distinct.input()))
                         .map(LogicalPlan::Filter)?;

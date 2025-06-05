@@ -37,7 +37,7 @@ use crate::logical_plan::{
     Window,
 };
 use crate::select_expr::SelectExpr;
-use crate::utils::{can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns, extract_aliases, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys, resolve_aliases_to_exprs};
+use crate::utils::{can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys};
 use crate::{
     and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
     Statement, TableProviderFilterPushDown, TableSource, WriteOp,
