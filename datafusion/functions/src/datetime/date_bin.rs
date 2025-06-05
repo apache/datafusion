@@ -505,7 +505,7 @@ mod tests {
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion_common::{DataFusionError, ScalarValue};
@@ -516,26 +516,29 @@ mod tests {
     fn invoke_date_bin_with_args(
         args: Vec<ColumnarValue>,
         number_rows: usize,
-        return_field: &Field,
+        return_field: &FieldRef,
     ) -> Result<ColumnarValue, DataFusionError> {
         let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type(), true))
+            .map(|arg| Field::new("a", arg.data_type(), true).into())
             .collect::<Vec<_>>();
 
         let args = datafusion_expr::ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows,
-            return_field,
+            return_field: Arc::clone(return_field),
         };
         DateBinFunc::new().invoke_with_args(args)
     }
 
     #[test]
     fn test_date_bin() {
-        let return_field =
-            &Field::new("f", DataType::Timestamp(TimeUnit::Nanosecond, None), true);
+        let return_field = &Arc::new(Field::new(
+            "f",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        ));
 
         let mut args = vec![
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
@@ -853,11 +856,11 @@ mod tests {
                         tz_opt.clone(),
                     )),
                 ];
-                let return_field = &Field::new(
+                let return_field = &Arc::new(Field::new(
                     "f",
                     DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
                     true,
-                );
+                ));
                 let result =
                     invoke_date_bin_with_args(args, batch_len, return_field).unwrap();
 

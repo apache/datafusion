@@ -25,7 +25,7 @@ use crate::{LexOrdering, PhysicalExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::SortOptions;
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
@@ -67,7 +67,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn as_any(&self) -> &dyn Any;
 
     /// The field of the final result of this window function.
-    fn field(&self) -> Result<Field>;
+    fn field(&self) -> Result<FieldRef>;
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
     /// implementation returns placeholder text.
@@ -186,6 +186,10 @@ pub trait AggregateWindowExpr: WindowExpr {
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue>;
 
+    /// Indicates whether this window function always produces the same result
+    /// for all rows in the partition.
+    fn is_constant_in_partition(&self) -> bool;
+
     /// Evaluates the window function against the batch.
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut accumulator = self.get_accumulator()?;
@@ -272,8 +276,13 @@ pub trait AggregateWindowExpr: WindowExpr {
         not_end: bool,
     ) -> Result<ArrayRef> {
         let values = self.evaluate_args(record_batch)?;
-        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
 
+        if self.is_constant_in_partition() {
+            accumulator.update_batch(&values)?;
+            let value = accumulator.evaluate()?;
+            return value.to_array_of_size(record_batch.num_rows());
+        }
+        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
         let most_recent_row_order_bys = most_recent_row
             .map(|batch| self.order_by_columns(batch))
             .transpose()?

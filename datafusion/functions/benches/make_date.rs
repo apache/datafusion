@@ -63,19 +63,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         let years = ColumnarValue::Array(years_array);
         let months = ColumnarValue::Array(Arc::new(months(&mut rng)) as ArrayRef);
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
+        let arg_fields = vec![
+            Field::new("a", years.data_type(), true).into(),
+            Field::new("a", months.data_type(), true).into(),
+            Field::new("a", days.data_type(), true).into(),
+        ];
+        let return_field = Field::new("f", DataType::Date32, true).into();
 
         b.iter(|| {
             black_box(
                 make_date()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![years.clone(), months.clone(), days.clone()],
-                        arg_fields: vec![
-                            &Field::new("a", years.data_type(), true),
-                            &Field::new("a", months.data_type(), true),
-                            &Field::new("a", days.data_type(), true),
-                        ],
+                        arg_fields: arg_fields.clone(),
                         number_rows: batch_len,
-                        return_field: &Field::new("f", DataType::Date32, true),
+                        return_field: Arc::clone(&return_field),
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -89,19 +91,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         let batch_len = months_arr.len();
         let months = ColumnarValue::Array(months_arr);
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
-
+        let arg_fields = vec![
+            Field::new("a", year.data_type(), true).into(),
+            Field::new("a", months.data_type(), true).into(),
+            Field::new("a", days.data_type(), true).into(),
+        ];
+        let return_field = Field::new("f", DataType::Date32, true).into();
         b.iter(|| {
             black_box(
                 make_date()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![year.clone(), months.clone(), days.clone()],
-                        arg_fields: vec![
-                            &Field::new("a", year.data_type(), true),
-                            &Field::new("a", months.data_type(), true),
-                            &Field::new("a", days.data_type(), true),
-                        ],
+                        arg_fields: arg_fields.clone(),
                         number_rows: batch_len,
-                        return_field: &Field::new("f", DataType::Date32, true),
+                        return_field: Arc::clone(&return_field),
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -115,19 +118,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         let day_arr = Arc::new(days(&mut rng));
         let batch_len = day_arr.len();
         let days = ColumnarValue::Array(day_arr);
-
+        let arg_fields = vec![
+            Field::new("a", year.data_type(), true).into(),
+            Field::new("a", month.data_type(), true).into(),
+            Field::new("a", days.data_type(), true).into(),
+        ];
+        let return_field = Field::new("f", DataType::Date32, true).into();
         b.iter(|| {
             black_box(
                 make_date()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![year.clone(), month.clone(), days.clone()],
-                        arg_fields: vec![
-                            &Field::new("a", year.data_type(), true),
-                            &Field::new("a", month.data_type(), true),
-                            &Field::new("a", days.data_type(), true),
-                        ],
+                        arg_fields: arg_fields.clone(),
                         number_rows: batch_len,
-                        return_field: &Field::new("f", DataType::Date32, true),
+                        return_field: Arc::clone(&return_field),
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -138,19 +142,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
         let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));
         let day = ColumnarValue::Scalar(ScalarValue::Int32(Some(26)));
+        let arg_fields = vec![
+            Field::new("a", year.data_type(), true).into(),
+            Field::new("a", month.data_type(), true).into(),
+            Field::new("a", day.data_type(), true).into(),
+        ];
+        let return_field = Field::new("f", DataType::Date32, true).into();
 
         b.iter(|| {
             black_box(
                 make_date()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![year.clone(), month.clone(), day.clone()],
-                        arg_fields: vec![
-                            &Field::new("a", year.data_type(), true),
-                            &Field::new("a", month.data_type(), true),
-                            &Field::new("a", day.data_type(), true),
-                        ],
+                        arg_fields: arg_fields.clone(),
                         number_rows: 1,
-                        return_field: &Field::new("f", DataType::Date32, true),
+                        return_field: Arc::clone(&return_field),
                     })
                     .expect("make_date should work on valid values"),
             )

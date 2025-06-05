@@ -40,6 +40,7 @@ use arrow::{
     },
 };
 
+use arrow::datatypes::FieldRef;
 use arrow::{
     array::{Array, BooleanArray, Int64Array, PrimitiveArray},
     buffer::BooleanBuffer,
@@ -123,7 +124,7 @@ pub fn count_all() -> Expr {
 /// let expr = col(expr.schema_name().to_string());
 /// ```
 pub fn count_all_window() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(
+    Expr::from(WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
         vec![Expr::Literal(COUNT_STAR_EXPANSION)],
     ))
@@ -201,20 +202,22 @@ impl AggregateUDFImpl for Count {
         false
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "count distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
                 Field::new_list_field(args.input_fields[0].data_type().clone(), true),
                 false,
-            )])
+            )
+            .into()])
         } else {
             Ok(vec![Field::new(
                 format_state_name(args.name, "count"),
                 DataType::Int64,
                 false,
-            )])
+            )
+            .into()])
         }
     }
 

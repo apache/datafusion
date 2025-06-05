@@ -475,13 +475,16 @@ mod tests {
             Field::new("a", Utf8, true),
             Field::new("a", Utf8View, true),
             Field::new("a", Utf8View, true),
-        ];
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
 
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2, c3, c4],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 3,
-            return_field: &Field::new("f", Utf8, true),
+            return_field: Field::new("f", Utf8, true).into(),
         };
 
         let result = ConcatFunc::new().invoke_with_args(args)?;
