@@ -814,19 +814,13 @@ physical_plan
 31)│         v1: value         │
 32)└─────────────┬─────────────┘
 33)┌─────────────┴─────────────┐
-34)│      YieldStreamExec      │
+34)│       LazyMemoryExec      │
 35)│    --------------------   │
-36)│ YieldStreamExec frequency:│
-37)│             64            │
-38)└─────────────┬─────────────┘
-39)┌─────────────┴─────────────┐
-40)│       LazyMemoryExec      │
-41)│    --------------------   │
-42)│     batch_generators:     │
-43)│ generate_series: start=1, │
-44)│    end=1000, batch_size   │
-45)│           =8192           │
-46)└───────────────────────────┘
+36)│     batch_generators:     │
+37)│ generate_series: start=1, │
+38)│    end=1000, batch_size   │
+39)│           =8192           │
+40)└───────────────────────────┘
 
 query TT
 explain select 

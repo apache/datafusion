@@ -35,6 +35,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
+use crate::yield_stream::YieldStream;
 use futures::Stream;
 use parking_lot::RwLock;
 
@@ -139,6 +140,9 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
 ///
 /// This plan generates output batches lazily, it doesn't have to buffer all batches
 /// in memory up front (compared to `MemorySourceConfig`), thus consuming constant memory.
+/// We now add a `cooperative` flag to
+/// let it optionally yield back to the runtime periodically.
+/// Default is `true`, meaning it will yield back to the runtime for cooperative scheduling.
 pub struct LazyMemoryExec {
     /// Schema representing the data
     schema: SchemaRef,
@@ -146,6 +150,8 @@ pub struct LazyMemoryExec {
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
     cache: PlanProperties,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl LazyMemoryExec {
@@ -160,11 +166,20 @@ impl LazyMemoryExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
+
         Ok(Self {
             schema,
             batch_generators: generators,
             cache,
+            cooperative: true, // Cooperative yielding mode defaults to true
         })
+    }
+
+    /// Set the Yielding mode for the execution plan
+    /// It defaults to `true`, meaning it will yield back to the runtime for cooperative scheduling.
+    pub fn with_cooperative_yielding(mut self, cooperative: bool) -> Self {
+        self.cooperative = cooperative;
+        self
     }
 }
 
@@ -244,7 +259,7 @@ impl ExecutionPlan for LazyMemoryExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition >= self.batch_generators.len() {
             return internal_err!(
@@ -254,10 +269,36 @@ impl ExecutionPlan for LazyMemoryExec {
             );
         }
 
-        Ok(Box::pin(LazyMemoryStream {
+        let stream = Box::pin(LazyMemoryStream {
             schema: Arc::clone(&self.schema),
             generator: Arc::clone(&self.batch_generators[partition]),
-        }))
+        });
+
+        // 2. If cooperative == false, return base_stream immediately.
+        if !self.cooperative {
+            return Ok(stream);
+        }
+
+        let frequency = context
+            .session_config()
+            .options()
+            .optimizer
+            .yield_frequency_for_pipeline_break;
+
+        // 3. If cooperative == true, wrap the stream into a YieldStream.
+        let yielding_stream = YieldStream::new(stream, frequency);
+        Ok(Box::pin(yielding_stream))
+    }
+
+    /// If `cooperative == true`, return `Some(self.clone())` so the optimizer knows
+    /// we can replace a plain DataSourceExec with this same node (it already yields).
+    /// Otherwise, return None.
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.cooperative {
+            Some(self)
+        } else {
+            None
+        }
     }
 
     fn statistics(&self) -> Result<Statistics> {
