@@ -15,24 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-use indexmap::IndexSet;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use std::sync::Arc;
 
 use crate::stack::StackGuard;
-use datafusion_common::{not_impl_err, plan_err, Column, Constraints, DFSchema, Result};
+use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
+    CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Ident, Offset as SQLOffset, OrderBy, OrderByExpr, OrderByKind,
     Query, SelectInto, SetExpr,
 };
 use sqlparser::tokenizer::Span;
-use datafusion_expr::utils::expr_as_column_expr;
-use crate::utils::{check_columns_satisfy_exprs, rebase_expr, CheckColumnsSatisfyExprsPurpose};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an SQL query/subquery

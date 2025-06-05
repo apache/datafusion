@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{Display, Formatter};
 use crate::Span;
+use std::fmt::{Display, Formatter};
 
 /// Additional contextual information intended for end users, to help them
 /// understand what went wrong by providing human-readable messages, and

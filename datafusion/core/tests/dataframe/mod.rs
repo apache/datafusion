@@ -1044,7 +1044,7 @@ async fn test_distinct_sort_by_unprojected() -> Result<()> {
 async fn test_distinct_on() -> Result<()> {
     let t = test_table().await?;
     let plan = t
-        .distinct_on(vec![col("c1")], vec![col("aggregate_test_100.c1")], None)
+        .distinct_on(vec![col("c1")], vec![col("aggregate_test_100.c1")], vec![])
         .unwrap();
 
     let sql_plan =
@@ -1081,7 +1081,7 @@ async fn test_distinct_on_sort_by() -> Result<()> {
         .distinct_on(
             vec![col("c1")],
             vec![col("c1")],
-            Some(vec![col("c1").sort(true, true)]),
+            vec![col("c1").sort(true, true)],
         )
         .unwrap()
         .sort(vec![col("c1").sort(true, true)])
@@ -1116,7 +1116,7 @@ async fn test_distinct_on_sort_by_unprojected() -> Result<()> {
         .distinct_on(
             vec![col("c1")],
             vec![col("c1")],
-            Some(vec![col("c1").sort(true, true)]),
+            vec![col("c1").sort(true, true)],
         )
         .unwrap()
         // try to sort on some value not present in input to distinct

@@ -534,8 +534,9 @@ impl DFSchema {
         qualifier: &TableReference,
         name: &str,
     ) -> bool {
-        self.iter()
-            .any(|(q, f)| q.map(|q| q.resolved_eq(qualifier)).unwrap_or(false) && f.name() == name)
+        self.iter().any(|(q, f)| {
+            q.map(|q| q.resolved_eq(qualifier)).unwrap_or(false) && f.name() == name
+        })
     }
 
     /// Find if the field exists with the given qualified column

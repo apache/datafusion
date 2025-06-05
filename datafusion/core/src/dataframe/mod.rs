@@ -874,7 +874,7 @@ impl DataFrame {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
     ///   // Return a single row (a, b) for each distinct value of a
-    ///   .distinct_on(vec![col("a")], vec![col("a"), col("b")], None)?;
+    ///   .distinct_on(vec![col("a")], vec![col("a"), col("b")], vec![])?;
     /// let expected = vec![
     ///     "+---+---+",
     ///     "| a | b |",
@@ -890,7 +890,7 @@ impl DataFrame {
         self,
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
-        sort_expr: Option<Vec<SortExpr>>,
+        sort_expr: Vec<SortExpr>,
     ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .distinct_on(on_expr, select_expr, sort_expr)?

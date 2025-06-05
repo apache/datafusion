@@ -592,7 +592,7 @@ impl Unparser<'_> {
                             .iter()
                             .map(|e| self.select_item_to_sql(e))
                             .collect::<Result<Vec<_>>>()?;
-                        if on.sort_expr.len() > 0 {
+                        if !on.sort_expr.is_empty() {
                             if let Some(query_ref) = query {
                                 query_ref.order_by(self.sorts_to_sql(&on.sort_expr)?);
                             } else {

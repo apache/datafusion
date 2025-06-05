@@ -833,11 +833,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec,
                 )?;
                 LogicalPlanBuilder::from(input)
-                    .distinct_on(on_expr, select_expr, from_proto::parse_sorts(
-                        &distinct_on.sort_expr,
-                        ctx,
-                        extension_codec,
-                    )?)?
+                    .distinct_on(
+                        on_expr,
+                        select_expr,
+                        from_proto::parse_sorts(
+                            &distinct_on.sort_expr,
+                            ctx,
+                            extension_codec,
+                        )?,
+                    )?
                     .build()
             }
             LogicalPlanType::ViewScan(scan) => {

@@ -103,7 +103,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
                 select_expr,
                 on_expr,
-                                                   mut sort_expr,
+                mut sort_expr,
                 input,
                 schema,
             })) if config.function_registry().is_some() => {

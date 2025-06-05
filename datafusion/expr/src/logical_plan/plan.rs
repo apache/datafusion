@@ -32,9 +32,7 @@ use super::invariants::{
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams};
-use crate::expr_rewriter::{
-    create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
-};
+use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols, NamePreserver};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -1045,7 +1043,8 @@ impl LogicalPlan {
                         ..
                     }) => {
                         let input = self.only_input(inputs)?;
-                        let new_sort_expr = expr.split_off(on_expr.len() + select_expr.len());
+                        let new_sort_expr =
+                            expr.split_off(on_expr.len() + select_expr.len());
                         let select_expr = expr.split_off(on_expr.len());
                         Distinct::On(DistinctOn::try_new(
                             expr,

@@ -19,9 +19,7 @@
 
 use std::vec;
 
-use arrow::datatypes::{
-    DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
-};
+use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
