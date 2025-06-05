@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -146,6 +147,8 @@ pub struct LazyMemoryExec {
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
     cache: PlanProperties,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl LazyMemoryExec {
@@ -164,6 +167,7 @@ impl LazyMemoryExec {
             schema,
             batch_generators: generators,
             cache,
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 }
@@ -254,10 +258,16 @@ impl ExecutionPlan for LazyMemoryExec {
             );
         }
 
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(LazyMemoryStream {
             schema: Arc::clone(&self.schema),
             generator: Arc::clone(&self.batch_generators[partition]),
+            baseline_metrics,
         }))
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn statistics(&self) -> Result<Statistics> {
@@ -276,6 +286,8 @@ pub struct LazyMemoryStream {
     /// parallel execution.
     /// Sharing generators between streams should be used with caution.
     generator: Arc<RwLock<dyn LazyBatchGenerator>>,
+    /// Execution metrics
+    baseline_metrics: BaselineMetrics,
 }
 
 impl Stream for LazyMemoryStream {
@@ -285,13 +297,16 @@ impl Stream for LazyMemoryStream {
         self: std::pin::Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        let _timer_guard = self.baseline_metrics.elapsed_compute().timer();
         let batch = self.generator.write().generate_next_batch();
 
-        match batch {
+        let poll = match batch {
             Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
             Ok(None) => Poll::Ready(None),
             Err(e) => Poll::Ready(Some(Err(e))),
-        }
+        };
+
+        self.baseline_metrics.record_poll(poll)
     }
 }
 
