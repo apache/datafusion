@@ -426,7 +426,6 @@ impl LogicalPlan {
         match self {
             LogicalPlan::DependentJoin(DependentJoin {
                 correlated_columns,
-                subquery_expr,
                 lateral_join_condition,
                 ..
             }) => {
