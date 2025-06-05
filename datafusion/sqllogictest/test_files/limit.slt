@@ -860,6 +860,7 @@ query I
 with selection as (
     select *
     from test_limit_with_partitions
+    order by part_key
     limit 1
 )
 select 1 as foo
