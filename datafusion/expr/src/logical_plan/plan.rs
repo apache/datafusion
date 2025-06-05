@@ -1041,16 +1041,20 @@ impl LogicalPlan {
                     Distinct::On(DistinctOn {
                         on_expr,
                         select_expr,
+                        sort_expr,
                         ..
                     }) => {
                         let input = self.only_input(inputs)?;
-                        let sort_expr = expr.split_off(on_expr.len() + select_expr.len());
+                        let new_sort_expr = expr.split_off(on_expr.len() + select_expr.len());
                         let select_expr = expr.split_off(on_expr.len());
-                        assert!(sort_expr.is_empty(), "with_new_exprs for Distinct does not support sort expressions");
                         Distinct::On(DistinctOn::try_new(
                             expr,
                             select_expr,
-                            None, // no sort expressions accepted
+                            new_sort_expr
+                                .into_iter()
+                                .zip(sort_expr.iter())
+                                .map(|(expr, sort)| sort.with_expr(expr))
+                                .collect(),
                             Arc::new(input),
                         )?)
                     }
@@ -1985,7 +1989,7 @@ impl LogicalPlan {
                             "DistinctOn: on_expr=[[{}]], select_expr=[[{}]], sort_expr=[[{}]]",
                             expr_vec_fmt!(on_expr),
                             expr_vec_fmt!(select_expr),
-                            if let Some(sort_expr) = sort_expr { expr_vec_fmt!(sort_expr) } else { "".to_string() },
+                            expr_vec_fmt!(sort_expr),
                         ),
                     },
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
@@ -3283,7 +3287,7 @@ pub struct DistinctOn {
     /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
     /// present. Note that those matching expressions actually wrap the `ON` expressions with
     /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
-    pub sort_expr: Option<Vec<SortExpr>>,
+    pub sort_expr: Vec<SortExpr>,
     /// The logical plan that is being DISTINCT'd
     pub input: Arc<LogicalPlan>,
     /// The schema description of the DISTINCT ON output
@@ -3295,7 +3299,7 @@ impl DistinctOn {
     pub fn try_new(
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
-        sort_expr: Option<Vec<SortExpr>>,
+        sort_expr: Vec<SortExpr>,
         input: Arc<LogicalPlan>,
     ) -> Result<Self> {
         if on_expr.is_empty() {
@@ -3303,6 +3307,7 @@ impl DistinctOn {
         }
 
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
+
         let qualified_fields = exprlist_to_fields(select_expr.as_slice(), &input)?
             .into_iter()
             .collect();
@@ -3312,44 +3317,13 @@ impl DistinctOn {
             input.schema().metadata().clone(),
         )?;
 
-        let mut distinct_on = DistinctOn {
+        Ok(DistinctOn {
             on_expr,
             select_expr,
-            sort_expr: None,
+            sort_expr,
             input,
             schema: Arc::new(dfschema),
-        };
-
-        if let Some(sort_expr) = sort_expr {
-            distinct_on = distinct_on.with_sort_expr(sort_expr)?;
-        }
-
-        Ok(distinct_on)
-    }
-
-    /// Try to update `self` with a new sort expressions.
-    ///
-    /// Validates that the sort expressions are a super-set of the `ON` expressions.
-    pub fn with_sort_expr(mut self, sort_expr: Vec<SortExpr>) -> Result<Self> {
-        let sort_expr = normalize_sorts(sort_expr, self.input.as_ref())?;
-
-        // Check that the left-most sort expressions are the same as the `ON` expressions.
-        let mut matched = true;
-        for (on, sort) in self.on_expr.iter().zip(sort_expr.iter()) {
-            if on != &sort.expr {
-                matched = false;
-                break;
-            }
-        }
-
-        if self.on_expr.len() > sort_expr.len() || !matched {
-            return plan_err!(
-                "SELECT DISTINCT ON expressions must match initial ORDER BY expressions"
-            );
-        }
-
-        self.sort_expr = Some(sort_expr);
-        Ok(self)
+        })
     }
 }
 
@@ -3365,7 +3339,7 @@ impl PartialOrd for DistinctOn {
             /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
             /// present. Note that those matching expressions actually wrap the `ON` expressions with
             /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
-            pub sort_expr: &'a Option<Vec<SortExpr>>,
+            pub sort_expr: &'a Vec<SortExpr>,
             /// The logical plan that is being DISTINCT'd
             pub input: &'a Arc<LogicalPlan>,
         }

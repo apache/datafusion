@@ -589,10 +589,8 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                         "On": expr_vec_fmt!(on_expr),
                         "Select": expr_vec_fmt!(select_expr),
                     });
-                    if let Some(sort_expr) = sort_expr {
-                        object["Sort"] =
-                            serde_json::Value::String(expr_vec_fmt!(sort_expr));
-                    }
+                    object["Sort"] =
+                        serde_json::Value::String(expr_vec_fmt!(sort_expr));
 
                     object
                 }

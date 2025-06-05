@@ -29,7 +29,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{not_impl_err, plan_err, Column, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -39,12 +39,9 @@ use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
-use datafusion_expr::{
-    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning,
-};
+use datafusion_expr::{Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions, Partitioning, Projection};
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use sqlparser::ast::{
     visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
     OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
@@ -266,10 +263,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
+                let select_alias_map = extract_aliases(&select_exprs);
+                // First, we need to ensure the ORDER BY expressions start with our ON expression
+                // This is because the ON expression is used to determine the distinct key
+                for (on_expr, sort ) in on_expr.iter().zip(order_by_rex.iter()) {
+                    let on_expr = resolve_columns(&resolve_aliases_to_exprs(on_expr.clone(), &select_alias_map)?, &base_plan)?;
+                    let sort_expr = resolve_columns(&resolve_aliases_to_exprs(sort.expr.clone(), &select_alias_map)?, &base_plan)?;
+                    if on_expr != sort_expr {
+                        plan_err!("SELECT DISTINCT ON expressions must match initial ORDER BY expressions (ON expression `{}` does not match ORDER BY expression `{}`)", on_expr.human_display(), sort_expr.human_display())?
+                    }
+                }
+
                 // Build the final plan
-                LogicalPlanBuilder::from(base_plan)
-                    .distinct_on(on_expr, select_exprs, None)?
-                    .build()
+                let distinct_on_plan = LogicalPlanBuilder::from(base_plan)
+                    .distinct_on(on_expr, select_exprs, order_by_rex)?
+                    .build()?;
+
+                return Ok(distinct_on_plan)
             }
         }?;
 

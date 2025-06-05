@@ -103,7 +103,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
                 select_expr,
                 on_expr,
-                sort_expr,
+                                                   mut sort_expr,
                 input,
                 schema,
             })) if config.function_registry().is_some() => {
@@ -113,10 +113,10 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 let first_value_udaf: Arc<datafusion_expr::AggregateUDF> =
                     config.function_registry().unwrap().udaf("first_value")?;
                 let aggr_expr = select_expr.into_iter().map(|e| {
-                    if let Some(order_by) = &sort_expr {
+                    if sort_expr.len() > 0 {
                         first_value_udaf
                             .call(vec![e])
-                            .order_by(order_by.clone())
+                            .order_by(sort_expr.clone())
                             .build()
                             // guaranteed to be `Expr::AggregateFunction`
                             .unwrap()
@@ -136,7 +136,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 // when https://github.com/apache/datafusion/issues/10485 is available
                 let lpb = LogicalPlanBuilder::from(plan);
 
-                let plan = if let Some(mut sort_expr) = sort_expr {
+                let plan = if sort_expr.len() > 0 {
                     // While sort expressions were used in the `FIRST_VALUE` aggregation itself above,
                     // this on it's own isn't enough to guarantee the proper output order of the grouping
                     // (`ON`) expression, so we need to sort those as well.

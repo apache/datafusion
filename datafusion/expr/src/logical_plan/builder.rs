@@ -37,11 +37,7 @@ use crate::logical_plan::{
     Window,
 };
 use crate::select_expr::SelectExpr;
-use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
-    group_window_expr_by_sort_keys,
-};
+use crate::utils::{can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns, extract_aliases, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys, resolve_aliases_to_exprs};
 use crate::{
     and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
     Statement, TableProviderFilterPushDown, TableSource, WriteOp,
@@ -759,6 +755,8 @@ impl LogicalPlanBuilder {
         plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list")
     }
 
+
+
     /// Apply a sort by provided expressions with default direction
     pub fn sort_by(
         self,
@@ -821,6 +819,8 @@ impl LogicalPlanBuilder {
             is_distinct,
         )?;
 
+
+
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),
@@ -873,10 +873,39 @@ impl LogicalPlanBuilder {
         self,
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
-        sort_expr: Option<Vec<SortExpr>>,
+        sort_expr: Vec<SortExpr>,
     ) -> Result<Self> {
+        // Collect sort columns that are missing in the input plan's schema
+        let projection = LogicalPlan::Projection(Projection::try_new(
+            select_expr.clone(),
+            self.plan,
+        )?);
+
+        let missing_cols = on_expr
+            .iter()
+            // Although the sort should be contained within the `on_expr`, we still want to show
+            // a correct error (not "column missing in schema")
+            .chain(sort_expr.iter().map(|c| &c.expr))
+            .flat_map(|expr| {
+                let columns = expr.column_refs();
+                let output: Vec<_> = columns
+                    .into_iter()
+                    .filter(|c| !projection.schema().has_column(c))
+                    .map(|c| c.clone()).collect();
+                output
+            }).collect::<IndexSet<Column>>();
+
+        let plan = Self::add_missing_columns(
+            projection,
+            &missing_cols,
+            false,
+        )?;
+
         Ok(Self::new(LogicalPlan::Distinct(Distinct::On(
-            DistinctOn::try_new(on_expr, select_expr, sort_expr, self.plan)?,
+            DistinctOn::try_new(on_expr, select_expr
+                .iter()
+                .map(|s| expr_as_column_expr(s, &plan))
+                .collect::<Result<Vec<Expr>>>()?, sort_expr, Arc::new(plan))?,
         ))))
     }
 
@@ -965,11 +994,6 @@ impl LogicalPlanBuilder {
         column: impl Into<Column>,
     ) -> Result<Column> {
         let column = column.into();
-        if column.relation.is_some() {
-            // column is already normalized
-            return Ok(column);
-        }
-
         let schema = plan.schema();
         let fallback_schemas = plan.fallback_normalize_schemas();
         let using_columns = plan.using_columns()?;

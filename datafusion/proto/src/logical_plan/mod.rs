@@ -832,16 +832,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ctx,
                     extension_codec,
                 )?;
-                let sort_expr = match distinct_on.sort_expr.len() {
-                    0 => None,
-                    _ => Some(from_proto::parse_sorts(
+                LogicalPlanBuilder::from(input)
+                    .distinct_on(on_expr, select_expr, from_proto::parse_sorts(
                         &distinct_on.sort_expr,
                         ctx,
                         extension_codec,
-                    )?),
-                };
-                LogicalPlanBuilder::from(input)
-                    .distinct_on(on_expr, select_expr, sort_expr)?
+                    )?)?
                     .build()
             }
             LogicalPlanType::ViewScan(scan) => {
@@ -1269,10 +1265,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     input.as_ref(),
                     extension_codec,
                 )?;
-                let sort_expr = match sort_expr {
-                    None => vec![],
-                    Some(sort_expr) => serialize_sorts(sort_expr, extension_codec)?,
-                };
+                let sort_expr = serialize_sorts(sort_expr, extension_codec)?;
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::DistinctOn(Box::new(
                         protobuf::DistinctOnNode {

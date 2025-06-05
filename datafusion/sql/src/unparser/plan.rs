@@ -592,9 +592,9 @@ impl Unparser<'_> {
                             .iter()
                             .map(|e| self.select_item_to_sql(e))
                             .collect::<Result<Vec<_>>>()?;
-                        if let Some(sort_expr) = &on.sort_expr {
+                        if on.sort_expr.len() > 0 {
                             if let Some(query_ref) = query {
-                                query_ref.order_by(self.sorts_to_sql(sort_expr)?);
+                                query_ref.order_by(self.sorts_to_sql(&on.sort_expr)?);
                             } else {
                                 return internal_err!(
                                     "Sort operator only valid in a statement context."
