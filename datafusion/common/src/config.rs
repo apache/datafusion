@@ -228,13 +228,13 @@ impl ConfigField for ConfigFileEncryptionProperties {
 
         let desc = "Per column encryption keys";
         for (col_name, col_val) in self.column_keys_as_hex.iter() {
-            let key = format!("{}.column_keys_as_hex::{}", key_prefix, col_name);
+            let key = format!("{}.column_keys_as_hex.{}", key_prefix, col_name);
             col_val.visit(v, key.as_str(), desc);
         }
         
         let desc = "Per column metadata";
         for (col_name, col_val) in self.column_metadata_as_hex.iter() {
-            let key = format!("{}.column_metadata_as_hex::{}", key_prefix, col_name);
+            let key = format!("{}.column_metadata_as_hex.{}", key_prefix, col_name);
             col_val.visit(v, key.as_str(), desc);
         }
 
@@ -411,7 +411,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
         
         let desc = "Per column decryption keys";
         for (col_name, col_val) in self.column_keys_as_hex.iter() {
-            let key = format!("{}.column_keys_as_hex::{}", key_prefix, col_name);
+            let key = format!("{}.column_keys_as_hex.{}", key_prefix, col_name);
             col_val.visit(v, key.as_str(), desc);
         }
 
