@@ -150,7 +150,7 @@ pub struct LazyMemoryExec {
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
     cache: PlanProperties,
-    /// Indicates whether to enable cooperative yielding mode.
+    /// Indicates whether to enable cooperative yielding mode (defaults to `true`).
     cooperative: bool,
 }
 
