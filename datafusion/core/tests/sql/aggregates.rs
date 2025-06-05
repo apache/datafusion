@@ -17,6 +17,7 @@
 
 use super::*;
 use datafusion::scalar::ScalarValue;
+use insta::assert_snapshot;
 
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
