@@ -75,7 +75,19 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// [`execute`]: ExecutionPlan::execute
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
-pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
+/// The core trait for a physical execution plan node. Every operator
+/// implements this trait. We have extended it by adding two new methods
+/// for “cooperative yielding” support:
+///
+/// 1. `yields_cooperatively()` indicates whether this operator already
+///    supports async/yield behavior internally (default: false).
+///
+/// 2. `with_cooperative_yields(self: Arc<Self>)` returns an alternate
+///    plan node that has built-in yielding; if not available, returns None.
+///
+/// Because `with_cooperative_yields` moves `Arc<Self>` into `Arc<dyn ExecutionPlan>`,
+/// we must ensure `Self: 'static`. Therefore, we add `+ 'static` here.
+pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync + 'static {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
     /// Implementation note: this method can just proxy to
@@ -545,6 +557,23 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(FilterPushdownPropagation::transparent(
             child_pushdown_result,
         ))
+    }
+
+    /// Whether this operator supports cooperative yielding. Default is false.
+    fn yields_cooperatively(&self) -> bool {
+        false
+    }
+
+    /// If `yields_cooperatively() == true`, return an Arc to a new version
+    /// of this plan node that includes built‐in yielding. Otherwise, return None.
+    ///
+    /// We have removed any `Self: Sized` bound so that this method can be
+    /// invoked on a trait object (`Arc<dyn ExecutionPlan>`). The default
+    /// implementation simply returns `None`. Concrete types (e.g. DataSourceExec)
+    /// should override this method when they really do have a built‐in yielding variant.
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        // Default: no built‐in yielding, so return None.
+        None
     }
 }
 

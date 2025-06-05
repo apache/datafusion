@@ -38,6 +38,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPropagation,
 };
+use datafusion_physical_plan::yield_stream::YieldStream;
 
 /// A source of data, typically a list of files or memory
 ///
@@ -179,12 +180,17 @@ pub trait DataSource: Send + Sync + Debug {
 /// the [`FileSource`] trait.
 ///
 /// [`FileSource`]: crate::file::FileSource
+/// We now add a `cooperative` flag to
+/// let it optionally yield back to the runtime periodically.
+/// Default is `true`, meaning it will yield back to the runtime for cooperative scheduling.
 #[derive(Clone, Debug)]
 pub struct DataSourceExec {
     /// The source of the data -- for example, `FileScanConfig` or `MemorySourceConfig`
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: PlanProperties,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -256,7 +262,39 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source.open(partition, context)
+        // 1. Get the “base” stream exactly as before, without yielding.
+        let stream = self.data_source.open(partition, Arc::clone(&context));
+
+        // 2. If cooperative == false, return base_stream immediately.
+        if !self.cooperative {
+            return stream;
+        }
+
+        let frequency = context
+            .session_config()
+            .options()
+            .optimizer
+            .yield_frequency_for_pipeline_break;
+
+        // 3. If cooperative == true, wrap the stream into a YieldStream.
+        let yielding_stream = YieldStream::new(stream?, frequency);
+        Ok(Box::pin(yielding_stream))
+    }
+
+    /// Override: this operator *does* support cooperative yielding when `cooperative == true`.
+    fn yields_cooperatively(&self) -> bool {
+        self.cooperative
+    }
+
+    /// If `cooperative == true`, return `Some(self.clone())` so the optimizer knows
+    /// we can replace a plain DataSourceExec with this same node (it already yields).
+    /// Otherwise, return None.
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.cooperative {
+            Some(self)
+        } else {
+            None
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -289,7 +327,11 @@ impl ExecutionPlan for DataSourceExec {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = self.cache.clone();
 
-        Some(Arc::new(Self { data_source, cache }))
+        Some(Arc::new(Self {
+            data_source,
+            cache,
+            cooperative: self.cooperative,
+        }))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -337,9 +379,14 @@ impl DataSourceExec {
         Arc::new(Self::new(Arc::new(data_source)))
     }
 
+    // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(Arc::clone(&data_source));
-        Self { data_source, cache }
+        Self {
+            data_source,
+            cache,
+            cooperative: true,
+        }
     }
 
     /// Return the source object
@@ -362,6 +409,12 @@ impl DataSourceExec {
     /// Assign output partitioning
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.cache = self.cache.with_partitioning(partitioning);
+        self
+    }
+
+    /// Assign yielding mode
+    pub fn with_cooperative(mut self, cooperative: bool) -> Self {
+        self.cooperative = cooperative;
         self
     }
 

@@ -43,13 +43,23 @@ impl WrapLeaves {
         yield_frequency: usize,
     ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
         if plan.children().is_empty() {
-            // Leaf: wrap it in YieldStreamExec, and do not descend further
-            let wrapped = Arc::new(YieldStreamExec::new(plan, yield_frequency));
-            Ok(Transformed::new(
-                wrapped,
-                /* changed */ true,
-                TreeNodeRecursion::Jump,
-            ))
+            // If the leaf node already has a built-in yielding variant:
+            if let Some(coop_variant) = Arc::clone(&plan).with_cooperative_yields() {
+                // Replace it with the built-in yielding version.
+                Ok(Transformed::new(
+                    coop_variant,
+                    /* changed = */ true,
+                    TreeNodeRecursion::Jump,
+                ))
+            } else {
+                // Otherwise, wrap in a YieldStreamExec.
+                let wrapped = Arc::new(YieldStreamExec::new(plan, yield_frequency));
+                Ok(Transformed::new(
+                    wrapped,
+                    /* changed = */ true,
+                    TreeNodeRecursion::Jump,
+                ))
+            }
         } else {
             // Not a leaf: leave unchanged and keep recursing
             Ok(Transformed::no(plan))

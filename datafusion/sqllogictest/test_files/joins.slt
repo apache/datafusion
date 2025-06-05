@@ -4702,7 +4702,8 @@ physical_plan
 01)CrossJoinExec
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
 03)--ProjectionExec: expr=[1 as Int64(1)]
-04)----PlaceholderRowExec
+04)----YieldStreamExec frequency=64
+05)------PlaceholderRowExec
 
 statement count 0
 drop table j1;

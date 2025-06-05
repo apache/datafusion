@@ -280,13 +280,17 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
 08)--------------UnionExec
 09)----------------ProjectionExec: expr=[1 as a, aa as b]
-10)------------------PlaceholderRowExec
-11)----------------ProjectionExec: expr=[3 as a, aa as b]
-12)------------------PlaceholderRowExec
-13)----------------ProjectionExec: expr=[5 as a, bb as b]
-14)------------------PlaceholderRowExec
-15)----------------ProjectionExec: expr=[7 as a, bb as b]
-16)------------------PlaceholderRowExec
+10)------------------YieldStreamExec frequency=64
+11)--------------------PlaceholderRowExec
+12)----------------ProjectionExec: expr=[3 as a, aa as b]
+13)------------------YieldStreamExec frequency=64
+14)--------------------PlaceholderRowExec
+15)----------------ProjectionExec: expr=[5 as a, bb as b]
+16)------------------YieldStreamExec frequency=64
+17)--------------------PlaceholderRowExec
+18)----------------ProjectionExec: expr=[7 as a, bb as b]
+19)------------------YieldStreamExec frequency=64
+20)--------------------PlaceholderRowExec
 
 # Check actual result:
 query TI
@@ -366,13 +370,17 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
 09)----------------UnionExec
 10)------------------ProjectionExec: expr=[1 as a, aa as b]
-11)--------------------PlaceholderRowExec
-12)------------------ProjectionExec: expr=[3 as a, aa as b]
-13)--------------------PlaceholderRowExec
-14)------------------ProjectionExec: expr=[5 as a, bb as b]
-15)--------------------PlaceholderRowExec
-16)------------------ProjectionExec: expr=[7 as a, bb as b]
-17)--------------------PlaceholderRowExec
+11)--------------------YieldStreamExec frequency=64
+12)----------------------PlaceholderRowExec
+13)------------------ProjectionExec: expr=[3 as a, aa as b]
+14)--------------------YieldStreamExec frequency=64
+15)----------------------PlaceholderRowExec
+16)------------------ProjectionExec: expr=[5 as a, bb as b]
+17)--------------------YieldStreamExec frequency=64
+18)----------------------PlaceholderRowExec
+19)------------------ProjectionExec: expr=[7 as a, bb as b]
+20)--------------------YieldStreamExec frequency=64
+21)----------------------PlaceholderRowExec
 
 
 # check actual result

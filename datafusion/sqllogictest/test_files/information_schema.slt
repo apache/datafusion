@@ -284,7 +284,7 @@ datafusion.format.timestamp_tz_format NULL
 datafusion.format.types_info false
 datafusion.optimizer.allow_symmetric_joins_without_pruning true
 datafusion.optimizer.default_filter_selectivity 20
-datafusion.optimizer.enable_add_yield_for_pipeline_break false
+datafusion.optimizer.enable_add_yield_for_pipeline_break true
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true
 datafusion.optimizer.enable_round_robin_repartition true
 datafusion.optimizer.enable_topk_aggregation true
@@ -396,7 +396,7 @@ datafusion.format.timestamp_tz_format NULL Timestamp format for timestamp with t
 datafusion.format.types_info false Show types in visual representation batches
 datafusion.optimizer.allow_symmetric_joins_without_pruning true Should DataFusion allow symmetric hash joins for unbounded data sources even when its inputs do not have any ordering or filtering If the flag is not enabled, the SymmetricHashJoin operator will be unable to prune its internal buffers, resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right, RightAnti, and RightSemi - being produced only at the end of the execution. This is not typical in stream processing. Additionally, without proper design for long runner execution, all types of joins may encounter out-of-memory errors.
 datafusion.optimizer.default_filter_selectivity 20 The default filter selectivity used by Filter Statistics when an exact selectivity cannot be determined. Valid values are between 0 (no selectivity) and 100 (all rows are selected).
-datafusion.optimizer.enable_add_yield_for_pipeline_break false When true, the optimizer will insert a Yield operator at the leaf nodes of any pipeline that contains a pipeline-breaking operator, allowing the Tokio scheduler to switch to other tasks while waiting. Default: false (disabled).
+datafusion.optimizer.enable_add_yield_for_pipeline_break true When true, the optimizer will insert a Yield operator at the leaf nodes of any pipeline that contains a pipeline-breaking operator, allowing the Tokio scheduler to switch to other tasks while waiting. Default: true (enabled).
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true When set to true, the optimizer will push a limit operation into grouped aggregations which have no aggregate expressions, as a soft limit, emitting groups once the limit is reached, before all rows in the group are read.
 datafusion.optimizer.enable_round_robin_repartition true When set to true, the physical plan optimizer will try to add round robin repartitioning to increase parallelism to leverage more CPU cores
 datafusion.optimizer.enable_topk_aggregation true When set to true, the optimizer will attempt to perform limit operations during aggregations, if possible
