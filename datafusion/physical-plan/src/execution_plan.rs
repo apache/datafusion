@@ -547,20 +547,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         ))
     }
 
-    /// Whether this operator supports cooperative yielding. Default is false.
-    fn yields_cooperatively(&self) -> bool {
-        false
-    }
-
-    /// If `yields_cooperatively() == true`, return an Arc to a new version
-    /// of this plan node that includes built‐in yielding. Otherwise, return None.
-    ///
-    /// We have removed any `Self: Sized` bound so that this method can be
-    /// invoked on a trait object (`Arc<dyn ExecutionPlan>`). The default
-    /// implementation simply returns `None`. Concrete types (e.g. DataSourceExec, LazyMemoryExec)
-    /// should override this method when they really do have a built‐in yielding variant.
+    /// Returns a version of this plan that cooperates with the runtime via
+    /// built‐in yielding. If such a version doesn't exist, returns `None`.
+    /// You do not need to do provide such a version of a custom operator,
+    /// but DataFusion will utilize it while optimizing the plan if it exists.
     fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        // Default: no built‐in yielding, so return None.
+        // Conservative default implementation assumes that a leaf does not
+        // cooperate with yielding.
         None
     }
 }

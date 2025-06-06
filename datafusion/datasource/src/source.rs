@@ -278,14 +278,6 @@ impl ExecutionPlan for DataSourceExec {
         Ok(Box::pin(yielding_stream))
     }
 
-    /// Override: this operator *does* support cooperative yielding when `cooperative == true`.
-    fn yields_cooperatively(&self) -> bool {
-        self.cooperative
-    }
-
-    /// If `cooperative == true`, return `Some(self.clone())` so the optimizer knows
-    /// we can replace a plain DataSourceExec with this same node (it already yields).
-    /// Otherwise, return None.
     fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
         self.cooperative.then_some(self)
     }
