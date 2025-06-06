@@ -54,16 +54,8 @@ impl PollBudget {
         }
     }
 
-    pub fn wrap_stream(
-        &self,
-        inner: SendableRecordBatchStream,
-    ) -> SendableRecordBatchStream {
-        match self.budget {
-            None => inner,
-            Some(budget) => {
-                Box::pin(YieldStream::new(inner, budget)) as SendableRecordBatchStream
-            }
-        }
+    pub fn wrap_stream(&self, inner: SendableRecordBatchStream) -> YieldStream {
+        YieldStream::new(inner, self.budget)
     }
 }
 
@@ -102,18 +94,18 @@ impl Future for ConsumeBudget {
     }
 }
 
-struct YieldStream {
+pub struct YieldStream {
     inner: SendableRecordBatchStream,
-    budget: u8,
-    remaining: u8,
+    budget: Option<u8>,
+    remaining: Option<u8>,
 }
 
 impl YieldStream {
-    pub fn new(inner: SendableRecordBatchStream, budget: u8) -> Self {
+    pub fn new(inner: SendableRecordBatchStream, budget: Option<u8>) -> Self {
         Self {
             inner,
             budget,
-            remaining: 0,
+            remaining: budget,
         }
     }
 }
@@ -125,21 +117,23 @@ impl Stream for YieldStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        if self.remaining == 0 {
-            self.remaining = self.budget;
-            cx.waker().wake_by_ref();
-            return Pending;
-        }
-
-        match self.inner.poll_next_unpin(cx) {
-            ready @ Ready(Some(_)) => {
-                self.remaining -= 1;
-                ready
-            }
-            other => {
+        match self.remaining {
+            None => self.inner.poll_next_unpin(cx),
+            Some(0) => {
                 self.remaining = self.budget;
-                other
+                cx.waker().wake_by_ref();
+                Pending
             }
+            Some(remaining) => match self.inner.poll_next_unpin(cx) {
+                ready @ Ready(Some(_)) => {
+                    self.remaining = Some(remaining - 1);
+                    ready
+                }
+                other => {
+                    self.remaining = self.budget;
+                    other
+                }
+            },
         }
     }
 }

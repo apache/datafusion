@@ -81,7 +81,7 @@ use datafusion_physical_expr::equivalence::{
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
-use crate::poll_budget::PollBudget;
+use crate::poll_budget::{PollBudget, YieldStream};
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -953,7 +953,7 @@ impl ExecutionPlan for HashJoinExec {
 /// hash table (`LeftJoinData`)
 async fn collect_left_input(
     random_state: RandomState,
-    left_stream: SendableRecordBatchStream,
+    left_stream: YieldStream,
     on_left: Vec<PhysicalExprRef>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,

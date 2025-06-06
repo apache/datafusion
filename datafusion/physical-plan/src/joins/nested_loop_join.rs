@@ -61,7 +61,7 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
-use crate::poll_budget::PollBudget;
+use crate::poll_budget::{PollBudget, YieldStream};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -626,7 +626,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
 /// Asynchronously collect input into a single batch, and creates `JoinLeftData` from it
 async fn collect_left_input(
-    stream: SendableRecordBatchStream,
+    stream: YieldStream,
     join_metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_left_side: bool,

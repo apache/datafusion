@@ -46,7 +46,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
-use crate::poll_budget::PollBudget;
+use crate::poll_budget::{PollBudget, YieldStream};
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -189,7 +189,7 @@ impl CrossJoinExec {
 
 /// Asynchronously collect the result of the left child
 async fn load_left_input(
-    stream: SendableRecordBatchStream,
+    stream: YieldStream,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {

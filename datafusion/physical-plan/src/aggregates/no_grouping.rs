@@ -22,7 +22,7 @@ use crate::aggregates::{
     AggregateMode,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
-use crate::{RecordBatchStream, SendableRecordBatchStream};
+use crate::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -35,7 +35,7 @@ use std::task::{Context, Poll};
 
 use super::AggregateExec;
 use crate::filter::batch_filter;
-use crate::poll_budget::PollBudget;
+use crate::poll_budget::{PollBudget, YieldStream};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
@@ -55,7 +55,7 @@ pub(crate) struct AggregateStream {
 struct AggregateStreamInner {
     schema: SchemaRef,
     mode: AggregateMode,
-    input: SendableRecordBatchStream,
+    input: YieldStream,
     baseline_metrics: BaselineMetrics,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
