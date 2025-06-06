@@ -3615,15 +3615,12 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=2
 03)----HashJoinExec: mode=CollectLeft, join_type=Full, on=[(e@0, c@0)]
 04)------ProjectionExec: expr=[1 as e, 3 as f]
-05)--------YieldStreamExec frequency=64
-06)----------PlaceholderRowExec
-07)------UnionExec
-08)--------ProjectionExec: expr=[1 as c, 2 as d]
-09)----------YieldStreamExec frequency=64
-10)------------PlaceholderRowExec
-11)--------ProjectionExec: expr=[1 as c, 3 as d]
-12)----------YieldStreamExec frequency=64
-13)------------PlaceholderRowExec
+05)--------PlaceholderRowExec
+06)------UnionExec
+07)--------ProjectionExec: expr=[1 as c, 2 as d]
+08)----------PlaceholderRowExec
+09)--------ProjectionExec: expr=[1 as c, 3 as d]
+10)----------PlaceholderRowExec
 
 query IIII rowsort
 SELECT * FROM (
@@ -3661,15 +3658,12 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=2
 03)----HashJoinExec: mode=CollectLeft, join_type=Full, on=[(e@0, c@0)]
 04)------ProjectionExec: expr=[1 as e, 3 as f]
-05)--------YieldStreamExec frequency=64
-06)----------PlaceholderRowExec
-07)------UnionExec
-08)--------ProjectionExec: expr=[1 as c, 2 as d]
-09)----------YieldStreamExec frequency=64
-10)------------PlaceholderRowExec
-11)--------ProjectionExec: expr=[1 as c, 3 as d]
-12)----------YieldStreamExec frequency=64
-13)------------PlaceholderRowExec
+05)--------PlaceholderRowExec
+06)------UnionExec
+07)--------ProjectionExec: expr=[1 as c, 2 as d]
+08)----------PlaceholderRowExec
+09)--------ProjectionExec: expr=[1 as c, 3 as d]
+10)----------PlaceholderRowExec
 
 query IIII rowsort
 SELECT * FROM (
@@ -4708,8 +4702,7 @@ physical_plan
 01)CrossJoinExec
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
 03)--ProjectionExec: expr=[1 as Int64(1)]
-04)----YieldStreamExec frequency=64
-05)------PlaceholderRowExec
+04)----PlaceholderRowExec
 
 statement count 0
 drop table j1;

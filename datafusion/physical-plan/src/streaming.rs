@@ -37,6 +37,7 @@ use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
 
+use crate::yield_stream::YieldStream;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::debug;
@@ -68,6 +69,8 @@ pub struct StreamingTableExec {
     limit: Option<usize>,
     cache: PlanProperties,
     metrics: ExecutionPlanMetricsSet,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl StreamingTableExec {
@@ -112,6 +115,7 @@ impl StreamingTableExec {
             limit,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
+            cooperative: true,
         })
     }
 
@@ -262,7 +266,7 @@ impl ExecutionPlan for StreamingTableExec {
         partition: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.partitions[partition].execute(ctx);
+        let stream = self.partitions[partition].execute(Arc::clone(&ctx));
         let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.projected_schema),
@@ -272,6 +276,30 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         };
+
+        if self.cooperative {
+            let frequency = ctx
+                .session_config()
+                .options()
+                .optimizer
+                .yield_frequency_for_pipeline_break;
+
+            let yielding_stream = YieldStream::new(projected_stream, frequency);
+
+            return Ok(match self.limit {
+                None => Box::pin(yielding_stream),
+                Some(fetch) => {
+                    let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+                    Box::pin(LimitStream::new(
+                        Box::pin(yielding_stream),
+                        0,
+                        Some(fetch),
+                        baseline_metrics,
+                    ))
+                }
+            });
+        }
+
         Ok(match self.limit {
             None => projected_stream,
             Some(fetch) => {
@@ -347,7 +375,20 @@ impl ExecutionPlan for StreamingTableExec {
             limit,
             cache: self.cache.clone(),
             metrics: self.metrics.clone(),
+            cooperative: self.cooperative,
         }))
+    }
+
+    /// Override: this operator *does* support cooperative yielding when `cooperative == true`.
+    fn yields_cooperatively(&self) -> bool {
+        self.cooperative
+    }
+
+    /// If `cooperative == true`, return `Some(self.clone())` so the optimizer knows
+    /// we can replace a plain DataSourceExec with this same node (it already yields).
+    /// Otherwise, return None.
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        self.cooperative.then_some(self)
     }
 }
 

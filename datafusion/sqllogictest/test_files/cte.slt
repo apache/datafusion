@@ -36,8 +36,7 @@ logical_plan
 03)----EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
-02)--YieldStreamExec frequency=64
-03)----PlaceholderRowExec
+02)--PlaceholderRowExec
 
 # cte_use_same_name_multiple_times
 statement error DataFusion error: Error during planning: WITH query name "a" specified more than once
@@ -115,15 +114,13 @@ logical_plan
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
 02)--ProjectionExec: expr=[1 as id]
-03)----YieldStreamExec frequency=64
-04)------PlaceholderRowExec
-05)--CoalescePartitionsExec
-06)----ProjectionExec: expr=[id@0 + 1 as id]
-07)------CoalesceBatchesExec: target_batch_size=8192
-08)--------FilterExec: id@0 < 10
-09)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------YieldStreamExec frequency=64
-11)--------------WorkTableExec: name=nodes
+03)----PlaceholderRowExec
+04)--CoalescePartitionsExec
+05)----ProjectionExec: expr=[id@0 + 1 as id]
+06)------CoalesceBatchesExec: target_batch_size=8192
+07)--------FilterExec: id@0 < 10
+08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)------------WorkTableExec: name=nodes
 
 # setup
 statement ok
@@ -169,8 +166,7 @@ physical_plan
 06)--------CoalesceBatchesExec: target_batch_size=2
 07)----------FilterExec: time@0 < 10
 08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)--------------YieldStreamExec frequency=64
-10)----------------WorkTableExec: name=balances
+09)--------------WorkTableExec: name=balances
 
 # recursive CTE with static term derived from table works
 # note that this is run with batch size set to 2. This should produce multiple batches per iteration since the input
@@ -735,19 +731,16 @@ logical_plan
 physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
 02)--ProjectionExec: expr=[1 as val]
-03)----YieldStreamExec frequency=64
-04)------PlaceholderRowExec
-05)--ProjectionExec: expr=[2 as val]
-06)----CrossJoinExec
-07)------CoalescePartitionsExec
-08)--------CoalesceBatchesExec: target_batch_size=8182
-09)----------FilterExec: val@0 < 2
-10)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------YieldStreamExec frequency=64
-12)----------------WorkTableExec: name=recursive_cte
-13)------ProjectionExec: expr=[2 as val]
-14)--------YieldStreamExec frequency=64
-15)----------PlaceholderRowExec
+03)----PlaceholderRowExec
+04)--ProjectionExec: expr=[2 as val]
+05)----CrossJoinExec
+06)------CoalescePartitionsExec
+07)--------CoalesceBatchesExec: target_batch_size=8182
+08)----------FilterExec: val@0 < 2
+09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)--------------WorkTableExec: name=recursive_cte
+11)------ProjectionExec: expr=[2 as val]
+12)--------PlaceholderRowExec
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types
@@ -879,8 +872,7 @@ logical_plan
 03)----EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
-02)--YieldStreamExec frequency=64
-03)----PlaceholderRowExec
+02)--PlaceholderRowExec
 
 query TT
 explain with numbers(a,b,c) as (select 1,2,3) select * from numbers;
@@ -891,8 +883,7 @@ logical_plan
 03)----EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
-02)--YieldStreamExec frequency=64
-03)----PlaceholderRowExec
+02)--PlaceholderRowExec
 
 query TT
 explain with numbers as (select 1 as a, 2 as b, 3 as c) select * from numbers;
@@ -903,8 +894,7 @@ logical_plan
 03)----EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
-02)--YieldStreamExec frequency=64
-03)----PlaceholderRowExec
+02)--PlaceholderRowExec
 
 statement count 0
 create table person (id int, name string, primary key(id))
@@ -946,8 +936,7 @@ physical_plan
 01)CrossJoinExec
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
 03)--ProjectionExec: expr=[1 as Int64(1)]
-04)----YieldStreamExec frequency=64
-05)------PlaceholderRowExec
+04)----PlaceholderRowExec
 
 statement count 0
 drop table j1;
@@ -973,15 +962,13 @@ logical_plan
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]
-03)----YieldStreamExec frequency=64
-04)------PlaceholderRowExec
-05)--CoalescePartitionsExec
-06)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
-07)------CoalesceBatchesExec: target_batch_size=8182
-08)--------FilterExec: n@0 < 10
-09)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------YieldStreamExec frequency=64
-11)--------------WorkTableExec: name=numbers
+03)----PlaceholderRowExec
+04)--CoalescePartitionsExec
+05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
+06)------CoalesceBatchesExec: target_batch_size=8182
+07)--------FilterExec: n@0 < 10
+08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)------------WorkTableExec: name=numbers
 
 query TT
 explain WITH RECURSIVE numbers AS (
@@ -1001,15 +988,13 @@ logical_plan
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]
-03)----YieldStreamExec frequency=64
-04)------PlaceholderRowExec
-05)--CoalescePartitionsExec
-06)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
-07)------CoalesceBatchesExec: target_batch_size=8182
-08)--------FilterExec: n@0 < 10
-09)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------YieldStreamExec frequency=64
-11)--------------WorkTableExec: name=numbers
+03)----PlaceholderRowExec
+04)--CoalescePartitionsExec
+05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
+06)------CoalesceBatchesExec: target_batch_size=8182
+07)--------FilterExec: n@0 < 10
+08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)------------WorkTableExec: name=numbers
 
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;

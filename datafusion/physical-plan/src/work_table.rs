@@ -28,6 +28,7 @@ use crate::{
 };
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
+use crate::yield_stream::YieldStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, Result};
@@ -106,6 +107,8 @@ pub struct WorkTableExec {
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl WorkTableExec {
@@ -118,6 +121,7 @@ impl WorkTableExec {
             metrics: ExecutionPlanMetricsSet::new(),
             work_table: Arc::new(WorkTable::new()),
             cache,
+            cooperative: true,
         }
     }
 
@@ -138,6 +142,7 @@ impl WorkTableExec {
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
             cache: self.cache.clone(),
+            cooperative: self.cooperative,
         }
     }
 
@@ -205,7 +210,7 @@ impl ExecutionPlan for WorkTableExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // WorkTable streams must be the plan base.
         if partition != 0 {
@@ -214,10 +219,27 @@ impl ExecutionPlan for WorkTableExec {
             );
         }
         let batch = self.work_table.take()?;
-        Ok(Box::pin(
+
+        // 1. Get the “base” stream exactly as before, without yielding.
+        let stream = Box::pin(
             MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
                 .with_reservation(batch.reservation),
-        ))
+        );
+
+        // 2. If cooperative == false, return base_stream immediately.
+        if !self.cooperative {
+            return Ok(stream);
+        }
+
+        let frequency = context
+            .session_config()
+            .options()
+            .optimizer
+            .yield_frequency_for_pipeline_break;
+
+        // 3. If cooperative == true, wrap the stream into a YieldStream.
+        let yielding_stream = YieldStream::new(stream, frequency);
+        Ok(Box::pin(yielding_stream))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -230,6 +252,18 @@ impl ExecutionPlan for WorkTableExec {
 
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    /// Override: this operator *does* support cooperative yielding when `cooperative == true`.
+    fn yields_cooperatively(&self) -> bool {
+        self.cooperative
+    }
+
+    /// If `cooperative == true`, return `Some(self.clone())` so the optimizer knows
+    /// we can replace a plain DataSourceExec with this same node (it already yields).
+    /// Otherwise, return None.
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        self.cooperative.then_some(self)
     }
 }
 

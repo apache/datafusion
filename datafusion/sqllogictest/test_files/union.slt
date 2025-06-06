@@ -520,13 +520,11 @@ physical_plan
 14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 15)----------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
 16)----ProjectionExec: expr=[1 as cnt]
-17)------YieldStreamExec frequency=64
-18)--------PlaceholderRowExec
-19)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
-20)------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
-21)--------ProjectionExec: expr=[1 as c1]
-22)----------YieldStreamExec frequency=64
-23)------------PlaceholderRowExec
+17)------PlaceholderRowExec
+18)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
+19)------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
+20)--------ProjectionExec: expr=[1 as c1]
+21)----------PlaceholderRowExec
 
 
 ########
@@ -632,14 +630,11 @@ physical_plan
 01)UnionExec
 02)--ProjectionExec: expr=[Int64(1)@0 as a]
 03)----AggregateExec: mode=SinglePartitioned, gby=[1 as Int64(1)], aggr=[], ordering_mode=Sorted
-04)------YieldStreamExec frequency=64
-05)--------PlaceholderRowExec
-06)--ProjectionExec: expr=[2 as a]
-07)----YieldStreamExec frequency=64
-08)------PlaceholderRowExec
-09)--ProjectionExec: expr=[3 as a]
-10)----YieldStreamExec frequency=64
-11)------PlaceholderRowExec
+04)------PlaceholderRowExec
+05)--ProjectionExec: expr=[2 as a]
+06)----PlaceholderRowExec
+07)--ProjectionExec: expr=[3 as a]
+08)----PlaceholderRowExec
 
 # test UNION ALL aliases correctly with aliased subquery
 query TT
@@ -664,12 +659,10 @@ physical_plan
 02)--ProjectionExec: expr=[count(Int64(1))@1 as count, n@0 as n]
 03)----AggregateExec: mode=SinglePartitioned, gby=[n@0 as n], aggr=[count(Int64(1))], ordering_mode=Sorted
 04)------ProjectionExec: expr=[5 as n]
-05)--------YieldStreamExec frequency=64
-06)----------PlaceholderRowExec
-07)--ProjectionExec: expr=[1 as count, max(Int64(10))@0 as n]
-08)----AggregateExec: mode=Single, gby=[], aggr=[max(Int64(10))]
-09)------YieldStreamExec frequency=64
-10)--------PlaceholderRowExec
+05)--------PlaceholderRowExec
+06)--ProjectionExec: expr=[1 as count, max(Int64(10))@0 as n]
+07)----AggregateExec: mode=Single, gby=[], aggr=[max(Int64(10))]
+08)------PlaceholderRowExec
 
 
 # Test issue: https://github.com/apache/datafusion/issues/11409

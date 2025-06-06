@@ -31,6 +31,7 @@ use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
+use crate::yield_stream::YieldStream;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=true
@@ -41,6 +42,8 @@ pub struct PlaceholderRowExec {
     /// Number of partitions
     partitions: usize,
     cache: PlanProperties,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl PlaceholderRowExec {
@@ -52,6 +55,7 @@ impl PlaceholderRowExec {
             schema,
             partitions,
             cache,
+            cooperative: true,
         }
     }
 
@@ -158,11 +162,25 @@ impl ExecutionPlan for PlaceholderRowExec {
             );
         }
 
-        Ok(Box::pin(MemoryStream::try_new(
-            self.data()?,
-            Arc::clone(&self.schema),
-            None,
-        )?))
+        let memory_stream =
+            MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)?;
+
+        let stream: SendableRecordBatchStream = Box::pin(memory_stream);
+
+        if !self.cooperative {
+            return Ok(stream);
+        }
+
+        let frequency = context
+            .session_config()
+            .options()
+            .optimizer
+            .yield_frequency_for_pipeline_break;
+
+        let yielding = YieldStream::new(stream, frequency);
+        let yielding_stream: SendableRecordBatchStream = Box::pin(yielding);
+
+        Ok(yielding_stream)
     }
 
     fn statistics(&self) -> Result<Statistics> {
@@ -181,6 +199,18 @@ impl ExecutionPlan for PlaceholderRowExec {
             &self.schema,
             None,
         ))
+    }
+
+    /// Override: this operator *does* support cooperative yielding when `cooperative == true`.
+    fn yields_cooperatively(&self) -> bool {
+        self.cooperative
+    }
+
+    /// If `cooperative == true`, return `Some(self.clone())` so the optimizer knows
+    /// we can replace a plain DataSourceExec with this same node (it already yields).
+    /// Otherwise, return None.
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        self.cooperative.then_some(self)
     }
 }
 
