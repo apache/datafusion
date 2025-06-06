@@ -1340,6 +1340,7 @@ mod tests {
     use datafusion_physical_plan::ExecutionPlanProperties;
 
     use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
+    use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
 
@@ -2486,11 +2487,7 @@ mod tests {
             .await?;
 
         // check count
-        let batches = session_ctx
-            .sql("select * from foo")
-            .await?
-            .collect()
-            .await?;
+        let batches = session_ctx.sql("select * from t").await?.collect().await?;
 
         insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
             +-----+-----+---+
@@ -2655,6 +2652,251 @@ mod tests {
         // Make sure inferred schema doesn't override specified schema
         let config = config.infer(&ctx.state()).await?;
         assert_eq!(*config.schema_source(), SchemaSource::Specified);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_listing_table_config_with_multiple_files_inferred() -> Result<()> {
+        // Test case 1: Inferred schema with multiple files having different schemas
+        let ctx = SessionContext::new();
+
+        // Create two test files with different schemas
+        let tmp_dir = TempDir::new()?;
+        let file_path1 = tmp_dir.path().join("file1.csv");
+        let file_path2 = tmp_dir.path().join("file2.csv");
+
+        // File 1: c1,c2,c3
+        let mut file1 = std::fs::File::create(&file_path1)?;
+        writeln!(file1, "c1,c2,c3")?;
+        writeln!(file1, "1,2,3")?;
+        writeln!(file1, "4,5,6")?;
+
+        // File 2: c1,c2,c3,c4
+        let mut file2 = std::fs::File::create(&file_path2)?;
+        writeln!(file2, "c1,c2,c3,c4")?;
+        writeln!(file2, "7,8,9,10")?;
+        writeln!(file2, "11,12,13,14")?;
+
+        // Parse paths
+        let table_path1 = ListingTableUrl::parse(file_path1.to_str().unwrap())?;
+        let table_path2 = ListingTableUrl::parse(file_path2.to_str().unwrap())?;
+
+        // Create config with both paths
+        let config =
+            ListingTableConfig::new_with_multi_paths(vec![table_path1, table_path2]);
+        assert_eq!(*config.schema_source(), SchemaSource::None);
+
+        // Set up options
+        let format = csv::CsvFormat::default()
+            .with_schema(None)
+            .with_has_header(true);
+        let options = ListingOptions::new(Arc::new(format));
+        let config = config.with_listing_options(options);
+
+        // Infer schema (should use first file's schema)
+        let config = config.infer_schema(&ctx.state()).await?;
+        assert_eq!(*config.schema_source(), SchemaSource::Inferred);
+
+        // Verify that the inferred schema matches the first file's schema (3 columns)
+        let schema = config.file_schema.unwrap();
+        assert_eq!(schema.fields().len(), 3);
+        assert_eq!(schema.field(0).name(), "c1");
+        assert_eq!(schema.field(1).name(), "c2");
+        assert_eq!(schema.field(2).name(), "c3");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_listing_table_config_with_multiple_files_specified_schema1(
+    ) -> Result<()> {
+        // Test case 2: Specified schema matching first file schema
+        let ctx = SessionContext::new();
+
+        // Create two test files with different schemas
+        let tmp_dir = TempDir::new()?;
+        let file_path1 = tmp_dir.path().join("file1.csv");
+        let file_path2 = tmp_dir.path().join("file2.csv");
+
+        // File 1: c1,c2,c3
+        let mut file1 = std::fs::File::create(&file_path1)?;
+        writeln!(file1, "c1,c2,c3")?;
+        writeln!(file1, "1,2,3")?;
+        writeln!(file1, "4,5,6")?;
+
+        // File 2: c1,c2,c3,c4
+        let mut file2 = std::fs::File::create(&file_path2)?;
+        writeln!(file2, "c1,c2,c3,c4")?;
+        writeln!(file2, "7,8,9,10")?;
+        writeln!(file2, "11,12,13,14")?;
+
+        // Parse paths
+        let table_path1 = ListingTableUrl::parse(file_path1.to_str().unwrap())?;
+        let table_path2 = ListingTableUrl::parse(file_path2.to_str().unwrap())?;
+
+        // Create specified schema matching first file
+        let specified_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Utf8, true),
+            Field::new("c3", DataType::Utf8, true),
+        ]));
+
+        // Create config with both paths and specified schema
+        let config =
+            ListingTableConfig::new_with_multi_paths(vec![table_path1, table_path2])
+                .with_schema(specified_schema);
+
+        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+
+        // Set up options
+        let format = csv::CsvFormat::default()
+            .with_schema(None)
+            .with_has_header(true);
+        let options = ListingOptions::new(Arc::new(format));
+        let config = config.with_listing_options(options);
+
+        // Infer should not change the schema because it's already specified
+        let config = config.infer_schema(&ctx.state()).await?;
+        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+
+        // Verify that the schema is still the one we specified (3 columns)
+        let schema = config.file_schema.unwrap();
+        assert_eq!(schema.fields().len(), 3);
+        assert_eq!(schema.field(0).name(), "c1");
+        assert_eq!(schema.field(1).name(), "c2");
+        assert_eq!(schema.field(2).name(), "c3");
+
+        // Create the ListingTable and verify it maintains the schema source
+        let table = ListingTable::try_new(config)?;
+        assert_eq!(*table.schema_source(), SchemaSource::Specified);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_listing_table_config_with_multiple_files_specified_schema2(
+    ) -> Result<()> {
+        // Test case 3: Specified schema matching second file schema
+        let ctx = SessionContext::new();
+
+        // Create two test files with different schemas
+        let tmp_dir = TempDir::new()?;
+        let file_path1 = tmp_dir.path().join("file1.csv");
+        let file_path2 = tmp_dir.path().join("file2.csv");
+
+        // File 1: c1,c2,c3
+        let mut file1 = std::fs::File::create(&file_path1)?;
+        writeln!(file1, "c1,c2,c3")?;
+        writeln!(file1, "1,2,3")?;
+        writeln!(file1, "4,5,6")?;
+
+        // File 2: c1,c2,c3,c4
+        let mut file2 = std::fs::File::create(&file_path2)?;
+        writeln!(file2, "c1,c2,c3,c4")?;
+        writeln!(file2, "7,8,9,10")?;
+        writeln!(file2, "11,12,13,14")?;
+
+        // Parse paths
+        let table_path1 = ListingTableUrl::parse(file_path1.to_str().unwrap())?;
+        let table_path2 = ListingTableUrl::parse(file_path2.to_str().unwrap())?;
+
+        // Create specified schema matching second file (with 4 columns)
+        let specified_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Utf8, true),
+            Field::new("c3", DataType::Utf8, true),
+            Field::new("c4", DataType::Utf8, true),
+        ]));
+
+        // Create config with both paths and specified schema
+        let config =
+            ListingTableConfig::new_with_multi_paths(vec![table_path1, table_path2])
+                .with_schema(specified_schema.clone());
+
+        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+
+        // Set up options
+        let format = csv::CsvFormat::default()
+            .with_schema(None)
+            .with_has_header(true);
+        let options = ListingOptions::new(Arc::new(format));
+        let config = config.with_listing_options(options);
+
+        // Infer should not change the schema because it's already specified
+        let config = config.infer_schema(&ctx.state()).await?;
+        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+
+        // Verify that the schema is still the one we specified (4 columns)
+        let schema = config.file_schema.unwrap();
+        assert_eq!(schema.fields().len(), 4);
+        assert_eq!(schema.field(0).name(), "c1");
+        assert_eq!(schema.field(1).name(), "c2");
+        assert_eq!(schema.field(2).name(), "c3");
+        assert_eq!(schema.field(3).name(), "c4");
+
+        // Create the ListingTable and verify it maintains the schema source
+        let table = ListingTable::try_new(config)?;
+        assert_eq!(*table.schema_source(), SchemaSource::Specified);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_listing_table_config_with_multiple_files_inferred_reversed(
+    ) -> Result<()> {
+        // Test case: Inferred schema with multiple files having different schemas,
+        // but with the order reversed (schema2 first, then schema1)
+        let ctx = SessionContext::new();
+
+        // Create two test files with different schemas
+        let tmp_dir = TempDir::new()?;
+        let file_path1 = tmp_dir.path().join("file1.csv");
+        let file_path2 = tmp_dir.path().join("file2.csv");
+
+        // File 1: c1,c2,c3,c4 (now schema2 with 4 columns)
+        let mut file1 = std::fs::File::create(&file_path1)?;
+        writeln!(file1, "c1,c2,c3,c4")?;
+        writeln!(file1, "7,8,9,10")?;
+        writeln!(file1, "11,12,13,14")?;
+
+        // File 2: c1,c2,c3 (now schema1 with 3 columns)
+        let mut file2 = std::fs::File::create(&file_path2)?;
+        writeln!(file2, "c1,c2,c3")?;
+        writeln!(file2, "1,2,3")?;
+        writeln!(file2, "4,5,6")?;
+
+        // Parse paths
+        let table_path1 = ListingTableUrl::parse(file_path1.to_str().unwrap())?;
+        let table_path2 = ListingTableUrl::parse(file_path2.to_str().unwrap())?;
+
+        // Create config with both paths, with schema2 (4-column) file first
+        let config =
+            ListingTableConfig::new_with_multi_paths(vec![table_path1, table_path2]);
+        assert_eq!(*config.schema_source(), SchemaSource::None);
+
+        // Set up options
+        let format = csv::CsvFormat::default()
+            .with_schema(None)
+            .with_has_header(true);
+        let options = ListingOptions::new(Arc::new(format));
+        let config = config.with_listing_options(options);
+
+        // Infer schema (should use first file's schema which is now schema2 with 4 columns)
+        let config = config.infer_schema(&ctx.state()).await?;
+        assert_eq!(*config.schema_source(), SchemaSource::Inferred);
+
+        // Verify that the inferred schema matches the first file's schema, which now has 4 columns
+        let schema = config.file_schema.unwrap();
+        assert_eq!(schema.fields().len(), 4);
+        assert_eq!(schema.field(0).name(), "c1");
+        assert_eq!(schema.field(1).name(), "c2");
+        assert_eq!(schema.field(2).name(), "c3");
+        assert_eq!(schema.field(3).name(), "c4");
+
+        // Create a ListingTable and verify it maintains the schema source
+        let table = ListingTable::try_new(config)?;
+        assert_eq!(*table.schema_source(), SchemaSource::Inferred);
 
         Ok(())
     }
