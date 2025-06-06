@@ -1,4 +1,3 @@
-use tempfile::TempDir;
 use datafusion::common::DataFusionError;
 use datafusion::config::{ConfigFileDecryptionProperties, TableParquetOptions};
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
@@ -7,7 +6,7 @@ use datafusion::logical_expr::{col, lit};
 use datafusion::parquet::encryption::decrypt::FileDecryptionProperties;
 use datafusion::parquet::encryption::encrypt::FileEncryptionProperties;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
-
+use tempfile::TempDir;
 
 #[tokio::main]
 async fn main() -> datafusion::common::Result<()> {
@@ -38,13 +37,13 @@ async fn main() -> datafusion::common::Result<()> {
     // Write encrypted parquet
     let mut options = TableParquetOptions::default();
     options.global.file_encryption_properties = Some((&encrypt).into());
-    parquet_df.write_parquet(
-        tempfile_str.as_str(),
-        DataFrameWriteOptions::new().with_single_file_output(true),
-        Some(options),
-    )
+    parquet_df
+        .write_parquet(
+            tempfile_str.as_str(),
+            DataFrameWriteOptions::new().with_single_file_output(true),
+            Some(options),
+        )
         .await?;
-
 
     // Read encrypted parquet
     let mut sc = SessionConfig::new();
@@ -65,7 +64,6 @@ async fn main() -> datafusion::common::Result<()> {
     println!("\n\nEncrypted Parquet DataFrame:");
     query_dataframe(&encrypted_parquet_df, true).await?;
 
-
     Ok(())
 }
 
@@ -77,21 +75,20 @@ async fn query_dataframe(df: &DataFrame, filter: bool) -> Result<(), DataFusionE
     if filter {
         // Select three columns and filter the results
         // so that only rows where id > 1 are returned
-        df
-            .clone()
+        df.clone()
             .select_columns(&["id", "bool_col", "timestamp_col"])?
             .filter(col("id").gt(lit(5)))?
             .show()
             .await?;
     }
-    
-    
+
     Ok(())
 }
 
 // Setup encryption and decryption properties
-fn setup_encryption(parquet_df: &DataFrame) -> Result<(FileEncryptionProperties, FileDecryptionProperties), DataFusionError> {
-
+fn setup_encryption(
+    parquet_df: &DataFrame,
+) -> Result<(FileEncryptionProperties, FileDecryptionProperties), DataFusionError> {
     let schema = parquet_df.schema();
     let footer_key = b"0123456789012345".to_vec(); // 128bit/16
     let column_key = b"1234567890123450".to_vec(); // 128bit/16
