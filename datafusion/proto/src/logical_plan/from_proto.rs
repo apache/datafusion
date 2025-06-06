@@ -268,7 +268,7 @@ pub fn parse_expr(
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {
             let scalar_value: ScalarValue = literal.try_into()?;
-            Ok(Expr::Literal(scalar_value))
+            Ok(Expr::Literal(scalar_value, None))
         }
         ExprType::WindowExpr(expr) => {
             let window_function = expr
