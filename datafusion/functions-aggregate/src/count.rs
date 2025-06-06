@@ -758,13 +758,58 @@ impl Accumulator for DistinctCountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::NullArray;
-
+    use arrow::{
+        array::{DictionaryArray, Int32Array, NullArray, StringArray},
+        datatypes::Int32Type,
+    };
     #[test]
     fn count_accumulator_nulls() -> Result<()> {
         let mut accumulator = CountAccumulator::new();
         accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_accumulator_dictionary_with_null_values() -> Result<()> {
+        // Create a dictionary array where:
+        // - keys aren't null
+        // - but values referenced by some keys are null
+        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 1]); // references "a", null, "c", "a", null
+        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values))?;
+
+        // The expected behavior is that count_distinct should count only non-null values
+        // which in this case are "a" and "c" (appearing as 0 and 2 in keys)
+        let mut accumulator = DistinctCountAccumulator {
+            values: HashSet::default(),
+            state_data_type: dict_array.data_type().clone(),
+        };
+
+        accumulator.update_batch(&[Arc::new(dict_array)])?;
+
+        // Should have 2 distinct non-null values ("a" and "c")
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(2)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_accumulator_dictionary_with_null_values() -> Result<()> {
+        // Create a dictionary array where:
+        // - keys aren't null
+        // - but values referenced by some keys are null
+        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 1]); // references "a", null, "c", "a", null
+        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values))?;
+
+        // The expected behavior is that count should only count non-null values
+        let mut accumulator = CountAccumulator::new();
+
+        accumulator.update_batch(&[Arc::new(dict_array)])?;
+
+        // 5 elements in the array, of which 2 reference null values (the two 1s in the keys)
+        // So we should count 3 non-null values
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(3)));
         Ok(())
     }
 }
