@@ -661,11 +661,15 @@ uint_tests!(64);
 // page-2                         0  0.0                                       4.0
 // page-3                         0  5.0                                       9.0
 async fn prune_f64_lt() {
+    // TODO: because NaN could be present but not accounted for in the statistics, these
+    // expressions should not be pruned at present. When IEEE 754 total order is added to
+    // the Parquet spec this can be revisited.
+    // See https://github.com/apache/parquet-format/pull/221
     test_prune(
         Scenario::Float64,
         "SELECT * FROM t where f < 1",
         Some(0),
-        Some(5),
+        Some(0),
         11,
         5,
     )
@@ -674,7 +678,7 @@ async fn prune_f64_lt() {
         Scenario::Float64,
         "SELECT * FROM t where -f > -1",
         Some(0),
-        Some(5),
+        Some(0),
         11,
         5,
     )
@@ -683,13 +687,17 @@ async fn prune_f64_lt() {
 
 #[tokio::test]
 async fn prune_f64_scalar_fun_and_gt() {
+    // TODO: because NaN could be present but not accounted for in the statistics, this
+    // expression should not be pruned at present. When IEEE 754 total order is added to
+    // the Parquet spec this can be revisited.
+    // See https://github.com/apache/parquet-format/pull/221
     // result of sql "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1"
     // only use "f >= 0" to prune
     test_prune(
         Scenario::Float64,
         "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1",
         Some(0),
-        Some(10),
+        Some(0),
         1,
         5,
     )

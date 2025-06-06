@@ -441,6 +441,7 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_optimizer::pruning::ColumnOrdering;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::arrow::ArrowSchemaConverter;
@@ -502,7 +503,12 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expr = col("c1").gt(lit(15));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
 
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
         let schema_descr = get_test_schema_descr(vec![field]);
@@ -547,7 +553,12 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expr = col("c1").gt(lit(15));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
 
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
         let schema_descr = get_test_schema_descr(vec![field]);
@@ -590,7 +601,12 @@ mod tests {
         ]));
         let expr = col("c1").gt(lit(15)).and(col("c2").rem(lit(2)).eq(lit(0)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
 
         let schema_descr = get_test_schema_descr(vec![
             PrimitiveTypeField::new("c1", PhysicalType::INT32),
@@ -629,7 +645,12 @@ mod tests {
         // this bypasses the entire predicate expression and no row groups are filtered out
         let expr = col("c1").gt(lit(15)).or(col("c2").rem(lit(2)).eq(lit(0)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
 
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
@@ -655,8 +676,12 @@ mod tests {
         ]));
         let expr = col("c1").gt(lit(0));
         let expr = logical2physical(&expr, &table_schema);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, table_schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            table_schema.clone(),
+            vec![ColumnOrdering::Unknown; table_schema.fields().len()],
+        )
+        .unwrap();
 
         // Model a file schema's column order c2 then c1, which is the opposite
         // of the table schema
@@ -733,7 +758,12 @@ mod tests {
         let schema_descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         let groups = gen_row_group_meta_data_for_pruning_predicate();
 
         let metrics = parquet_file_metrics();
@@ -764,7 +794,12 @@ mod tests {
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         let groups = gen_row_group_meta_data_for_pruning_predicate();
 
         let metrics = parquet_file_metrics();
@@ -802,7 +837,12 @@ mod tests {
         let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             // [1.00, 6.00]
@@ -873,7 +913,12 @@ mod tests {
             Decimal128(11, 2),
         ));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             // [100, 600]
@@ -965,7 +1010,12 @@ mod tests {
         let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").lt(lit(ScalarValue::Decimal128(Some(500), 18, 2)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             // [6.00, 8.00]
@@ -1026,7 +1076,12 @@ mod tests {
         let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         // we must use the big-endian when encode the i128 to bytes or vec[u8].
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
@@ -1104,7 +1159,12 @@ mod tests {
         let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = PruningPredicate::try_new(
+            expr,
+            schema.clone(),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         // we must use the big-endian when encode the i128 to bytes or vec[u8].
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
@@ -1271,8 +1331,9 @@ mod tests {
             false,
         );
         let expr = logical2physical(&expr, &schema);
+        let column_orders = vec![ColumnOrdering::Unknown; schema.fields().len()];
         let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+            PruningPredicate::try_new(expr, Arc::new(schema), column_orders).unwrap();
 
         let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
             file_name,
@@ -1488,8 +1549,9 @@ mod tests {
             let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
             let expr = logical2physical(&expr, &schema);
+            let column_orders = vec![ColumnOrdering::Unknown; schema.fields().len()];
             let pruning_predicate =
-                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+                PruningPredicate::try_new(expr, Arc::new(schema), column_orders).unwrap();
 
             let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
                 &file_name,

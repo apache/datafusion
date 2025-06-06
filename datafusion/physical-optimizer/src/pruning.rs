@@ -406,6 +406,20 @@ impl UnhandledPredicateHook for ConstantUnhandledPredicateHook {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColumnOrdering {
+    /// No column ordering was specified
+    Unknown,
+    /// Column ordering uses signed comparison
+    Signed,
+    /// Column ordering uses unsigned comparison
+    Unsigned,
+    /// Column ordering is undefined for the type
+    Undefined,
+    /// Column ordering uses IEEE 754 total ordering (depends on PARQUET-2249)
+    TotalOrder,
+}
+
 impl PruningPredicate {
     /// Try to create a new instance of [`PruningPredicate`]
     ///
@@ -429,7 +443,11 @@ impl PruningPredicate {
     ///
     /// See the struct level documentation on [`PruningPredicate`] for more
     /// details.
-    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: SchemaRef,
+        column_orderings: Vec<ColumnOrdering>,
+    ) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`
         // which does not handle dynamic exprs  in general
         let expr = snapshot_physical_expr(expr)?;
@@ -441,6 +459,7 @@ impl PruningPredicate {
             &expr,
             schema.as_ref(),
             &mut required_columns,
+            &column_orderings,
             &unhandled_hook,
         );
 
@@ -1318,12 +1337,14 @@ impl PredicateRewriter {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
         schema: &Schema,
+        column_orderings: &Vec<ColumnOrdering>,
     ) -> Arc<dyn PhysicalExpr> {
         let mut required_columns = RequiredColumns::new();
         build_predicate_expression(
             expr,
             schema,
             &mut required_columns,
+            column_orderings,
             &self.unhandled_hook,
         )
     }
@@ -1342,6 +1363,7 @@ fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
     required_columns: &mut RequiredColumns,
+    column_orderings: &Vec<ColumnOrdering>,
     unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
 ) -> Arc<dyn PhysicalExpr> {
     if is_always_false(expr) {
@@ -1407,6 +1429,7 @@ fn build_predicate_expression(
                 &change_expr,
                 schema,
                 required_columns,
+                column_orderings,
                 unhandled_hook,
             );
         } else {
@@ -1442,10 +1465,20 @@ fn build_predicate_expression(
     };
 
     if op == Operator::And || op == Operator::Or {
-        let left_expr =
-            build_predicate_expression(&left, schema, required_columns, unhandled_hook);
-        let right_expr =
-            build_predicate_expression(&right, schema, required_columns, unhandled_hook);
+        let left_expr = build_predicate_expression(
+            &left,
+            schema,
+            required_columns,
+            column_orderings,
+            unhandled_hook,
+        );
+        let right_expr = build_predicate_expression(
+            &right,
+            schema,
+            required_columns,
+            column_orderings,
+            unhandled_hook,
+        );
         // simplify boolean expression if applicable
         let expr = match (&left_expr, op, &right_expr) {
             (left, Operator::And, right)
@@ -1468,6 +1501,54 @@ fn build_predicate_expression(
         return expr;
     }
 
+    // Special handlng for floats. Because current Parquet statistics do not allow NaN, and
+    // Datafusion uses total order (i.e. -NaN < -x < -0.0 < 0.0 < x < NaN), pruning predicates
+    // for floating point columns may be overly aggressive. For example, say the max for a column
+    // that also contains NaN is 1.0, and a predicate like `x > 2.0` is provided. This will
+    // be turned into a stats predicate like `max(x) > 2.0`, which will evaluate false in this
+    // case, so the page/column chunk will be (improperly) pruned. PARQUET-2249 attempts to
+    // solve this by adding a new ColumnOrder (IEEE_754_TOTAL_ORDER) for floating point columns.
+    // This will allow for NaN to appear in the statistics so pruning will be correct.
+
+    // TODO(ets): this is rather parquet specific...still wonder if this should be done
+    //            at the datasource level
+
+    // Sanity check that column orderings match schema
+    if column_orderings.len() == schema.fields().len() {
+        let colidx = column_index_for_expr(&left, schema)
+            .or_else(|| column_index_for_expr(&right, schema));
+        if let Some(colidx) = colidx {
+            let col_order = column_orderings[colidx];
+
+            // If the ColumnOrder is undefined (as opposed to unknown), we shouldn't be pruning
+            // since min/max are invalid.
+            if col_order == ColumnOrdering::Undefined {
+                dbg!("Cannot prune because column order is undefined");
+                return unhandled_hook.handle(expr);
+            }
+
+            // left and right should have the same type by now, so only check left
+            if left.data_type(schema).is_ok_and(|t| t.is_floating()) {
+                // By the time we've reached this code, we've narrowed down the possible expressions
+                // to binary expressions. Of those allowed by `build_statistics_expr`, we only need
+                // to worry about greater/less than expressions and not equal.
+                match op {
+                    Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+                    | Operator::NotEq => {
+                        if col_order != ColumnOrdering::TotalOrder {
+                            dbg!("Cannot prune floating point column because NaN may be present");
+                            return unhandled_hook.handle(expr);
+                        }
+                    }
+                    _ => (),
+                }
+            }
+        }
+    }
+
     let expr_builder =
         PruningExpressionBuilder::try_new(&left, &right, op, schema, required_columns);
     let mut expr_builder = match expr_builder {
@@ -1482,6 +1563,28 @@ fn build_predicate_expression(
 
     build_statistics_expr(&mut expr_builder)
         .unwrap_or_else(|_| unhandled_hook.handle(expr))
+}
+
+// Find column index for the given expression. Expects either column or cast-like expressions.
+fn column_index_for_expr(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> Option<usize> {
+    if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
+        // Cannot always trust `col.index()` since the schema may be rewritten along the way.
+        let col_idx = schema.index_of(col.name());
+        // Sanity check that columns are still in the same order as the `ColumnOrder` array.
+        if col_idx.is_ok_and(|idx| idx == col.index()) {
+            Some(col.index())
+        } else {
+            None
+        }
+    } else if let Some(cast) = expr.as_any().downcast_ref::<phys_expr::CastExpr>() {
+        column_index_for_expr(cast.expr(), schema)
+    } else if let Some(cast) = expr.as_any().downcast_ref::<phys_expr::TryCastExpr>() {
+        column_index_for_expr(cast.expr(), schema)
+    } else if let Some(neg) = expr.as_any().downcast_ref::<phys_expr::NegativeExpr>() {
+        column_index_for_expr(neg.arg(), schema)
+    } else {
+        None
+    }
 }
 
 fn build_statistics_expr(
@@ -2224,7 +2327,12 @@ mod tests {
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, Arc::clone(&schema)).unwrap();
+        let p = PruningPredicate::try_new(
+            expr,
+            Arc::clone(&schema),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         // note pruning expression refers to row_count twice
         assert_eq!(
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= 100 AND 100 <= c1_max@1 AND c2_null_count@6 != row_count@3 AND c2_min@4 <= 200 AND 200 <= c2_max@5",
@@ -4545,12 +4653,18 @@ mod tests {
             Field::new("b", DataType::Int32, true),
         ]);
 
+        let column_orderings = vec![ColumnOrdering::Unknown; schema.fields().len()];
+
         let rewriter = PredicateRewriter::new()
             .with_unhandled_hook(Arc::new(CustomUnhandledHook {}));
 
         let transform_expr = |expr| {
             let expr = logical2physical(&expr, &schema_with_b);
-            rewriter.rewrite_predicate_to_statistics_predicate(&expr, &schema)
+            rewriter.rewrite_predicate_to_statistics_predicate(
+                &expr,
+                &schema,
+                &column_orderings,
+            )
         };
 
         // transform an arbitrary valid expression that we know is handled
@@ -4559,6 +4673,7 @@ mod tests {
             .rewrite_predicate_to_statistics_predicate(
                 &logical2physical(&known_expression, &schema),
                 &schema,
+                &column_orderings,
             );
 
         // an expression referencing an unknown column (that is not in the schema) gets passed to the hook
@@ -5072,7 +5187,12 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let p = PruningPredicate::try_new(
+            expr,
+            Arc::<Schema>::clone(schema),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5083,8 +5203,15 @@ mod tests {
         required_columns: &mut RequiredColumns,
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
+        let column_orderings = vec![ColumnOrdering::Unknown; schema.fields().len()];
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
-        build_predicate_expression(&expr, schema, required_columns, &unhandled_hook)
+        build_predicate_expression(
+            &expr,
+            schema,
+            required_columns,
+            &column_orderings,
+            &unhandled_hook,
+        )
     }
 
     #[test]
