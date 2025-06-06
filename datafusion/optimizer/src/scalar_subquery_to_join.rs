@@ -73,7 +73,6 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     fn supports_rewrite(&self) -> bool {
         true
     }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
