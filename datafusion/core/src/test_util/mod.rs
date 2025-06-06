@@ -22,12 +22,14 @@ pub mod parquet;
 
 pub mod csv;
 
+use futures::Stream;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use crate::catalog::{TableProvider, TableProviderFactory};
 use crate::dataframe::DataFrame;
@@ -38,11 +40,13 @@ use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{CsvReadOptions, SessionContext};
 
+use crate::execution::SendableRecordBatchStream;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
 use datafusion_common::TableReference;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
+use std::pin::Pin;
 
 use async_trait::async_trait;
 
@@ -51,6 +55,8 @@ use tempfile::TempDir;
 #[cfg(feature = "parquet")]
 pub use datafusion_common::test_util::parquet_test_data;
 pub use datafusion_common::test_util::{arrow_test_data, get_data_dir};
+
+use crate::execution::RecordBatchStream;
 
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
@@ -233,4 +239,45 @@ pub fn register_unbounded_file_with_ordering(
     // Register table:
     ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
     Ok(())
+}
+
+/// Creates a bounded stream that emits the same record batch a specified number of times.
+/// This is useful for testing purposes.
+pub fn bounded_stream(
+    record_batch: RecordBatch,
+    limit: usize,
+) -> SendableRecordBatchStream {
+    Box::pin(BoundedStream {
+        record_batch,
+        count: 0,
+        limit,
+    })
+}
+
+struct BoundedStream {
+    record_batch: RecordBatch,
+    count: usize,
+    limit: usize,
+}
+
+impl Stream for BoundedStream {
+    type Item = Result<RecordBatch, crate::error::DataFusionError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if self.count >= self.limit {
+            Poll::Ready(None)
+        } else {
+            self.count += 1;
+            Poll::Ready(Some(Ok(self.record_batch.clone())))
+        }
+    }
+}
+
+impl RecordBatchStream for BoundedStream {
+    fn schema(&self) -> SchemaRef {
+        self.record_batch.schema()
+    }
 }

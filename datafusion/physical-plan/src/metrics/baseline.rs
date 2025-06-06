@@ -117,9 +117,10 @@ impl BaselineMetrics {
         }
     }
 
-    /// Process a poll result of a stream producing output for an
-    /// operator, recording the output rows and stream done time and
-    /// returning the same poll result
+    /// Process a poll result of a stream producing output for an operator.
+    ///
+    /// Note: this method only updates `output_rows` and `end_time` metrics.
+    /// Remember to update `elapsed_compute` and other metrics manually.
     pub fn record_poll(
         &self,
         poll: Poll<Option<Result<RecordBatch>>>,
