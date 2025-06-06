@@ -279,7 +279,7 @@ mod tests {
         // Write encrypted parquet using write_parquet
         let mut options = TableParquetOptions::default();
         options.global.file_encryption_properties = Some((&encrypt).into());
-        
+
         df.write_parquet(
             tempfile_str.as_str(),
             DataFrameWriteOptions::new().with_single_file_output(true),

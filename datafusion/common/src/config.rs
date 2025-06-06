@@ -199,7 +199,7 @@ macro_rules! config_namespace {
 pub struct ConfigFileEncryptionProperties {
     pub encrypt_footer: bool, // default = false
     pub footer_key_as_hex: String,
-    pub footer_key_metadata_as_hex: String, 
+    pub footer_key_metadata_as_hex: String,
     pub column_keys_as_hex: HashMap<String, String>,
     pub column_metadata_as_hex: HashMap<String, String>,
     pub aad_prefix_as_hex: String,
@@ -218,7 +218,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
         let key = format!("{}.encrypt_footer", key_prefix);
         let desc = "Encrypt the footer";
         self.encrypt_footer.visit(v, key.as_str(), desc);
-        
+
         let key = format!("{}.footer_key_as_hex", key_prefix);
         let desc = "Key to use for the parquet footer";
         self.footer_key_as_hex.visit(v, key.as_str(), desc);
@@ -232,7 +232,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
             let key = format!("{}.column_keys_as_hex.{}", key_prefix, col_name);
             col_val.visit(v, key.as_str(), desc);
         }
-        
+
         let desc = "Per column metadata";
         for (col_name, col_val) in self.column_metadata_as_hex.iter() {
             let key = format!("{}.column_metadata_as_hex.{}", key_prefix, col_name);
@@ -247,7 +247,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
         let desc = "If true, store the AAD prefix";
         self.store_aad_prefix.visit(v, key.as_str(), desc);
     }
-    
+
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Any hex encoded values must be pre-encoded using
         // hex::encode() before calling set.
@@ -266,7 +266,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
                 }
             };
             self.column_keys_as_hex.insert(k, String::from(value));
-            return Ok(())
+            return Ok(());
         };
 
         if key.starts_with("column_metadata_as_hex.") {
@@ -284,20 +284,22 @@ impl ConfigField for ConfigFileEncryptionProperties {
                 }
             };
             self.column_metadata_as_hex.insert(k, String::from(value));
-            return Ok(())
+            return Ok(());
         };
-        
+
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
-          "encrypt_footer" => self.encrypt_footer.set(rem, value.as_ref()),
-          "footer_key_as_hex" => self.footer_key_as_hex.set(rem, value.as_ref()),
-          "footer_key_metadata_as_hex" => self.footer_key_metadata_as_hex.set(rem, value.as_ref()),
-          "aad_prefix_as_hex" => self.aad_prefix_as_hex.set(rem, value.as_ref()),
-          "store_aad_prefix" => self.store_aad_prefix.set(rem, value.as_ref()),
-           _ => _config_err!(
-              "Config value \"{}\" not found on ConfigFileEncryptionProperties",
-               key
-           ),
+            "encrypt_footer" => self.encrypt_footer.set(rem, value.as_ref()),
+            "footer_key_as_hex" => self.footer_key_as_hex.set(rem, value.as_ref()),
+            "footer_key_metadata_as_hex" => {
+                self.footer_key_metadata_as_hex.set(rem, value.as_ref())
+            }
+            "aad_prefix_as_hex" => self.aad_prefix_as_hex.set(rem, value.as_ref()),
+            "store_aad_prefix" => self.store_aad_prefix.set(rem, value.as_ref()),
+            _ => _config_err!(
+                "Config value \"{}\" not found on ConfigFileEncryptionProperties",
+                key
+            ),
         }
     }
 }
@@ -308,8 +310,8 @@ impl Into<FileEncryptionProperties> for ConfigFileEncryptionProperties {
         let mut fep = FileEncryptionProperties::builder(
             hex::decode(self.footer_key_as_hex).unwrap(),
         )
-            .with_plaintext_footer(!self.encrypt_footer)
-            .with_aad_prefix_storage(self.store_aad_prefix);
+        .with_plaintext_footer(!self.encrypt_footer)
+        .with_aad_prefix_storage(self.store_aad_prefix);
 
         if self.footer_key_metadata_as_hex.len() > 0 {
             fep = fep.with_footer_key_metadata(
@@ -317,11 +319,14 @@ impl Into<FileEncryptionProperties> for ConfigFileEncryptionProperties {
                     .expect("Invalid footer key metadata"),
             );
         }
-        
+
         for (column_name, encryption_key) in self.column_keys_as_hex.iter() {
-            let encryption_key = hex::decode(encryption_key).expect("Invalid column encryption key");
-            let key_metadata = self.column_metadata_as_hex.get(column_name).map(|x|
-                hex::decode(x).expect("Invalid column metadata"));
+            let encryption_key =
+                hex::decode(encryption_key).expect("Invalid column encryption key");
+            let key_metadata = self
+                .column_metadata_as_hex
+                .get(column_name)
+                .map(|x| hex::decode(x).expect("Invalid column metadata"));
             match key_metadata {
                 Some(key_metadata) => {
                     fep = fep.with_column_key_and_metadata(
@@ -354,8 +359,10 @@ impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
         let mut column_metadata_as_hex: HashMap<String, String> = HashMap::new();
 
         for (i, column_name) in column_names_vec.iter().enumerate() {
-            column_keys_as_hex.insert(column_name.clone(), hex::encode(column_keys_vec[i].clone()));
-            let metadata_as_hex: Option<String> = column_metas_vec.get(i).map(|x| hex::encode(x));
+            column_keys_as_hex
+                .insert(column_name.clone(), hex::encode(column_keys_vec[i].clone()));
+            let metadata_as_hex: Option<String> =
+                column_metas_vec.get(i).map(|x| hex::encode(x));
             if let Some(metadata_as_hex) = metadata_as_hex {
                 column_metadata_as_hex.insert(column_name.clone(), metadata_as_hex);
             }
@@ -383,13 +390,13 @@ impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
 pub struct ConfigFileDecryptionProperties {
     pub footer_key_as_hex: String,
     pub column_keys_as_hex: HashMap<String, String>,
-    pub aad_prefix_as_hex: String, 
+    pub aad_prefix_as_hex: String,
     pub footer_signature_verification: bool, // default = true
 }
 
 impl Default for ConfigFileDecryptionProperties {
     fn default() -> Self {
-        ConfigFileDecryptionProperties{
+        ConfigFileDecryptionProperties {
             footer_key_as_hex: String::new(),
             column_keys_as_hex: HashMap::new(),
             aad_prefix_as_hex: String::new(),
@@ -409,7 +416,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
         let key = format!("{}.footer_key_as_hex", key_prefix);
         let desc = "Key to use for the parquet footer";
         self.footer_key_as_hex.visit(v, key.as_str(), desc);
-        
+
         let desc = "Per column decryption keys";
         for (col_name, col_val) in self.column_keys_as_hex.iter() {
             let key = format!("{}.column_keys_as_hex.{}", key_prefix, col_name);
@@ -422,9 +429,10 @@ impl ConfigField for ConfigFileDecryptionProperties {
 
         let key = format!("{}.footer_signature_verification", key_prefix);
         let desc = "If true, verify the footer signature";
-        self.footer_signature_verification.visit(v, key.as_str(), desc);
+        self.footer_signature_verification
+            .visit(v, key.as_str(), desc);
     }
-    
+
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Any hex encoded values must be pre-encoded using
         // hex::encode() before calling set.
@@ -443,22 +451,23 @@ impl ConfigField for ConfigFileDecryptionProperties {
                 }
             };
             self.column_keys_as_hex.insert(k, String::from(value));
-            return Ok(())
+            return Ok(());
         };
-        
+
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
             "footer_key_as_hex" => self.footer_key_as_hex.set(rem, value.as_ref()),
             "aad_prefix_as_hex" => self.aad_prefix_as_hex.set(rem, value.as_ref()),
-            "footer_signature_verification" => self.footer_signature_verification.set(rem, value.as_ref()),
+            "footer_signature_verification" => {
+                self.footer_signature_verification.set(rem, value.as_ref())
+            }
             _ => _config_err!(
-              "Config value \"{}\" not found on ConfigFileEncryptionProperties",
-               key
-           ),
+                "Config value \"{}\" not found on ConfigFileEncryptionProperties",
+                key
+            ),
         }
     }
 }
-
 
 #[cfg(feature = "parquet")]
 impl Into<FileDecryptionProperties> for ConfigFileDecryptionProperties {
@@ -468,9 +477,11 @@ impl Into<FileDecryptionProperties> for ConfigFileDecryptionProperties {
 
         for (col_name, encryption_key) in self.column_keys_as_hex.iter() {
             column_names.push(col_name.as_str());
-            column_keys.push(hex::decode(encryption_key).expect("Invalid column decryption key"));
+            column_keys.push(
+                hex::decode(encryption_key).expect("Invalid column decryption key"),
+            );
         }
-        
+
         let mut fep = FileDecryptionProperties::builder(
             hex::decode(self.footer_key_as_hex).expect("Invalid footer key"),
         )
@@ -497,9 +508,10 @@ impl From<&FileDecryptionProperties> for ConfigFileDecryptionProperties {
         let (column_names_vec, column_keys_vec) = f.column_keys();
         let mut column_keys_as_hex: HashMap<String, String> = HashMap::new();
         for (i, column_name) in column_names_vec.iter().enumerate() {
-            column_keys_as_hex.insert(column_name.clone(), hex::encode(column_keys_vec[i].clone()));
+            column_keys_as_hex
+                .insert(column_name.clone(), hex::encode(column_keys_vec[i].clone()));
         }
-        
+
         let mut aad_prefix: Vec<u8> = Vec::new();
         if let Some(prefix) = f.aad_prefix() {
             aad_prefix = prefix.clone();
@@ -514,7 +526,6 @@ impl From<&FileDecryptionProperties> for ConfigFileDecryptionProperties {
         }
     }
 }
-
 
 config_namespace! {
     /// Options related to catalog and directory scanning
@@ -922,7 +933,7 @@ config_namespace! {
 
         /// Optional file decryption properties
         pub file_decryption_properties: Option<ConfigFileDecryptionProperties>, default = None
-        
+
         /// Optional file encryption properties
         pub file_encryption_properties: Option<ConfigFileEncryptionProperties>, default = None
     }
@@ -2430,7 +2441,10 @@ impl Display for OutputFormat {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{ConfigEntry, ConfigExtension, ConfigField,  ConfigFileType, ExtensionOptions, Extensions, TableOptions};
+    use crate::config::{
+        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
+        Extensions, TableOptions,
+    };
     use std::any::Any;
     use std::collections::HashMap;
 
@@ -2564,9 +2578,11 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_encryption() {
+        use crate::config::{
+            ConfigFileDecryptionProperties, ConfigFileEncryptionProperties,
+        };
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
-        use crate::config::{ConfigFileDecryptionProperties, ConfigFileEncryptionProperties};
 
         let footer_key = b"0123456789012345".to_vec(); // 128bit/16
         let column_names = vec!["double_field", "float_field"];
@@ -2623,17 +2639,15 @@ mod tests {
             .unwrap();
 
         for (i, col_name) in column_names.iter().enumerate() {
-            let key = format!("file_encryption_properties.column_keys_as_hex.{}", col_name);
+            let key =
+                format!("file_encryption_properties.column_keys_as_hex.{}", col_name);
             let value = hex::encode(column_keys[i].clone());
             table_config
                 .parquet
-                .set(
-                    key.as_str(),
-                    value.as_str(),
-                )
+                .set(key.as_str(), value.as_str())
                 .unwrap();
         }
-        
+
         // Print matching final encryption config
         // println!("{:#?}", table_config.parquet.global.file_encryption_properties);
 
@@ -2659,14 +2673,12 @@ mod tests {
             .unwrap();
 
         for (i, col_name) in column_names.iter().enumerate() {
-            let key = format!("file_decryption_properties.column_keys_as_hex.{}", col_name);
+            let key =
+                format!("file_decryption_properties.column_keys_as_hex.{}", col_name);
             let value = hex::encode(column_keys[i].clone());
             table_config
                 .parquet
-                .set(
-                    key.as_str(),
-                    value.as_str(),
-                )
+                .set(key.as_str(), value.as_str())
                 .unwrap();
         }
 

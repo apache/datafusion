@@ -1309,7 +1309,7 @@ impl FileSink for ParquetSink {
         let parquet_opts = &self.parquet_options;
         let mut allow_single_file_parallelism =
             parquet_opts.global.allow_single_file_parallelism;
-        
+
         if parquet_opts.global.file_encryption_properties.is_some() {
             // For now, arrow-rs does not support parallel writes with encryption
             allow_single_file_parallelism = false;
