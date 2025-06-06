@@ -82,8 +82,9 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
@@ -810,7 +811,7 @@ impl ExecutionPlan for HashJoinExec {
                 let reservation =
                     MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
 
-                Ok(collect_left_input(
+                let task = collect_left_input(
                     self.random_state.clone(),
                     left_stream,
                     on_left.clone(),
@@ -818,7 +819,14 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
-                ))
+                );
+
+                Ok(async move {
+                    // Spawn a task the first time the stream is polled for the build phase.
+                    // This ensures the consumer of the join does not poll unnecessarily
+                    // while the build is ongoing
+                    SpawnedTask::spawn(task).await?
+                })
             })?,
             PartitionMode::Partitioned => {
                 let left_stream = self.left.execute(partition, Arc::clone(&context))?;
@@ -827,7 +835,7 @@ impl ExecutionPlan for HashJoinExec {
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
 
-                OnceFut::new(collect_left_input(
+                let task = collect_left_input(
                     self.random_state.clone(),
                     left_stream,
                     on_left.clone(),
@@ -835,7 +843,14 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
-                ))
+                );
+
+                OnceFut::new(async move {
+                    // Spawn a task the first time the stream is polled for the build phase.
+                    // This ensures the consumer of the join does not poll unnecessarily
+                    // while the build is ongoing
+                    SpawnedTask::spawn(task).map(|r| r?).await
+                })
             }
             PartitionMode::Auto => {
                 return plan_err!(

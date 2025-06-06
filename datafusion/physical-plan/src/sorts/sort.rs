@@ -54,6 +54,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 
+use datafusion_common_runtime::SpawnedTask;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -1126,14 +1127,20 @@ impl ExecutionPlan for SortExec {
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
-                        while let Some(batch) = input.next().await {
-                            let batch = batch?;
-                            topk.insert_batch(batch)?;
-                            if topk.finished {
-                                break;
+                        // Spawn a task the first time the stream is polled for the sort phase.
+                        // This ensures the consumer of the sort does not poll unnecessarily
+                        // while the sort is ongoing
+                        SpawnedTask::spawn(async move {
+                            while let Some(batch) = input.next().await {
+                                let batch = batch?;
+                                topk.insert_batch(batch)?;
+                                if topk.finished {
+                                    break;
+                                }
                             }
-                        }
-                        topk.emit()
+                            topk.emit()
+                        })
+                        .await?
                     })
                     .try_flatten(),
                 )))
@@ -1152,11 +1159,17 @@ impl ExecutionPlan for SortExec {
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
-                        while let Some(batch) = input.next().await {
-                            let batch = batch?;
-                            sorter.insert_batch(batch).await?;
-                        }
-                        sorter.sort().await
+                        // Spawn a task the first time the stream is polled for the sort phase.
+                        // This ensures the consumer of the sort does not poll unnecessarily
+                        // while the sort is ongoing
+                        SpawnedTask::spawn(async move {
+                            while let Some(batch) = input.next().await {
+                                let batch = batch?;
+                                sorter.insert_batch(batch).await?;
+                            }
+                            sorter.sort().await
+                        })
+                        .await?
                     })
                     .try_flatten(),
                 )))
