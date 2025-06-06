@@ -1207,6 +1207,8 @@ message NestedLoopJoinExecNode {
   datafusion_common.JoinType join_type = 3;
   JoinFilter filter = 4;
   repeated uint32 projection = 5;
+  bool null_equals_null = 6;
+  repeated JoinOn on = 7;
 }
 
 message CoalesceBatchesExecNode {
