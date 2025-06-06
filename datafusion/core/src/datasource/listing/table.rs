@@ -216,14 +216,25 @@ impl ListingTableConfig {
     pub async fn infer_schema(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
-                let schema = if let Some(url) = self.table_paths.first() {
-                    options.infer_schema(state, url).await?
-                } else {
-                    Arc::new(Schema::empty())
+                let ListingTableConfig {
+                    table_paths,
+                    file_schema,
+                    ..
+                } = self;
+
+                let schema = match file_schema {
+                    Some(schema) => schema,
+                    None => {
+                        if let Some(url) = table_paths.first() {
+                            options.infer_schema(state, url).await?
+                        } else {
+                            Arc::new(Schema::empty())
+                        }
+                    }
                 };
 
                 Ok(Self {
-                    table_paths: self.table_paths,
+                    table_paths,
                     file_schema: Some(schema),
                     options: Some(options),
                 })
@@ -2470,6 +2481,31 @@ mod tests {
         let schema = config_with_schema.file_schema.unwrap();
 
         assert_eq!(schema.fields.len(), 13);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_preserves_provided_schema() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let testdata = crate::test_util::datafusion_test_data();
+        let filename = format!("{testdata}/aggregate_simple.csv");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let provided_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Float32, true),
+            Field::new("c2", DataType::Float64, true),
+            Field::new("c3", DataType::Boolean, true),
+            Field::new("c4", DataType::Utf8, true),
+        ]));
+
+        let config =
+            ListingTableConfig::new(table_path).with_schema(Arc::clone(&provided_schema));
+
+        let config = config.infer(&ctx.state()).await?;
+
+        assert_eq!(*config.file_schema.unwrap(), *provided_schema);
 
         Ok(())
     }
