@@ -413,29 +413,6 @@ async fn test_count_distinct_dictionary_with_null_values() -> Result<()> {
                 result_string
             );
         }
-
-        // Also perform the original check on the actual values for extra safety
-        let results = df.collect().await?;
-        for batch in &results {
-            let distinct_count = batch.column(0);
-            // All rows should have count(distinct dict) = 0 since all dict values are null
-            for i in 0..batch.num_rows() {
-                assert_eq!(
-                    distinct_count
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
-                        .value(i),
-                    0,
-                    "Expected count(distinct) to be 0 for null values, but got {}",
-                    distinct_count
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
-                        .value(i)
-                );
-            }
-        }
     }
 
     // Test with multiple partitions
@@ -478,29 +455,6 @@ async fn test_count_distinct_dictionary_with_null_values() -> Result<()> {
                 line,
                 result_string
             );
-        }
-
-        // Also perform the original check on the actual values for extra safety
-        let results = df.collect().await?;
-        for batch in &results {
-            let distinct_count = batch.column(0);
-            // All rows should have count(distinct dict) = 0 since all dict values are null
-            for i in 0..batch.num_rows() {
-                assert_eq!(
-                    distinct_count
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
-                        .value(i),
-                    0,
-                    "Expected count(distinct) to be 0 for null values, but got {}",
-                    distinct_count
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
-                        .value(i)
-                );
-            }
         }
     }
 
@@ -561,21 +515,6 @@ async fn test_count_distinct_dictionary_with_mixed_values() -> Result<()> {
             result_string
         );
     }
-
-    // Also perform direct check on values
-    let results = df.collect().await?;
-    let batch = &results[0];
-    let count_col = batch.column(0);
-
-    assert_eq!(
-        count_col
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .value(0),
-        2,
-        "Expected count(distinct) to be 2 for the unique non-null values"
-    );
 
     Ok(())
 }
