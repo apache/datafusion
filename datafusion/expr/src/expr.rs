@@ -30,7 +30,7 @@ use crate::logical_plan::Subquery;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -284,8 +284,8 @@ pub enum Expr {
     Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
-    /// A constant value along with associated metadata
-    Literal(ScalarValue, Option<BTreeMap<String, String>>),
+    /// A constant value along with associated [`FieldMetadata`].
+    Literal(ScalarValue, Option<FieldMetadata>),
     /// A binary expression such as "age > 21"
     BinaryExpr(BinaryExpr),
     /// LIKE expression
@@ -410,6 +410,116 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         f(self)
+    }
+}
+
+/// Literal metadata
+///
+/// This structure is used to store metadata associated with a literal expressions
+/// and is designed to be cheap to `clone`.
+///
+/// This structure is used to store metadata associated with a literal expression, and it
+/// corresponds to the `metadata` field on [`FieldRef`].
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct FieldMetadata {
+    /// The inner metadata of a literal expression, which is a map of string
+    /// keys to string values.
+    ///
+    /// Note this is not a `HashMap because `HashMap` does not provide
+    /// implementations for traits like `Debug` and `Hash`.
+    inner: Arc<BTreeMap<String, String>>,
+}
+
+impl FieldMetadata {
+    /// Create a new empty metadata instance.
+    pub fn new_empty() -> Self {
+        Self {
+            inner: Arc::new(BTreeMap::new()),
+        }
+    }
+
+    /// Create a new metadata instance from a `Field`'s metadata.
+    pub fn new_from_field(field: &Field) -> Self {
+        let inner = field
+            .metadata()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Create a new metadata instance from a map of string keys to string values.
+    pub fn new(inner: BTreeMap<String, String>) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Get the inner metadata as a reference to a `BTreeMap`.
+    pub fn inner(&self) -> &BTreeMap<String, String> {
+        &self.inner
+    }
+
+    /// Return the inner metadata
+    pub fn into_inner(self) -> Arc<BTreeMap<String, String>> {
+        self.inner
+    }
+
+    /// Adds metadata from `other` into `self`, overwriting any existing keys.
+    pub fn extend(&mut self, other: Self) {
+        let other = Arc::unwrap_or_clone(other.into_inner());
+        Arc::make_mut(&mut self.inner).extend(other);
+    }
+
+    /// Returns true if the metadata is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the number of key-value pairs in the metadata.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Updates the metadata on the Field with this metadata
+    pub fn add_to_field(&self, field: Field) -> Field {
+        field.with_metadata(
+            self.inner
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        )
+    }
+}
+
+impl From<&Field> for FieldMetadata {
+    fn from(field: &Field) -> Self {
+        Self::new_from_field(field)
+    }
+}
+
+impl From<BTreeMap<String, String>> for FieldMetadata {
+    fn from(inner: BTreeMap<String, String>) -> Self {
+        Self::new(inner)
+    }
+}
+
+impl From<std::collections::HashMap<String, String>> for FieldMetadata {
+    fn from(map: std::collections::HashMap<String, String>) -> Self {
+        Self::new(map.into_iter().collect())
+    }
+}
+
+/// From reference
+impl From<&std::collections::HashMap<String, String>> for FieldMetadata {
+    fn from(map: &std::collections::HashMap<String, String>) -> Self {
+        let inner = map
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self::new(inner)
     }
 }
 

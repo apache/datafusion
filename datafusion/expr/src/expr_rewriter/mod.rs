@@ -390,11 +390,7 @@ mod test {
                     } else {
                         utf8_val
                     };
-                    Ok(Transformed::yes(lit_with_metadata(
-                        utf8_val,
-                        metadata
-                            .map(|m| m.into_iter().collect::<HashMap<String, String>>()),
-                    )))
+                    Ok(Transformed::yes(lit_with_metadata(utf8_val, metadata)))
                 }
                 // otherwise, return None
                 _ => Ok(Transformed::no(expr)),
