@@ -2571,6 +2571,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-macros",
  "log",
+ "num",
 ]
 
 [[package]]
