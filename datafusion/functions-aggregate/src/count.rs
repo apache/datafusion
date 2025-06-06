@@ -771,6 +771,20 @@ mod tests {
     use datafusion_physical_expr::{expressions::Column, LexOrdering};
     use std::sync::Arc;
 
+    /// Helper function to create a dictionary array with non-null keys but some null values
+    /// Returns a dictionary array where:
+    /// - keys are [0, 1, 2, 0, 1] (all non-null)
+    /// - values are ["a", null, "c"]
+    /// - so the keys reference: "a", null, "c", "a", null
+    fn create_dictionary_with_null_values() -> Result<DictionaryArray<Int32Type>> {
+        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 1]); // references "a", null, "c", "a", null
+        Ok(DictionaryArray::<Int32Type>::try_new(
+            keys,
+            Arc::new(values),
+        )?)
+    }
+
     #[test]
     fn count_accumulator_nulls() -> Result<()> {
         let mut accumulator = CountAccumulator::new();
@@ -823,12 +837,7 @@ mod tests {
 
     #[test]
     fn count_distinct_accumulator_dictionary_with_null_values() -> Result<()> {
-        // Create a dictionary array where:
-        // - keys aren't null
-        // - but values referenced by some keys are null
-        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
-        let keys = Int32Array::from(vec![0, 1, 2, 0, 1]); // references "a", null, "c", "a", null
-        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values))?;
+        let dict_array = create_dictionary_with_null_values()?;
 
         // The expected behavior is that count_distinct should count only non-null values
         // which in this case are "a" and "c" (appearing as 0 and 2 in keys)
@@ -846,12 +855,7 @@ mod tests {
 
     #[test]
     fn count_accumulator_dictionary_with_null_values() -> Result<()> {
-        // Create a dictionary array where:
-        // - keys aren't null
-        // - but values referenced by some keys are null
-        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
-        let keys = Int32Array::from(vec![0, 1, 2, 0, 1]); // references "a", null, "c", "a", null
-        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values))?;
+        let dict_array = create_dictionary_with_null_values()?;
 
         // The expected behavior is that count should only count non-null values
         let mut accumulator = CountAccumulator::new();
