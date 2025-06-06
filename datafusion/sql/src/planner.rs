@@ -601,7 +601,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )
             }
             SQLDataType::Char(_) | SQLDataType::Text | SQLDataType::String(_) => {
-                Ok(DataType::Utf8)
+                Ok(DataType::Utf8View)
             }
             SQLDataType::Timestamp(precision, tz_info)
                 if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
