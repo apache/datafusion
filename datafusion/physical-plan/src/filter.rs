@@ -63,7 +63,7 @@ use datafusion_physical_expr::{
 };
 use futures::FutureExt;
 
-use crate::poll_budget::PollBudget;
+use crate::r#yield::PollBudget;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use itertools::Itertools;

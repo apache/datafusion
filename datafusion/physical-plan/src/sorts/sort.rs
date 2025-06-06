@@ -54,7 +54,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::poll_budget::PollBudget;
+use crate::r#yield::PollBudget;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 

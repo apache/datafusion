@@ -73,7 +73,6 @@ pub mod limit;
 pub mod memory;
 pub mod metrics;
 pub mod placeholder_row;
-pub mod poll_budget;
 pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
@@ -87,6 +86,7 @@ pub mod unnest;
 pub mod values;
 pub mod windows;
 pub mod work_table;
+pub mod r#yield;
 pub mod udaf {
     pub use datafusion_expr::StatisticsArgs;
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;

@@ -63,7 +63,7 @@ use datafusion_physical_expr::window::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
-use crate::poll_budget::PollBudget;
+use crate::r#yield::PollBudget;
 use futures::stream::Stream;
 use futures::{ready, FutureExt, StreamExt};
 use hashbrown::hash_table::HashTable;

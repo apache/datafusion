@@ -49,7 +49,7 @@ use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
-use crate::poll_budget::PollBudget;
+use crate::r#yield::PollBudget;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};

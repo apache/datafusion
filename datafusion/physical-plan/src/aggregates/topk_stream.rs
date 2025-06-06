@@ -22,7 +22,7 @@ use crate::aggregates::{
     aggregate_expressions, evaluate_group_by, evaluate_many, AggregateExec,
     PhysicalGroupBy,
 };
-use crate::poll_budget::PollBudget;
+use crate::r#yield::PollBudget;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;

@@ -46,7 +46,7 @@ use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
-use crate::poll_budget::PollBudget;
+use crate::r#yield::PollBudget;
 use futures::{ready, FutureExt, Stream, StreamExt};
 
 /// Window execution plan

@@ -46,7 +46,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
-use crate::poll_budget::{PollBudget, YieldStream};
+use crate::r#yield::{PollBudget, YieldStream};
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 

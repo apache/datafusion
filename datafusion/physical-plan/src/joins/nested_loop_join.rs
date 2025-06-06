@@ -61,7 +61,7 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
-use crate::poll_budget::{PollBudget, YieldStream};
+use crate::r#yield::{PollBudget, YieldStream};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 

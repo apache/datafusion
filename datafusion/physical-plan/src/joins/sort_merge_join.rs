@@ -74,7 +74,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
-use crate::poll_budget::PollBudget;
+use crate::r#yield::PollBudget;
 use futures::{FutureExt, Stream, StreamExt};
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
