@@ -33,7 +33,7 @@ use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
-use crate::decorrelate_general::Decorrelation;
+use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
@@ -226,7 +226,7 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
-            Arc::new(Decorrelation::new()),
+            Arc::new(DecorrelateDependentJoin::new()), // TODO
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(DecorrelateLateralJoin::new()),

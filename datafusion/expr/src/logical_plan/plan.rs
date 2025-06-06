@@ -364,7 +364,7 @@ impl Display for DependentJoin {
         let correlated_str = self
             .correlated_columns
             .iter()
-            .map(|(level, col, data_type)| format!("{col} lvl {level}"))
+            .map(|(level, col, _)| format!("{col} lvl {level}"))
             .collect::<Vec<String>>()
             .join(", ");
         let lateral_join_info =
