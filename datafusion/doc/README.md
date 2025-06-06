@@ -17,11 +17,12 @@
   under the License.
 -->
 
-# DataFusion datasource
+# DataFusion Execution
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate is a submodule of DataFusion that defines a CSV based file source.
+This crate is a submodule of DataFusion that provides structures and macros
+for documenting user defined functions.
 
 Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no
