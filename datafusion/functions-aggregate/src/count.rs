@@ -763,11 +763,12 @@ impl Accumulator for DistinctCountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, NullArray};
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::{
+        array::{DictionaryArray, Int32Array, NullArray, StringArray},
+        datatypes::{DataType, Field, Int32Type, Schema},
+    };
     use datafusion_expr::function::AccumulatorArgs;
-    use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr::LexOrdering;
+    use datafusion_physical_expr::{expressions::Column, LexOrdering};
     use std::sync::Arc;
 
     #[test]
@@ -806,15 +807,12 @@ mod tests {
             ordering_req: &LexOrdering::default(),
         };
 
-        let inner_dict = arrow::array::DictionaryArray::<Int32Type>::from_iter([
-            "a", "b", "c", "d", "a", "b",
-        ]);
+        let inner_dict =
+            DictionaryArray::<Int32Type>::from_iter(["a", "b", "c", "d", "a", "b"]);
 
         let keys = Int32Array::from(vec![0, 1, 2, 0, 3, 1]);
-        let dict_of_dict = arrow::array::DictionaryArray::<Int32Type>::try_new(
-            keys,
-            Arc::new(inner_dict),
-        )?;
+        let dict_of_dict =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(inner_dict))?;
 
         let mut acc = count.accumulator(args)?;
         acc.update_batch(&[Arc::new(dict_of_dict)])?;
