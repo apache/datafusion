@@ -310,7 +310,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 runtime,
                 extension_codec,
             ),
-
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetSink(sink) => self
                 .try_into_parquet_sink_physical_plan(
@@ -325,7 +324,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 runtime,
                 extension_codec,
             ),
-
             PhysicalPlanType::YieldStream(yield_stream) => self
                 .try_into_yield_stream_physical_plan(
                     yield_stream,
@@ -1794,8 +1792,10 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input =
             into_physical_plan(&field_stream.input, registry, runtime, extension_codec)?;
-        let frequency = field_stream.frequency as usize;
-        Ok(Arc::new(YieldStreamExec::new(input, frequency)))
+        Ok(Arc::new(YieldStreamExec::new(
+            input,
+            field_stream.frequency as _,
+        )))
     }
 
     fn try_from_explain_exec(
@@ -2793,7 +2793,7 @@ impl protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::YieldStream(Box::new(
                 protobuf::YieldStreamExecNode {
                     input: Some(Box::new(input)),
-                    frequency: frequency as u32,
+                    frequency: frequency as _,
                 },
             ))),
         })

@@ -24,6 +24,7 @@ use std::task::{Context, Poll};
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::yield_stream::YieldStream;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -36,7 +37,6 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
-use crate::yield_stream::YieldStream;
 use futures::Stream;
 use parking_lot::RwLock;
 
@@ -166,7 +166,6 @@ impl LazyMemoryExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
-
         Ok(Self {
             schema,
             batch_generators: generators,

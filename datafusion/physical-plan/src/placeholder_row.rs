@@ -22,16 +22,18 @@ use std::sync::Arc;
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
-use arrow::array::{ArrayRef, NullArray};
-use arrow::array::{RecordBatch, RecordBatchOptions};
+use crate::yield_stream::YieldStream;
+use crate::{
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
+};
+
+use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
-use crate::yield_stream::YieldStream;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=true
