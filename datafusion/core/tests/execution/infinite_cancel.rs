@@ -32,7 +32,7 @@ use datafusion::physical_plan::{
 use datafusion::prelude::SessionContext;
 use datafusion::{common, physical_plan};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::ScalarValue;
+use datafusion_common::{JoinType, ScalarValue};
 use datafusion_expr_common::operator::Operator::Gt;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -41,6 +41,8 @@ use datafusion_physical_optimizer::wrap_leaves_cancellation::WrapLeaves;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::union::InterleaveExec;
@@ -271,11 +273,11 @@ async fn test_infinite_interleave_agg_cancel() -> Result<(), Box<dyn Error>> {
     // 2) Create N infinite sources, each filtered by a different predicate.
     //    That way, the InterleaveExec will have multiple children.
     let mut infinite_children: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
-    let thresholds = [
-        8192, 8111, 8030, 7949, 7868, 7787, 7706, 7625, 7544, 7463, 7382, 7301, 7220,
-        7139, 7058, 6977, 6896, 6815, 6734, 6653, 6572, 6491, 6410, 6329, 6248, 6167,
-        6086, 6005, 5924, 5843, 5762, 5681, 5600,
-    ];
+    // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
+    let thresholds = (0..32)
+        .map(|i| 8_192 - 1 - (i * 256) as i64)
+        .collect::<Vec<_>>();
+
     for &thr in &thresholds {
         // 2a) One infinite exec:
         let inf = Arc::new(InfiniteExec::new(&batch));
@@ -359,5 +361,129 @@ async fn test_infinite_interleave_agg_cancel() -> Result<(), Box<dyn Error>> {
         "Expected no output for aggregate over infinite interleave, but got some batch"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_infinite_join_agg_cancel() -> Result<(), Box<dyn Error>> {
+    // 1) Session, schema, and a single 8 K‐row batch for each side
+    let session_ctx = SessionContext::new();
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    )]));
+
+    let mut builder_left = Int64Array::builder(8_192);
+    let mut builder_right = Int64Array::builder(8_192);
+    for v in 0..8_192 {
+        builder_left.append_value(v);
+        // on the right side, we’ll shift each value by +1 so that not everything joins,
+        // but plenty of matching keys exist (e.g. 0 on left matches 1 on right, etc.)
+        builder_right.append_value(v + 1);
+    }
+    let batch_left = Arc::new(RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(builder_left.finish())],
+    )?);
+    let batch_right = Arc::new(RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(builder_right.finish())],
+    )?);
+
+    // 2a) Build two InfiniteExecs (left and right)
+    let infinite_left = Arc::new(InfiniteExec::new(&*batch_left));
+    let infinite_right = Arc::new(InfiniteExec::new(&*batch_right));
+
+    // 2b) Create Join keys → join on “value” = “value”
+    let left_keys: Vec<Arc<dyn PhysicalExpr>> =
+        vec![Arc::new(Column::new_with_schema("value", &schema)?)];
+    let right_keys: Vec<Arc<dyn PhysicalExpr>> =
+        vec![Arc::new(Column::new_with_schema("value", &schema)?)];
+
+    // 2c) Wrap each side in CoalesceBatches + Repartition so they are both hashed into 1 partition
+    let coalesced_left: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalesceBatchesExec::new(infinite_left.clone(), 8_192));
+    let coalesced_right: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalesceBatchesExec::new(infinite_right.clone(), 8_192));
+
+    let part_left = Partitioning::Hash(left_keys.clone(), 1);
+    let part_right = Partitioning::Hash(right_keys.clone(), 1);
+
+    let hashed_left: Arc<dyn ExecutionPlan> =
+        Arc::new(RepartitionExec::try_new(coalesced_left.clone(), part_left)?);
+    let hashed_right: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        coalesced_right.clone(),
+        part_right,
+    )?);
+
+    // 2d) Build an Inner HashJoinExec → left.value = right.value
+    let join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+        hashed_left.clone(),
+        hashed_right.clone(),
+        vec![(
+            Arc::new(Column::new_with_schema("value", &hashed_left.schema()).unwrap()),
+            Arc::new(Column::new_with_schema("value", &hashed_right.schema()).unwrap()),
+        )],
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::CollectLeft,
+        true,
+    )?);
+
+    // 3) Project only one column (“value” from the left side) because we just want to sum that
+    let input_schema = join.schema();
+
+    let proj_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![(
+        Arc::new(Column::new_with_schema("value", &input_schema)?)
+            as Arc<dyn PhysicalExpr>,
+        "value".to_string(),
+    )];
+
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(proj_expr, join.clone())?);
+
+    let output_fields = vec![Field::new("total", DataType::Int64, true)];
+    let output_schema = Arc::new(Schema::new(output_fields));
+
+    // 4) Global aggregate (Single) over “value”
+    let aggregate_expr = AggregateExprBuilder::new(
+        sum::sum_udaf(),
+        vec![Arc::new(Column::new_with_schema(
+            "value",
+            &projection.schema(),
+        )?)],
+    )
+    .schema(output_schema.clone())
+    .alias("total")
+    .build()?;
+
+    let aggr: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new(vec![], vec![], vec![]),
+        vec![Arc::new(aggregate_expr)],
+        vec![None],
+        projection.clone(),
+        projection.schema(),
+    )?);
+
+    // 5) Wrap yields under each infinite leaf
+    let config = ConfigOptions::new();
+    let optimized = WrapLeaves::new().optimize(aggr, &config)?;
+
+    // 6) Execute + 1 sec timeout
+    let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
+    const TIMEOUT: u64 = 1;
+    let result = select! {
+        batch_opt = stream.next() => batch_opt,
+        _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => {
+            None
+        }
+    };
+    assert!(
+        result.is_none(),
+        "Expected no output for aggregate over infinite + join, but got a batch"
+    );
     Ok(())
 }
