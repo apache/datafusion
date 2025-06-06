@@ -330,8 +330,6 @@ async fn get_formatted_results(df: &DataFrame) -> Result<String> {
     // Collect the results and use arrow's pretty formatting
     let results = df.clone().collect().await?;
 
-    // Use arrow's pretty formatting with default options
-    // FormatOptions doesn't have with_max_rows method, so use default options
     let config = arrow::util::display::FormatOptions::default();
 
     // Format the batches as a string
@@ -390,7 +388,6 @@ async fn test_count_distinct_dictionary_with_null_values() -> Result<()> {
             .sql("SELECT count(distinct dict), count(num2) FROM t GROUP BY num1")
             .await?;
 
-        // Get the formatted output for verification
         let result_string = get_formatted_results(&df).await?;
         println!("Single partition results:\n{}", result_string);
 
