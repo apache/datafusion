@@ -54,6 +54,16 @@ use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
+pub fn aggregate_stream(
+    agg: &AggregateExec,
+    context: Arc<TaskContext>,
+    partition: usize,
+) -> Result<SendableRecordBatchStream> {
+    Ok(Box::pin(GroupedHashAggregateStream::new(
+        agg, context, partition,
+    )?))
+}
+
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
 pub(crate) enum ExecutionState {
@@ -338,7 +348,7 @@ impl SkipAggregationProbe {
 /// │ 2 │ 2     │ 3.0 │    │ 2 │ 2     │ 3.0 │                   └────────────┘
 /// └─────────────────┘    └─────────────────┘
 /// ```
-pub(crate) struct GroupedHashAggregateStream {
+struct GroupedHashAggregateStream {
     // ========================================================================
     // PROPERTIES:
     // These fields are initialized at the start and remain constant throughout
