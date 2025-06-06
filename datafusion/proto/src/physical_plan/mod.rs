@@ -2787,7 +2787,7 @@ impl protobuf::PhysicalPlanNode {
             extension_codec,
         )?;
 
-        let frequency = exec.get_yield_frequency();
+        let frequency = exec.yield_frequency();
 
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::YieldStream(Box::new(

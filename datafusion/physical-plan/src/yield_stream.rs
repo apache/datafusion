@@ -20,21 +20,22 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution_plan::CardinalityEffect;
-use crate::execution_plan::CardinalityEffect::Equal;
+use crate::execution_plan::CardinalityEffect::{self, Equal};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
-use datafusion_common::{Result, Statistics};
+use datafusion_common::{internal_err, Result, Statistics};
 use datafusion_execution::TaskContext;
+
 use futures::{Stream, StreamExt};
 
-/// A stream that yields batches of data, yielding control back to the executor every `frequency` batches
-///
-/// This can be useful to allow operators that might not yield to check for cancellation
+/// An identity stream that passes batches through as is, but yields control
+/// back to the runtime every `frequency` batches. This stream is useful to
+/// construct a mechanism that allows operators that do not directly cooperate
+/// with the runtime to  check/support cancellation.
 pub struct YieldStream {
     inner: SendableRecordBatchStream,
     batches_processed: usize,
@@ -51,7 +52,6 @@ impl YieldStream {
     }
 }
 
-// Stream<Item = Result<RecordBatch>> to poll_next_unpin
 impl Stream for YieldStream {
     type Item = Result<RecordBatch>;
 
@@ -65,43 +65,58 @@ impl Stream for YieldStream {
             return Poll::Pending;
         }
 
-        match self.inner.poll_next_unpin(cx) {
-            Poll::Ready(Some(Ok(batch))) => {
+        let value = self.inner.poll_next_unpin(cx);
+        match value {
+            Poll::Ready(Some(Ok(_))) => {
                 self.batches_processed += 1;
-                Poll::Ready(Some(Ok(batch)))
             }
             Poll::Pending => {
                 self.batches_processed = 0;
-                Poll::Pending
             }
-
-            other => other,
+            _ => {}
         }
+        value
     }
 }
 
-// RecordBatchStream schema()
 impl RecordBatchStream for YieldStream {
     fn schema(&self) -> Arc<Schema> {
         self.inner.schema()
     }
 }
 
+/// This operator wraps any other execution plan and to "adapt" it to cooperate
+/// with the runtime by yielding control back to the runtime every `frequency`
+/// batches. This is useful for operators that do not natively support yielding
+/// control, allowing them to be used in a runtime that requires yielding for
+/// cancellation or other purposes.
 #[derive(Debug)]
 pub struct YieldStreamExec {
+    /// The child execution plan that this operator "wraps" to make it
+    /// cooperate with the runtime.
     child: Arc<dyn ExecutionPlan>,
+    /// The frequency at which the operator yields control back to the runtime.
     frequency: usize,
-    properties: PlanProperties,
 }
 
 impl YieldStreamExec {
+    /// Create a new `YieldStreamExec` operator that wraps the given child
+    /// execution plan and yields control back to the runtime every `frequency`
+    /// batches.
     pub fn new(child: Arc<dyn ExecutionPlan>, frequency: usize) -> Self {
-        let properties = child.properties().clone();
-        Self {
-            child,
-            properties,
-            frequency,
-        }
+        Self { frequency, child }
+    }
+
+    /// Returns the child execution plan this operator "wraps" to make it
+    /// cooperate with the runtime.
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.child
+    }
+
+    /// Returns the frequency at which the operator yields control back to the
+    /// runtime.
+    pub fn yield_frequency(&self) -> usize {
+        self.frequency
     }
 }
 
@@ -112,18 +127,6 @@ impl DisplayAs for YieldStreamExec {
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(f, "YieldStreamExec frequency={}", self.frequency)
-    }
-}
-
-impl YieldStreamExec {
-    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.child
-    }
-}
-
-impl YieldStreamExec {
-    pub fn get_yield_frequency(&self) -> usize {
-        self.frequency
     }
 }
 
@@ -141,7 +144,7 @@ impl ExecutionPlan for YieldStreamExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.properties
+        self.child.properties()
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -150,16 +153,13 @@ impl ExecutionPlan for YieldStreamExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
-            return Err(datafusion_common::DataFusionError::Internal(
-                "YieldStreamExec requires exactly one child".to_string(),
-            ));
+            return internal_err!("YieldStreamExec requires exactly one child");
         }
-        // Use Arc::clone on children[0] rather than calling clone() directly
         Ok(Arc::new(YieldStreamExec::new(
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
             self.frequency,
         )))
     }
@@ -169,21 +169,16 @@ impl ExecutionPlan for YieldStreamExec {
         partition: usize,
         task_ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let child_stream = self.child.execute(partition, Arc::clone(&task_ctx))?;
+        let child_stream = self.child.execute(partition, task_ctx)?;
         let yield_stream = YieldStream::new(child_stream, self.frequency);
         Ok(Box::pin(yield_stream))
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            self.child.partition_statistics(partition)
-        } else {
-            Ok(Statistics::new_unknown(&self.schema()))
-        }
+        self.child.partition_statistics(partition)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        // YieldStreamExec does not change the order of the input data
         self.child.maintains_input_order()
     }
 
@@ -200,7 +195,9 @@ impl ExecutionPlan for YieldStreamExec {
 mod tests {
     use super::*;
     use crate::stream::RecordBatchStreamAdapter;
+
     use arrow_schema::SchemaRef;
+
     use futures::{stream, StreamExt};
 
     // Frequency testing:
@@ -224,7 +221,7 @@ mod tests {
     async fn yield_less_than_threshold() -> Result<()> {
         let count = YIELD_BATCHES - 10;
         let inner = make_empty_batches(count);
-        let out: Vec<_> = YieldStream::new(inner, YIELD_BATCHES)
+        let out = YieldStream::new(inner, YIELD_BATCHES)
             .collect::<Vec<_>>()
             .await;
         assert_eq!(out.len(), count);
@@ -235,7 +232,7 @@ mod tests {
     async fn yield_equal_to_threshold() -> Result<()> {
         let count = YIELD_BATCHES;
         let inner = make_empty_batches(count);
-        let out: Vec<_> = YieldStream::new(inner, YIELD_BATCHES)
+        let out = YieldStream::new(inner, YIELD_BATCHES)
             .collect::<Vec<_>>()
             .await;
         assert_eq!(out.len(), count);
@@ -246,7 +243,7 @@ mod tests {
     async fn yield_more_than_threshold() -> Result<()> {
         let count = YIELD_BATCHES + 20;
         let inner = make_empty_batches(count);
-        let out: Vec<_> = YieldStream::new(inner, YIELD_BATCHES)
+        let out = YieldStream::new(inner, YIELD_BATCHES)
             .collect::<Vec<_>>()
             .await;
         assert_eq!(out.len(), count);
