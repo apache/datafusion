@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
 
@@ -327,6 +326,7 @@ async fn test_accumulator_row_accumulator() -> Result<()> {
 
 /// Helper function to get formatted results from a DataFrame for assertion purposes
 async fn get_formatted_results(df: &DataFrame) -> Result<String> {
+    use arrow::util::pretty::pretty_format_batches_with_options;
     // Collect the results and use arrow's pretty formatting
     let results = df.clone().collect().await?;
 
@@ -338,6 +338,24 @@ async fn get_formatted_results(df: &DataFrame) -> Result<String> {
         .to_string();
 
     Ok(formatted_results)
+}
+
+/// Helper function to assert that a formatted output string matches the expected lines
+fn assert_formatted_output(result_string: &str, expected: &[&str]) -> Result<()> {
+    // Check that the formatted output matches the expected output exactly
+    let actual_lines = result_string.split('\n').collect::<Vec<_>>();
+    // Trim any empty lines at the end
+    let actual_lines: Vec<_> = actual_lines
+        .into_iter()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+
+    assert_eq!(
+        actual_lines, expected,
+        "Actual:\n{actual_lines:#?}\n\nExpected:\n{expected:#?}"
+    );
+
+    Ok(())
 }
 
 /// Test that COUNT(DISTINCT) correctly handles dictionary arrays with null values
@@ -404,15 +422,7 @@ async fn test_count_distinct_dictionary_with_null_values() -> Result<()> {
             "+------------------------+---------------+",
         ];
 
-        // Check that each line in the expected output appears in the actual output
-        for line in &expected {
-            assert!(
-                result_string.contains(line),
-                "Expected output to contain '{}', but got:\n{}",
-                line,
-                result_string
-            );
-        }
+        let _ = assert_formatted_output(&result_string, &expected);
     }
 
     // Test with multiple partitions
@@ -447,15 +457,7 @@ async fn test_count_distinct_dictionary_with_null_values() -> Result<()> {
             "+------------------------+---------------+",
         ];
 
-        // Check that each line in the expected output appears in the actual output
-        for line in &expected {
-            assert!(
-                result_string.contains(line),
-                "Expected output to contain '{}', but got:\n{}",
-                line,
-                result_string
-            );
-        }
+        let _ = assert_formatted_output(&result_string, &expected);
     }
 
     Ok(())
@@ -506,15 +508,7 @@ async fn test_count_distinct_dictionary_with_mixed_values() -> Result<()> {
         "+------------------------+",
     ];
 
-    // Check that each line in the expected output appears in the actual output
-    for line in &expected {
-        assert!(
-            result_string.contains(line),
-            "Expected output to contain '{}', but got:\n{}",
-            line,
-            result_string
-        );
-    }
+    let _ = assert_formatted_output(&result_string, &expected);
 
     Ok(())
 }
