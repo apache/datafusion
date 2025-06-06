@@ -2787,13 +2787,11 @@ impl protobuf::PhysicalPlanNode {
             extension_codec,
         )?;
 
-        let frequency = exec.yield_frequency();
-
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::YieldStream(Box::new(
                 protobuf::YieldStreamExecNode {
                     input: Some(Box::new(input)),
-                    frequency: frequency as _,
+                    frequency: exec.yield_frequency() as _,
                 },
             ))),
         })

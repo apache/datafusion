@@ -573,8 +573,8 @@ async fn test_infinite_join_agg_cancel(
     let coalesced_left = Arc::new(CoalesceBatchesExec::new(infinite_left, 8_192));
     let coalesced_right = Arc::new(CoalesceBatchesExec::new(infinite_right, 8_192));
 
-    let part_left = Partitioning::Hash(left_keys.clone(), 1);
-    let part_right = Partitioning::Hash(right_keys.clone(), 1);
+    let part_left = Partitioning::Hash(left_keys, 1);
+    let part_right = Partitioning::Hash(right_keys, 1);
 
     let hashed_left = Arc::new(RepartitionExec::try_new(coalesced_left, part_left)?);
     let hashed_right = Arc::new(RepartitionExec::try_new(coalesced_right, part_right)?);
@@ -742,8 +742,8 @@ async fn test_infinite_hash_join_without_repartition_and_no_agg(
     // 2c) Directly feed `coalesced_left` and `coalesced_right` into HashJoinExec.
     //     Do not use aggregation or repartition.
     let join = Arc::new(HashJoinExec::try_new(
-        coalesced_left.clone(),
-        coalesced_right.clone(),
+        coalesced_left,
+        coalesced_right,
         vec![(
             Arc::new(Column::new_with_schema("value", &schema)?),
             Arc::new(Column::new_with_schema("value", &schema)?),
@@ -827,12 +827,9 @@ async fn test_infinite_sort_merge_join_without_repartition_and_no_agg(
     //    We need a Vec<SortOptions> for the join key. Any consistent SortOptions works,
     //    because data is already in ascending order on “value.”
     let join = Arc::new(SortMergeJoinExec::try_new(
-        coalesced_left.clone(),
-        coalesced_right.clone(),
-        vec![(
-            col("value", &coalesced_left.schema())?,
-            col("value", &coalesced_right.schema())?,
-        )],
+        coalesced_left,
+        coalesced_right,
+        vec![(col("value", &schema)?, col("value", &schema)?)],
         /* filter */ None,
         JoinType::Inner,
         vec![SortOptions::new(true, false)], // ascending, nulls last
