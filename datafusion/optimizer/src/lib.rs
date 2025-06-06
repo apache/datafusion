@@ -40,7 +40,6 @@
 pub mod analyzer;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate;
-pub mod decorrelate_general;
 pub mod decorrelate_lateral_join;
 pub mod decorrelate_predicate_subquery;
 pub mod eliminate_cross_join;
@@ -60,6 +59,7 @@ pub mod propagate_empty_relation;
 pub mod push_down_filter;
 pub mod push_down_limit;
 pub mod replace_distinct_aggregate;
+pub mod rewrite_dependent_join;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;

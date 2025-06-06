@@ -29,7 +29,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{internal_err, Column, HashMap, Result};
 use datafusion_expr::{
-    col, lit, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Projection,
+    col, lit, Aggregate, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Projection,
 };
 
 use indexmap::map::Entry;
@@ -442,7 +442,7 @@ impl DependentJoinRewriter {
             });
     }
 
-    fn rewrite_subqueries_into_dependent_joins(
+    pub fn rewrite_subqueries_into_dependent_joins(
         &mut self,
         plan: LogicalPlan,
     ) -> Result<Transformed<LogicalPlan>> {
@@ -451,7 +451,7 @@ impl DependentJoinRewriter {
 }
 
 impl DependentJoinRewriter {
-    fn new(alias_generator: Arc<AliasGenerator>) -> Self {
+    pub fn new(alias_generator: Arc<AliasGenerator>) -> Self {
         DependentJoinRewriter {
             alias_generator,
             current_id: 0,
@@ -527,10 +527,12 @@ fn contains_subquery(expr: &Expr) -> bool {
 /// before its children (subqueries children are visited first).
 /// This behavior allow the fact that, at any moment, if we observe a `LogicalPlan`
 /// that provides the data for columns, we can assume that all subqueries that reference
-/// its data were already visited, and we can conclude the information of the `DependentJoin`
+/// its data were already visited, and we can conclude the information of
+/// the `DependentJoin`
 /// needed for the decorrelation:
 /// - The subquery expr
-/// - The correlated columns on the LHS referenced from the RHS (and its recursing subqueries if any)
+/// - The correlated columns on the LHS referenced from the RHS
+///   (and its recursing subqueries if any)
 ///
 /// If in the original node there exists multiple subqueries at the same time
 /// two nested `DependentJoin` plans are generated (with equal depth).
@@ -922,19 +924,30 @@ impl TreeNodeRewriter for DependentJoinRewriter {
     }
 }
 
+<<<<<<< HEAD:datafusion/optimizer/src/decorrelate_general.rs
 #[allow(dead_code)]
 #[derive(Debug)]
 struct Decorrelation {}
+=======
+/// Optimizer rule for rewriting subqueries to dependent join.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct RewriteDependentJoin {}
 
-impl OptimizerRule for Decorrelation {
+impl RewriteDependentJoin {
+    pub fn new() -> Self {
+        return RewriteDependentJoin {};
+    }
+}
+>>>>>>> 47ace22cf (spilt into rewrite_dependent_join & decorrelate_dependent_join):datafusion/optimizer/src/rewrite_dependent_join.rs
+
+impl OptimizerRule for RewriteDependentJoin {
     fn supports_rewrite(&self) -> bool {
         true
     }
 
-    // There will be 2 rewrites going on
-    // - Convert all subqueries (maybe including lateral join in the future) to temporary
-    // LogicalPlan node called DependentJoin
-    // - Decorrelate DependentJoin following top-down approach recursively
+    // Convert all subqueries (maybe including lateral join in the future) to temporary
+    // LogicalPlan node called DependentJoin.
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -944,14 +957,18 @@ impl OptimizerRule for Decorrelation {
             DependentJoinRewriter::new(Arc::clone(config.alias_generator()));
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
         if rewrite_result.transformed {
+<<<<<<< HEAD:datafusion/optimizer/src/decorrelate_general.rs
             // At this point, we have a logical plan with DependentJoin similar to duckdb
             unimplemented!("implement dependent join decorrelation")
+=======
+            println!("dependent join plan {}", rewrite_result.data);
+>>>>>>> 47ace22cf (spilt into rewrite_dependent_join & decorrelate_dependent_join):datafusion/optimizer/src/rewrite_dependent_join.rs
         }
         Ok(rewrite_result)
     }
 
     fn name(&self) -> &str {
-        "decorrelate_subquery"
+        "rewrite_dependent_join"
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
@@ -967,6 +984,7 @@ mod tests {
     use crate::test::test_table_scan_with_name;
 =======
     use crate::test::{test_table_scan_with_name, test_table_with_columns};
+<<<<<<< HEAD:datafusion/optimizer/src/decorrelate_general.rs
     use crate::{
         assert_optimized_plan_eq_display_indent_snapshot,
         decorrelate_general::Decorrelation, OptimizerConfig, OptimizerContext,
@@ -975,6 +993,9 @@ mod tests {
 >>>>>>> 496703d58 (fix: not expose subquery expr for dependentjoin)
     use arrow::datatypes::DataType as ArrowDataType;
     use arrow::datatypes::{DataType, Field};
+=======
+    use arrow::datatypes::DataType;
+>>>>>>> 47ace22cf (spilt into rewrite_dependent_join & decorrelate_dependent_join):datafusion/optimizer/src/rewrite_dependent_join.rs
     use datafusion_common::{alias::AliasGenerator, Result, Spans};
     use datafusion_expr::{
         binary_expr, exists, expr::InSubquery, expr_fn::col, in_subquery, lit,
@@ -1622,6 +1643,7 @@ mod tests {
         ");
         Ok(())
     }
+<<<<<<< HEAD:datafusion/optimizer/src/decorrelate_general.rs
 <<<<<<< HEAD
 =======
     #[test]
@@ -1673,6 +1695,8 @@ mod tests {
 
         Ok(())
     }
+=======
+>>>>>>> 47ace22cf (spilt into rewrite_dependent_join & decorrelate_dependent_join):datafusion/optimizer/src/rewrite_dependent_join.rs
 
     // from duckdb test: https://github.com/duckdb/duckdb/blob/main/test/sql/subquery/any_all/test_correlated_any_all.test
     #[test]
@@ -1839,6 +1863,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD:datafusion/optimizer/src/decorrelate_general.rs
     fn decorrelate_two_subqueries_at_the_same_level() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
@@ -2011,6 +2036,8 @@ mod tests {
         Ok(())
     }
 
+=======
+>>>>>>> 47ace22cf (spilt into rewrite_dependent_join & decorrelate_dependent_join):datafusion/optimizer/src/rewrite_dependent_join.rs
     fn test_simple_correlated_agg_subquery() -> Result<()> {
         // CREATE TABLE t(a INT, b INT);
         // SELECT a,
