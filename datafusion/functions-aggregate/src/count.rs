@@ -867,4 +867,24 @@ mod tests {
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(3)));
         Ok(())
     }
+
+    #[test]
+    fn count_distinct_accumulator_dictionary_all_null_values() -> Result<()> {
+        // Create a dictionary array that only contains null values
+        let dict_values = StringArray::from(vec![None, Some("abc")]);
+        let dict_indices = Int32Array::from(vec![0; 5]);
+        let dict_array =
+            DictionaryArray::<Int32Type>::try_new(dict_indices, Arc::new(dict_values))?;
+
+        let mut accumulator = DistinctCountAccumulator {
+            values: HashSet::default(),
+            state_data_type: dict_array.data_type().clone(),
+        };
+
+        accumulator.update_batch(&[Arc::new(dict_array)])?;
+
+        // All referenced values are null so count(distinct) should be 0
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
 }
