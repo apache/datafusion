@@ -537,18 +537,41 @@ mod tests {
         let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
         let builder =
             get_s3_object_store_builder(table_url.as_ref(), aws_options).await?;
+
+        // If the environment variables are set (as they are in CI) use them
+        let expected_access_key_id = std::env::var("AWS_ACCESS_KEY_ID").ok();
+        let expected_secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY").ok();
+        let expected_region = std::env::var("AWS_REGION").ok();
+        let expected_endpoint = std::env::var("AWS_ENDPOINT").ok();
+
         // get the actual configuration information, then assert_eq!
         assert_eq!(
             builder.get_config_value(&AmazonS3ConfigKey::AccessKeyId),
-            None
+            expected_access_key_id
         );
-        assert_eq!(builder.get_config_value(&AmazonS3ConfigKey::Region), None);
-        assert_eq!(builder.get_config_value(&AmazonS3ConfigKey::Endpoint), None);
-        assert_eq!(builder.get_config_value(&AmazonS3ConfigKey::Token), None);
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::SecretAccessKey),
+            expected_secret_access_key
+        );
         // Default is to skip signature when no credentials are provided
+        let expected_skip_signature =
+            if expected_access_key_id.is_none() && expected_secret_access_key.is_none() {
+                Some(String::from("true"))
+            } else {
+                None
+            };
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Region),
+            expected_region
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Endpoint),
+            expected_endpoint
+        );
+        assert_eq!(builder.get_config_value(&AmazonS3ConfigKey::Token), None);
         assert_eq!(
             builder.get_config_value(&AmazonS3ConfigKey::SkipSignature),
-            Some("true".into())
+            expected_skip_signature
         );
         Ok(())
     }
@@ -714,7 +737,7 @@ mod tests {
     /// Plans the `CREATE EXTERNAL TABLE` SQL statement and returns the
     /// resulting resolved `CreateExternalTable` command.
     async fn get_table_options(ctx: &SessionContext, sql: &str) -> TableOptions {
-        let mut plan = ctx.state().create_logical_plan(&sql).await.unwrap();
+        let mut plan = ctx.state().create_logical_plan(sql).await.unwrap();
 
         let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan else {
             panic!("plan is not a CreateExternalTable");
