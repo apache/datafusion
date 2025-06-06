@@ -52,6 +52,7 @@ Usage:
 $0 data [benchmark] [query]
 $0 run [benchmark]
 $0 compare <branch1> <branch2>
+$0 compare_detail <branch1> <branch2>
 $0 venv
 
 **********
@@ -66,10 +67,11 @@ DATAFUSION_DIR=/source/datafusion ./bench.sh run tpch
 **********
 * Commands
 **********
-data:         Generates or downloads data needed for benchmarking
-run:          Runs the named benchmark
-compare:      Compares results from benchmark runs
-venv:         Creates new venv (unless already exists) and installs compare's requirements into it
+data:            Generates or downloads data needed for benchmarking
+run:             Runs the named benchmark
+compare:         Compares fastest results from benchmark runs
+compare_detail:  Compares minimum, average (±stddev), and maximum results from benchmark runs
+venv:            Creates new venv (unless already exists) and installs compare's requirements into it
 
 **********
 * Benchmarks
@@ -359,6 +361,9 @@ main() {
             ;;
         compare)
             compare_benchmarks "$ARG2" "$ARG3"
+            ;;
+        compare_detail)
+            compare_benchmarks "$ARG2" "$ARG3" "--detailed"
             ;;
         venv)
             setup_venv
@@ -958,6 +963,8 @@ compare_benchmarks() {
     BASE_RESULTS_DIR="${SCRIPT_DIR}/results"
     BRANCH1="$1"
     BRANCH2="$2"
+    OPTS="$3"
+
     if [ -z "$BRANCH1" ] ; then
         echo "<branch1> not specified. Available branches:"
         ls -1 "${BASE_RESULTS_DIR}"
@@ -978,7 +985,7 @@ compare_benchmarks() {
             echo "--------------------"
             echo "Benchmark ${BENCH}"
             echo "--------------------"
-            PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py "${RESULTS_FILE1}" "${RESULTS_FILE2}"
+            PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
         else
             echo "Note: Skipping ${RESULTS_FILE1} as ${RESULTS_FILE2} does not exist"
         fi

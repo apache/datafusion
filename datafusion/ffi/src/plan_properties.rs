@@ -299,7 +299,7 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::physical_plan::Partitioning;
+    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
 
     use super::*;
 
@@ -309,9 +309,13 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
+        let mut eqp = EquivalenceProperties::new(Arc::clone(&schema));
+        let _ = eqp.reorder([PhysicalSortExpr::new_default(
+            datafusion::physical_plan::expressions::col("a", &schema)?,
+        )]);
         let original_props = PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(3),
+            eqp,
+            Partitioning::RoundRobinBatch(3),
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
