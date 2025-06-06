@@ -818,7 +818,11 @@ impl DefaultPhysicalPlanner {
                 )?)
             }
             LogicalPlan::Sort(Sort {
-                expr, input, fetch, ..
+                expr,
+                input,
+                fetch,
+                preserve_partitioning,
+                ..
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
@@ -827,8 +831,9 @@ impl DefaultPhysicalPlanner {
                     input_dfschema,
                     session_state.execution_props(),
                 )?;
-                let new_sort =
-                    SortExec::new(sort_expr, physical_input).with_fetch(*fetch);
+                let new_sort = SortExec::new(sort_expr, physical_input)
+                    .with_preserve_partitioning(*preserve_partitioning)
+                    .with_fetch(*fetch);
                 Arc::new(new_sort)
             }
             LogicalPlan::Subquery(_) => todo!(),

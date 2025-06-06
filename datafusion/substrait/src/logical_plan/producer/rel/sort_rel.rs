@@ -27,7 +27,12 @@ pub fn from_sort(
     producer: &mut impl SubstraitProducer,
     sort: &Sort,
 ) -> datafusion::common::Result<Box<Rel>> {
-    let Sort { expr, input, fetch } = sort;
+    let Sort {
+        expr,
+        input,
+        fetch,
+        preserve_partitioning, // TODO: implement preserve_partitioning after substrait supports it
+    } = sort;
     let sort_fields = expr
         .iter()
         .map(|e| substrait_sort_field(producer, e, input.schema()))

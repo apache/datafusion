@@ -1610,7 +1610,7 @@ fn test_sort_with_push_down_fetch() -> Result<()> {
 
     let plan = table_scan(Some("t1"), &schema, None)?
         .project(vec![col("id"), col("age")])?
-        .sort_with_limit(vec![col("age").sort(true, true)], Some(10))?
+        .sort_with_limit(vec![col("age").sort(true, true)], Some(10), false)?
         .build()?;
 
     let sql = plan_to_sql(&plan)?;

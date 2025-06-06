@@ -47,7 +47,8 @@ use datafusion_expr::{
 use indexmap::IndexMap;
 use sqlparser::ast::{
     visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
-    OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    OrderBy, OrderByExpr, OrderByOptions, SelectItemQualifiedWildcardKind,
+    WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -60,9 +61,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Check for unsupported syntax first
-        if !select.cluster_by.is_empty() {
-            return not_impl_err!("CLUSTER BY");
-        }
         if !select.lateral_views.is_empty() {
             return not_impl_err!("LATERAL VIEWS");
         }
@@ -72,8 +70,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if select.top.is_some() {
             return not_impl_err!("TOP");
         }
-        if !select.sort_by.is_empty() {
-            return not_impl_err!("SORT BY");
+
+        if query_order_by.is_some() {
+            if !select.cluster_by.is_empty() {
+                return plan_err!("ORDER BY and CLUSTER BY cannot be used together");
+            }
+            if !select.distribute_by.is_empty() {
+                return plan_err!("ORDER BY and DISTRIBUTE BY cannot be used together");
+            }
+            if !select.sort_by.is_empty() {
+                return plan_err!("ORDER BY and SORT BY cannot be used together");
+            }
+        }
+
+        if !select.cluster_by.is_empty() {
+            if !select.sort_by.is_empty() {
+                return plan_err!("CLUSTER BY and SORT BY cannot be used together");
+            }
+            if !select.distribute_by.is_empty() {
+                return plan_err!("CLUSTER BY and DISTRIBUTE BY cannot be used together");
+            }
         }
 
         // Process `from` clause
@@ -274,10 +290,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }?;
 
         // DISTRIBUTE BY
-        let plan = if !select.distribute_by.is_empty() {
+        let plan = if !select.distribute_by.is_empty() || !select.cluster_by.is_empty() {
             let x = select
                 .distribute_by
                 .iter()
+                .chain(select.cluster_by.iter())
                 .map(|e| {
                     self.sql_expr_to_logical_expr(
                         e.clone(),
@@ -288,6 +305,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlanBuilder::from(plan)
                 .repartition(Partitioning::DistributeBy(x))?
+                .build()?
+        } else {
+            plan
+        };
+
+        // SORT BY
+        let plan = if !select.sort_by.is_empty() || !select.cluster_by.is_empty() {
+            let sort_by_rex = self.order_by_to_sort_expr(
+                select
+                    .sort_by
+                    .into_iter()
+                    .chain(select.cluster_by.iter().map(|e| OrderByExpr {
+                        expr: e.clone(),
+                        options: OrderByOptions {
+                            asc: Some(true),
+                            nulls_first: None,
+                        },
+                        with_fill: None,
+                    }))
+                    .collect(),
+                projected_plan.schema().as_ref(),
+                planner_context,
+                true,
+                Some(plan.schema().as_ref()),
+            )?;
+            let sort_by_rex = normalize_sorts(sort_by_rex, &projected_plan)?;
+            LogicalPlanBuilder::from(plan)
+                .sort_within_partitions(sort_by_rex)?
                 .build()?
         } else {
             plan

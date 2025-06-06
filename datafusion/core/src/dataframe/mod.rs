@@ -1112,6 +1112,69 @@ impl DataFrame {
         )
     }
 
+    /// Sorts the DataFrame within each partition using the specified expressions.
+    ///
+    /// This function performs a local sort within each partition of the DataFrame,
+    /// meaning that the sorting is done independently for each partition without
+    /// merging the results across partitions. This is more efficient than a global
+    /// sort when you only need data sorted within each partition.
+    ///
+    /// # Arguments
+    ///
+    /// * `expr` - A vector of expressions to sort by. Each expression can be a column name
+    ///   or a more complex expression. The expressions are evaluated in order, with
+    ///   earlier expressions taking precedence over later ones.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new DataFrame with the data sorted within each partition according
+    /// to the specified expressions.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// // First repartition the data
+    /// let df = df.repartition(Partitioning::RoundRobinBatch(2))?;
+    /// // Then sort within each partition
+    /// let df = df.sort_by_within_partitions(vec![
+    ///   col("a"),   // a ASC
+    ///   col("b"),   // b ASC
+    /// ])?;
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 7 | 8 | 9 |",
+    ///     "| 4 | 5 | 6 |",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// - This operation maintains the existing partitioning of the data
+    /// - The sort order is not guaranteed across partitions
+    /// - For a global sort across all partitions, use [`sort_by()`](Self::sort_by) instead
+    ///
+    pub fn sort_by_within_partitions(self, expr: Vec<Expr>) -> Result<DataFrame> {
+        self.sort_within_partitions(
+            expr.into_iter()
+                .map(|e| e.sort(true, false))
+                .collect::<Vec<SortExpr>>(),
+        )
+    }
+
     /// Sort the DataFrame by the specified sorting expressions.
     ///
     /// Note that any expression can be turned into
@@ -1146,6 +1209,70 @@ impl DataFrame {
     /// ```
     pub fn sort(self, expr: Vec<SortExpr>) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: self.projection_requires_validation,
+        })
+    }
+    /// Sorts the DataFrame within each partition using the specified expressions.
+    ///
+    /// This function performs a local sort within each partition of the DataFrame,
+    /// meaning that the sorting is done independently for each partition without
+    /// merging the results across partitions. This is more efficient than a global
+    /// sort when you only need data sorted within each partition.
+    ///
+    /// # Arguments
+    ///
+    /// * `expr` - A vector of expressions to sort by. Each expression can be a column name
+    ///   or a more complex expression. The expressions are evaluated in order, with
+    ///   earlier expressions taking precedence over later ones.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new DataFrame with the data sorted within each partition according
+    /// to the specified expressions.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// // First repartition the data
+    /// let df = df.repartition(Partitioning::RoundRobinBatch(2))?;
+    /// // Then sort within each partition
+    /// let df = df.sort_within_partitions(vec![
+    ///   col("a").sort(false, true),   // a DESC, nulls first
+    ///   col("b").sort(true, false),   // b ASC, nulls last
+    /// ])?;
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 7 | 8 | 9 |",
+    ///     "| 4 | 5 | 6 |",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// - This operation maintains the existing partitioning of the data
+    /// - The sort order is not guaranteed across partitions
+    /// - For a global sort across all partitions, use [`sort()`](Self::sort) instead
+    pub fn sort_within_partitions(self, expr: Vec<SortExpr>) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .sort_within_partitions(expr)?
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
