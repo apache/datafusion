@@ -196,3 +196,49 @@ impl Stream for FFI_RecordBatchStream {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::{
+        common::record_batch, error::Result, execution::SendableRecordBatchStream,
+        test_util::bounded_stream,
+    };
+
+    use super::FFI_RecordBatchStream;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn test_round_trip_record_batch_stream() -> Result<()> {
+        let record_batch = record_batch!(
+            ("a", Int32, vec![1, 2, 3]),
+            ("b", Float64, vec![Some(4.0), None, Some(5.0)])
+        )?;
+        let original_rbs = bounded_stream(record_batch.clone(), 1);
+
+        let ffi_rbs: FFI_RecordBatchStream = original_rbs.into();
+        let mut ffi_rbs: SendableRecordBatchStream = Box::pin(ffi_rbs);
+
+        let schema = ffi_rbs.schema();
+        assert_eq!(
+            schema,
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Float64, true)
+            ]))
+        );
+
+        let batch = ffi_rbs.next().await;
+        assert!(batch.is_some());
+        assert!(batch.as_ref().unwrap().is_ok());
+        assert_eq!(batch.unwrap().unwrap(), record_batch);
+
+        // There should only be one batch
+        let no_batch = ffi_rbs.next().await;
+        assert!(no_batch.is_none());
+
+        Ok(())
+    }
+}

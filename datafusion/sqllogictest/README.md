@@ -291,6 +291,27 @@ Tests that need to write temporary files should write (only) to this
 directory to ensure they do not interfere with others concurrently
 running tests.
 
+## Running tests: Substrait round-trip mode
+
+This mode will run all the .slt test files in validation mode, adding a Substrait conversion round-trip for each
+generated DataFusion logical plan (SQL statement → DF logical → Substrait → DF logical → DF physical → execute).
+
+Not all statements will be round-tripped, some statements like CREATE, INSERT, SET or EXPLAIN statements will be
+issued as is, but any other statement will be round-tripped to/from Substrait.
+
+_WARNING_: as there are still a lot of failures in this mode (https://github.com/apache/datafusion/issues/16248),
+it is not enforced in the CI, instead, it needs to be run manually with the following command:
+
+```shell
+cargo test --test sqllogictests -- --substrait-round-trip
+```
+
+For focusing on one specific failing test, a file:line filter can be used:
+
+```shell
+cargo test --test sqllogictests -- --substrait-round-trip binary.slt:23
+```
+
 ## `.slt` file format
 
 [`sqllogictest`] was originally written for SQLite to verify the
