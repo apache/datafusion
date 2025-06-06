@@ -701,3 +701,79 @@ async fn test_filter_reject_all_batches_cancel(
     );
     Ok(())
 }
+
+#[rstest]
+#[tokio::test]
+#[ignore]
+async fn test_infinite_hash_join_without_repartition_and_no_agg(
+    #[values(false, true)] pretend_finite: bool,
+) -> Result<(), Box<dyn Error>> {
+    // 1) Create Session, schema, and an 8K-row RecordBatch for each side
+    let session_ctx = SessionContext::new();
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    )]));
+
+    let mut builder_left = Int64Array::builder(8_192);
+    let mut builder_right = Int64Array::builder(8_192);
+    for v in 0..8_192 {
+        builder_left.append_value(v);
+        builder_right.append_value(v + 1);
+    }
+    let batch_left =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(builder_left.finish())])?;
+    let batch_right =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(builder_right.finish())])?;
+
+    // 2a) Unlike the test with aggregation, keep this as a pure join—
+    //     use InfiniteExec to simulate an infinite stream
+    let infinite_left = Arc::new(InfiniteExec::new(batch_left, pretend_finite));
+    let infinite_right = Arc::new(InfiniteExec::new(batch_right, pretend_finite));
+
+    // 2b) To feed a single batch into the Join, we can still use CoalesceBatchesExec,
+    //     but do NOT wrap it in a RepartitionExec
+    let coalesced_left = Arc::new(CoalesceBatchesExec::new(infinite_left, 8_192));
+    let coalesced_right = Arc::new(CoalesceBatchesExec::new(infinite_right, 8_192));
+
+    // 2c) Directly feed `coalesced_left` and `coalesced_right` into HashJoinExec.
+    //     Do not use aggregation or repartition.
+    let join = Arc::new(HashJoinExec::try_new(
+        coalesced_left.clone(),
+        coalesced_right.clone(),
+        vec![(
+            Arc::new(Column::new_with_schema("value", &schema)?),
+            Arc::new(Column::new_with_schema("value", &schema)?),
+        )],
+        /* filter */ None,
+        &JoinType::Inner,
+        /* output64 */ None,
+        // Using CollectLeft is fine—just avoid RepartitionExec’s partitioned channels.
+        PartitionMode::CollectLeft,
+        /* build_left */ true,
+    )?);
+
+    // 3) Do not apply WrapLeaves—since there is no aggregation, WrapLeaves would
+    //    not insert a 'final' yield wrapper for the Join. If you want to skip WrapLeaves
+    //    entirely, comment out the next line; however, not calling it is equivalent
+    //    because there is no aggregation so no wrapper is inserted. Here we simply do
+    //    not call WrapLeaves, ensuring the plan has neither aggregation nor repartition.
+    let optimized = join as Arc<dyn ExecutionPlan>;
+
+    // 4) Execute with a 1 second timeout
+    let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
+    const TIMEOUT_SEC: u64 = 1;
+    let result = select! {
+        batch_opt = stream.next() => batch_opt,
+        _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT_SEC)) => {
+            None
+        }
+    };
+
+    assert!(
+        result.is_none(),
+        "Expected no output for infinite + filter(all-false) + aggregate, but got a batch"
+    );
+    Ok(())
+}
