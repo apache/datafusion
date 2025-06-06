@@ -23,7 +23,7 @@ use std::{
 };
 
 use datafusion_common::{
-    config::{ConfigExtension, ConfigOptions},
+    config::{ConfigExtension, ConfigOptions, SpillCompression},
     Result, ScalarValue,
 };
 
@@ -256,6 +256,11 @@ impl SessionConfig {
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
         self.options.execution.collect_statistics
+    }
+
+    /// Compression codec for spill file
+    pub fn spill_compression(&self) -> SpillCompression {
+        self.options.execution.spill_compression
     }
 
     /// Selects a name for the default catalog and schema

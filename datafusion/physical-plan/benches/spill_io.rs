@@ -20,6 +20,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use datafusion_common::config::SpillCompression;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
@@ -82,7 +83,7 @@ fn bench_spill_io(c: &mut Criterion) {
         Field::new("c2", DataType::Date32, true),
         Field::new("c3", DataType::Decimal128(11, 2), true),
     ]));
-    let spill_manager = SpillManager::new(env, metrics, schema);
+    let spill_manager = SpillManager::new(env, metrics, schema, SpillCompression::Uncompressed);
 
     let mut group = c.benchmark_group("spill_io");
     let rt = Runtime::new().unwrap();
