@@ -798,6 +798,8 @@ pub struct ListingTable {
     ///     - Partition columns are derived from directory paths (not stored in files)
     ///     - These are columns like "year=2022/month=01" in paths like `/data/year=2022/month=01/file.parquet`
     table_schema: SchemaRef,
+    /// Indicates how the schema was derived (inferred or explicitly specified)
+    schema_source: SchemaSource,
     options: ListingOptions,
     definition: Option<String>,
     collected_statistics: FileStatisticsCache,
@@ -810,6 +812,9 @@ impl ListingTable {
     ///
     /// See documentation and example on [`ListingTable`] and [`ListingTableConfig`]
     pub fn try_new(config: ListingTableConfig) -> Result<Self> {
+        // Extract schema_source before moving other parts of the config
+        let schema_source = config.schema_source().clone();
+
         let file_schema = config
             .file_schema
             .ok_or_else(|| DataFusionError::Internal("No schema provided.".into()))?;
@@ -834,6 +839,7 @@ impl ListingTable {
             table_paths: config.table_paths,
             file_schema,
             table_schema,
+            schema_source,
             options,
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
@@ -885,6 +891,11 @@ impl ListingTable {
     /// Get options ref
     pub fn options(&self) -> &ListingOptions {
         &self.options
+    }
+
+    /// Get the schema source
+    pub fn schema_source(&self) -> &SchemaSource {
+        &self.schema_source
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
