@@ -44,46 +44,103 @@ physical_plan
 05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # inner join with join filter
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT t1.a, t1.b, t2.a, t2.b FROM t1 JOIN t2 ON t1.a = t2.a AND t2.b * 50 <= t1.b
+----
+Alice 50 Alice 1
+Alice 100 Alice 2
+Alice 100 Alice 1
 
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT t1.a, t1.b, t2.a, t2.b FROM t1 JOIN t2 ON t1.a = t2.a AND t2.b < t1.b
+----
+Alice 50 Alice 2
+Alice 50 Alice 1
+Alice 100 Alice 2
+Alice 100 Alice 1
 
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT t1.a, t1.b, t2.a, t2.b FROM t1 JOIN t2 ON t1.a = t2.a AND t2.b > t1.b
+----
 
 # left join without join filter
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT * FROM t1 LEFT JOIN t2 ON t1.a = t2.a
+----
+Alice 50 Alice 2
+Alice 50 Alice 1
+Alice 100 Alice 2
+Alice 100 Alice 1
+Bob 1 NULL NULL
 
 # left join with join filter
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT * FROM t1 LEFT JOIN t2 ON t1.a = t2.a AND t2.b * 50 <= t1.b
+----
+Alice 50 Alice 1
+Alice 100 Alice 2
+Alice 100 Alice 1
+Bob 1 NULL NULL
 
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT * FROM t1 LEFT JOIN t2 ON t1.a = t2.a AND t2.b < t1.b
+----
+Alice 50 Alice 2
+Alice 50 Alice 1
+Alice 100 Alice 2
+Alice 100 Alice 1
+Bob 1 NULL NULL
 
 # right join without join filter
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT * FROM t1 RIGHT JOIN t2 ON t1.a = t2.a
+----
+Alice 50 Alice 2
+Alice 100 Alice 2
+Alice 50 Alice 1
+Alice 100 Alice 1
 
 # right join with join filter
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT * FROM t1 RIGHT JOIN t2 ON t1.a = t2.a AND t2.b * 50 <= t1.b
+----
+Alice 100 Alice 2
+Alice 50 Alice 1
+Alice 100 Alice 1
 
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT * FROM t1 RIGHT JOIN t2 ON t1.a = t2.a AND t1.b > t2.b
+----
+Alice 50 Alice 2
+Alice 100 Alice 2
+Alice 50 Alice 1
+Alice 100 Alice 1
 
 # full join without join filter
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a
+----
+Alice 50 Alice 2
+Alice 50 Alice 1
+Alice 100 Alice 2
+Alice 100 Alice 1
+Bob 1 NULL NULL
 
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t2.b * 50 > t1.b
+----
+Alice 50 Alice 2
+Alice 100 NULL NULL
+NULL NULL Alice 1
+Bob 1 NULL NULL
 
-query error DataFusion error: This feature is not implemented: Unsupported data type in sort merge join comparator: Utf8View
+query TITI
 SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t1.b > t2.b + 50
+----
+Alice 50 NULL NULL
+Alice 100 Alice 2
+Alice 100 Alice 1
+Bob 1 NULL NULL
 
 statement ok
 DROP TABLE t1;
