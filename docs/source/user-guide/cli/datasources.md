@@ -179,7 +179,10 @@ LOCATION '/mnt/nyctaxi/tripdata.parquet';
 Register a single folder parquet datasource. Note: All files inside must be valid
 parquet files and have compatible schemas
 
-!! alert: The path must end in `/` otherwise DataFusion will treat the path as a file and not a directory
+:::{note}
+Paths must end in Slash `/`
+: The path must end in `/` otherwise DataFusion will treat the path as a file and not a directory
+:::
 
 ```sql
 CREATE EXTERNAL TABLE taxi
@@ -293,20 +296,20 @@ which allows reading from public buckets.
 
 Supported configuration options are:
 
-| Environment Variable                     | Configuration Option    | Description                                          |
-| ---------------------------------------- | ----------------------- | ---------------------------------------------------- |
-| `AWS_ACCESS_KEY_ID`                      | `aws.access_key_id`     |                                                      |
-| `AWS_SECRET_ACCESS_KEY`                  | `aws.secret_access_key` |                                                      |
-| `AWS_DEFAULT_REGION`                     | `aws.region`            |                                                      |
-| `AWS_ENDPOINT`                           | `aws.endpoint`          |                                                      |
-| `AWS_SESSION_TOKEN`                      | `aws.token`             |                                                      |
-| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` |                         | See [IAM Roles]                                      |
-| `AWS_ALLOW_HTTP`                         |                         | set to "true" to permit HTTP connections without TLS |
-| `AWS_SKIP_SIGNATURE`                     | `aws.skip_signature`    | If "true" does not sign requests                     |
-|                                          | `aws.nosign`            | Alias for `skip_signature`                           |
+| Environment Variable                     | Configuration Option    | Description                                    |
+| ---------------------------------------- | ----------------------- | ---------------------------------------------- |
+| `AWS_ACCESS_KEY_ID`                      | `aws.access_key_id`     |                                                |
+| `AWS_SECRET_ACCESS_KEY`                  | `aws.secret_access_key` |                                                |
+| `AWS_DEFAULT_REGION`                     | `aws.region`            |                                                |
+| `AWS_ENDPOINT`                           | `aws.endpoint`          |                                                |
+| `AWS_SESSION_TOKEN`                      | `aws.token`             |                                                |
+| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` |                         | See [IAM Roles]                                |
+| `AWS_ALLOW_HTTP`                         |                         | If "true", permit HTTP connections without TLS |
+| `AWS_SKIP_SIGNATURE`                     | `aws.skip_signature`    | If "true", does not sign requests              |
+|                                          | `aws.nosign`            | Alias for `skip_signature`                     |
 
 [iam roles]: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
-[aws-config]: https://docs.rs/aws-config/latest/aws_config/
+[`aws-config`]: https://docs.rs/aws-config/latest/aws_config/
 
 ## OSS
 
