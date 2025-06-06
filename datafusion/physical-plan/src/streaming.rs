@@ -30,6 +30,7 @@ use crate::projection::{
     all_alias_free_columns, new_projections_for_columns, update_expr, ProjectionExec,
 };
 use crate::stream::RecordBatchStreamAdapter;
+use crate::yield_stream::YieldStream;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -37,7 +38,6 @@ use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
 
-use crate::yield_stream::YieldStream;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::debug;

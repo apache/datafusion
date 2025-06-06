@@ -22,13 +22,13 @@ use std::sync::{Arc, Mutex};
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::yield_stream::YieldStream;
 use crate::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
-use crate::yield_stream::YieldStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, Result};
