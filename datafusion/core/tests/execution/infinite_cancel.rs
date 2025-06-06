@@ -524,18 +524,11 @@ async fn test_infinite_join_agg_cancel() -> Result<(), Box<dyn Error>> {
 //     let coalesced: Arc<dyn ExecutionPlan> =
 //         Arc::new(CoalesceBatchesExec::new(filtered.clone(), 8_192));
 //
-//     // 2d) Hash-repartition into 1 partition (so that a later global aggregation would run on a single partition)
-//     let exprs: Vec<Arc<dyn PhysicalExpr>> =
-//         vec![Arc::new(Column::new_with_schema("value", &schema)?)];
-//     let part = Partitioning::Hash(exprs.clone(), 1);
-//     let hashed: Arc<dyn ExecutionPlan> =
-//         Arc::new(RepartitionExec::try_new(coalesced.clone(), part.clone())?);
-//
-//     // 4) WrapLeaves to insert YieldExec—so that the InfiniteExec yields control between batches
+//     // 3) WrapLeaves to insert YieldExec—so that the InfiniteExec yields control between batches
 //     let config = ConfigOptions::new();
-//     let optimized = WrapLeaves::new().optimize(hashed, &config)?;
+//     let optimized = WrapLeaves::new().optimize(coalesced, &config)?;
 //
-//     // 5) Execute with a 1-second timeout. Because Filter discards all 8192 rows each time
+//     // 4) Execute with a 1-second timeout. Because Filter discards all 8192 rows each time
 //     //    without ever producing output, no batch will arrive within 1 second. And since
 //     //    emission type is not Final, we never see an end‐of‐stream marker.
 //     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
