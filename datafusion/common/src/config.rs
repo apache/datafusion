@@ -723,14 +723,13 @@ config_namespace! {
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
 
-        /// Yield frequency in batches, it represents how many batches to process before yielding
-        /// to the Tokio scheduler. The default value is 64, which means that after processing
-        /// 64 batches, the execution will yield control back to the Tokio scheduler.
-        /// This value should be greater than 0 or equal to 0;
-        /// When it is greater than 0, `enable` the optimizer will insert a Yield operator at the leaf nodes of any pipeline
-        /// that contains a pipeline-breaking operator, allowing the Tokio scheduler to switch to
-        /// other tasks while waiting.
-        /// If you want to `disable` the Yield operator, you can set this value to 0.
+        /// When DataFusion detects that a plan might not be promply cancellable
+        /// due to the presence of tight-looping operators, it will attempt to
+        /// mitigate this by inserting explicit yielding (in as few places as
+        /// possible to avoid performance degradation). This value represents the
+        /// yielding frequency (in batches) at such explicit yielding points.
+        /// The default value is 64. If set to 0, no DataFusion will not perform
+        /// any explicit yielding.
         pub yield_frequency_for_pipeline_break: usize, default = 64
     }
 }
