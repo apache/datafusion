@@ -1997,8 +1997,6 @@ dependencies = [
  "pyo3",
  "rand 0.9.1",
  "recursive",
- "serde",
- "serde_json",
  "sqlparser",
  "tokio",
  "web-time",

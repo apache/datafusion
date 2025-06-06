@@ -1,0 +1,110 @@
+use tempfile::TempDir;
+use datafusion::common::DataFusionError;
+use datafusion::config::{ConfigFileDecryptionProperties, TableParquetOptions};
+use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
+use datafusion::execution::SessionStateBuilder;
+use datafusion::logical_expr::{col, lit};
+use datafusion::parquet::encryption::decrypt::FileDecryptionProperties;
+use datafusion::parquet::encryption::encrypt::FileEncryptionProperties;
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
+
+
+#[tokio::main]
+async fn main() -> datafusion::common::Result<()> {
+    // The SessionContext is the main high level API for interacting with DataFusion
+    let ctx = SessionContext::new();
+
+    // Find the local path of "alltypes_plain.parquet"
+    let testdata = datafusion::test_util::parquet_test_data();
+    let filename = &format!("{testdata}/alltypes_plain.parquet");
+
+    // Read the sample parquet file
+    let parquet_df = ctx
+        .read_parquet(filename, ParquetReadOptions::default())
+        .await?;
+
+    // Show information from the dataframe
+    println!("Original Parquet DataFrame:");
+    query_dataframe(&parquet_df, false).await?;
+
+    // Setup encryption and decryption properties
+    let (encrypt, decrypt) = setup_encryption(&parquet_df)?;
+
+    // Create a temporary file location for the encrypted parquet file
+    let tmp_dir = TempDir::new()?;
+    let tempfile = tmp_dir.path().join("alltypes_plain-encrypted.parquet");
+    let tempfile_str = tempfile.into_os_string().into_string().unwrap();
+
+    // Write encrypted parquet
+    let mut options = TableParquetOptions::default();
+    options.global.file_encryption_properties = Some((&encrypt).into());
+    parquet_df.write_parquet(
+        tempfile_str.as_str(),
+        DataFrameWriteOptions::new().with_single_file_output(true),
+        Some(options),
+    )
+        .await?;
+
+
+    // Read encrypted parquet
+    let mut sc = SessionConfig::new();
+    let fd: ConfigFileDecryptionProperties = (&decrypt).into();
+    sc.options_mut()
+        .execution
+        .parquet
+        .file_decryption_properties = Some(fd);
+
+    let state = SessionStateBuilder::new().with_config(sc).build();
+    let ctx: SessionContext = SessionContext::new_with_state(state);
+
+    let encrypted_parquet_df = ctx
+        .read_parquet(tempfile_str, ParquetReadOptions::default())
+        .await?;
+
+    // Show information from the dataframe
+    println!("\n\nEncrypted Parquet DataFrame:");
+    query_dataframe(&encrypted_parquet_df, true).await?;
+
+
+    Ok(())
+}
+
+// Show information from the dataframe
+async fn query_dataframe(df: &DataFrame, filter: bool) -> Result<(), DataFusionError> {
+    // show its schema using 'describe'
+    df.clone().describe().await?.show().await?;
+
+    if filter {
+        // Select three columns and filter the results
+        // so that only rows where id > 1 are returned
+        df
+            .clone()
+            .select_columns(&["id", "bool_col", "timestamp_col"])?
+            .filter(col("id").gt(lit(5)))?
+            .show()
+            .await?;
+    }
+    
+    
+    Ok(())
+}
+
+// Setup encryption and decryption properties
+fn setup_encryption(parquet_df: &DataFrame) -> Result<(FileEncryptionProperties, FileDecryptionProperties), DataFusionError> {
+
+    let schema = parquet_df.schema();
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let column_key = b"1234567890123450".to_vec(); // 128bit/16
+
+    let mut encrypt = FileEncryptionProperties::builder(footer_key.clone());
+    let mut decrypt = FileDecryptionProperties::builder(footer_key.clone());
+
+    for field in schema.fields().iter() {
+        encrypt = encrypt.with_column_key(field.name().as_str(), column_key.clone());
+        decrypt = decrypt.with_column_key(field.name().as_str(), column_key.clone());
+    }
+
+    let encrypt = encrypt.build()?;
+    let decrypt = decrypt.build()?;
+    Ok((encrypt, decrypt))
+}
