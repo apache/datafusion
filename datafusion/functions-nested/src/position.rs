@@ -173,7 +173,7 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
     // if `start_from` index is out of bounds, return error
     for (arr, &from) in list_array.iter().zip(arr_from.iter()) {
         if let Some(arr) = arr {
-            if from < 0 || from as usize >= arr.len() {
+            if from < 0 || from as usize > arr.len() {
                 return internal_err!("start_from index out of bounds");
             }
         } else {
