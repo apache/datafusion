@@ -270,7 +270,7 @@ async fn test_infinite_sort_cancel(
 async fn test_infinite_interleave_cancel(
     #[values(false, true)] pretend_finite: bool,
 ) -> Result<(), Box<dyn Error>> {
-    // 1) Build session, schema, and a sample batch.
+    // 1) Build a session and a schema with one i64 column.
     let session_ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(Fields::from(vec![Field::new(
         "value",
@@ -283,17 +283,17 @@ async fn test_infinite_interleave_cancel(
     }
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(builder.finish())])?;
 
-    // 2) Create N infinite sources, each filtered by a different predicate.
-    //    That way, the InterleaveExec will have multiple children.
+    // 2) Create multiple infinite sources, each filtered by a different threshold.
+    //    This ensures InterleaveExec has many children.
     let mut infinite_children = vec![];
-    // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    let thresholds = (0..32).map(|i| 8_192 - 1 - (i * 256) as i64);
+    // Use 32 distinct thresholds (each > 0 and < 8192) for 32 infinite inputs.
+    let thresholds = (0..32).map(|i| 8191 - (i * 256) as i64);
 
     for thr in thresholds {
-        // 2a) One infinite exec:
+        // 2a) Construct an InfiniteExec for the sample batch.
         let inf = Arc::new(InfiniteExec::new(batch.clone(), pretend_finite));
 
-        // 2b) Apply a FilterExec: “value > thr”.
+        // 2b) Apply a FilterExec with predicate "value > thr".
         let filter_expr = Arc::new(BinaryExpr::new(
             Arc::new(Column::new_with_schema("value", &schema)?),
             Gt,
@@ -301,45 +301,50 @@ async fn test_infinite_interleave_cancel(
         ));
         let filtered = Arc::new(FilterExec::try_new(filter_expr, inf)?);
 
-        // 2c) Wrap in CoalesceBatchesExec so the upstream yields are batched.
+        // 2c) Wrap the filtered stream in CoalesceBatchesExec so it emits
+        //     one 8192-row batch at a time.
         let coalesced = Arc::new(CoalesceBatchesExec::new(filtered, 8192));
 
-        // 2d) Now repartition so that all children share identical Hash partitioning
-        //     on “value” into 1 bucket. This is required for InterleaveExec::try_new.
+        // 2d) Repartition each coalesced stream by hashing on "value" into 1 partition.
+        //     Required for InterleaveExec::try_new to succeed.
         let exprs = vec![Arc::new(Column::new_with_schema("value", &schema)?) as _];
         let partitioning = Partitioning::Hash(exprs, 1);
         let hashed = Arc::new(RepartitionExec::try_new(coalesced, partitioning)?);
 
-        infinite_children.push(hashed as _);
+        infinite_children.push(hashed as Arc<dyn ExecutionPlan>);
     }
 
-    // 3) Build an InterleaveExec over all N children.
-    //    Since each child now has Partitioning::Hash([col "value"], 1), InterleaveExec::try_new succeeds.
+    // 3) Build an InterleaveExec over all infinite children.
     let interleave = Arc::new(InterleaveExec::try_new(infinite_children)?);
 
-    // 5) WrapLeaves will automatically insert YieldStreams beneath each “infinite” leaf.
-    //    That way, each InfiniteExec (through the FilterExec/CoalesceBatchesExec/RepartitionExec chain)
-    //    yields to the runtime periodically instead of spinning CPU.
-    let config = ConfigOptions::new();
-    let optimized = WrapLeaves::new().optimize(interleave, &config)?;
+    // 4) Wrap the InterleaveExec in a FilterExec that always returns false,
+    //    ensuring that no rows are ever emitted.
+    let always_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))));
+    let filtered_interleave = Arc::new(FilterExec::try_new(always_false, interleave)?);
 
-    // 6) Execute the stream. Because AggregateExec(mode=Single) only emits a final batch
-    //    after all inputs finish—and those inputs are infinite—we expect no output
-    //    within 1 second (timeout → None).
+    // 5) Coalesce the filtered interleave into 8192-row batches.
+    //    This lets WrapLeaves insert YieldStreamExec at each batch boundary.
+    let coalesced_top = Arc::new(CoalesceBatchesExec::new(filtered_interleave, 8192));
+
+    // 6) Apply WrapLeaves to insert YieldStreamExec under every leaf.
+    //    Each InfiniteExec → FilterExec → CoalesceBatchesExec chain will yield periodically.
+    let config = ConfigOptions::new();
+    let optimized = WrapLeaves::new().optimize(coalesced_top, &config)?;
+
+    // 7) Execute the optimized plan with a 1-second timeout.
+    //    Because the top-level FilterExec always discards rows and the inputs are infinite,
+    //    no batch will be returned within 1 second, causing result to be None.
     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
     const TIMEOUT: u64 = 1;
     let result = select! {
         batch_opt = stream.next() => batch_opt,
-        _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => {
-            None
-        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT)) => None,
     };
 
     assert!(
         result.is_none(),
-        "Expected no output for aggregate over infinite interleave, but got some batch"
+        "Expected no output for infinite interleave aggregate, but got a batch"
     );
-
     Ok(())
 }
 
@@ -756,7 +761,8 @@ async fn test_infinite_hash_join_without_repartition_and_no_agg(
     //    entirely, comment out the next line; however, not calling it is equivalent
     //    because there is no aggregation so no wrapper is inserted. Here we simply do
     //    not call WrapLeaves, ensuring the plan has neither aggregation nor repartition.
-    let optimized = join as Arc<dyn ExecutionPlan>;
+    let config = ConfigOptions::new();
+    let optimized = WrapLeaves::new().optimize(join, &config)?;
 
     // 4) Execute with a 1 second timeout
     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
@@ -834,7 +840,8 @@ async fn test_infinite_sort_merge_join_without_repartition_and_no_agg(
     )?);
 
     // 3) Do not apply WrapLeaves (no aggregation, no repartition → no built-in yields).
-    let optimized = join as Arc<dyn ExecutionPlan>;
+    let config = ConfigOptions::new();
+    let optimized = WrapLeaves::new().optimize(join, &config)?;
 
     // 4) Execute with a 1-second timeout. Because both sides are infinite and never match,
     //    the SortMergeJoin will never produce output within 1s.
