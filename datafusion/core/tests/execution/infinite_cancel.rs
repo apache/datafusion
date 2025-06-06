@@ -392,8 +392,8 @@ async fn test_infinite_join_agg_cancel() -> Result<(), Box<dyn Error>> {
     )?);
 
     // 2a) Build two InfiniteExecs (left and right)
-    let infinite_left = Arc::new(InfiniteExec::new(&*batch_left));
-    let infinite_right = Arc::new(InfiniteExec::new(&*batch_right));
+    let infinite_left = Arc::new(InfiniteExec::new(&batch_left));
+    let infinite_right = Arc::new(InfiniteExec::new(&batch_right));
 
     // 2b) Create Join keys → join on “value” = “value”
     let left_keys: Vec<Arc<dyn PhysicalExpr>> =

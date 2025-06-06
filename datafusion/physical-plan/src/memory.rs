@@ -270,9 +270,8 @@ impl ExecutionPlan for LazyMemoryExec {
             );
         }
 
-
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-            
+
         let stream = Box::pin(LazyMemoryStream {
             schema: Arc::clone(&self.schema),
             generator: Arc::clone(&self.batch_generators[partition]),
@@ -300,7 +299,6 @@ impl ExecutionPlan for LazyMemoryExec {
     /// Otherwise, return None.
     fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
         self.cooperative.then_some(self)
-        
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
