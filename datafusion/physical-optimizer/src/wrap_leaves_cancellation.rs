@@ -24,6 +24,7 @@ use datafusion_physical_plan::yield_stream::YieldStreamExec;
 use datafusion_physical_plan::ExecutionPlan;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use datafusion_physical_plan::filter::FilterExec;
 
 /// WrapLeaves is a PhysicalOptimizerRule that finds every
 /// pipeline‐breaking node (emission_type == Final) and then
@@ -76,7 +77,8 @@ impl WrapLeaves {
         plan: Arc<dyn ExecutionPlan>,
         yield_frequency: usize,
     ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-        let is_pipeline_breaker = plan.properties().emission_type == EmissionType::Final;
+        // todo this is a bit of a hack, we should probably have a more explicit way to handle
+        let is_pipeline_breaker = plan.properties().emission_type == EmissionType::Final|| plan.as_any().is::<FilterExec>();
         if is_pipeline_breaker {
             // Transform all leaf descendants of this node by calling wrap_leaves
             let mut transformed =
