@@ -47,6 +47,7 @@ use crate::{
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
+use datafusion_common::config::SpillCompression;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -256,6 +257,7 @@ impl ExternalSorter {
         batch_size: usize,
         sort_spill_reservation_bytes: usize,
         sort_in_place_threshold_bytes: usize,
+        spill_compression: SpillCompression,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
@@ -272,6 +274,7 @@ impl ExternalSorter {
             Arc::clone(&runtime),
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
+            spill_compression,
         );
 
         Ok(Self {
@@ -1148,6 +1151,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
+                    context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;

@@ -61,6 +61,7 @@ use arrow::compute::{
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::ipc::reader::StreamReader;
+use datafusion_common::config::SpillCompression;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
     JoinType, Result,
@@ -486,6 +487,7 @@ impl ExecutionPlan for SortMergeJoinExec {
 
         // create join stream
         Ok(Box::pin(SortMergeJoinStream::try_new(
+            context.session_config().spill_compression(),
             Arc::clone(&self.schema),
             self.sort_options.clone(),
             self.null_equals_null,
@@ -1310,6 +1312,7 @@ impl Stream for SortMergeJoinStream {
 impl SortMergeJoinStream {
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
+        spill_compression: SpillCompression,
         schema: SchemaRef,
         sort_options: Vec<SortOptions>,
         null_equals_null: bool,
@@ -1330,6 +1333,7 @@ impl SortMergeJoinStream {
             Arc::clone(&runtime_env),
             join_metrics.spill_metrics.clone(),
             Arc::clone(&buffered_schema),
+            spill_compression,
         );
         Ok(Self {
             state: SortMergeJoinState::Init,
