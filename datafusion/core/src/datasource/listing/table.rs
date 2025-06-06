@@ -2548,4 +2548,114 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_schema_source_tracking() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let testdata = crate::test_util::datafusion_test_data();
+        let filename = format!("{testdata}/aggregate_simple.csv");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        // Test default schema source
+        let config = ListingTableConfig::new(table_path.clone());
+        assert_eq!(*config.schema_source(), SchemaSource::None);
+
+        // Test schema source after setting a schema explicitly
+        let provided_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Float32, true),
+            Field::new("c2", DataType::Float64, true),
+            Field::new("c3", DataType::Boolean, true),
+            Field::new("c4", DataType::Utf8, true),
+        ]));
+
+        let config = config.with_schema(provided_schema.clone());
+        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+
+        // Test schema source after inferring schema
+        let format = csv::CsvFormat::default().with_schema(None);
+        let options = ListingOptions::new(Arc::new(format));
+        let config_without_schema =
+            ListingTableConfig::new(table_path).with_listing_options(options);
+        assert_eq!(*config_without_schema.schema_source(), SchemaSource::None);
+
+        let config_with_inferred =
+            config_without_schema.infer_schema(&ctx.state()).await?;
+        assert_eq!(
+            *config_with_inferred.schema_source(),
+            SchemaSource::Inferred
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schema_source_in_listing_table() -> Result<()> {
+        let ctx = SessionContext::new();
+        let testdata = crate::test_util::datafusion_test_data();
+        let filename = format!("{testdata}/aggregate_simple.csv");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        // Create a table with specified schema
+        let specified_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Float32, true),
+            Field::new("c2", DataType::Float64, true),
+            Field::new("c3", DataType::Boolean, true),
+            Field::new("c4", DataType::Utf8, true),
+        ]));
+
+        let format = csv::CsvFormat::default().with_schema(None);
+        let options = ListingOptions::new(Arc::new(format));
+
+        let config_specified = ListingTableConfig::new(table_path.clone())
+            .with_listing_options(options.clone())
+            .with_schema(specified_schema);
+
+        let table_specified = ListingTable::try_new(config_specified)?;
+        assert_eq!(*table_specified.schema_source(), SchemaSource::Specified);
+
+        // Create a table with inferred schema
+        let config_to_infer =
+            ListingTableConfig::new(table_path).with_listing_options(options);
+
+        let config_inferred = config_to_infer.infer_schema(&ctx.state()).await?;
+        let table_inferred = ListingTable::try_new(config_inferred)?;
+        assert_eq!(*table_inferred.schema_source(), SchemaSource::Inferred);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schema_source_preserved_through_config_operations() -> Result<()> {
+        let ctx = SessionContext::new();
+        let testdata = crate::test_util::datafusion_test_data();
+        let filename = format!("{testdata}/aggregate_simple.csv");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        // Start with a specified schema
+        let specified_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Float32, true),
+            Field::new("c2", DataType::Float64, true),
+            Field::new("c3", DataType::Boolean, true),
+            Field::new("c4", DataType::Utf8, true),
+        ]));
+
+        let config =
+            ListingTableConfig::new(table_path.clone()).with_schema(specified_schema);
+
+        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+
+        // Make sure source is preserved after adding options
+        let format = csv::CsvFormat::default().with_schema(None);
+        let options = ListingOptions::new(Arc::new(format));
+        let config = config.with_listing_options(options);
+
+        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+
+        // Make sure inferred schema doesn't override specified schema
+        let config = config.infer(&ctx.state()).await?;
+        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+
+        Ok(())
+    }
 }
