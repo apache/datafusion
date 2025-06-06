@@ -26,7 +26,6 @@ use datafusion::{
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_expr::{dml::InsertOp, Expr, TableType};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::yield_stream::YieldStreamExec;
 use datafusion_physical_plan::{
     execution_plan::{Boundedness, EmissionType},
     DisplayAs, ExecutionPlan, PlanProperties,
@@ -56,15 +55,7 @@ async fn insert_operation_is_passed_correctly_to_table_provider() {
 async fn assert_insert_op(ctx: &SessionContext, sql: &str, insert_op: InsertOp) {
     let df = ctx.sql(sql).await.unwrap();
     let plan = df.create_physical_plan().await.unwrap();
-    let maybe_yield = plan.as_any().downcast_ref::<YieldStreamExec>();
-
-    let target: &dyn ExecutionPlan = if let Some(yield_exec) = maybe_yield {
-        // `yield_exec.input()` is Arc<dyn ExecutionPlan> → call .as_ref() to get &dyn ExecutionPlan
-        yield_exec.input().as_ref()
-    } else {
-        plan.as_ref() // plan is an Arc<dyn ExecutionPlan> → as_ref() gives &dyn ExecutionPlan
-    };
-    let exec = target.as_any().downcast_ref::<TestInsertExec>().unwrap();
+    let exec = plan.as_any().downcast_ref::<TestInsertExec>().unwrap();
     assert_eq!(exec.op, insert_op);
 }
 
@@ -187,6 +178,14 @@ impl ExecutionPlan for TestInsertExec {
         _context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         unimplemented!("TestInsertExec is a stub for testing.")
+    }
+
+    fn yields_cooperatively(&self) -> bool {
+        true
+    }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(self)
     }
 }
 

@@ -173,6 +173,14 @@ impl ExecutionPlan for EmptyExec {
             None,
         ))
     }
+
+    fn yields_cooperatively(&self) -> bool {
+        true
+    }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(self)
+    }
 }
 
 #[cfg(test)]

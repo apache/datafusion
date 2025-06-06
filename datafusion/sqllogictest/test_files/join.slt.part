@@ -682,9 +682,7 @@ query TT
 explain select * from t1 join t2 on false;
 ----
 logical_plan EmptyRelation
-physical_plan
-01)YieldStreamExec frequency=64
-02)--EmptyExec
+physical_plan EmptyExec
 
 # Make batch size smaller than table row number. to introduce parallelism to the plan.
 statement ok
