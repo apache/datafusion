@@ -58,6 +58,17 @@ use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
 
+/// Indicates the source of the schema for a [`ListingTable`]
+#[derive(Debug, Clone, PartialEq)]
+pub enum SchemaSource {
+    /// Schema is not yet set (initial state)
+    None,
+    /// Schema was inferred from first table_path
+    Inferred,
+    /// Schema was specified explicitly via with_schema
+    Specified,
+}
+
 /// Configuration for creating a [`ListingTable`]
 ///
 ///
@@ -74,6 +85,8 @@ pub struct ListingTableConfig {
     ///
     /// See details on [`ListingTableConfig::with_listing_options`]
     pub options: Option<ListingOptions>,
+    /// Tracks the source of the schema information
+    schema_source: SchemaSource,
 }
 
 impl ListingTableConfig {
@@ -84,6 +97,7 @@ impl ListingTableConfig {
             table_paths,
             file_schema: None,
             options: None,
+            schema_source: SchemaSource::None,
         }
     }
 
@@ -95,7 +109,13 @@ impl ListingTableConfig {
             table_paths,
             file_schema: None,
             options: None,
+            schema_source: SchemaSource::None,
         }
+    }
+
+    /// Returns the source of the schema for this configuration
+    pub fn schema_source(&self) -> &SchemaSource {
+        &self.schema_source
     }
     /// Set the `schema` for the overall [`ListingTable`]
     ///
@@ -112,6 +132,7 @@ impl ListingTableConfig {
             table_paths: self.table_paths,
             file_schema: Some(schema),
             options: self.options,
+            schema_source: SchemaSource::Specified,
         }
     }
 
@@ -124,6 +145,7 @@ impl ListingTableConfig {
             table_paths: self.table_paths,
             file_schema: self.file_schema,
             options: Some(listing_options),
+            schema_source: self.schema_source,
         }
     }
 
@@ -203,6 +225,7 @@ impl ListingTableConfig {
             table_paths: self.table_paths,
             file_schema: self.file_schema,
             options: Some(listing_options),
+            schema_source: self.schema_source,
         })
     }
 
@@ -219,16 +242,20 @@ impl ListingTableConfig {
                 let ListingTableConfig {
                     table_paths,
                     file_schema,
-                    ..
+                    options: _,
+                    schema_source,
                 } = self;
 
-                let schema = match file_schema {
-                    Some(schema) => schema,
+                let (schema, new_schema_source) = match file_schema {
+                    Some(schema) => (schema, schema_source), // Keep existing source if schema exists
                     None => {
                         if let Some(url) = table_paths.first() {
-                            options.infer_schema(state, url).await?
+                            (
+                                options.infer_schema(state, url).await?,
+                                SchemaSource::Inferred,
+                            )
                         } else {
-                            Arc::new(Schema::empty())
+                            (Arc::new(Schema::empty()), SchemaSource::Inferred)
                         }
                     }
                 };
@@ -237,6 +264,7 @@ impl ListingTableConfig {
                     table_paths,
                     file_schema: Some(schema),
                     options: Some(options),
+                    schema_source: new_schema_source,
                 })
             }
             None => internal_err!("No `ListingOptions` set for inferring schema"),
@@ -277,6 +305,7 @@ impl ListingTableConfig {
                     table_paths: self.table_paths,
                     file_schema: self.file_schema,
                     options: Some(options),
+                    schema_source: self.schema_source,
                 })
             }
             None => config_err!("No `ListingOptions` set for inferring schema"),
@@ -1212,7 +1241,6 @@ impl ListingTable {
 /// * `files` - A stream of `Result<PartitionedFile>` items to process
 /// * `limit` - An optional row count limit. If provided, the function will stop collecting files
 ///   once the accumulated number of rows exceeds this limit
-/// * `collect_stats` - Whether to collect and accumulate statistics from the files
 ///
 /// # Returns
 /// A `Result` containing a `FileGroup` with the collected files
