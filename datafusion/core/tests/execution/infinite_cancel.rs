@@ -267,7 +267,6 @@ async fn test_infinite_sort_cancel(
 
 #[rstest]
 #[tokio::test]
-#[ignore]
 async fn test_infinite_interleave_cancel(
     #[values(false, true)] pretend_finite: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -647,7 +646,6 @@ async fn test_infinite_join_agg_cancel(
 
 #[rstest]
 #[tokio::test]
-#[ignore]
 async fn test_filter_reject_all_batches_cancel(
     #[values(false, true)] pretend_finite: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -704,7 +702,6 @@ async fn test_filter_reject_all_batches_cancel(
 
 #[rstest]
 #[tokio::test]
-#[ignore]
 async fn test_infinite_hash_join_without_repartition_and_no_agg(
     #[values(false, true)] pretend_finite: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -780,7 +777,6 @@ async fn test_infinite_hash_join_without_repartition_and_no_agg(
 
 #[rstest]
 #[tokio::test]
-#[ignore]
 async fn test_infinite_sort_merge_join_without_repartition_and_no_agg(
     #[values(false, true)] pretend_finite: bool,
 ) -> Result<(), Box<dyn Error>> {

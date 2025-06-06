@@ -380,15 +380,20 @@ physical_plan
 05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
 06)----------UnionExec
 07)------------ProjectionExec: expr=[1 as id, 2 as foo]
-08)--------------PlaceholderRowExec
-09)------------ProjectionExec: expr=[1 as id, NULL as foo]
-10)--------------PlaceholderRowExec
-11)------------ProjectionExec: expr=[1 as id, NULL as foo]
-12)--------------PlaceholderRowExec
-13)------------ProjectionExec: expr=[1 as id, 3 as foo]
-14)--------------PlaceholderRowExec
-15)------------ProjectionExec: expr=[1 as id, 2 as foo]
-16)--------------PlaceholderRowExec
+08)--------------YieldStreamExec frequency=64
+09)----------------PlaceholderRowExec
+10)------------ProjectionExec: expr=[1 as id, NULL as foo]
+11)--------------YieldStreamExec frequency=64
+12)----------------PlaceholderRowExec
+13)------------ProjectionExec: expr=[1 as id, NULL as foo]
+14)--------------YieldStreamExec frequency=64
+15)----------------PlaceholderRowExec
+16)------------ProjectionExec: expr=[1 as id, 3 as foo]
+17)--------------YieldStreamExec frequency=64
+18)----------------PlaceholderRowExec
+19)------------ProjectionExec: expr=[1 as id, 2 as foo]
+20)--------------YieldStreamExec frequency=64
+21)----------------PlaceholderRowExec
 
 
 # FIX: custom absolute values
@@ -6067,7 +6072,8 @@ logical_plan
 02)--TableScan: empty projection=[col0]
 physical_plan
 01)ProjectionExec: expr=[NULL as min(empty.col0)]
-02)--PlaceholderRowExec
+02)--YieldStreamExec frequency=64
+03)----PlaceholderRowExec
 
 query TT
 EXPLAIN SELECT MAX(col0) FROM empty;
@@ -6077,7 +6083,8 @@ logical_plan
 02)--TableScan: empty projection=[col0]
 physical_plan
 01)ProjectionExec: expr=[NULL as max(empty.col0)]
-02)--PlaceholderRowExec
+02)--YieldStreamExec frequency=64
+03)----PlaceholderRowExec
 
 statement ok
 DROP TABLE empty;
@@ -6534,15 +6541,20 @@ physical_plan
 05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
 06)----------UnionExec
 07)------------ProjectionExec: expr=[1 as id, 2 as foo]
-08)--------------PlaceholderRowExec
-09)------------ProjectionExec: expr=[1 as id, 4 as foo]
-10)--------------PlaceholderRowExec
-11)------------ProjectionExec: expr=[1 as id, 5 as foo]
-12)--------------PlaceholderRowExec
-13)------------ProjectionExec: expr=[1 as id, 3 as foo]
-14)--------------PlaceholderRowExec
-15)------------ProjectionExec: expr=[1 as id, 2 as foo]
-16)--------------PlaceholderRowExec
+08)--------------YieldStreamExec frequency=64
+09)----------------PlaceholderRowExec
+10)------------ProjectionExec: expr=[1 as id, 4 as foo]
+11)--------------YieldStreamExec frequency=64
+12)----------------PlaceholderRowExec
+13)------------ProjectionExec: expr=[1 as id, 5 as foo]
+14)--------------YieldStreamExec frequency=64
+15)----------------PlaceholderRowExec
+16)------------ProjectionExec: expr=[1 as id, 3 as foo]
+17)--------------YieldStreamExec frequency=64
+18)----------------PlaceholderRowExec
+19)------------ProjectionExec: expr=[1 as id, 2 as foo]
+20)--------------YieldStreamExec frequency=64
+21)----------------PlaceholderRowExec
 
 # SortExec is removed if it is coming after one-row producing AggregateExec's having an empty group by expression
 query TT
@@ -6672,7 +6684,8 @@ logical_plan
 03)----TableScan: t projection=[]
 physical_plan
 01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count()]
-02)--PlaceholderRowExec
+02)--YieldStreamExec frequency=64
+03)----PlaceholderRowExec
 
 query II
 select count(1), count(*) from t;
@@ -6688,7 +6701,8 @@ logical_plan
 03)----TableScan: t projection=[]
 physical_plan
 01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(*)]
-02)--PlaceholderRowExec
+02)--YieldStreamExec frequency=64
+03)----PlaceholderRowExec
 
 query II
 select count(), count(*) from t;
@@ -6704,7 +6718,8 @@ logical_plan
 03)----TableScan: t projection=[]
 physical_plan
 01)ProjectionExec: expr=[2 as count(), 2 as count(*)]
-02)--PlaceholderRowExec
+02)--YieldStreamExec frequency=64
+03)----PlaceholderRowExec
 
 query TT
 explain select count(1) * count(2) from t;

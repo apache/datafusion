@@ -41,7 +41,8 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: ticker@1 = A
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+05)--------YieldStreamExec frequency=64
+06)----------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
 
 # constant ticker, CAST(time AS DATE) = time, order by time
 query TT
@@ -58,7 +59,8 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+05)--------YieldStreamExec frequency=64
+06)----------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
 
 # same thing but order by date
 query TT
@@ -75,7 +77,8 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+05)--------YieldStreamExec frequency=64
+06)----------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
 
 # same thing but order by ticker
 query TT
@@ -92,7 +95,8 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+05)--------YieldStreamExec frequency=64
+06)----------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
 
 # same thing but order by time, date
 query TT
@@ -109,7 +113,8 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: ticker@1 = A AND CAST(time@2 AS Date32) = date@0
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+05)--------YieldStreamExec frequency=64
+06)----------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
 
 # CAST(time AS DATE) <> date (should require a sort)
 # no physical plan due to sort breaking pipeline
@@ -150,4 +155,5 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: date@0 = 2006-01-02
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]
+05)--------YieldStreamExec frequency=64
+06)----------StreamingTableExec: partition_sizes=1, projection=[date, ticker, time], infinite_source=true, output_ordering=[date@0 ASC NULLS LAST, ticker@1 ASC NULLS LAST, time@2 ASC NULLS LAST]

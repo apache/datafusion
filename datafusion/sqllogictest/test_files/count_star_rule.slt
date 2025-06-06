@@ -37,7 +37,8 @@ logical_plan
 04)------EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[1 as count()]
-02)--PlaceholderRowExec
+02)--YieldStreamExec frequency=64
+03)----PlaceholderRowExec
 
 query TT
 EXPLAIN SELECT t1.a, COUNT() FROM t1 GROUP BY t1.a;

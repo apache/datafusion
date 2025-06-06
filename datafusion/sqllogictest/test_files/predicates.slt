@@ -786,7 +786,9 @@ query TT
 explain select x from t where x IN (1,2,3) AND x IN (4,5);
 ----
 logical_plan EmptyRelation
-physical_plan EmptyExec
+physical_plan
+01)YieldStreamExec frequency=64
+02)--EmptyExec
 
 query TT
 explain select x from t where x NOT IN (1,2,3,4) OR x NOT IN (5,6,7,8);
@@ -809,7 +811,9 @@ query TT
 explain select x from t where x NOT IN (1,2,3,4,5) AND x IN (1,2,3);
 ----
 logical_plan EmptyRelation
-physical_plan EmptyExec
+physical_plan
+01)YieldStreamExec frequency=64
+02)--EmptyExec
 
 statement ok
 drop table t;

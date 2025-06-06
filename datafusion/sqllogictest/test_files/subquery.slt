@@ -773,9 +773,11 @@ physical_plan
 01)ProjectionExec: expr=[count(*)@0 as b, count(Int64(1))@1 as count(Int64(1))]
 02)--NestedLoopJoinExec: join_type=Left
 03)----ProjectionExec: expr=[4 as count(*)]
-04)------PlaceholderRowExec
-05)----ProjectionExec: expr=[4 as count(Int64(1))]
-06)------PlaceholderRowExec
+04)------YieldStreamExec frequency=64
+05)--------PlaceholderRowExec
+06)----ProjectionExec: expr=[4 as count(Int64(1))]
+07)------YieldStreamExec frequency=64
+08)--------PlaceholderRowExec
 
 statement ok
 set datafusion.explain.logical_plan_only = true;

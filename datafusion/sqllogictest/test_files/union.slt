@@ -632,11 +632,14 @@ physical_plan
 01)UnionExec
 02)--ProjectionExec: expr=[Int64(1)@0 as a]
 03)----AggregateExec: mode=SinglePartitioned, gby=[1 as Int64(1)], aggr=[], ordering_mode=Sorted
-04)------PlaceholderRowExec
-05)--ProjectionExec: expr=[2 as a]
-06)----PlaceholderRowExec
-07)--ProjectionExec: expr=[3 as a]
-08)----PlaceholderRowExec
+04)------YieldStreamExec frequency=64
+05)--------PlaceholderRowExec
+06)--ProjectionExec: expr=[2 as a]
+07)----YieldStreamExec frequency=64
+08)------PlaceholderRowExec
+09)--ProjectionExec: expr=[3 as a]
+10)----YieldStreamExec frequency=64
+11)------PlaceholderRowExec
 
 # test UNION ALL aliases correctly with aliased subquery
 query TT

@@ -19,15 +19,18 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::Result;
-use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::yield_stream::YieldStreamExec;
 use datafusion_physical_plan::ExecutionPlan;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-/// WrapLeaves is a PhysicalOptimizerRule that finds every
-/// pipeline‐breaking node (emission_type == Final) and then
-/// wraps all of its leaf children in YieldStreamExec.
+/// WrapLeaves is a PhysicalOptimizerRule that finds every *leaf* node in the
+/// entire plan, and replaces it with a variant that can cooperatively yield
+/// (either using its built‐in `with_cooperative_yields()` or, if none exists,
+/// by wrapping it in a `YieldStreamExec` wrapper).
+///
+/// In contrast to the previous behavior (which only looked at “Final”/pipeline‐
+/// breaking nodes), this modified rule simply wraps *every* leaf no matter what.
 pub struct WrapLeaves {}
 
 impl WrapLeaves {
@@ -35,60 +38,37 @@ impl WrapLeaves {
         Self {}
     }
 
-    /// This function is called on every plan node during transform_down().
-    /// If the node is a leaf (no children), we wrap it in a new YieldStreamExec
-    /// and stop recursing further under that branch (TreeNodeRecursion::Jump).
+    /// Called when we encounter any node during `transform_down()`.  If the node
+    /// has no children, it is a leaf.  We check if it has a built‐in cooperative
+    /// yield variant (`with_cooperative_yields()`); if so, we replace it with that.
+    /// Otherwise, we wrap it in a `YieldStreamExec`.
+    ///
+    /// We then return `TreeNodeRecursion::Jump` so that we do not attempt to go
+    /// deeper under this node (there are no children, anyway).
     fn wrap_leaves(
         plan: Arc<dyn ExecutionPlan>,
         yield_frequency: usize,
     ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
         if plan.children().is_empty() {
-            // If the leaf node already has a built-in yielding variant:
+            // This is a leaf.  Try to see if the plan itself has a cooperative‐yield variant.
             if let Some(coop_variant) = Arc::clone(&plan).with_cooperative_yields() {
-                // Replace it with the built-in yielding version.
+                // Replace with the built‐in cooperative yield version.
                 Ok(Transformed::new(
                     coop_variant,
-                    /* changed = */ true,
+                    /* changed= */ true,
                     TreeNodeRecursion::Jump,
                 ))
             } else {
-                // Otherwise, wrap in a YieldStreamExec.
+                // Otherwise wrap it in a YieldStreamExec to enforce periodic yielding.
                 let wrapped = Arc::new(YieldStreamExec::new(plan, yield_frequency));
                 Ok(Transformed::new(
                     wrapped,
-                    /* changed = */ true,
+                    /* changed= */ true,
                     TreeNodeRecursion::Jump,
                 ))
             }
         } else {
-            // Not a leaf: leave unchanged and keep recursing
-            Ok(Transformed::no(plan))
-        }
-    }
-
-    /// This function is called on every plan node during transform_down().
-    ///
-    /// If this node itself is a pipeline breaker (emission_type == Final),
-    /// we perform a second pass of transform_down with wrap_leaves. Then we
-    /// set TreeNodeRecursion::Jump so that we do not descend any deeper under
-    /// this subtree (we’ve already wrapped its leaves).
-    fn wrap_leaves_of_pipeline_breakers(
-        plan: Arc<dyn ExecutionPlan>,
-        yield_frequency: usize,
-    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-        let is_pipeline_breaker = plan.properties().emission_type == EmissionType::Final;
-        if is_pipeline_breaker {
-            // Transform all leaf descendants of this node by calling wrap_leaves
-            let mut transformed =
-                plan.transform_down(|child_plan: Arc<dyn ExecutionPlan>| {
-                    Self::wrap_leaves(child_plan, yield_frequency)
-                })?;
-
-            // Once we’ve handled the leaves of this subtree, we skip deeper recursion
-            transformed.tnr = TreeNodeRecursion::Jump;
-            Ok(transformed)
-        } else {
-            // Not a pipeline breaker: do nothing here, let transform_down recurse
+            // Not a leaf: leave unchanged for now, keep recursing down.
             Ok(Transformed::no(plan))
         }
     }
@@ -116,23 +96,27 @@ impl PhysicalOptimizerRule for WrapLeaves {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Only activate if user has configured a nonzero yield frequency.
         if config.optimizer.yield_frequency_for_pipeline_break != 0 {
             let yield_frequency = config.optimizer.yield_frequency_for_pipeline_break;
 
-            // We run a top‐level transform_down: for every node, call wrap_leaves_of_pipeline_breakers.
-            // If a node is a pipeline breaker, we then wrap all of its leaf children in YieldStreamExec.
+            // We perform a single top‐level transform_down over the entire plan.
+            // For each node encountered, we call `wrap_leaves`.  If the node is
+            // a leaf, it will be replaced with a yielding variant (either its
+            // built‐in cooperative version or an explicit YieldStreamExec).
             let new_plan = plan.transform_down(|node: Arc<dyn ExecutionPlan>| {
-                Self::wrap_leaves_of_pipeline_breakers(node, yield_frequency)
+                Self::wrap_leaves(node, yield_frequency)
             })?;
 
             Ok(new_plan.data)
         } else {
+            // If yield_frequency is zero, we do nothing.
             Ok(plan)
         }
     }
 
     fn schema_check(&self) -> bool {
-        // Wrapping a leaf in YieldStreamExec preserves the schema, so we’re fine
+        // Wrapping a leaf in YieldStreamExec preserves the schema, so it is safe.
         true
     }
 }
