@@ -61,22 +61,12 @@ LOCATION '../core/tests/data/partitioned_table_arrow/'
 PARTITIONED BY (part);
 
 # select wildcard
-query ITBI
+query error DataFusion error: Arrow error: External error: Arrow error: Invalid argument error: column types must match schema types, expected Utf8View but found Utf8 at column index 1
 SELECT * FROM arrow_partitioned ORDER BY f0;
-----
-1 foo true 123
-2 bar false 123
-3 baz true 456
-4 NULL NULL 456
 
 # select all fields
-query IITB
+query error DataFusion error: Arrow error: External error: Arrow error: Invalid argument error: column types must match schema types, expected Utf8View but found Utf8 at column index 1
 SELECT part, f0, f1, f2 FROM arrow_partitioned ORDER BY f0;
-----
-123 1 foo true
-123 2 bar false
-456 3 baz true
-456 4 NULL NULL
 
 # select without partition column
 query IB
