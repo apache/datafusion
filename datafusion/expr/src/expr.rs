@@ -17,7 +17,8 @@
 
 //! Logical Expressions: [`Expr`]
 
-use std::collections::HashSet;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -51,7 +52,7 @@ use sqlparser::ast::{
 ///  BinaryExpr {
 ///    left: Expr::Column("A"),
 ///    op: Operator::Plus,
-///    right: Expr::Literal(ScalarValue::Int32(Some(1)))
+///    right: Expr::Literal(ScalarValue::Int32(Some(1)), None)
 /// }
 /// ```
 ///
@@ -113,10 +114,10 @@ use sqlparser::ast::{
 /// # use datafusion_expr::{lit, col, Expr};
 /// // All literals are strongly typed in DataFusion. To make an `i64` 42:
 /// let expr = lit(42i64);
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42)), None));
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42)), None));
 /// // To make a (typed) NULL:
-/// let expr = Expr::Literal(ScalarValue::Int64(None));
+/// let expr = Expr::Literal(ScalarValue::Int64(None), None);
 /// // to make an (untyped) NULL (the optimizer will coerce this to the correct type):
 /// let expr = lit(ScalarValue::Null);
 /// ```
@@ -150,7 +151,7 @@ use sqlparser::ast::{
 /// if let Expr::BinaryExpr(binary_expr) = expr {
 ///   assert_eq!(*binary_expr.left, col("c1"));
 ///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
+///   assert_eq!(*binary_expr.right, Expr::Literal(scalar, None));
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
@@ -194,7 +195,7 @@ use sqlparser::ast::{
 /// ```
 /// # use datafusion_expr::{lit, col};
 /// let expr = col("c1") + lit(42);
-/// assert_eq!(format!("{expr:?}"), "BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: \"c1\" }), op: Plus, right: Literal(Int32(42)) })");
+/// assert_eq!(format!("{expr:?}"), "BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: \"c1\" }), op: Plus, right: Literal(Int32(42), None) })");
 /// ```
 ///
 /// ## Use the `Display` trait  (detailed expression)
@@ -240,7 +241,7 @@ use sqlparser::ast::{
 /// let mut scalars = HashSet::new();
 /// // apply recursively visits all nodes in the expression tree
 /// expr.apply(|e| {
-///    if let Expr::Literal(scalar) = e {
+///    if let Expr::Literal(scalar, _) = e {
 ///       scalars.insert(scalar);
 ///    }
 ///    // The return value controls whether to continue visiting the tree
@@ -275,7 +276,7 @@ use sqlparser::ast::{
 /// assert!(rewritten.transformed);
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
@@ -283,8 +284,8 @@ pub enum Expr {
     Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
-    /// A constant value.
-    Literal(ScalarValue),
+    /// A constant value along with associated metadata
+    Literal(ScalarValue, Option<BTreeMap<String, String>>),
     /// A binary expression such as "age > 21"
     BinaryExpr(BinaryExpr),
     /// LIKE expression
@@ -368,7 +369,7 @@ pub enum Expr {
 
 impl Default for Expr {
     fn default() -> Self {
-        Expr::Literal(ScalarValue::Null)
+        Expr::Literal(ScalarValue::Null, None)
     }
 }
 
@@ -450,13 +451,13 @@ impl Hash for Alias {
 }
 
 impl PartialOrd for Alias {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let cmp = self.expr.partial_cmp(&other.expr);
-        let Some(std::cmp::Ordering::Equal) = cmp else {
+        let Some(Ordering::Equal) = cmp else {
             return cmp;
         };
         let cmp = self.relation.partial_cmp(&other.relation);
-        let Some(std::cmp::Ordering::Equal) = cmp else {
+        let Some(Ordering::Equal) = cmp else {
             return cmp;
         };
         self.name.partial_cmp(&other.name)
@@ -1537,8 +1538,16 @@ impl Expr {
             |expr| {
                 // f_up: unalias on up so we can remove nested aliases like
                 // `(x as foo) as bar`
-                if let Expr::Alias(Alias { expr, .. }) = expr {
-                    Ok(Transformed::yes(*expr))
+                if let Expr::Alias(alias) = expr {
+                    match alias
+                        .metadata
+                        .as_ref()
+                        .map(|h| h.is_empty())
+                        .unwrap_or(true)
+                    {
+                        true => Ok(Transformed::yes(*alias.expr)),
+                        false => Ok(Transformed::no(Expr::Alias(alias))),
+                    }
                 } else {
                     Ok(Transformed::no(expr))
                 }
@@ -2299,7 +2308,7 @@ impl HashNode for Expr {
                 data_type.hash(state);
                 name.hash(state);
             }
-            Expr::Literal(scalar_value) => {
+            Expr::Literal(scalar_value, _) => {
                 scalar_value.hash(state);
             }
             Expr::BinaryExpr(BinaryExpr {
@@ -2479,7 +2488,7 @@ impl Display for SchemaDisplay<'_> {
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
             Expr::Column(_)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::ScalarVariable(..)
             | Expr::OuterReferenceColumn(..)
             | Expr::Placeholder(_)
@@ -2738,7 +2747,7 @@ struct SqlDisplay<'a>(&'a Expr);
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
-            Expr::Literal(scalar) => scalar.fmt(f),
+            Expr::Literal(scalar, _) => scalar.fmt(f),
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -3005,7 +3014,12 @@ impl Display for Expr {
                 write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
-            Expr::Literal(v) => write!(f, "{v:?}"),
+            Expr::Literal(v, metadata) => {
+                match metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
+                    false => write!(f, "{v:?} {:?}", metadata.as_ref().unwrap()),
+                    true => write!(f, "{v:?}"),
+                }
+            }
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {
@@ -3376,7 +3390,7 @@ mod test {
     #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
+            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
