@@ -227,7 +227,7 @@ impl ParquetOptions {
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
-            file_decryption_properties: _,
+            file_decryption_properties: None,
             file_encryption_properties,
 
             // not in WriterProperties
