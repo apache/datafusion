@@ -279,9 +279,7 @@ mod tests {
         // Write encrypted parquet using write_parquet
         let mut options = TableParquetOptions::default();
         options.global.file_encryption_properties = Some((&encrypt).into());
-        // Parallel writing for encryption is broken right now.
-        // Rok is working on it.
-        options.global.allow_single_file_parallelism = false;
+        
         df.write_parquet(
             tempfile_str.as_str(),
             DataFrameWriteOptions::new().with_single_file_output(true),

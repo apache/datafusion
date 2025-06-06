@@ -109,7 +109,7 @@ async fn round_trip_encryption() {
 
     // Read encrypted parquet
     let mut sc = SessionConfig::new();
-    let fd: ConfigFileDecryptionProperties = decrypt.clone().into();
+    let fd: ConfigFileDecryptionProperties = (&decrypt).into();
     sc.options_mut()
         .execution
         .parquet

@@ -27,6 +27,7 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+#[cfg(feature = "parquet")]
 use hex;
 #[cfg(feature = "parquet")]
 use parquet::encryption::decrypt::FileDecryptionProperties;
