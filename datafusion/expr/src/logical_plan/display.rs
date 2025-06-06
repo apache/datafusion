@@ -473,10 +473,16 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Aggregates": expr_vec_fmt!(aggr_expr)
                 })
             }
-            LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
+            LogicalPlan::Sort(Sort {
+                expr,
+                fetch,
+                preserve_partitioning,
+                ..
+            }) => {
                 let mut object = json!({
                     "Node Type": "Sort",
                     "Sort Key": expr_vec_fmt!(expr),
+                    "Preserve Partitioning": preserve_partitioning,
                 });
 
                 if let Some(fetch) = fetch {

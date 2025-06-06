@@ -139,6 +139,7 @@ message SortNode {
   repeated SortExprNode expr = 2;
   // Maximum number of highest/lowest rows to fetch; negative means no limit
   int64 fetch = 3;
+  bool preserve_partitioning = 4;
 }
 
 message RepartitionNode {

@@ -121,9 +121,19 @@ impl TreeNode for LogicalPlan {
                     schema,
                 })
             }),
-            LogicalPlan::Sort(Sort { expr, input, fetch }) => input
-                .map_elements(f)?
-                .update_data(|input| LogicalPlan::Sort(Sort { expr, input, fetch })),
+            LogicalPlan::Sort(Sort {
+                expr,
+                input,
+                fetch,
+                preserve_partitioning,
+            }) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::Sort(Sort {
+                    expr,
+                    input,
+                    fetch,
+                    preserve_partitioning,
+                })
+            }),
             LogicalPlan::Join(Join {
                 left,
                 right,
@@ -574,9 +584,19 @@ impl LogicalPlan {
                     null_equals_null,
                 })
             }),
-            LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
-                .map_elements(f)?
-                .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch })),
+            LogicalPlan::Sort(Sort {
+                expr,
+                input,
+                fetch,
+                preserve_partitioning,
+            }) => expr.map_elements(f)?.update_data(|expr| {
+                LogicalPlan::Sort(Sort {
+                    expr,
+                    input,
+                    fetch,
+                    preserve_partitioning,
+                })
+            }),
             LogicalPlan::Extension(Extension { node }) => {
                 // would be nice to avoid this copy -- maybe can
                 // update extension to just observer Exprs

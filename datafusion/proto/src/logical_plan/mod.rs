@@ -542,7 +542,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     from_proto::parse_sorts(&sort.expr, ctx, extension_codec)?;
                 let fetch: Option<usize> = sort.fetch.try_into().ok();
                 LogicalPlanBuilder::from(input)
-                    .sort_with_limit(sort_expr, fetch)?
+                    .sort_with_limit(sort_expr, fetch, false)?
                     .build()
             }
             LogicalPlanType::Repartition(repartition) => {
@@ -1414,7 +1414,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Sort(Sort { input, expr, fetch }) => {
+            LogicalPlan::Sort(Sort {
+                input,
+                expr,
+                fetch,
+                preserve_partitioning,
+            }) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,
@@ -1427,6 +1432,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             input: Some(Box::new(input)),
                             expr: sort_expr,
                             fetch: fetch.map(|f| f as i64).unwrap_or(-1i64),
+                            preserve_partitioning: *preserve_partitioning,
                         },
                     ))),
                 })
