@@ -31,7 +31,7 @@ pub fn from_sort(
         expr,
         input,
         fetch,
-        preserve_partitioning, // TODO: implement preserve_partitioning after substrait supports it
+        preserve_partitioning: _, // TODO: implement preserve_partitioning after substrait supports it
     } = sort;
     let sort_fields = expr
         .iter()

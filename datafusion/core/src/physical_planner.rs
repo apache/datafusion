@@ -806,10 +806,20 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<_>>>()?;
                         Partitioning::Hash(runtime_expr, *n)
                     }
-                    LogicalPartitioning::DistributeBy(_) => {
-                        return not_impl_err!(
-                            "Physical plan does not support DistributeBy partitioning"
-                        );
+                    LogicalPartitioning::DistributeBy(expr) => {
+                        let n =
+                            session_state.config().options().execution.target_partitions;
+                        let runtime_expr = expr
+                            .iter()
+                            .map(|e| {
+                                self.create_physical_expr(
+                                    e,
+                                    input_dfschema,
+                                    session_state,
+                                )
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        Partitioning::Hash(runtime_expr, n)
                     }
                 };
                 Arc::new(RepartitionExec::try_new(

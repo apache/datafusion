@@ -4145,7 +4145,10 @@ logical_plan
 02)--Projection: multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
 03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 04)------TableScan: multiple_ordered_table_with_pk projection=[a, b, c, d]
-physical_plan_error This feature is not implemented: Physical plan does not support DistributeBy partitioning
+physical_plan
+01)ProjectionExec: expr=[a@1 as a, b@2 as b, sum(multiple_ordered_table_with_pk.d)@3 as sum1]
+02)--AggregateExec: mode=Single, gby=[c@2 as c, a@0 as a, b@1 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=Sorted
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_orderings=[[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 # union with aggregate
 query TT
