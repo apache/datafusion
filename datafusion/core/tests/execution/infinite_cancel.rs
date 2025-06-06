@@ -22,7 +22,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{Int64Array, RecordBatch};
+use arrow::array::{Array, Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow_schema::SortOptions;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
@@ -41,14 +41,14 @@ use datafusion::{common, physical_plan};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, ScalarValue};
 use datafusion_expr_common::operator::Operator::Gt;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::wrap_leaves_cancellation::WrapLeaves;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -774,6 +774,84 @@ async fn test_infinite_hash_join_without_repartition_and_no_agg(
     assert!(
         result.is_none(),
         "Expected no output for infinite + filter(all-false) + aggregate, but got a batch"
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+#[ignore]
+async fn test_infinite_sort_merge_join_without_repartition_and_no_agg(
+    #[values(false, true)] pretend_finite: bool,
+) -> Result<(), Box<dyn Error>> {
+    // 1) Create Session, schema, and two small RecordBatches that never overlap:
+    //    Left = [-3, -2, -1], Right = [0, 1, 2]
+    let session_ctx = SessionContext::new();
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    )]));
+
+    let left_array = {
+        let mut b = Int64Array::builder(3);
+        b.append_value(-3);
+        b.append_value(-2);
+        b.append_value(-1);
+        Arc::new(b.finish()) as Arc<dyn Array>
+    };
+    let right_array = {
+        let mut b = Int64Array::builder(3);
+        b.append_value(0);
+        b.append_value(1);
+        b.append_value(2);
+        Arc::new(b.finish()) as Arc<dyn Array>
+    };
+    let batch_left = RecordBatch::try_new(schema.clone(), vec![left_array])?;
+    let batch_right = RecordBatch::try_new(schema.clone(), vec![right_array])?;
+
+    // 2a) Wrap each small batch in an InfiniteExec (pretend_finite toggles finite vs infinite)
+    let infinite_left = Arc::new(InfiniteExec::new(batch_left, pretend_finite));
+    let infinite_right = Arc::new(InfiniteExec::new(batch_right, pretend_finite));
+
+    // 2b) Coalesce each InfiniteExec into a single 3-row batch at a time.
+    //     (Do NOT wrap in RepartitionExec.)
+    let coalesced_left = Arc::new(CoalesceBatchesExec::new(infinite_left, 3));
+    let coalesced_right = Arc::new(CoalesceBatchesExec::new(infinite_right, 3));
+
+    // 2c) Build a SortMergeJoinExec on “value”. Since left values < 0 and
+    //     right values ≥ 0, they never match. No aggregation or repartition.
+    //
+    //    We need a Vec<SortOptions> for the join key. Any consistent SortOptions works,
+    //    because data is already in ascending order on “value.”
+    let join = Arc::new(SortMergeJoinExec::try_new(
+        coalesced_left.clone(),
+        coalesced_right.clone(),
+        vec![(
+            col("value", &coalesced_left.schema())?,
+            col("value", &coalesced_right.schema())?,
+        )],
+        /* filter */ None,
+        JoinType::Inner,
+        vec![SortOptions::new(true, false)], // ascending, nulls last
+        /* null_equal */ true,
+    )?);
+
+    // 3) Do not apply WrapLeaves (no aggregation, no repartition → no built-in yields).
+    let optimized = join as Arc<dyn ExecutionPlan>;
+
+    // 4) Execute with a 1-second timeout. Because both sides are infinite and never match,
+    //    the SortMergeJoin will never produce output within 1s.
+    let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
+    const TIMEOUT_SEC: u64 = 1;
+    let result = select! {
+        batch_opt = stream.next() => batch_opt,
+        _ = tokio::time::sleep(tokio::time::Duration::from_secs(TIMEOUT_SEC)) => None,
+    };
+
+    assert!(
+        result.is_none(),
+        "Expected no output for infinite SortMergeJoin (no repartition & no aggregation), but got a batch",
     );
     Ok(())
 }
