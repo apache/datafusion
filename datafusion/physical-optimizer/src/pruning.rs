@@ -28,7 +28,8 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use datafusion_common::pruning::PruningStatistics;
+// pub use for backwards compatibility
+pub use datafusion_common::pruning::PruningStatistics;
 use log::{debug, trace};
 
 use datafusion_common::error::{DataFusionError, Result};
