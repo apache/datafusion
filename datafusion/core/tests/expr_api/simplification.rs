@@ -293,7 +293,7 @@ fn select_date_plus_interval() -> Result<()> {
 
     // Note that constant folder runs and folds the entire
     // expression down to a single constant (true)
-    let expected = r#"Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
+    let expected = r#"Projection: Date32("2021-01-09") AS (to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }"))
   TableScan: test"#;
     let actual = get_optimized_plan_formatted(plan, &time);
 
