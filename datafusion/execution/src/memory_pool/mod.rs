@@ -106,7 +106,7 @@ pub use pool::*;
 /// - [`MemoryConsumer`]: A named allocation traced by a particular operator. If an
 ///   execution is parallelized, and there are multiple partitions of the same
 ///   operator, each partition will have a separate `MemoryConsumer`.
-/// - [`SharedRegistration`]: A registration of a `MemoryConsumer` with a `MemoryPool`.
+/// - `SharedRegistration`: A registration of a `MemoryConsumer` with a `MemoryPool`.
 ///   `SharedRegistration` and `MemoryPool` have a many-to-one relationship. `MemoryPool`
 ///   implementation can decide how to allocate memory based on the registered consumers.
 ///   (e.g. `FairSpillPool` will try to share available memory evenly among all registered
