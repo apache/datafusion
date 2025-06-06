@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::util::pretty::pretty_format_batches_with_options;
+use datafusion_catalog::MemTable;
+use datafusion_common::ScalarValue;
+
 use super::*;
-use datafusion::scalar::ScalarValue;
 
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
@@ -318,6 +321,264 @@ async fn test_accumulator_row_accumulator() -> Result<()> {
     | a  | 5  | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 141047417 | QJYm7YRA3YetcBHI5wkMZeLXVmfuNy | 2496054700 | 1216992989.6666667 | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 3    | 1825431770.0 |
     +----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+
     ");
+
+    Ok(())
+}
+
+/// Helper function to get formatted results from a DataFrame for assertion purposes
+async fn get_formatted_results(df: &DataFrame) -> Result<String> {
+    // Collect the results and use arrow's pretty formatting
+    let results = df.clone().collect().await?;
+
+    // Use arrow's pretty formatting with default options
+    // FormatOptions doesn't have with_max_rows method, so use default options
+    let config = arrow::util::display::FormatOptions::default();
+
+    // Format the batches as a string
+    let formatted_results = pretty_format_batches_with_options(&results, &config)
+        .map_err(|e| datafusion::error::DataFusionError::ArrowError(e, None))?
+        .to_string();
+
+    Ok(formatted_results)
+}
+
+/// Test that COUNT(DISTINCT) correctly handles dictionary arrays with null values
+/// in the values array. This test ensures that when dictionary indices point to null
+/// values in the dictionary, those values are properly handled as nulls in COUNT(DISTINCT).
+#[tokio::test]
+async fn test_count_distinct_dictionary_with_null_values() -> Result<()> {
+    // Create a dictionary array where all indices point to a null value
+    let n: usize = 5;
+    let num = Arc::new(Int32Array::from((0..n as _).collect::<Vec<i32>>())) as ArrayRef;
+
+    // Create dictionary where index 0 is a null value
+    let dict_values = StringArray::from(vec![None, Some("abc")]);
+    let dict_indices = Int32Array::from(vec![0; n]); // All indices point to null value (index 0)
+    let dict = DictionaryArray::new(dict_indices, Arc::new(dict_values) as ArrayRef);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("num1", DataType::Int32, false),
+        Field::new("num2", DataType::Int32, false), // num2 to disable SingleDistinctToGroupBy optimization
+        Field::new(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![num.clone(), num.clone(), Arc::new(dict)],
+    )?;
+
+    let provider = MemTable::try_new(schema.clone(), vec![vec![batch.clone()]])?;
+
+    // Test with single partition
+    {
+        let mut session_config = SessionConfig::default();
+        session_config = session_config.set(
+            "datafusion.execution.target_partitions",
+            &ScalarValue::UInt64(Some(1u64)), // Set to 1 partition
+        );
+
+        let ctx = SessionContext::new_with_config(session_config);
+        // Create a new instance of MemTable with the same schema and data
+        let new_provider = MemTable::try_new(schema.clone(), vec![vec![batch.clone()]])?;
+        ctx.register_table("t", Arc::new(new_provider))?;
+
+        let df = ctx
+            .sql("SELECT count(distinct dict), count(num2) FROM t GROUP BY num1")
+            .await?;
+
+        // Get the formatted output for verification
+        let result_string = get_formatted_results(&df).await?;
+        println!("Single partition results:\n{}", result_string);
+
+        // Check the expected output format and values
+        let expected = vec![
+            "+------------------------+---------------+",
+            "| count(DISTINCT t.dict) | count(t.num2) |",
+            "+------------------------+---------------+",
+            "| 0                      | 1             |",
+            "| 0                      | 1             |",
+            "| 0                      | 1             |",
+            "| 0                      | 1             |",
+            "| 0                      | 1             |",
+            "+------------------------+---------------+",
+        ];
+
+        // Check that each line in the expected output appears in the actual output
+        for line in &expected {
+            assert!(
+                result_string.contains(line),
+                "Expected output to contain '{}', but got:\n{}",
+                line,
+                result_string
+            );
+        }
+
+        // Also perform the original check on the actual values for extra safety
+        let results = df.collect().await?;
+        for batch in &results {
+            let distinct_count = batch.column(0);
+            // All rows should have count(distinct dict) = 0 since all dict values are null
+            for i in 0..batch.num_rows() {
+                assert_eq!(
+                    distinct_count
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .value(i),
+                    0,
+                    "Expected count(distinct) to be 0 for null values, but got {}",
+                    distinct_count
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .value(i)
+                );
+            }
+        }
+    }
+
+    // Test with multiple partitions
+    {
+        let mut session_config = SessionConfig::default();
+        session_config = session_config.set(
+            "datafusion.execution.target_partitions",
+            &ScalarValue::UInt64(Some(2u64)), // Set to 2 partitions
+        );
+
+        let ctx = SessionContext::new_with_config(session_config);
+        ctx.register_table("t", Arc::new(provider))?;
+
+        let df = ctx
+            .sql("SELECT count(distinct dict), count(num2) FROM t GROUP BY num1")
+            .await?;
+
+        // Get the formatted output for verification
+        let result_string = get_formatted_results(&df).await?;
+        println!("Multiple partition results:\n{}", result_string);
+
+        // Check the expected output format and values
+        let expected = vec![
+            "+------------------------+---------------+",
+            "| count(DISTINCT t.dict) | count(t.num2) |",
+            "+------------------------+---------------+",
+            "| 0                      | 1             |",
+            "| 0                      | 1             |",
+            "| 0                      | 1             |",
+            "| 0                      | 1             |",
+            "| 0                      | 1             |",
+            "+------------------------+---------------+",
+        ];
+
+        // Check that each line in the expected output appears in the actual output
+        for line in &expected {
+            assert!(
+                result_string.contains(line),
+                "Expected output to contain '{}', but got:\n{}",
+                line,
+                result_string
+            );
+        }
+
+        // Also perform the original check on the actual values for extra safety
+        let results = df.collect().await?;
+        for batch in &results {
+            let distinct_count = batch.column(0);
+            // All rows should have count(distinct dict) = 0 since all dict values are null
+            for i in 0..batch.num_rows() {
+                assert_eq!(
+                    distinct_count
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .value(i),
+                    0,
+                    "Expected count(distinct) to be 0 for null values, but got {}",
+                    distinct_count
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .value(i)
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Test mixed null and non-null dictionary values in COUNT(DISTINCT)
+#[tokio::test]
+async fn test_count_distinct_dictionary_with_mixed_values() -> Result<()> {
+    // Create a dictionary array with a mix of null and non-null values
+    let n: usize = 6;
+    let num = Arc::new(Int32Array::from((0..n as _).collect::<Vec<i32>>())) as ArrayRef;
+
+    // Dictionary values array with nulls and non-nulls
+    let dict_values = StringArray::from(vec![None, Some("abc"), Some("def"), None]);
+
+    // Create indices that point to both null and non-null values
+    let dict_indices = Int32Array::from(vec![0, 1, 2, 0, 1, 3]);
+    let dict = DictionaryArray::new(dict_indices, Arc::new(dict_values) as ArrayRef);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("num1", DataType::Int32, false),
+        Field::new(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]));
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![num.clone(), Arc::new(dict)])?;
+
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // COUNT(DISTINCT) should only count non-null values "abc" and "def"
+    let df = ctx.sql("SELECT count(distinct dict) FROM t").await?;
+
+    // Get the formatted output for verification
+    let result_string = get_formatted_results(&df).await?;
+    println!("Mixed values results:\n{}", result_string);
+
+    // Check the expected output format and values
+    let expected = vec![
+        "+------------------------+",
+        "| count(DISTINCT t.dict) |",
+        "+------------------------+",
+        "| 2                      |",
+        "+------------------------+",
+    ];
+
+    // Check that each line in the expected output appears in the actual output
+    for line in &expected {
+        assert!(
+            result_string.contains(line),
+            "Expected output to contain '{}', but got:\n{}",
+            line,
+            result_string
+        );
+    }
+
+    // Also perform direct check on values
+    let results = df.collect().await?;
+    let batch = &results[0];
+    let count_col = batch.column(0);
+
+    assert_eq!(
+        count_col
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0),
+        2,
+        "Expected count(distinct) to be 2 for the unique non-null values"
+    );
 
     Ok(())
 }
