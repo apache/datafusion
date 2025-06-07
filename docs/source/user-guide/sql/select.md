@@ -184,8 +184,8 @@ SELECT * from x CROSS JOIN x y;
 
 ### LEFT SEMI JOIN
 
-The `LEFT SEMI JOIN` returns all rows from the left table that have at least one matching row in the right table, and 
-projects only the columns from the left table. 
+The `LEFT SEMI JOIN` returns all rows from the left table that have at least one matching row in the right table, and
+projects only the columns from the left table.
 
 ```sql
 SELECT * FROM x LEFT SEMI JOIN x y ON x.column_1 = y.column_1;
@@ -199,7 +199,7 @@ SELECT * FROM x LEFT SEMI JOIN x y ON x.column_1 = y.column_1;
 ### RIGHT SEMI JOIN
 
 The `RIGHT SEMI JOIN` returns all rows from the right table that have at least one matching row in the left table, and
-only projects the columns from the right table. 
+only projects the columns from the right table.
 
 ```sql
 SELECT * FROM x RIGHT SEMI JOIN x y ON x.column_1 = y.column_1;
@@ -212,7 +212,7 @@ SELECT * FROM x RIGHT SEMI JOIN x y ON x.column_1 = y.column_1;
 
 ### LEFT ANTI JOIN
 
-The `LEFT ANTI JOIN` returns all rows from the left table that do not have any matching row in the right table, projecting 
+The `LEFT ANTI JOIN` returns all rows from the left table that do not have any matching row in the right table, projecting
 only the left table’s columns.
 
 ```sql
@@ -225,8 +225,8 @@ SELECT * FROM x LEFT ANTI JOIN x y ON x.column_1 = y.column_1;
 
 ### RIGHT ANTI JOIN
 
-The `RIGHT ANTI JOIN` returns all rows from the right table that do not have any matching row in the left table, projecting 
-only the right table’s columns. 
+The `RIGHT ANTI JOIN` returns all rows from the right table that do not have any matching row in the left table, projecting
+only the right table’s columns.
 
 ```sql
 SELECT * FROM x RIGHT ANTI JOIN x y ON x.column_1 = y.column_1;
