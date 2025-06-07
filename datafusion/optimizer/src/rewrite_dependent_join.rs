@@ -958,7 +958,7 @@ mod tests {
     use super::DependentJoinRewriter;
 
     use crate::test::{test_table_scan_with_name, test_table_with_columns};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::{alias::AliasGenerator, Result, Spans};
     use datafusion_expr::{
         binary_expr, exists, expr::InSubquery, expr_fn::col, in_subquery, lit,
@@ -984,9 +984,52 @@ mod tests {
             )
         }};
     }
+    #[test]
+    fn lateral_join() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+
+        let lateral_join_rhs = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(
+                    col("inner_table_lv1.c")
+                        .eq(out_ref_col(DataType::UInt32, "outer_table.c")),
+                )?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
+            .join_on(
+                LogicalPlan::Subquery(Subquery {
+                    subquery: lateral_join_rhs,
+                    outer_ref_columns: vec![out_ref_col(
+                        DataType::UInt32,
+                        "outer_table.c",
+                    )],
+                    spans: Spans::new(),
+                }),
+                JoinType::Inner,
+                vec![lit(true)],
+            )?
+            .build()?;
+
+        // Inner Join:  Filter: Boolean(true)
+        //   TableScan: outer_table
+        //   Subquery:
+        //     Filter: inner_table_lv1.c = outer_ref(outer_table.c)
+        //       TableScan: inner_table_lv1
+
+        assert_dependent_join_rewrite!(plan, @r"
+        DependentJoin on [outer_table.c lvl 1] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+          Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ");
+        Ok(())
+    }
 
     #[test]
-    fn rewrite_dependent_join_with_nested_lateral_join() -> Result<()> {
+    fn scalar_subquery_nested_inside_a_lateral_join() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
 
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
@@ -1061,7 +1104,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_dependent_join_with_lhs_as_a_join() -> Result<()> {
+    fn join_logical_plan_with_subquery_in_filter_expr() -> Result<()> {
         let outer_left_table = test_table_scan_with_name("outer_right_table")?;
         let outer_right_table = test_table_scan_with_name("outer_left_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
@@ -1115,11 +1158,11 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn rewrite_dependent_join_in_from_expr() -> Result<()> {
+    fn subquery_in_from_expr() -> Result<()> {
         Ok(())
     }
     #[test]
-    fn rewrite_dependent_join_inside_project_exprs() -> Result<()> {
+    fn nested_subquery_in_projection_expr() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
 
@@ -1217,7 +1260,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_dependent_join_two_nested_subqueries() -> Result<()> {
+    fn nested_subquery_in_filter() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
 
@@ -1283,7 +1326,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn rewrite_dependent_join_two_subqueries_at_the_same_level() -> Result<()> {
+    fn two_subqueries_in_the_same_filter_expr() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let in_sq_level1 = Arc::new(
@@ -1335,7 +1378,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_dependent_join_in_subquery_with_count_depth_1() -> Result<()> {
+    fn in_subquery_with_count_of_1_depth() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -1387,7 +1430,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn rewrite_dependent_join_exist_subquery_with_dependent_columns() -> Result<()> {
+    fn correlated_exist_subquery() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -1436,8 +1479,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_dependent_join_with_exist_subquery_with_no_dependent_columns() -> Result<()>
-    {
+    fn uncorrelated_exist_subquery() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -1471,7 +1513,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn rewrite_dependent_join_with_in_subquery_no_dependent_column() -> Result<()> {
+    fn uncorrelated_in_subquery() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -1509,7 +1551,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn rewrite_dependent_join_with_in_subquery_has_dependent_column() -> Result<()> {
+    fn correlated_in_subquery() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -1561,7 +1603,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_dependent_join_reference_outer_column_with_alias_name() -> Result<()> {
+    fn correlated_subquery_with_alias() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
         let sq_level1 = Arc::new(
@@ -1893,6 +1935,51 @@ mod tests {
                     Filter: t2.a = outer_ref(t1.a) [a:Int32, b:Int32]
                       SubqueryAlias: t2 [a:Int32, b:Int32]
                         TableScan: t [a:Int32, b:Int32]
+        "#
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    // https://github.com/duckdb/duckdb/blob/4d7cb701cabd646d8232a9933dd058a089ea7348/test/sql/subquery/any_all/subquery_in.test
+    fn correlated_scalar_subquery_returning_more_than_1_row() -> Result<()> {
+        //  SELECT (FALSE) IN (TRUE, (SELECT TIME '13:35:07' FROM t1) BETWEEN t0.c0 AND t0.c0) FROM t0;
+        let t0 = test_table_with_columns(
+            "t0",
+            &[
+                ("c0", DataType::Time64(TimeUnit::Second)),
+                ("c1", DataType::Float64),
+            ],
+        )?;
+        let t1 = test_table_with_columns("t1", &[("c0", DataType::Int32)])?;
+        let t1_subquery = Arc::new(
+            LogicalPlanBuilder::from(t1)
+                .project(vec![lit("13:35:07")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(t0)
+            .project(vec![lit(false).in_list(
+                vec![
+                    lit(true),
+                    scalar_subquery(t1_subquery).between(col("t0.c0"), col("t0.c0")),
+                ],
+                false,
+            )])?
+            .build()?;
+        // Projection: Boolean(false) IN ([Boolean(true), (<subquery>) BETWEEN t0.c0 AND t0.c0])
+        //   Subquery:
+        //     Projection: Utf8("13:35:07")
+        //       TableScan: t1
+        //   TableScan: t0
+        assert_dependent_join_rewrite!(
+            plan,
+            @r#"
+        Projection: Boolean(false) IN ([Boolean(true), __scalar_sq_1.output BETWEEN t0.c0 AND t0.c0]) [Boolean(false) IN Boolean(true), __scalar_sq_1.output BETWEEN t0.c0 AND t0.c0:Boolean]
+          DependentJoin on [] with expr (<subquery>) depth 1 [c0:Time64(Second), c1:Float64, output:Utf8]
+            TableScan: t0 [c0:Time64(Second), c1:Float64]
+            Projection: Utf8("13:35:07") [Utf8("13:35:07"):Utf8]
+              TableScan: t1 [c0:Int32]
         "#
         );
 
