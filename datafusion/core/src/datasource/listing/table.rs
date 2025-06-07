@@ -1333,6 +1333,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::test_util::datafusion_test_data;
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -2487,7 +2488,11 @@ mod tests {
             .await?;
 
         // check count
-        let batches = session_ctx.sql("select * from t").await?.collect().await?;
+        let batches = session_ctx
+            .sql("select * from foo")
+            .await?
+            .collect()
+            .await?;
 
         insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
             +-----+-----+---+
@@ -2525,7 +2530,7 @@ mod tests {
     async fn infer_preserves_provided_schema() -> Result<()> {
         let ctx = SessionContext::new();
 
-        let testdata = crate::test_util::datafusion_test_data();
+        let testdata = datafusion_test_data();
         let filename = format!("{testdata}/aggregate_simple.csv");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
@@ -2550,7 +2555,7 @@ mod tests {
     async fn test_schema_source_tracking() -> Result<()> {
         let ctx = SessionContext::new();
 
-        let testdata = crate::test_util::datafusion_test_data();
+        let testdata = datafusion_test_data();
         let filename = format!("{testdata}/aggregate_simple.csv");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
@@ -2570,7 +2575,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::Specified);
 
         // Test schema source after inferring schema
-        let format = csv::CsvFormat::default().with_schema(None);
+        let format = CsvFormat::default();
         let options = ListingOptions::new(Arc::new(format));
         let config_without_schema =
             ListingTableConfig::new(table_path).with_listing_options(options);
@@ -2589,7 +2594,7 @@ mod tests {
     #[tokio::test]
     async fn test_schema_source_in_listing_table() -> Result<()> {
         let ctx = SessionContext::new();
-        let testdata = crate::test_util::datafusion_test_data();
+        let testdata = datafusion_test_data();
         let filename = format!("{testdata}/aggregate_simple.csv");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
@@ -2601,7 +2606,7 @@ mod tests {
             Field::new("c4", DataType::Utf8, true),
         ]));
 
-        let format = csv::CsvFormat::default().with_schema(None);
+        let format = CsvFormat::default();
         let options = ListingOptions::new(Arc::new(format));
 
         let config_specified = ListingTableConfig::new(table_path.clone())
@@ -2625,7 +2630,7 @@ mod tests {
     #[tokio::test]
     async fn test_schema_source_preserved_through_config_operations() -> Result<()> {
         let ctx = SessionContext::new();
-        let testdata = crate::test_util::datafusion_test_data();
+        let testdata = datafusion_test_data();
         let filename = format!("{testdata}/aggregate_simple.csv");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
@@ -2643,7 +2648,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::Specified);
 
         // Make sure source is preserved after adding options
-        let format = csv::CsvFormat::default().with_schema(None);
+        let format = CsvFormat::default();
         let options = ListingOptions::new(Arc::new(format));
         let config = config.with_listing_options(options);
 
@@ -2688,9 +2693,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::None);
 
         // Set up options
-        let format = csv::CsvFormat::default()
-            .with_schema(None)
-            .with_has_header(true);
+        let format = CsvFormat::default().with_has_header(true);
         let options = ListingOptions::new(Arc::new(format));
         let config = config.with_listing_options(options);
 
@@ -2699,7 +2702,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::Inferred);
 
         // Verify that the inferred schema matches the first file's schema (3 columns)
-        let schema = config.file_schema.unwrap();
+        let schema = config.file_schema.as_ref().unwrap().clone();
         assert_eq!(schema.fields().len(), 3);
         assert_eq!(schema.field(0).name(), "c1");
         assert_eq!(schema.field(1).name(), "c2");
@@ -2750,9 +2753,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::Specified);
 
         // Set up options
-        let format = csv::CsvFormat::default()
-            .with_schema(None)
-            .with_has_header(true);
+        let format = CsvFormat::default().with_has_header(true);
         let options = ListingOptions::new(Arc::new(format));
         let config = config.with_listing_options(options);
 
@@ -2761,7 +2762,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::Specified);
 
         // Verify that the schema is still the one we specified (3 columns)
-        let schema = config.file_schema.unwrap();
+        let schema = config.file_schema.as_ref().unwrap().clone();
         assert_eq!(schema.fields().len(), 3);
         assert_eq!(schema.field(0).name(), "c1");
         assert_eq!(schema.field(1).name(), "c2");
@@ -2817,9 +2818,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::Specified);
 
         // Set up options
-        let format = csv::CsvFormat::default()
-            .with_schema(None)
-            .with_has_header(true);
+        let format = CsvFormat::default().with_has_header(true);
         let options = ListingOptions::new(Arc::new(format));
         let config = config.with_listing_options(options);
 
@@ -2828,7 +2827,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::Specified);
 
         // Verify that the schema is still the one we specified (4 columns)
-        let schema = config.file_schema.unwrap();
+        let schema = config.file_schema.as_ref().unwrap().clone();
         assert_eq!(schema.fields().len(), 4);
         assert_eq!(schema.field(0).name(), "c1");
         assert_eq!(schema.field(1).name(), "c2");
@@ -2876,9 +2875,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::None);
 
         // Set up options
-        let format = csv::CsvFormat::default()
-            .with_schema(None)
-            .with_has_header(true);
+        let format = CsvFormat::default().with_has_header(true);
         let options = ListingOptions::new(Arc::new(format));
         let config = config.with_listing_options(options);
 
@@ -2887,7 +2884,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::Inferred);
 
         // Verify that the inferred schema matches the first file's schema, which now has 4 columns
-        let schema = config.file_schema.unwrap();
+        let schema = config.file_schema.as_ref().unwrap().clone();
         assert_eq!(schema.fields().len(), 4);
         assert_eq!(schema.field(0).name(), "c1");
         assert_eq!(schema.field(1).name(), "c2");
