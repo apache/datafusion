@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::yield_stream::YieldStream;
+use crate::yield_stream::wrap_yield_stream;
 use crate::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream, Statistics,
@@ -164,25 +164,8 @@ impl ExecutionPlan for PlaceholderRowExec {
             );
         }
 
-        let memory_stream =
-            MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)?;
-
-        let stream: SendableRecordBatchStream = Box::pin(memory_stream);
-
-        if !self.cooperative {
-            return Ok(stream);
-        }
-
-        let frequency = context
-            .session_config()
-            .options()
-            .optimizer
-            .yield_frequency_for_pipeline_break;
-
-        let yielding = YieldStream::new(stream, frequency);
-        let yielding_stream: SendableRecordBatchStream = Box::pin(yielding);
-
-        Ok(yielding_stream)
+        MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)
+            .map(|ms| wrap_yield_stream(Box::pin(ms), &context, self.cooperative))
     }
 
     fn statistics(&self) -> Result<Statistics> {

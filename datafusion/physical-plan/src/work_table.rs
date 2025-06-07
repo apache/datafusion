@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::yield_stream::YieldStream;
+use crate::yield_stream::wrap_yield_stream;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream, Statistics,
@@ -220,26 +220,12 @@ impl ExecutionPlan for WorkTableExec {
         }
         let batch = self.work_table.take()?;
 
-        // 1. Get the “base” stream exactly as before, without yielding.
         let stream = Box::pin(
             MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
                 .with_reservation(batch.reservation),
         );
-
-        // 2. If cooperative == false, return base_stream immediately.
-        if !self.cooperative {
-            return Ok(stream);
-        }
-
-        let frequency = context
-            .session_config()
-            .options()
-            .optimizer
-            .yield_frequency_for_pipeline_break;
-
-        // 3. If cooperative == true, wrap the stream into a YieldStream.
-        let yielding_stream = YieldStream::new(stream, frequency);
-        Ok(Box::pin(yielding_stream))
+        // Cooperatively yield if asked to do so:
+        Ok(wrap_yield_stream(stream, &context, self.cooperative))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

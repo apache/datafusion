@@ -2788,7 +2788,7 @@ impl protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::YieldStream(Box::new(
                 protobuf::YieldStreamExecNode {
                     input: Some(Box::new(input)),
-                    frequency: exec.yield_frequency() as _,
+                    frequency: exec.yield_period() as _,
                 },
             ))),
         })

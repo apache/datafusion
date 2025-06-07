@@ -30,7 +30,7 @@ use crate::projection::{
     all_alias_free_columns, new_projections_for_columns, update_ordering, ProjectionExec,
 };
 use crate::stream::RecordBatchStreamAdapter;
-use crate::yield_stream::YieldStream;
+use crate::yield_stream::wrap_yield_stream;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -276,40 +276,13 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         };
-
-        if self.cooperative {
-            let frequency = ctx
-                .session_config()
-                .options()
-                .optimizer
-                .yield_frequency_for_pipeline_break;
-
-            let yielding_stream = YieldStream::new(projected_stream, frequency);
-
-            return Ok(match self.limit {
-                None => Box::pin(yielding_stream),
-                Some(fetch) => {
-                    let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-                    Box::pin(LimitStream::new(
-                        Box::pin(yielding_stream),
-                        0,
-                        Some(fetch),
-                        baseline_metrics,
-                    ))
-                }
-            });
-        }
+        let stream = wrap_yield_stream(projected_stream, &ctx, self.cooperative);
 
         Ok(match self.limit {
-            None => projected_stream,
+            None => stream,
             Some(fetch) => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-                Box::pin(LimitStream::new(
-                    projected_stream,
-                    0,
-                    Some(fetch),
-                    baseline_metrics,
-                ))
+                Box::pin(LimitStream::new(stream, 0, Some(fetch), baseline_metrics))
             }
         })
     }

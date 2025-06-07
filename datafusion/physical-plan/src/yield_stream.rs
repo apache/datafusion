@@ -33,21 +33,24 @@ use datafusion_execution::TaskContext;
 use futures::{Stream, StreamExt};
 
 /// An identity stream that passes batches through as is, but yields control
-/// back to the runtime every `frequency` batches. This stream is useful to
+/// back to the runtime every `period` batches. This stream is useful to
 /// construct a mechanism that allows operators that do not directly cooperate
 /// with the runtime to  check/support cancellation.
 pub struct YieldStream {
     inner: SendableRecordBatchStream,
     batches_processed: usize,
-    frequency: usize,
+    period: usize,
 }
 
 impl YieldStream {
-    pub fn new(inner: SendableRecordBatchStream, frequency: usize) -> Self {
+    pub fn new(inner: SendableRecordBatchStream, mut period: usize) -> Self {
+        if period == 0 {
+            period = usize::MAX;
+        }
         Self {
             inner,
             batches_processed: 0,
-            frequency,
+            period,
         }
     }
 }
@@ -59,7 +62,7 @@ impl Stream for YieldStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        if self.batches_processed >= self.frequency {
+        if self.batches_processed >= self.period {
             self.batches_processed = 0;
             cx.waker().wake_by_ref();
             return Poll::Pending;
@@ -113,9 +116,9 @@ impl YieldStreamExec {
         &self.child
     }
 
-    /// Returns the frequency at which the operator yields control back to the
+    /// Returns the period at which the operator yields control back to the
     /// runtime.
-    pub fn yield_frequency(&self) -> usize {
+    pub fn yield_period(&self) -> usize {
         self.frequency
     }
 }
@@ -189,6 +192,22 @@ impl ExecutionPlan for YieldStreamExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         Equal
     }
+}
+
+/// Wraps `stream` inside a `YieldStream` depending on the `cooperative` flag.
+/// Yielding period is extracted from `context`.
+pub fn wrap_yield_stream(
+    mut stream: SendableRecordBatchStream,
+    context: &TaskContext,
+    cooperative: bool,
+) -> SendableRecordBatchStream {
+    if cooperative {
+        let period = context.session_config().options().optimizer.yield_period;
+        if period > 0 {
+            stream = Box::pin(YieldStream::new(stream, period));
+        }
+    }
+    stream
 }
 
 #[cfg(test)]

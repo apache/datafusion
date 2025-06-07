@@ -38,7 +38,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPropagation,
 };
-use datafusion_physical_plan::yield_stream::YieldStream;
+use datafusion_physical_plan::yield_stream::wrap_yield_stream;
 
 /// A source of data, typically a list of files or memory
 ///
@@ -259,23 +259,9 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // 1. Get the “base” stream exactly as before, without yielding.
-        let stream = self.data_source.open(partition, Arc::clone(&context));
-
-        // 2. If cooperative == false, return base_stream immediately.
-        if !self.cooperative {
-            return stream;
-        }
-
-        let frequency = context
-            .session_config()
-            .options()
-            .optimizer
-            .yield_frequency_for_pipeline_break;
-
-        // 3. If cooperative == true, wrap the stream into a YieldStream.
-        let yielding_stream = YieldStream::new(stream?, frequency);
-        Ok(Box::pin(yielding_stream))
+        self.data_source
+            .open(partition, Arc::clone(&context))
+            .map(|stream| wrap_yield_stream(stream, &context, self.cooperative))
     }
 
     fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {

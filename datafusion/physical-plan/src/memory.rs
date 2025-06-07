@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::yield_stream::YieldStream;
+use crate::yield_stream::wrap_yield_stream;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -276,21 +276,7 @@ impl ExecutionPlan for LazyMemoryExec {
             generator: Arc::clone(&self.batch_generators[partition]),
             baseline_metrics,
         });
-
-        // 2. If cooperative == false, return base_stream immediately.
-        if !self.cooperative {
-            return Ok(stream);
-        }
-
-        let frequency = context
-            .session_config()
-            .options()
-            .optimizer
-            .yield_frequency_for_pipeline_break;
-
-        // 3. If cooperative == true, wrap the stream into a YieldStream.
-        let yielding_stream = YieldStream::new(stream, frequency);
-        Ok(Box::pin(yielding_stream))
+        Ok(wrap_yield_stream(stream, &context, self.cooperative))
     }
 
     fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {

@@ -66,8 +66,8 @@ impl PhysicalOptimizerRule for WrapLeaves {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Only activate if user has configured a non-zero yield frequency.
-        let yield_frequency = config.optimizer.yield_frequency_for_pipeline_break;
-        if yield_frequency != 0 {
+        let yield_period = config.optimizer.yield_period;
+        if yield_period != 0 {
             plan.transform_down(|plan| {
                 if !plan.children().is_empty() {
                     // Not a leaf, keep recursing down.
@@ -77,13 +77,12 @@ impl PhysicalOptimizerRule for WrapLeaves {
                     .with_cooperative_yields()
                     .unwrap_or_else(|| {
                         // Otherwise, insert a `YieldStreamExec` to enforce periodic yielding.
-                        Arc::new(YieldStreamExec::new(plan, yield_frequency))
+                        Arc::new(YieldStreamExec::new(plan, yield_period))
                     });
                 Ok(Transformed::new(new_plan, true, TreeNodeRecursion::Jump))
             })
             .map(|t| t.data)
         } else {
-            // If yield_frequency is zero, we do nothing.
             Ok(plan)
         }
     }

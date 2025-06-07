@@ -727,10 +727,10 @@ config_namespace! {
         /// due to the presence of tight-looping operators, it will attempt to
         /// mitigate this by inserting explicit yielding (in as few places as
         /// possible to avoid performance degradation). This value represents the
-        /// yielding frequency (in batches) at such explicit yielding points.
-        /// The default value is 64. If set to 0, no DataFusion will not perform
+        /// yielding period (in batches) at such explicit yielding points. The
+        /// default value is 64. If set to 0, no DataFusion will not perform
         /// any explicit yielding.
-        pub yield_frequency_for_pipeline_break: usize, default = 64
+        pub yield_period: usize, default = 64
     }
 }
 
