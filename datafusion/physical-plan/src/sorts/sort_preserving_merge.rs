@@ -1386,7 +1386,7 @@ mod tests {
             match self.partition {
                 0 => {
                     if self.none_polled_once {
-                        panic!("Exhausted stream is polled more than one")
+                        panic!("Exhausted stream is polled more than once")
                     } else {
                         self.none_polled_once = true;
                         Poll::Ready(None)
