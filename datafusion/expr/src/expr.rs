@@ -511,6 +511,9 @@ impl FieldMetadata {
 
     /// Adds metadata from `other` into `self`, overwriting any existing keys.
     pub fn extend(&mut self, other: Self) {
+        if other.is_empty() {
+            return;
+        }
         let other = Arc::unwrap_or_clone(other.into_inner());
         Arc::make_mut(&mut self.inner).extend(other);
     }
@@ -569,6 +572,24 @@ impl From<&std::collections::HashMap<String, String>> for FieldMetadata {
     }
 }
 
+/// From hashbrown map
+impl From<HashMap<String, String>> for FieldMetadata {
+    fn from(map: HashMap<String, String>) -> Self {
+        let inner = map.into_iter().collect();
+        Self::new(inner)
+    }
+}
+
+impl From<&HashMap<String, String>> for FieldMetadata {
+    fn from(map: &HashMap<String, String>) -> Self {
+        let inner = map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self::new(inner)
+    }
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
@@ -595,7 +616,7 @@ pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
-    pub metadata: Option<std::collections::HashMap<String, String>>,
+    pub metadata: Option<FieldMetadata>,
 }
 
 impl Hash for Alias {
@@ -635,10 +656,7 @@ impl Alias {
         }
     }
 
-    pub fn with_metadata(
-        mut self,
-        metadata: Option<std::collections::HashMap<String, String>>,
-    ) -> Self {
+    pub fn with_metadata(mut self, metadata: Option<FieldMetadata>) -> Self {
         self.metadata = metadata;
         self
     }
@@ -1593,7 +1611,7 @@ impl Expr {
     pub fn alias_with_metadata(
         self,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, None::<&str>, name.into()).with_metadata(metadata))
     }
@@ -1624,7 +1642,7 @@ impl Expr {
         self,
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, relation, name.into()).with_metadata(metadata))
     }
