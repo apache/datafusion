@@ -462,6 +462,24 @@ impl FieldMetadata {
         }
     }
 
+    /// Merges two optional `FieldMetadata` instances, overwriting any existing
+    /// keys in `m` with keys from `n` if present
+    pub fn merge_options(
+        m: Option<&FieldMetadata>,
+        n: Option<&FieldMetadata>,
+    ) -> Option<FieldMetadata> {
+        match (m, n) {
+            (Some(m), Some(n)) => {
+                let mut merged = m.clone();
+                merged.extend(n.clone());
+                Some(merged)
+            }
+            (Some(m), None) => Some(m.clone()),
+            (None, Some(n)) => Some(n.clone()),
+            (None, None) => None,
+        }
+    }
+
     /// Create a new metadata instance from a `Field`'s metadata.
     pub fn new_from_field(field: &Field) -> Self {
         let inner = field
@@ -507,7 +525,7 @@ impl FieldMetadata {
         self.inner.len()
     }
 
-    /// Updates the metadata on the Field with this metadata
+    /// Updates the metadata on the Field with this metadata, if it is not empty.
     pub fn add_to_field(&self, field: Field) -> Field {
         if self.inner.is_empty() {
             return field;

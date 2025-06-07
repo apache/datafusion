@@ -116,25 +116,10 @@ pub fn create_physical_expr(
         Expr::Alias(Alias { expr, metadata, .. }) => {
             if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
                 let metadata = metadata.as_ref().map(|m| FieldMetadata::from(m.clone()));
-                let new_metadata = match (prior_metadata.as_ref(), metadata) {
-                    (Some(m), Some(n)) => {
-                        let mut m = m.clone();
-                        m.extend(n);
-                        Some(m)
-                    }
-                    (Some(m), None) => Some(m.clone()),
-                    (None, Some(n)) => Some(n),
-                    (None, None) => None,
-                };
-
-                let new_metadata = new_metadata.and_then(|new_metadata| {
-                    if new_metadata.is_empty() {
-                        None
-                    } else {
-                        Some(new_metadata)
-                    }
-                });
-
+                let new_metadata = FieldMetadata::merge_options(
+                    prior_metadata.as_ref(),
+                    metadata.as_ref(),
+                );
                 Ok(Arc::new(Literal::new_with_metadata(
                     v.clone(),
                     new_metadata,
