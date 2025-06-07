@@ -219,7 +219,6 @@ uninlined_format_args = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
 
-
 # pin to https://github.com/apache/arrow-rs/pull/7597
 [patch.crates-io]
 arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "092914f0be3a11d16417a02ef8b031e87a52df0c" }
@@ -247,4 +246,3 @@ parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "092914f0be3a1
 #arrow-ord = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-ord" }
 #arrow-flight = { path= "/Users/andrewlamb/Software/arrow-rs/arrow-flight" }
 #parquet = { path= "/Users/andrewlamb/Software/arrow-rs/parquet" }
-
