@@ -39,9 +39,9 @@
 
 use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
-    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
-    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
+    DependentJoin, Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension,
+    Filter, Join, Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery,
+    Repartition, Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
     UserDefinedLogicalNode, Values, Window,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
@@ -52,8 +52,6 @@ use datafusion_common::tree_node::{
     TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{internal_err, Result};
-
-use super::plan::DependentJoin;
 
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
@@ -425,13 +423,12 @@ impl LogicalPlan {
         match self {
             LogicalPlan::DependentJoin(DependentJoin {
                 correlated_columns,
-                subquery_expr,
                 lateral_join_condition,
                 ..
             }) => {
                 let correlated_column_exprs = correlated_columns
                     .iter()
-                    .map(|(_, c)| c.clone())
+                    .map(|(_, c, _)| c.clone())
                     .collect::<Vec<_>>();
                 let maybe_lateral_join_condition = match lateral_join_condition {
                     Some((_, condition)) => Some(condition.clone()),

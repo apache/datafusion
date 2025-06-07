@@ -295,14 +295,13 @@ pub enum LogicalPlan {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DependentJoin {
     pub schema: DFSchemaRef,
-    // All combinatoins of (subquery,OuterReferencedExpr) on the RHS (and its descendant)
-    // which points to a column on the LHS.
-    // The Expr should always be Expr::OuterRefColumn.
+    // All combinations of (subquery depth,Column and its DataType) on the RHS (and its descendant)
+    // which points to a column on the LHS of this dependent join
     // Note that not all outer_refs from the RHS are mentioned in this vectors
-    // because RHS may reference columns provided somewhere from the above join.
+    // because RHS may reference columns provided somewhere from the above parent dependent join.
     // Depths of each correlated_columns should always be gte current dependent join
     // subquery_depth
-    pub correlated_columns: Vec<(usize, Expr)>,
+    pub correlated_columns: Vec<(usize, Column, DataType)>,
     // the upper expr that containing the subquery expr
     // i.e for predicates: where outer = scalar_sq + 1
     // correlated exprs are `scalar_sq + 1`
@@ -323,12 +322,7 @@ impl Display for DependentJoin {
         let correlated_str = self
             .correlated_columns
             .iter()
-            .map(|(level, c)| {
-                if let Expr::OuterReferenceColumn(_, ref col) = c {
-                    return format!("{col} lvl {level}");
-                }
-                "".to_string()
-            })
+            .map(|(level, col, _)| format!("{col} lvl {level}"))
             .collect::<Vec<String>>()
             .join(", ");
         let lateral_join_info =
@@ -355,7 +349,7 @@ impl PartialOrd for DependentJoin {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
         struct ComparableJoin<'a> {
-            correlated_columns: &'a Vec<(usize, Expr)>,
+            correlated_columns: &'a Vec<(usize, Column, DataType)>,
             // the upper expr that containing the subquery expr
             // i.e for predicates: where outer = scalar_sq + 1
             // correlated exprs are `scalar_sq + 1`
@@ -1991,7 +1985,7 @@ impl LogicalPlan {
                     }
 
                     LogicalPlan::DependentJoin(dependent_join) => {
-                        Display::fmt(dependent_join,f)
+                        Display::fmt(dependent_join, f)
                     },
                     LogicalPlan::Join(Join {
                         on: ref keys,
