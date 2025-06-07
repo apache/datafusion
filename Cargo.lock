@@ -1962,6 +1962,7 @@ dependencies = [
  "futures",
  "insta",
  "insta-cmd",
+ "log",
  "mimalloc",
  "object_store",
  "parking_lot",
