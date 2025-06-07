@@ -27,7 +27,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{internal_err, Column, HashMap, Result};
+use datafusion_common::{internal_datafusion_err, internal_err, Column, HashMap, Result};
 use datafusion_expr::{
     col, lit, Aggregate, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Projection,
 };
@@ -62,14 +62,15 @@ struct ColumnAccess {
 }
 
 impl DependentJoinRewriter {
-    fn rewrite_filter(
-        &mut self,
-        filter: &Filter,
+    // this function is to rewrite logical plan having arbitrary exprs that contain
+    // subquery expr into dependent join logical plan
+    fn rewrite_exprs_into_dependent_join_plan(
+        exprs: Vec<Vec<&Expr>>,
         dependent_join_node: &Node,
         current_subquery_depth: usize,
         mut current_plan: LogicalPlanBuilder,
         subquery_alias_by_offset: HashMap<usize, String>,
-    ) -> Result<LogicalPlanBuilder> {
+    ) -> Result<(LogicalPlanBuilder, Vec<Vec<Expr>>)> {
         // everytime we meet a subquery during traversal, we increment this by 1
         // we can use this offset to lookup the original subquery info
         // in subquery_alias_by_offset
@@ -79,35 +80,84 @@ impl DependentJoinRewriter {
         let mut offset = 0;
         let offset_ref = &mut offset;
         let mut subquery_expr_by_offset = HashMap::new();
-        let new_predicate = filter
-            .predicate
-            .clone()
-            .transform(|e| {
-                // replace any subquery expr with subquery_alias.output
-                // column
-                let alias = match e {
-                    Expr::InSubquery(_) | Expr::Exists(_) | Expr::ScalarSubquery(_) => {
-                        subquery_alias_by_offset.get(offset_ref).unwrap()
-                    }
-                    _ => return Ok(Transformed::no(e)),
-                };
-                // we are aware that the original subquery can be rewritten
-                // update the latest expr to this map
-                subquery_expr_by_offset.insert(*offset_ref, e);
-                *offset_ref += 1;
+        let mut rewritten_exprs_groups = vec![];
+        for expr_group in exprs {
+            let rewritten_exprs = expr_group
+                .iter()
+                .cloned()
+                .map(|e| {
+                    Ok(e.clone()
+                        .transform(|e| {
+                            // replace any subquery expr with subquery_alias.output column
+                            let alias = match e {
+                                Expr::InSubquery(_)
+                                | Expr::Exists(_)
+                                | Expr::ScalarSubquery(_) => subquery_alias_by_offset
+                                    .get(offset_ref)
+                                    .ok_or(internal_datafusion_err!(
+                                        "subquery alias not found at offset {}",
+                                        *offset_ref
+                                    )),
+                                _ => return Ok(Transformed::no(e)),
+                            }?;
 
-                // TODO: this assume that after decorrelation
-                // the dependent join will provide an extra column with the structure
-                // of "subquery_alias.output"
-                // On later step of decorrelation, it rely on this structure
-                // to again rename the expression after join
-                // for example if the real join type is LeftMark, the correct output
-                // column should be "mark" instead, else after the join
-                // one extra layer of projection is needed to alias "mark" into
-                // "alias.output"
-                Ok(Transformed::yes(col(format!("{alias}.output"))))
-            })?
-            .data;
+                            // We are aware that the original subquery can be rewritten update the
+                            // latest expr to this map.
+                            subquery_expr_by_offset.insert(*offset_ref, e);
+                            *offset_ref += 1;
+
+                            Ok(Transformed::yes(col(format!("{alias}.output"))))
+                        })?
+                        .data)
+                })
+                .collect::<Result<Vec<Expr>>>()?;
+            rewritten_exprs_groups.push(rewritten_exprs);
+        }
+
+        for (subquery_offset, (_, column_accesses)) in dependent_join_node
+            .columns_accesses_by_subquery_id
+            .iter()
+            .enumerate()
+        {
+            let alias = subquery_alias_by_offset.get(&subquery_offset).ok_or(
+                internal_datafusion_err!(
+                    "subquery alias not found at offset {subquery_offset}"
+                ),
+            )?;
+            let subquery_expr = subquery_expr_by_offset.get(&subquery_offset).ok_or(
+                internal_datafusion_err!(
+                    "subquery expr not found at offset {subquery_offset}"
+                ),
+            )?;
+
+            let subquery_input = unwrap_subquery_input_from_expr(subquery_expr);
+
+            let correlated_columns = column_accesses
+                .iter()
+                .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
+                .unique()
+                .collect();
+
+            current_plan = current_plan.dependent_join(
+                subquery_input.deref().clone(),
+                correlated_columns,
+                Some(subquery_expr.clone()),
+                current_subquery_depth,
+                alias.clone(),
+                None,
+            )?;
+        }
+        Ok((current_plan, rewritten_exprs_groups))
+    }
+
+    fn rewrite_filter(
+        &mut self,
+        filter: &Filter,
+        dependent_join_node: &Node,
+        current_subquery_depth: usize,
+        current_plan: LogicalPlanBuilder,
+        subquery_alias_by_offset: HashMap<usize, String>,
+    ) -> Result<LogicalPlanBuilder> {
         // because dependent join may introduce extra columns
         // to evaluate the subquery, the final plan should
         // has another projection to remove these redundant columns
@@ -118,33 +168,27 @@ impl DependentJoinRewriter {
             .iter()
             .map(|c| col(c.clone()))
             .collect();
-        for (subquery_offset, (_, column_accesses)) in dependent_join_node
-            .columns_accesses_by_subquery_id
-            .iter()
-            .enumerate()
-        {
-            let alias = subquery_alias_by_offset.get(&subquery_offset).unwrap();
-            let subquery_expr = subquery_expr_by_offset.get(&subquery_offset).unwrap();
-
-            let subquery_input = unwrap_subquery_input_from_expr(subquery_expr);
-
-            let correlated_columns = column_accesses
-                .iter()
-                .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
-                .unique()
-                .collect();
-
-            current_plan = current_plan.dependent_join(
-                subquery_input.deref().clone(),
-                correlated_columns,
-                Some(subquery_expr.clone()),
+        let (transformed_plan, transformed_exprs) =
+            Self::rewrite_exprs_into_dependent_join_plan(
+                vec![vec![&filter.predicate]],
+                dependent_join_node,
                 current_subquery_depth,
-                alias.clone(),
-                None, // TODO: handle this when we support lateral join rewrite
+                current_plan,
+                subquery_alias_by_offset,
             )?;
-        }
-        current_plan
-            .filter(new_predicate.clone())?
+
+        let transformed_predicate = transformed_exprs
+            .first()
+            .ok_or(internal_datafusion_err!(
+                "transform predicate does not return 1 element"
+            ))?
+            .first()
+            .ok_or(internal_datafusion_err!(
+                "transform predicate does not return 1 element"
+            ))?;
+
+        transformed_plan
+            .filter(transformed_predicate.clone())?
             .project(post_join_projections)
     }
 
@@ -153,83 +197,22 @@ impl DependentJoinRewriter {
         original_proj: &Projection,
         dependent_join_node: &Node,
         current_subquery_depth: usize,
-        mut current_plan: LogicalPlanBuilder,
+        current_plan: LogicalPlanBuilder,
         subquery_alias_by_offset: HashMap<usize, String>,
     ) -> Result<LogicalPlanBuilder> {
-        // everytime we meet a subquery during traversal, we increment this by 1
-        // we can use this offset to lookup the original subquery info
-        // in subquery_alias_by_offset
-        // the reason why we cannot create a hashmap keyed by Subquery object HashMap<Subquery,String>
-        // is that the subquery inside this filter expr may have been rewritten in
-        // the lower level
-        let mut offset = 0;
-        let offset_ref = &mut offset;
-        let mut subquery_expr_by_offset = HashMap::new();
-        // for each projected expr, we convert the SubqueryExpr into a ColExpr
-        // with structure "{subquery_alias}.output"
-        let new_projections = original_proj
-            .expr
-            .iter()
-            .cloned()
-            .map(|e| {
-                Ok(e.transform(|e| {
-                    // replace any subquery expr with subquery_alias.output
-                    // column
-                    let alias = match e {
-                        Expr::InSubquery(_)
-                        | Expr::Exists(_)
-                        | Expr::ScalarSubquery(_) => {
-                            subquery_alias_by_offset.get(offset_ref).unwrap()
-                        }
-                        _ => return Ok(Transformed::no(e)),
-                    };
-                    // we are aware that the original subquery can be rewritten
-                    // update the latest expr to this map
-                    subquery_expr_by_offset.insert(*offset_ref, e);
-                    *offset_ref += 1;
-
-                    // TODO: this assume that after decorrelation
-                    // the dependent join will provide an extra column with the structure
-                    // of "subquery_alias.output"
-                    // On later step of decorrelation, it rely on this structure
-                    // to again rename the expression after join
-                    // for example if the real join type is LeftMark, the correct output
-                    // column should be "mark" instead, else after the join
-                    // one extra layer of projection is needed to alias "mark" into
-                    // "alias.output"
-                    Ok(Transformed::yes(col(format!("{alias}.output"))))
-                })?
-                .data)
-            })
-            .collect::<Result<Vec<Expr>>>()?;
-
-        for (subquery_offset, (_, column_accesses)) in dependent_join_node
-            .columns_accesses_by_subquery_id
-            .iter()
-            .enumerate()
-        {
-            let alias = subquery_alias_by_offset.get(&subquery_offset).unwrap();
-            let subquery_expr = subquery_expr_by_offset.get(&subquery_offset).unwrap();
-
-            let subquery_input = unwrap_subquery_input_from_expr(subquery_expr);
-
-            let correlated_columns = column_accesses
-                .iter()
-                .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
-                .unique()
-                .collect();
-
-            current_plan = current_plan.dependent_join(
-                subquery_input.deref().clone(),
-                correlated_columns,
-                Some(subquery_expr.clone()),
+        let (transformed_plan, transformed_exprs) =
+            Self::rewrite_exprs_into_dependent_join_plan(
+                vec![original_proj.expr.iter().collect::<Vec<&Expr>>()],
+                dependent_join_node,
                 current_subquery_depth,
-                alias.clone(),
-                None, // TODO: handle this when we support lateral join rewrite
+                current_plan,
+                subquery_alias_by_offset,
             )?;
-        }
-        current_plan = current_plan.project(new_projections)?;
-        Ok(current_plan)
+        let transformed_proj_exprs =
+            transformed_exprs.first().ok_or(internal_datafusion_err!(
+                "transform projection expr does not return 1 element"
+            ))?;
+        transformed_plan.project(transformed_proj_exprs.clone())
     }
 
     fn rewrite_aggregate(
@@ -237,93 +220,9 @@ impl DependentJoinRewriter {
         aggregate: &Aggregate,
         dependent_join_node: &Node,
         current_subquery_depth: usize,
-        mut current_plan: LogicalPlanBuilder,
+        current_plan: LogicalPlanBuilder,
         subquery_alias_by_offset: HashMap<usize, String>,
     ) -> Result<LogicalPlanBuilder> {
-        let mut offset = 0;
-        let offset_ref = &mut offset;
-        let mut subquery_expr_by_offset = HashMap::new();
-        let new_group_expr = aggregate
-            .group_expr
-            .iter()
-            .cloned()
-            .map(|e| {
-                Ok(e.transform(|e| {
-                    // replace any subquery expr with subquery_alias.output column
-                    let alias = match e {
-                        Expr::InSubquery(_)
-                        | Expr::Exists(_)
-                        | Expr::ScalarSubquery(_) => {
-                            subquery_alias_by_offset.get(offset_ref).unwrap()
-                        }
-                        _ => return Ok(Transformed::no(e)),
-                    };
-
-                    // We are aware that the original subquery can be rewritten update the
-                    // latest expr to this map.
-                    subquery_expr_by_offset.insert(*offset_ref, e);
-                    *offset_ref += 1;
-
-                    Ok(Transformed::yes(col(format!("{alias}.output"))))
-                })?
-                .data)
-            })
-            .collect::<Result<Vec<Expr>>>()?;
-
-        let new_agg_expr = aggregate
-            .aggr_expr
-            .clone()
-            .iter()
-            .cloned()
-            .map(|e| {
-                Ok(e.transform(|e| {
-                    // replace any subquery expr with subquery_alias.output column
-                    let alias = match e {
-                        Expr::InSubquery(_)
-                        | Expr::Exists(_)
-                        | Expr::ScalarSubquery(_) => {
-                            subquery_alias_by_offset.get(offset_ref).unwrap()
-                        }
-                        _ => return Ok(Transformed::no(e)),
-                    };
-
-                    // We are aware that the original subquery can be rewritten update the
-                    // latest expr to this map.
-                    subquery_expr_by_offset.insert(*offset_ref, e);
-                    *offset_ref += 1;
-
-                    Ok(Transformed::yes(col(format!("{alias}.output"))))
-                })?
-                .data)
-            })
-            .collect::<Result<Vec<Expr>>>()?;
-
-        for (subquery_offset, (_, column_accesses)) in dependent_join_node
-            .columns_accesses_by_subquery_id
-            .iter()
-            .enumerate()
-        {
-            let alias = subquery_alias_by_offset.get(&subquery_offset).unwrap();
-            let subquery_expr = subquery_expr_by_offset.get(&subquery_offset).unwrap();
-
-            let subquery_input = unwrap_subquery_input_from_expr(subquery_expr);
-
-            let correlated_columns = column_accesses
-                .iter()
-                .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
-                .unique()
-                .collect();
-
-            current_plan = current_plan.dependent_join(
-                subquery_input.deref().clone(),
-                correlated_columns,
-                Some(subquery_expr.clone()),
-                current_subquery_depth,
-                alias.clone(),
-                None, // TODO: handle this when we support lateral join rewrite
-            )?;
-        }
-
         // because dependent join may introduce extra columns
         // to evaluate the subquery, the final plan should
         // has another projection to remove these redundant columns
@@ -334,8 +233,27 @@ impl DependentJoinRewriter {
             .map(|c| col(c.clone()))
             .collect();
 
-        current_plan
-            .aggregate(new_group_expr.clone(), new_agg_expr.clone())?
+        let (transformed_plan, transformed_exprs) =
+            Self::rewrite_exprs_into_dependent_join_plan(
+                vec![
+                    aggregate.group_expr.iter().collect::<Vec<&Expr>>(),
+                    aggregate.aggr_expr.iter().collect::<Vec<&Expr>>(),
+                ],
+                dependent_join_node,
+                current_subquery_depth,
+                current_plan,
+                subquery_alias_by_offset,
+            )?;
+        let (new_group_exprs, new_aggr_exprs) = match transformed_exprs.as_slice() {
+            [first, second] => (first, second),
+            _ => {
+                return internal_err!(
+                "transform group and aggr exprs does not return vector of 2 Vec<Expr>")
+            }
+        };
+
+        transformed_plan
+            .aggregate(new_group_exprs.clone(), new_aggr_exprs.clone())?
             .project(post_join_projections)
     }
 
