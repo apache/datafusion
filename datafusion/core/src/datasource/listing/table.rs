@@ -2463,7 +2463,6 @@ mod tests {
             exec_default.partition_statistics(None)?.num_rows,
             Precision::Absent
         );
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
             exec_default.partition_statistics(None)?.total_byte_size,
             Precision::Absent
