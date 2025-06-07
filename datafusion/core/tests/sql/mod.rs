@@ -34,29 +34,11 @@ use datafusion::{execution::context::SessionContext, physical_plan::displayable}
 use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{assert_contains, assert_not_contains};
-use insta::assert_snapshot;
 use object_store::path::Path;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use tempfile::TempDir;
-
-/// A macro to assert that some particular line contains two substrings
-///
-/// Usage: `assert_metrics!(actual, operator_name, metrics)`
-///
-macro_rules! assert_metrics {
-    ($ACTUAL: expr, $OPERATOR_NAME: expr, $METRICS: expr) => {
-        let found = $ACTUAL
-            .lines()
-            .any(|line| line.contains($OPERATOR_NAME) && line.contains($METRICS));
-        assert!(
-            found,
-            "Can not find a line with both '{}' and '{}' in\n\n{}",
-            $OPERATOR_NAME, $METRICS, $ACTUAL
-        );
-    };
-}
 
 pub mod aggregates;
 pub mod create_drop;

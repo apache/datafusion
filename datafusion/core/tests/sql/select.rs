@@ -17,6 +17,7 @@
 
 use super::*;
 use datafusion_common::ScalarValue;
+use insta::assert_snapshot;
 
 #[tokio::test]
 async fn test_list_query_parameters() -> Result<()> {
