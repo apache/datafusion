@@ -1210,7 +1210,7 @@ async fn join_on_filter_datatype() -> Result<()> {
     let join = left.clone().join_on(
         right.clone(),
         JoinType::Inner,
-        Some(Expr::Literal(ScalarValue::Null)),
+        Some(Expr::Literal(ScalarValue::Null, None)),
     )?;
     assert_snapshot!(join.into_optimized_plan().unwrap(), @"EmptyRelation");
 
@@ -4527,7 +4527,10 @@ async fn consecutive_projection_same_schema() -> Result<()> {
 
     // Add `t` column full of nulls
     let df = df
-        .with_column("t", cast(Expr::Literal(ScalarValue::Null), DataType::Int32))
+        .with_column(
+            "t",
+            cast(Expr::Literal(ScalarValue::Null, None), DataType::Int32),
+        )
         .unwrap();
     df.clone().show().await.unwrap();
 

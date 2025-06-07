@@ -76,7 +76,7 @@ pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
     match (cast_expr, literal) {
         (
             Expr::TryCast(TryCast { expr, .. }) | Expr::Cast(Cast { expr, .. }),
-            Expr::Literal(lit_value),
+            Expr::Literal(lit_value, _),
         ) => {
             let Ok(expr_type) = info.get_data_type(&expr) else {
                 return internal_err!("Can't get the data type of the expr {:?}", &expr);
@@ -126,7 +126,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<
             | Expr::Cast(Cast {
                 expr: left_expr, ..
             }),
-            Expr::Literal(lit_val),
+            Expr::Literal(lit_val, _),
         ) => {
             let Ok(expr_type) = info.get_data_type(left_expr) else {
                 return false;
@@ -183,7 +183,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist<
         }
 
         match right {
-            Expr::Literal(lit_val)
+            Expr::Literal(lit_val, _)
                 if try_cast_literal_to_type(lit_val, &expr_type).is_some() => {}
             _ => return false,
         }
