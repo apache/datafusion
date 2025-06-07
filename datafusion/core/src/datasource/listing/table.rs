@@ -2388,7 +2388,7 @@ mod tests {
         for (test_name, files, paths, target_partitions, expected_partitions, file_ext) in
             test_cases
         {
-            println!("Running test: {}", test_name);
+            println!("Running test: {test_name}");
 
             if files.is_empty() {
                 // Test empty files case
