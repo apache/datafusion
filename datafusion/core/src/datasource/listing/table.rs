@@ -59,7 +59,7 @@ use itertools::Itertools;
 use object_store::ObjectStore;
 
 /// Indicates the source of the schema for a [`ListingTable`]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaSource {
     /// Schema is not yet set (initial state)
     None,
@@ -1394,8 +1394,10 @@ mod tests {
         );
 
         // Make sure inferred schema doesn't override specified schema
-        let config_with_schema_and_infer =
-            config_with_schema_and_options.infer(&ctx.state()).await?;
+        let config_with_schema_and_infer = config_with_schema_and_options
+            .clone()
+            .infer(&ctx.state())
+            .await?;
         assert_eq!(
             *config_with_schema_and_infer.schema_source(),
             SchemaSource::Specified
@@ -2418,7 +2420,7 @@ mod tests {
                 // Test empty files case
                 assert_list_files_for_multi_paths(
                     &[],
-                    &paths.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    &paths,
                     target_partitions,
                     expected_partitions,
                     file_ext,
@@ -2427,7 +2429,7 @@ mod tests {
             } else if paths.len() == 1 {
                 // Test using single path API
                 assert_list_files_for_scan_grouping(
-                    &files.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    &files,
                     paths[0],
                     target_partitions,
                     expected_partitions,
@@ -2437,8 +2439,8 @@ mod tests {
             } else if paths[0].contains("test:///bucket/key") {
                 // Test using multi path API
                 assert_list_files_for_multi_paths(
-                    &files.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                    &paths.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    &files,
+                    &paths,
                     target_partitions,
                     expected_partitions,
                     file_ext,
@@ -2446,9 +2448,8 @@ mod tests {
                 .await?;
             } else {
                 // Test using exact path API for specific cases
-                let file_strs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
                 assert_list_files_for_exact_paths(
-                    &file_strs,
+                    &files,
                     target_partitions,
                     expected_partitions,
                     file_ext,
