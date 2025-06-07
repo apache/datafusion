@@ -31,10 +31,10 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
-    Aggregate, Analyze, Distinct, DistinctOn, EmptyRelation, Explain, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-    Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
-    Window,
+    Aggregate, Analyze, DependentJoin, Distinct, DistinctOn, EmptyRelation, Explain,
+    Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
+    Prepare, Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest,
+    Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -49,7 +49,6 @@ use crate::{
 
 use super::dml::InsertOp;
 use super::plan::{ColumnUnnestList, ExplainFormat};
-use super::DependentJoin;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
