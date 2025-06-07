@@ -17,11 +17,11 @@
   under the License.
 -->
 
-# DataFusion datasource
+# DataFusion Logical Plan and Expressions
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate is a submodule of DataFusion that defines a CSV based file source.
+This crate is a submodule of DataFusion that provides common logical expressions
 
 Most projects should use the [`datafusion`] crate directly, which re-exports
 this module. If you are already using the [`datafusion`] crate, there is no

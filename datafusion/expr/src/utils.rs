@@ -276,7 +276,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::Unnest(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
             | Expr::SimilarTo { .. }
@@ -785,7 +785,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
                     indexes.push(idx);
                 }
             }
-            Expr::Literal(_) => {
+            Expr::Literal(_, _) => {
                 indexes.push(usize::MAX);
             }
             _ => {}
