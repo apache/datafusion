@@ -25,21 +25,22 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
-use datafusion_common::{JoinSide, JoinType, ScalarValue};
+use datafusion_common::{JoinSide, JoinType, Result, ScalarValue};
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{
     Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr::expressions::{
     binary, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
 };
-use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr::{
-    Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+use datafusion_physical_expr::{Distribution, Partitioning, ScalarFunctionExpr};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{
+    OrderingRequirements, PhysicalSortExpr, PhysicalSortRequirement,
 };
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -54,13 +55,10 @@ use datafusion_physical_plan::projection::{update_expr, ProjectionExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::streaming::PartitionStream;
-use datafusion_physical_plan::streaming::StreamingTableExec;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_expr_common::columnar_value::ColumnarValue;
 use itertools::Itertools;
 
 /// Mocked UDF
@@ -519,7 +517,7 @@ fn test_streaming_table_after_projection() -> Result<()> {
         }) as _],
         Some(&vec![0_usize, 2, 4, 3]),
         vec![
-            LexOrdering::new(vec![
+            [
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("e", 2)),
                     options: SortOptions::default(),
@@ -528,11 +526,13 @@ fn test_streaming_table_after_projection() -> Result<()> {
                     expr: Arc::new(Column::new("a", 0)),
                     options: SortOptions::default(),
                 },
-            ]),
-            LexOrdering::new(vec![PhysicalSortExpr {
+            ]
+            .into(),
+            [PhysicalSortExpr {
                 expr: Arc::new(Column::new("d", 3)),
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
         ]
         .into_iter(),
         true,
@@ -579,7 +579,7 @@ fn test_streaming_table_after_projection() -> Result<()> {
     assert_eq!(
         result.projected_output_ordering().into_iter().collect_vec(),
         vec![
-            LexOrdering::new(vec![
+            [
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("e", 1)),
                     options: SortOptions::default(),
@@ -588,11 +588,13 @@ fn test_streaming_table_after_projection() -> Result<()> {
                     expr: Arc::new(Column::new("a", 2)),
                     options: SortOptions::default(),
                 },
-            ]),
-            LexOrdering::new(vec![PhysicalSortExpr {
+            ]
+            .into(),
+            [PhysicalSortExpr {
                 expr: Arc::new(Column::new("d", 0)),
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
         ]
     );
     assert!(result.is_infinite());
@@ -652,21 +654,24 @@ fn test_projection_after_projection() -> Result<()> {
 fn test_output_req_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let sort_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
-        csv.clone(),
-        Some(LexRequirement::new(vec![
-            PhysicalSortRequirement {
-                expr: Arc::new(Column::new("b", 1)),
-                options: Some(SortOptions::default()),
-            },
-            PhysicalSortRequirement {
-                expr: Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("c", 2)),
-                    Operator::Plus,
-                    Arc::new(Column::new("a", 0)),
-                )),
-                options: Some(SortOptions::default()),
-            },
-        ])),
+        csv,
+        Some(OrderingRequirements::new(
+            [
+                PhysicalSortRequirement::new(
+                    Arc::new(Column::new("b", 1)),
+                    Some(SortOptions::default()),
+                ),
+                PhysicalSortRequirement::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("c", 2)),
+                        Operator::Plus,
+                        Arc::new(Column::new("a", 0)),
+                    )),
+                    Some(SortOptions::default()),
+                ),
+            ]
+            .into(),
+        )),
         Distribution::HashPartitioned(vec![
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
@@ -699,20 +704,23 @@ fn test_output_req_after_projection() -> Result<()> {
         ];
 
     assert_eq!(get_plan_string(&after_optimize), expected);
-    let expected_reqs = LexRequirement::new(vec![
-        PhysicalSortRequirement {
-            expr: Arc::new(Column::new("b", 2)),
-            options: Some(SortOptions::default()),
-        },
-        PhysicalSortRequirement {
-            expr: Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("c", 0)),
-                Operator::Plus,
-                Arc::new(Column::new("new_a", 1)),
-            )),
-            options: Some(SortOptions::default()),
-        },
-    ]);
+    let expected_reqs = OrderingRequirements::new(
+        [
+            PhysicalSortRequirement::new(
+                Arc::new(Column::new("b", 2)),
+                Some(SortOptions::default()),
+            ),
+            PhysicalSortRequirement::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("c", 0)),
+                    Operator::Plus,
+                    Arc::new(Column::new("new_a", 1)),
+                )),
+                Some(SortOptions::default()),
+            ),
+        ]
+        .into(),
+    );
     assert_eq!(
         after_optimize
             .as_any()
@@ -795,15 +803,15 @@ fn test_filter_after_projection() -> Result<()> {
             Arc::new(Column::new("a", 0)),
         )),
     ));
-    let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, csv)?);
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let filter = Arc::new(FilterExec::try_new(predicate, csv)?);
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("a", 0)), "a_new".to_string()),
             (Arc::new(Column::new("b", 1)), "b".to_string()),
             (Arc::new(Column::new("d", 3)), "d".to_string()),
         ],
         filter.clone(),
-    )?);
+    )?) as _;
 
     let initial = get_plan_string(&projection);
     let expected_initial = [
@@ -880,7 +888,7 @@ fn test_join_after_projection() -> Result<()> {
         None,
         StreamJoinPartitionMode::SinglePartition,
     )?);
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c_from_left".to_string()),
             (Arc::new(Column::new("b", 1)), "b_from_left".to_string()),
@@ -889,7 +897,7 @@ fn test_join_after_projection() -> Result<()> {
             (Arc::new(Column::new("c", 7)), "c_from_right".to_string()),
         ],
         join,
-    )?);
+    )?) as _;
     let initial = get_plan_string(&projection);
     let expected_initial = [
             "ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, a@5 as a_from_right, c@7 as c_from_right]",
@@ -945,7 +953,7 @@ fn test_join_after_required_projection() -> Result<()> {
     let left_csv = create_simple_csv_exec();
     let right_csv = create_simple_csv_exec();
 
-    let join: Arc<dyn ExecutionPlan> = Arc::new(SymmetricHashJoinExec::try_new(
+    let join = Arc::new(SymmetricHashJoinExec::try_new(
         left_csv,
         right_csv,
         vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
@@ -994,7 +1002,7 @@ fn test_join_after_required_projection() -> Result<()> {
         None,
         StreamJoinPartitionMode::SinglePartition,
     )?);
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("a", 5)), "a".to_string()),
             (Arc::new(Column::new("b", 6)), "b".to_string()),
@@ -1008,7 +1016,7 @@ fn test_join_after_required_projection() -> Result<()> {
             (Arc::new(Column::new("e", 4)), "e".to_string()),
         ],
         join,
-    )?);
+    )?) as _;
     let initial = get_plan_string(&projection);
     let expected_initial = [
             "ProjectionExec: expr=[a@5 as a, b@6 as b, c@7 as c, d@8 as d, e@9 as e, a@0 as a, b@1 as b, c@2 as c, d@3 as d, e@4 as e]",
@@ -1061,7 +1069,7 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
         Field::new("c", DataType::Int32, true),
     ]);
 
-    let join: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
+    let join = Arc::new(NestedLoopJoinExec::try_new(
         left_csv,
         right_csv,
         Some(JoinFilter::new(
@@ -1071,12 +1079,12 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
         )),
         &JoinType::Inner,
         None,
-    )?);
+    )?) as _;
 
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![(col_left_c, "c".to_string())],
         Arc::clone(&join),
-    )?);
+    )?) as _;
     let initial = get_plan_string(&projection);
     let expected_initial = [
             "ProjectionExec: expr=[c@2 as c]",
@@ -1104,7 +1112,7 @@ fn test_hash_join_after_projection() -> Result<()> {
     let left_csv = create_simple_csv_exec();
     let right_csv = create_simple_csv_exec();
 
-    let join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+    let join = Arc::new(HashJoinExec::try_new(
         left_csv,
         right_csv,
         vec![(Arc::new(Column::new("b", 1)), Arc::new(Column::new("c", 2)))],
@@ -1152,7 +1160,7 @@ fn test_hash_join_after_projection() -> Result<()> {
         PartitionMode::Auto,
         true,
     )?);
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c_from_left".to_string()),
             (Arc::new(Column::new("b", 1)), "b_from_left".to_string()),
@@ -1160,7 +1168,7 @@ fn test_hash_join_after_projection() -> Result<()> {
             (Arc::new(Column::new("c", 7)), "c_from_right".to_string()),
         ],
         join.clone(),
-    )?);
+    )?) as _;
     let initial = get_plan_string(&projection);
     let expected_initial = [
 			"ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@7 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
@@ -1174,7 +1182,7 @@ fn test_hash_join_after_projection() -> Result<()> {
     let expected = ["ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@3 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("a", 0)), "a".to_string()),
             (Arc::new(Column::new("b", 1)), "b".to_string()),
@@ -1197,7 +1205,7 @@ fn test_hash_join_after_projection() -> Result<()> {
 #[test]
 fn test_repartition_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
-    let repartition: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+    let repartition = Arc::new(RepartitionExec::try_new(
         csv,
         Partitioning::Hash(
             vec![
@@ -1208,14 +1216,14 @@ fn test_repartition_after_projection() -> Result<()> {
             6,
         ),
     )?);
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("b", 1)), "b_new".to_string()),
             (Arc::new(Column::new("a", 0)), "a".to_string()),
             (Arc::new(Column::new("d", 3)), "d_new".to_string()),
         ],
         repartition,
-    )?);
+    )?) as _;
     let initial = get_plan_string(&projection);
     let expected_initial = [
                 "ProjectionExec: expr=[b@1 as b_new, a@0 as a, d@3 as d_new]",
@@ -1257,31 +1265,26 @@ fn test_repartition_after_projection() -> Result<()> {
 #[test]
 fn test_sort_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
-    let sort_req: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
-        LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("b", 1)),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("c", 2)),
-                    Operator::Plus,
-                    Arc::new(Column::new("a", 0)),
-                )),
-                options: SortOptions::default(),
-            },
-        ]),
-        csv.clone(),
-    ));
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let sort_exec = SortExec::new(
+        [
+            PhysicalSortExpr::new_default(Arc::new(Column::new("b", 1))),
+            PhysicalSortExpr::new_default(Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c", 2)),
+                Operator::Plus,
+                Arc::new(Column::new("a", 0)),
+            ))),
+        ]
+        .into(),
+        csv,
+    );
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c".to_string()),
             (Arc::new(Column::new("a", 0)), "new_a".to_string()),
             (Arc::new(Column::new("b", 1)), "b".to_string()),
         ],
-        sort_req.clone(),
-    )?);
+        Arc::new(sort_exec),
+    )?) as _;
 
     let initial = get_plan_string(&projection);
     let expected_initial = [
@@ -1307,31 +1310,26 @@ fn test_sort_after_projection() -> Result<()> {
 #[test]
 fn test_sort_preserving_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
-    let sort_req: Arc<dyn ExecutionPlan> = Arc::new(SortPreservingMergeExec::new(
-        LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("b", 1)),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("c", 2)),
-                    Operator::Plus,
-                    Arc::new(Column::new("a", 0)),
-                )),
-                options: SortOptions::default(),
-            },
-        ]),
-        csv.clone(),
-    ));
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let sort_exec = SortPreservingMergeExec::new(
+        [
+            PhysicalSortExpr::new_default(Arc::new(Column::new("b", 1))),
+            PhysicalSortExpr::new_default(Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c", 2)),
+                Operator::Plus,
+                Arc::new(Column::new("a", 0)),
+            ))),
+        ]
+        .into(),
+        csv,
+    );
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c".to_string()),
             (Arc::new(Column::new("a", 0)), "new_a".to_string()),
             (Arc::new(Column::new("b", 1)), "b".to_string()),
         ],
-        sort_req.clone(),
-    )?);
+        Arc::new(sort_exec),
+    )?) as _;
 
     let initial = get_plan_string(&projection);
     let expected_initial = [
@@ -1357,16 +1355,15 @@ fn test_sort_preserving_after_projection() -> Result<()> {
 #[test]
 fn test_union_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
-    let union: Arc<dyn ExecutionPlan> =
-        Arc::new(UnionExec::new(vec![csv.clone(), csv.clone(), csv]));
-    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+    let union = Arc::new(UnionExec::new(vec![csv.clone(), csv.clone(), csv]));
+    let projection = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c".to_string()),
             (Arc::new(Column::new("a", 0)), "new_a".to_string()),
             (Arc::new(Column::new("b", 1)), "b".to_string()),
         ],
         union.clone(),
-    )?);
+    )?) as _;
 
     let initial = get_plan_string(&projection);
     let expected_initial = [
