@@ -528,18 +528,21 @@ impl FieldMetadata {
         self.inner.len()
     }
 
+    /// Convert this `FieldMetadata` into a `HashMap<String, String>`
+    pub fn to_hashmap(&self) -> std::collections::HashMap<String, String> {
+        self.inner
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     /// Updates the metadata on the Field with this metadata, if it is not empty.
     pub fn add_to_field(&self, field: Field) -> Field {
         if self.inner.is_empty() {
             return field;
         }
 
-        field.with_metadata(
-            self.inner
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        )
+        field.with_metadata(self.to_hashmap())
     }
 }
 

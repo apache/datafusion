@@ -1533,10 +1533,11 @@ async fn test_metadata_based_udf_with_literal() -> Result<()> {
         [("modify_values".to_string(), "double_output".to_string())]
             .into_iter()
             .collect();
+    let input_metadata = FieldMetadata::from(input_metadata);
     let df = ctx.sql("select 0;").await?.select(vec![
         lit(5u64).alias_with_metadata("lit_with_doubling", Some(input_metadata.clone())),
         lit(5u64).alias("lit_no_doubling"),
-        lit_with_metadata(5u64, Some(FieldMetadata::from(input_metadata)))
+        lit_with_metadata(5u64, Some(input_metadata))
             .alias("lit_with_double_no_alias_metadata"),
     ])?;
 
