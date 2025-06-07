@@ -148,10 +148,13 @@ pub use pool::*;
 ///    ║                    MemoryPool                     ║
 ///    ║                                                   ║
 ///    ╚═══════════════════════════════════════════════════╝
+/// ```
 ///
 /// For example, there are two parallel partitions of an operator X: each partition
-/// corresponds to a `MemoryConsumer` in the above diagram. Inside operator X there are
-/// several `MemoryReservation`s for different internal data structures.
+/// corresponds to a `MemoryConsumer` in the above diagram. Inside each partition of
+/// operator X, there are typically several `MemoryReservation`s - one for each
+/// internal data structure that needs memory tracking (e.g., 1 reservation for the hash
+/// table, and 1 reservation for buffered input, etc.).
 ///
 /// # Implementing `MemoryPool`
 ///
