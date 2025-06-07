@@ -247,7 +247,11 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -270,7 +274,11 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -283,7 +291,11 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "ahash 0.8.12",
  "arrow-buffer",
@@ -299,7 +311,11 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "bytes",
  "half",
@@ -309,7 +325,11 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -329,7 +349,11 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -344,7 +368,11 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -355,7 +383,11 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -381,7 +413,11 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -394,7 +430,11 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -415,7 +455,11 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -427,7 +471,11 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -439,7 +487,11 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "bitflags 2.9.1",
  "serde",
@@ -449,7 +501,11 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",
@@ -462,7 +518,11 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4392,7 +4452,11 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "55.1.0"
+<<<<<<< Updated upstream
 source = "git+https://github.com/apache/arrow-rs.git?rev=95c7b2a36aac01c8d398f6b8a072b20429f391db#95c7b2a36aac01c8d398f6b8a072b20429f391db"
+=======
+source = "git+https://github.com/apache/arrow-rs.git?rev=092914f0be3a11d16417a02ef8b031e87a52df0c#092914f0be3a11d16417a02ef8b031e87a52df0c"
+>>>>>>> Stashed changes
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",
