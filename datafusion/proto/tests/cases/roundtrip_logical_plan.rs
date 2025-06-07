@@ -19,9 +19,9 @@ use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
-    DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
-    DECIMAL256_MAX_PRECISION,
+    DataType, Field, FieldRef, Fields, Int32Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
+    UnionMode, DECIMAL256_MAX_PRECISION,
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
@@ -1968,7 +1968,7 @@ fn roundtrip_case_with_null() {
     let test_expr = Expr::Case(Case::new(
         Some(Box::new(lit(1.0_f32))),
         vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
-        Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        Some(Box::new(Expr::Literal(ScalarValue::Null, None))),
     ));
 
     let ctx = SessionContext::new();
@@ -1977,7 +1977,7 @@ fn roundtrip_case_with_null() {
 
 #[test]
 fn roundtrip_null_literal() {
-    let test_expr = Expr::Literal(ScalarValue::Null);
+    let test_expr = Expr::Literal(ScalarValue::Null, None);
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2359,7 +2359,7 @@ fn roundtrip_window() {
     let ctx = SessionContext::new();
 
     // 1. without window_frame
-    let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr1 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2370,7 +2370,7 @@ fn roundtrip_window() {
     .unwrap();
 
     // 2. with default window_frame
-    let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr2 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2387,7 +2387,7 @@ fn roundtrip_window() {
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
     );
 
-    let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr3 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2404,7 +2404,7 @@ fn roundtrip_window() {
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
     );
 
-    let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr4 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(max_udaf()),
         vec![col("col1")],
     ))
@@ -2454,7 +2454,7 @@ fn roundtrip_window() {
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
 
-    let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr5 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(Arc::new(dummy_agg.clone())),
         vec![col("col1")],
     ))
@@ -2516,9 +2516,13 @@ fn roundtrip_window() {
             make_partition_evaluator()
         }
 
-        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             if let Some(return_field) = field_args.get_input_field(0) {
-                Ok(return_field.with_name(field_args.name()))
+                Ok(return_field
+                    .as_ref()
+                    .clone()
+                    .with_name(field_args.name())
+                    .into())
             } else {
                 plan_err!(
                     "dummy_udwf expects 1 argument, got {}: {:?}",
@@ -2535,7 +2539,7 @@ fn roundtrip_window() {
 
     let dummy_window_udf = WindowUDF::from(SimpleWindowUDF::new());
 
-    let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr6 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),
         vec![col("col1")],
     ))
@@ -2545,7 +2549,7 @@ fn roundtrip_window() {
     .build()
     .unwrap();
 
-    let text_expr7 = Expr::WindowFunction(expr::WindowFunction::new(
+    let text_expr7 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
     ))

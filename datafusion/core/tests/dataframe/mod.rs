@@ -32,6 +32,7 @@ use arrow::datatypes::{
 };
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
+use datafusion::{assert_batches_eq, dataframe};
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
@@ -906,7 +907,7 @@ async fn window_using_aggregates() -> Result<()> {
             vec![col("c3")],
         );
 
-        Expr::WindowFunction(w)
+        Expr::from(w)
             .null_treatment(NullTreatment::IgnoreNulls)
             .order_by(vec![col("c2").sort(true, true), col("c3").sort(true, true)])
             .window_frame(WindowFrame::new_bounds(
@@ -1209,7 +1210,7 @@ async fn join_on_filter_datatype() -> Result<()> {
     let join = left.clone().join_on(
         right.clone(),
         JoinType::Inner,
-        Some(Expr::Literal(ScalarValue::Null)),
+        Some(Expr::Literal(ScalarValue::Null, None)),
     )?;
     assert_snapshot!(join.into_optimized_plan().unwrap(), @"EmptyRelation");
 
@@ -2504,6 +2505,11 @@ async fn write_table_with_order() -> Result<()> {
     write_df = write_df
         .with_column_renamed("column1", "tablecol1")
         .unwrap();
+
+    // Ensure the column type matches the target table
+    write_df =
+        write_df.with_column("tablecol1", cast(col("tablecol1"), DataType::Utf8View))?;
+
     let sql_str =
         "create external table data(tablecol1 varchar) stored as parquet location '"
             .to_owned()
@@ -4521,7 +4527,10 @@ async fn consecutive_projection_same_schema() -> Result<()> {
 
     // Add `t` column full of nulls
     let df = df
-        .with_column("t", cast(Expr::Literal(ScalarValue::Null), DataType::Int32))
+        .with_column(
+            "t",
+            cast(Expr::Literal(ScalarValue::Null, None), DataType::Int32),
+        )
         .unwrap();
     df.clone().show().await.unwrap();
 
@@ -6064,5 +6073,64 @@ async fn test_insert_into_casting_support() -> Result<()> {
     +------+
     "###
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_from_columns() -> Result<()> {
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let b: ArrayRef = Arc::new(BooleanArray::from(vec![true, true, false]));
+    let c: ArrayRef = Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
+    let df = DataFrame::from_columns(vec![("a", a), ("b", b), ("c", c)])?;
+
+    assert_eq!(df.schema().fields().len(), 3);
+    assert_eq!(df.clone().count().await?, 3);
+
+    let rows = df.sort(vec![col("a").sort(true, true)])?;
+    assert_batches_eq!(
+        &[
+            "+---+-------+-----+",
+            "| a | b     | c   |",
+            "+---+-------+-----+",
+            "| 1 | true  | foo |",
+            "| 2 | true  | bar |",
+            "| 3 | false |     |",
+            "+---+-------+-----+",
+        ],
+        &rows.collect().await?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_macro() -> Result<()> {
+    let df = dataframe!(
+        "a" => [1, 2, 3],
+        "b" => [true, true, false],
+        "c" => [Some("foo"), Some("bar"), None]
+    )?;
+
+    assert_eq!(df.schema().fields().len(), 3);
+    assert_eq!(df.clone().count().await?, 3);
+
+    let rows = df.sort(vec![col("a").sort(true, true)])?;
+    assert_batches_eq!(
+        &[
+            "+---+-------+-----+",
+            "| a | b     | c   |",
+            "+---+-------+-----+",
+            "| 1 | true  | foo |",
+            "| 2 | true  | bar |",
+            "| 3 | false |     |",
+            "+---+-------+-----+",
+        ],
+        &rows.collect().await?
+    );
+
+    let df_empty = dataframe!()?;
+    assert_eq!(df_empty.schema().fields().len(), 0);
+    assert_eq!(df_empty.count().await?, 0);
+
     Ok(())
 }

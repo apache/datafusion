@@ -132,20 +132,20 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from \[Utf8, Int8, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
 SELECT approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from \[Int16, Utf8, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
 SELECT approx_percentile_cont_with_weight(c1, 0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from \[Int16, Int8, Utf8\] to the signature OneOf(.*) failed(.|\n)*
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
 SELECT approx_percentile_cont_with_weight(c2, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Int16, Float64, Utf8\] to the signature OneOf(.*) failed(.|\n)*
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function
 SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
@@ -5013,18 +5013,20 @@ set datafusion.sql_parser.dialect = 'Generic';
 
 ## Multiple distinct aggregates and dictionaries
 statement ok
-create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)')), (1, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
 
 query IT
-select * from dict_test;
+select * from dict_test order by column1, column2;
 ----
+1 bar
+1 foo
 1 foo
 2 bar
 
 query II
-select count(distinct column1), count(distinct column2) from dict_test group by column1;
+select count(distinct column1), count(distinct column2) from dict_test group by column1 order by column1;
 ----
-1 1
+1 2
 1 1
 
 statement ok
@@ -7018,3 +7020,12 @@ VALUES
 );
 ----
 {a: 1, b: 2, c: 3} {a: 1, b: 2, c: 4}
+
+query TI
+SELECT column1, COUNT(DISTINCT column2) FROM (
+VALUES
+  ('x', arrow_cast('NAN','Float64')),
+  ('x', arrow_cast('NAN','Float64'))
+) GROUP BY 1 ORDER BY 1;
+----
+x 1

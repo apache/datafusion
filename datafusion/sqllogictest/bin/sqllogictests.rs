@@ -21,7 +21,8 @@ use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{exec_err, DataFusionError, Result};
 use datafusion_sqllogictest::{
     df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
-    should_skip_record, value_normalizer, DataFusion, Filter, TestContext,
+    should_skip_record, value_normalizer, DataFusion, DataFusionSubstraitRoundTrip,
+    Filter, TestContext,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -102,6 +103,7 @@ async fn run_tests() -> Result<()> {
         // to stdout and return OK so they can continue listing other tests.
         return Ok(());
     }
+
     options.warn_on_ignored();
 
     #[cfg(feature = "postgres")]
@@ -138,8 +140,22 @@ async fn run_tests() -> Result<()> {
             let filters = options.filters.clone();
 
             SpawnedTask::spawn(async move {
-                match (options.postgres_runner, options.complete) {
-                    (false, false) => {
+                match (
+                    options.postgres_runner,
+                    options.complete,
+                    options.substrait_round_trip,
+                ) {
+                    (_, _, true) => {
+                        run_test_file_substrait_round_trip(
+                            test_file,
+                            validator,
+                            m_clone,
+                            m_style_clone,
+                            filters.as_ref(),
+                        )
+                        .await?
+                    }
+                    (false, false, _) => {
                         run_test_file(
                             test_file,
                             validator,
@@ -149,11 +165,11 @@ async fn run_tests() -> Result<()> {
                         )
                         .await?
                     }
-                    (false, true) => {
+                    (false, true, _) => {
                         run_complete_file(test_file, validator, m_clone, m_style_clone)
                             .await?
                     }
-                    (true, false) => {
+                    (true, false, _) => {
                         run_test_file_with_postgres(
                             test_file,
                             validator,
@@ -163,7 +179,7 @@ async fn run_tests() -> Result<()> {
                         )
                         .await?
                     }
-                    (true, true) => {
+                    (true, true, _) => {
                         run_complete_file_with_postgres(
                             test_file,
                             validator,
@@ -208,6 +224,45 @@ async fn run_tests() -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+async fn run_test_file_substrait_round_trip(
+    test_file: TestFile,
+    validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
+    filters: &[Filter],
+) -> Result<()> {
+    let TestFile {
+        path,
+        relative_path,
+    } = test_file;
+    let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
+        info!("Skipping: {}", path.display());
+        return Ok(());
+    };
+    setup_scratch_dir(&relative_path)?;
+
+    let count: u64 = get_record_count(&path, "DatafusionSubstraitRoundTrip".to_string());
+    let pb = mp.add(ProgressBar::new(count));
+
+    pb.set_style(mp_style);
+    pb.set_message(format!("{:?}", &relative_path));
+
+    let mut runner = sqllogictest::Runner::new(|| async {
+        Ok(DataFusionSubstraitRoundTrip::new(
+            test_ctx.session_ctx().clone(),
+            relative_path.clone(),
+            pb.clone(),
+        ))
+    });
+    runner.add_label("DatafusionSubstraitRoundTrip");
+    runner.with_column_validator(strict_column_validator);
+    runner.with_normalizer(value_normalizer);
+    runner.with_validator(validator);
+    let res = run_file_in_runner(path, runner, filters).await;
+    pb.finish_and_clear();
+    res
 }
 
 async fn run_test_file(
@@ -577,6 +632,14 @@ struct Options {
         help = "Run Postgres compatibility tests with Postgres runner"
     )]
     postgres_runner: bool,
+
+    #[clap(
+        long,
+        conflicts_with = "complete",
+        conflicts_with = "postgres_runner",
+        help = "Before executing each query, convert its logical plan to Substrait and from Substrait back to its logical plan"
+    )]
+    substrait_round_trip: bool,
 
     #[clap(long, env = "INCLUDE_SQLITE", help = "Include sqlite files")]
     include_sqlite: bool,

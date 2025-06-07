@@ -254,6 +254,12 @@ fn baseline_config() -> DatasetGeneratorConfig {
             // low cardinality to try and get many repeated runs
             vec![String::from("u8_low")],
             vec![String::from("utf8_low"), String::from("u8_low")],
+            vec![String::from("dictionary_utf8_low")],
+            vec![
+                String::from("dictionary_utf8_low"),
+                String::from("utf8_low"),
+                String::from("u8_low"),
+            ],
         ],
     }
 }

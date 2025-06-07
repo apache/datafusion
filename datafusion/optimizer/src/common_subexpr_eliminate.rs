@@ -905,7 +905,7 @@ mod test {
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
                     return_type.clone(),
                     Arc::clone(&accumulator),
-                    vec![Field::new("value", DataType::UInt32, true)],
+                    vec![Field::new("value", DataType::UInt32, true).into()],
                 ))),
                 vec![inner],
                 false,

@@ -58,7 +58,7 @@ order by
 logical_plan
 01)Sort: all_nations.o_year ASC NULLS LAST
 02)--Projection: all_nations.o_year, CAST(CAST(sum(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END) AS Decimal128(12, 2)) / CAST(sum(all_nations.volume) AS Decimal128(12, 2)) AS Decimal128(15, 2)) AS mkt_share
-03)----Aggregate: groupBy=[[all_nations.o_year]], aggr=[[sum(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Decimal128(Some(0),38,4) END) AS sum(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END), sum(all_nations.volume)]]
+03)----Aggregate: groupBy=[[all_nations.o_year]], aggr=[[sum(CASE WHEN all_nations.nation = Utf8View("BRAZIL") THEN all_nations.volume ELSE Decimal128(Some(0),38,4) END) AS sum(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END), sum(all_nations.volume)]]
 04)------SubqueryAlias: all_nations
 05)--------Projection: date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) AS volume, n2.n_name AS nation
 06)----------Inner Join: n1.n_regionkey = region.r_regionkey
@@ -75,8 +75,8 @@ logical_plan
 17)--------------------------------Projection: lineitem.l_orderkey, lineitem.l_suppkey, lineitem.l_extendedprice, lineitem.l_discount
 18)----------------------------------Inner Join: part.p_partkey = lineitem.l_partkey
 19)------------------------------------Projection: part.p_partkey
-20)--------------------------------------Filter: part.p_type = Utf8("ECONOMY ANODIZED STEEL")
-21)----------------------------------------TableScan: part projection=[p_partkey, p_type], partial_filters=[part.p_type = Utf8("ECONOMY ANODIZED STEEL")]
+20)--------------------------------------Filter: part.p_type = Utf8View("ECONOMY ANODIZED STEEL")
+21)----------------------------------------TableScan: part projection=[p_partkey, p_type], partial_filters=[part.p_type = Utf8View("ECONOMY ANODIZED STEEL")]
 22)------------------------------------TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_extendedprice, l_discount]
 23)--------------------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
 24)----------------------------Filter: orders.o_orderdate >= Date32("1995-01-01") AND orders.o_orderdate <= Date32("1996-12-31")
@@ -87,8 +87,8 @@ logical_plan
 29)----------------SubqueryAlias: n2
 30)------------------TableScan: nation projection=[n_nationkey, n_name]
 31)------------Projection: region.r_regionkey
-32)--------------Filter: region.r_name = Utf8("AMERICA")
-33)----------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("AMERICA")]
+32)--------------Filter: region.r_name = Utf8View("AMERICA")
+33)----------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8View("AMERICA")]
 physical_plan
 01)SortPreservingMergeExec: [o_year@0 ASC NULLS LAST]
 02)--SortExec: expr=[o_year@0 ASC NULLS LAST], preserve_partitioning=[true]

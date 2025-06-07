@@ -1441,9 +1441,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.38"
+version = "4.5.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed93b9805f8ba930df42c2590f05453d5ec36cbb85d018868a5b24d31f6ac000"
+checksum = "fd60e63e9be68e5fb56422e397cf9baddded06dae1d2e523401542383bc72a9f"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1451,9 +1451,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.38"
+version = "4.5.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "379026ff283facf611b0ea629334361c4211d1b12ee01024eec1591133b04120"
+checksum = "89cc6392a1f72bbeb820d71f32108f61fdaf18bc526e1d23954168a67759ef51"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1635,7 +1635,7 @@ dependencies = [
  "anes",
  "cast",
  "ciborium",
- "clap 4.5.38",
+ "clap 4.5.39",
  "criterion-plot",
  "futures",
  "is-terminal",
@@ -1808,7 +1808,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -1854,7 +1854,7 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "log",
- "nix 0.30.1",
+ "nix",
  "object_store",
  "parking_lot",
  "parquet",
@@ -1878,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-benchmarks"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "datafusion",
@@ -1902,7 +1902,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1926,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog-listing"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1947,14 +1947,14 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "assert_cmd",
  "async-trait",
  "aws-config",
  "aws-credential-types",
- "clap 4.5.38",
+ "clap 4.5.39",
  "ctor",
  "datafusion",
  "dirs",
@@ -1976,7 +1976,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "ahash 0.8.12",
  "apache-avro",
@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "futures",
  "log",
@@ -2012,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-compression",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-avro"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -2072,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-csv"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2095,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-json"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-parquet"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2148,11 +2148,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion-doc"
-version = "47.0.0"
+version = "48.0.0"
 
 [[package]]
 name = "datafusion-examples"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -2167,7 +2167,7 @@ dependencies = [
  "futures",
  "log",
  "mimalloc",
- "nix 0.30.1",
+ "nix",
  "object_store",
  "prost",
  "tempfile",
@@ -2182,7 +2182,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -2201,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -2214,6 +2214,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "env_logger",
  "indexmap 2.9.0",
+ "insta",
  "paste",
  "recursive",
  "serde_json",
@@ -2222,7 +2223,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2233,7 +2234,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-ffi"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "abi_stable",
  "arrow",
@@ -2241,7 +2242,9 @@ dependencies = [
  "async-ffi",
  "async-trait",
  "datafusion",
+ "datafusion-functions-aggregate-common",
  "datafusion-proto",
+ "datafusion-proto-common",
  "doc-comment",
  "futures",
  "log",
@@ -2252,7 +2255,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -2281,7 +2284,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
@@ -2302,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
@@ -2315,7 +2318,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-nested"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "arrow-ord",
@@ -2336,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-table"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2350,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2366,7 +2369,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window-common"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -2374,7 +2377,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-macros"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "datafusion-expr",
  "quote",
@@ -2383,7 +2386,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2409,7 +2412,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
@@ -2434,7 +2437,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
@@ -2446,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-optimizer"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2465,7 +2468,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
@@ -2501,7 +2504,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -2523,7 +2526,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto-common"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2536,7 +2539,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-session"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2558,7 +2561,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-spark"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "datafusion-catalog",
@@ -2572,7 +2575,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "bigdecimal",
@@ -2596,16 +2599,17 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sqllogictest"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "arrow",
  "async-trait",
  "bigdecimal",
  "bytes",
  "chrono",
- "clap 4.5.38",
+ "clap 4.5.39",
  "datafusion",
  "datafusion-spark",
+ "datafusion-substrait",
  "env_logger",
  "futures",
  "half",
@@ -2628,7 +2632,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-substrait"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2648,7 +2652,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-wasmtest"
-version = "47.0.0"
+version = "48.0.0"
 dependencies = [
  "chrono",
  "console_error_panic_hook",
@@ -3969,7 +3973,7 @@ checksum = "5297962ef19edda4ce33aaa484386e0a5b3d7f2f4e037cbeee00503ef6b29d33"
 dependencies = [
  "anstream",
  "anstyle",
- "clap 4.5.38",
+ "clap 4.5.39",
  "escape8259",
 ]
 
@@ -4137,18 +4141,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
 dependencies = [
  "smallvec",
-]
-
-[[package]]
-name = "nix"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
-dependencies = [
- "bitflags 2.9.1",
- "cfg-if",
- "cfg_aliases",
- "libc",
 ]
 
 [[package]]
@@ -5567,9 +5559,9 @@ checksum = "eded382c5f5f786b989652c49544c4877d9f015cc22e145a5ea8ea66c2921cd2"
 
 [[package]]
 name = "rustyline"
-version = "15.0.0"
+version = "16.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee1e066dc922e513bda599c6ccb5f3bb2b0ea5870a579448f2622993f0a9a2f"
+checksum = "62fd9ca5ebc709e8535e8ef7c658eb51457987e48c98ead2be482172accc408d"
 dependencies = [
  "bitflags 2.9.1",
  "cfg-if",
@@ -5579,7 +5571,7 @@ dependencies = [
  "libc",
  "log",
  "memchr",
- "nix 0.29.0",
+ "nix",
  "radix_trie",
  "unicode-segmentation",
  "unicode-width 0.2.0",
@@ -5919,9 +5911,9 @@ dependencies = [
 
 [[package]]
 name = "sqllogictest"
-version = "0.28.2"
+version = "0.28.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94181af64007792bd1ab6d22023fbe86c2ccc50c1031b5bac554b5d057597e7b"
+checksum = "9fcbf91368a8d6807093d94f274fa4d0978cd78a310fee1d20368c545a606f7a"
 dependencies = [
  "async-trait",
  "educe",
@@ -6158,9 +6150,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.35.1"
+version = "0.35.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79251336d17c72d9762b8b54be4befe38d2db56fbbc0241396d70f173c39d47a"
+checksum = "3c3ffa3e4ff2b324a57f7aeb3c349656c7b127c3c189520251a648102a92496e"
 dependencies = [
  "libc",
  "memchr",
@@ -6243,9 +6235,9 @@ dependencies = [
 
 [[package]]
 name = "testcontainers-modules"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f29549c522bd43086d038c421ed69cdf88bc66387acf3aa92b26f965fa95ec2"
+checksum = "eac95cde96549fc19c6bf19ef34cc42bd56e264c1cb97e700e21555be0ecf9e2"
 dependencies = [
  "testcontainers",
 ]

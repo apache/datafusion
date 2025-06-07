@@ -1224,7 +1224,7 @@ mod tests {
             "concat",
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            Field::new("f", DataType::Utf8, true),
+            Field::new("f", DataType::Utf8, true).into(),
         ));
 
         // Assume existing ordering is [c ASC, a ASC, b ASC]
@@ -1315,7 +1315,7 @@ mod tests {
             "concat",
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            Field::new("f", DataType::Utf8, true),
+            Field::new("f", DataType::Utf8, true).into(),
         ));
 
         // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]

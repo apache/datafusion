@@ -17,9 +17,11 @@
 
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
+use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{cast::AsArray, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
+use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use itertools::izip;
 use std::iter;
@@ -71,7 +73,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
     }
 
-    fn append_val(&mut self, array: &ArrayRef, row: usize) {
+    fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
         // Perf: skip null check if input can't have nulls
         if NULLABLE {
             if array.is_null(row) {
@@ -84,6 +86,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         } else {
             self.group_values.push(array.as_primitive::<T>().value(row));
         }
+
+        Ok(())
     }
 
     fn vectorized_equal_to(
@@ -118,11 +122,11 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 // Otherwise, we need to check their values
             }
 
-            *equal_to_result = self.group_values[lhs_row] == array.value(rhs_row);
+            *equal_to_result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
         }
     }
 
-    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) {
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
         let arr = array.as_primitive::<T>();
 
         let null_count = array.null_count();
@@ -167,6 +171,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 }
             }
         }
+
+        Ok(())
     }
 
     fn len(&self) -> usize {
@@ -222,7 +228,7 @@ mod tests {
                       builder_array: &ArrayRef,
                       append_rows: &[usize]| {
             for &index in append_rows {
-                builder.append_val(builder_array, index);
+                builder.append_val(builder_array, index).unwrap();
             }
         };
 
@@ -245,7 +251,9 @@ mod tests {
         let append = |builder: &mut PrimitiveGroupValueBuilder<Int64Type, true>,
                       builder_array: &ArrayRef,
                       append_rows: &[usize]| {
-            builder.vectorized_append(builder_array, append_rows);
+            builder
+                .vectorized_append(builder_array, append_rows)
+                .unwrap();
         };
 
         let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, true>,
@@ -335,7 +343,7 @@ mod tests {
                       builder_array: &ArrayRef,
                       append_rows: &[usize]| {
             for &index in append_rows {
-                builder.append_val(builder_array, index);
+                builder.append_val(builder_array, index).unwrap();
             }
         };
 
@@ -358,7 +366,9 @@ mod tests {
         let append = |builder: &mut PrimitiveGroupValueBuilder<Int64Type, false>,
                       builder_array: &ArrayRef,
                       append_rows: &[usize]| {
-            builder.vectorized_append(builder_array, append_rows);
+            builder
+                .vectorized_append(builder_array, append_rows)
+                .unwrap();
         };
 
         let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
@@ -432,7 +442,9 @@ mod tests {
             None,
             None,
         ])) as _;
-        builder.vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4]);
+        builder
+            .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
+            .unwrap();
 
         let mut equal_to_results = vec![true; all_nulls_input_array.len()];
         builder.vectorized_equal_to(
@@ -456,7 +468,9 @@ mod tests {
             Some(4),
             Some(5),
         ])) as _;
-        builder.vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4]);
+        builder
+            .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
+            .unwrap();
 
         let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
         builder.vectorized_equal_to(

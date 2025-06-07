@@ -27,7 +27,7 @@ use crate::type_coercion::functions::{
 use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
     Result, Spans, TableReference,
@@ -115,7 +115,7 @@ impl ExprSchemable for Expr {
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
-            Expr::Literal(l) => Ok(l.data_type()),
+            Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
                 for (_, then_expr) in &case.when_then_expr {
                     let then_type = then_expr.get_type(schema)?;
@@ -160,10 +160,10 @@ impl ExprSchemable for Expr {
             }) => {
                 let fields = args
                     .iter()
-                    .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
+                    .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
-                let new_fields =
-                    fields_with_aggregate_udf(&fields, func).map_err(|err| {
+                let new_fields = fields_with_aggregate_udf(&fields, func)
+                    .map_err(|err| {
                         let data_types = fields
                             .iter()
                             .map(|f| f.data_type().clone())
@@ -180,7 +180,9 @@ impl ExprSchemable for Expr {
                                 &data_types
                             )
                         )
-                    })?;
+                    })?
+                    .into_iter()
+                    .collect::<Vec<_>>();
                 Ok(func.return_field(&new_fields)?.data_type().clone())
             }
             Expr::Not(_)
@@ -276,7 +278,7 @@ impl ExprSchemable for Expr {
 
             Expr::Column(c) => input_schema.nullable(c),
             Expr::OuterReferenceColumn(_, _) => Ok(true),
-            Expr::Literal(value) => Ok(value.is_null()),
+            Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
                 // This expression is nullable if any of the input expressions are nullable
                 let then_nullable = case
@@ -408,17 +410,28 @@ impl ExprSchemable for Expr {
                     }
                 }
 
-                Ok(field.with_metadata(combined_metadata))
+                Ok(Arc::new(field.with_metadata(combined_metadata)))
             }
-            Expr::Negative(expr) => {
-                expr.to_field(schema).map(|(_, f)| f.as_ref().clone())
-            }
-            Expr::Column(c) => schema.field_from_column(c).cloned(),
+            Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
+            Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
             Expr::OuterReferenceColumn(ty, _) => {
-                Ok(Field::new(&schema_name, ty.clone(), true))
+                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
             }
-            Expr::ScalarVariable(ty, _) => Ok(Field::new(&schema_name, ty.clone(), true)),
-            Expr::Literal(l) => Ok(Field::new(&schema_name, l.data_type(), l.is_null())),
+            Expr::ScalarVariable(ty, _) => {
+                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
+            }
+            Expr::Literal(l, metadata) => {
+                let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
+                if let Some(metadata) = metadata {
+                    field = field.with_metadata(
+                        metadata
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    );
+                }
+                Ok(Arc::new(field))
+            }
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -428,10 +441,10 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => {
-                Ok(Field::new(&schema_name, DataType::Boolean, false))
+                Ok(Arc::new(Field::new(&schema_name, DataType::Boolean, false)))
             }
             Expr::ScalarSubquery(subquery) => {
-                Ok(subquery.subquery.schema().field(0).clone())
+                Ok(Arc::new(subquery.subquery.schema().field(0).clone()))
             }
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
@@ -443,18 +456,18 @@ impl ExprSchemable for Expr {
                 let mut coercer = BinaryTypeCoercer::new(&lhs_type, op, &rhs_type);
                 coercer.set_lhs_spans(left.spans().cloned().unwrap_or_default());
                 coercer.set_rhs_spans(right.spans().cloned().unwrap_or_default());
-                Ok(Field::new(
+                Ok(Arc::new(Field::new(
                     &schema_name,
                     coercer.get_result_type()?,
                     lhs_nullable || rhs_nullable,
-                ))
+                )))
             }
             Expr::WindowFunction(window_function) => {
                 let (dt, nullable) = self.data_type_and_nullable_with_window_function(
                     schema,
                     window_function,
                 )?;
-                Ok(Field::new(&schema_name, dt, nullable))
+                Ok(Arc::new(Field::new(&schema_name, dt, nullable)))
             }
             Expr::AggregateFunction(aggregate_function) => {
                 let AggregateFunction {
@@ -465,11 +478,11 @@ impl ExprSchemable for Expr {
 
                 let fields = args
                     .iter()
-                    .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
+                    .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                let new_fields =
-                    fields_with_aggregate_udf(&fields, func).map_err(|err| {
+                let new_fields = fields_with_aggregate_udf(&fields, func)
+                    .map_err(|err| {
                         let arg_types = fields
                             .iter()
                             .map(|f| f.data_type())
@@ -487,7 +500,9 @@ impl ExprSchemable for Expr {
                                 &arg_types,
                             )
                         )
-                    })?;
+                    })?
+                    .into_iter()
+                    .collect::<Vec<_>>();
 
                 func.return_field(&new_fields)
             }
@@ -519,12 +534,13 @@ impl ExprSchemable for Expr {
                     .into_iter()
                     .zip(new_data_types)
                     .map(|(f, d)| f.as_ref().clone().with_data_type(d))
-                    .collect::<Vec<Field>>();
+                    .map(Arc::new)
+                    .collect::<Vec<FieldRef>>();
 
                 let arguments = args
                     .iter()
                     .map(|e| match e {
-                        Expr::Literal(sv) => Some(sv),
+                        Expr::Literal(sv, _) => Some(sv),
                         _ => None,
                     })
                     .collect::<Vec<_>>();
@@ -538,7 +554,8 @@ impl ExprSchemable for Expr {
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
             Expr::Cast(Cast { expr, data_type }) => expr
                 .to_field(schema)
-                .map(|(_, f)| f.as_ref().clone().with_data_type(data_type.clone())),
+                .map(|(_, f)| f.as_ref().clone().with_data_type(data_type.clone()))
+                .map(Arc::new),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -550,14 +567,17 @@ impl ExprSchemable for Expr {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_) => Ok(Field::new(
+            | Expr::Unnest(_) => Ok(Arc::new(Field::new(
                 &schema_name,
                 self.get_type(schema)?,
                 self.nullable(schema)?,
-            )),
+            ))),
         }?;
 
-        Ok((relation, Arc::new(field.with_name(schema_name))))
+        Ok((
+            relation,
+            Arc::new(field.as_ref().clone().with_name(schema_name)),
+        ))
     }
 
     /// Wraps this expression in a cast to a target [arrow::datatypes::DataType].
@@ -612,7 +632,7 @@ impl Expr {
 
         let fields = args
             .iter()
-            .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
+            .map(|e| e.to_field(schema).map(|(_, f)| f))
             .collect::<Result<Vec<_>>>()?;
         match fun {
             WindowFunctionDefinition::AggregateUDF(udaf) => {
@@ -621,8 +641,8 @@ impl Expr {
                     .map(|f| f.data_type())
                     .cloned()
                     .collect::<Vec<_>>();
-                let new_fields =
-                    fields_with_aggregate_udf(&fields, udaf).map_err(|err| {
+                let new_fields = fields_with_aggregate_udf(&fields, udaf)
+                    .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
                             match err {
@@ -635,7 +655,9 @@ impl Expr {
                                 &data_types
                             )
                         )
-                    })?;
+                    })?
+                    .into_iter()
+                    .collect::<Vec<_>>();
 
                 let return_field = udaf.return_field(&new_fields)?;
 
@@ -647,8 +669,8 @@ impl Expr {
                     .map(|f| f.data_type())
                     .cloned()
                     .collect::<Vec<_>>();
-                let new_fields =
-                    fields_with_window_udf(&fields, udwf).map_err(|err| {
+                let new_fields = fields_with_window_udf(&fields, udwf)
+                    .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
                             match err {
@@ -661,7 +683,9 @@ impl Expr {
                                 &data_types
                             )
                         )
-                    })?;
+                    })?
+                    .into_iter()
+                    .collect::<Vec<_>>();
                 let (_, function_name) = self.qualified_name();
                 let field_args = WindowUDFFieldArgs::new(&new_fields, &function_name);
 

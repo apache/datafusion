@@ -512,7 +512,7 @@ impl Unparser<'_> {
                     .expr
                     .iter()
                     .map(|sort_expr| {
-                        unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
+                        unproject_sort_expr(sort_expr.clone(), agg, sort.input.as_ref())
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -1081,6 +1081,7 @@ impl Unparser<'_> {
                         if project_vec.is_empty() {
                             builder = builder.project(vec![Expr::Literal(
                                 ScalarValue::Int64(Some(1)),
+                                None,
                             )])?;
                         } else {
                             let project_columns = project_vec
