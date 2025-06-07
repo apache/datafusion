@@ -306,7 +306,7 @@ impl DependentJoinRewriter {
         &mut self,
         child_id: usize,
         col: &Column,
-    ) {
+    ) -> Result<()> {
         if let Some(accesses) = self.all_outer_ref_columns.get(col) {
             for access in accesses.iter() {
                 let mut cur_stack = self.stack.clone();
@@ -314,7 +314,11 @@ impl DependentJoinRewriter {
                 cur_stack.push(child_id);
                 let (dependent_join_node_id, subquery_node_id) =
                     Self::dependent_join_and_subquery_node_ids(&cur_stack, &access.stack);
-                let node = self.nodes.get_mut(&dependent_join_node_id).unwrap();
+                let node = self.nodes.get_mut(&dependent_join_node_id).ok_or(
+                    internal_datafusion_err!(
+                        "dependent join node with id {dependent_join_node_id} not found"
+                    ),
+                )?;
                 let accesses = node
                     .columns_accesses_by_subquery_id
                     .entry(subquery_node_id)
@@ -328,6 +332,7 @@ impl DependentJoinRewriter {
                 });
             }
         }
+        Ok(())
     }
 
     fn mark_outer_column_access(
@@ -515,19 +520,22 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             // TODO: maybe there are more logical plan that provides columns
             // aside from TableScan
             LogicalPlan::TableScan(tbl_scan) => {
-                tbl_scan.projected_schema.columns().iter().for_each(|col| {
-                    self.conclude_lowest_dependent_join_node_if_any(new_id, col);
-                });
+                tbl_scan
+                    .projected_schema
+                    .columns()
+                    .iter()
+                    .try_for_each(|col| {
+                        self.conclude_lowest_dependent_join_node_if_any(new_id, col)
+                    })?;
             }
             // Similar to TableScan, this node may provide column names which
             // is referenced inside some subqueries
             LogicalPlan::SubqueryAlias(alias) => {
-                alias.schema.columns().iter().for_each(|col| {
-                    self.conclude_lowest_dependent_join_node_if_any(new_id, col);
-                });
+                alias.schema.columns().iter().try_for_each(|col| {
+                    self.conclude_lowest_dependent_join_node_if_any(new_id, col)
+                })?;
             }
             LogicalPlan::Unnest(_unnest) => {}
-            // TODO: this is untested
             LogicalPlan::Projection(proj) => {
                 for expr in &proj.expr {
                     if contains_subquery(expr) {
@@ -542,8 +550,14 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 }
             }
             LogicalPlan::Subquery(subquery) => {
-                let parent = self.stack.last().unwrap();
-                let parent_node = self.nodes.get_mut(parent).unwrap();
+                let parent = self.stack.last().ok_or(internal_datafusion_err!(
+                    "subquery node cannot be at the beginning of the query plan"
+                ))?;
+
+                let parent_node = self
+                    .nodes
+                    .get_mut(parent)
+                    .ok_or(internal_datafusion_err!("node {parent} not found"))?;
                 // the inserting sequence matter here
                 // when a parent has multiple children subquery at the same time
                 // we rely on the order in which subquery children are visited
@@ -722,7 +736,9 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         // if the node in the f_up meet any node in the stack, it means that node itself
         // is a dependent join node,transformation by
         // build a join based on
-        let current_node_id = self.stack.pop().unwrap();
+        let current_node_id = self.stack.pop().ok_or(internal_datafusion_err!(
+            "stack cannot be empty during upward traversal"
+        ))?;
         let node_info = if let Entry::Occupied(e) = self.nodes.entry(current_node_id) {
             let node_info = e.get();
             if !node_info.is_dependent_join_node {
@@ -736,13 +752,20 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         let current_subquery_depth = self.subquery_depth;
         self.subquery_depth -= 1;
 
-        let cloned_input = (**node.inputs().first().unwrap()).clone();
+        let cloned_input = (**node.inputs().first().ok_or(internal_datafusion_err!(
+            "logical plan {} does not have any input",
+            node
+        ))?)
+        .clone();
         let mut current_plan = LogicalPlanBuilder::new(cloned_input);
         let mut subquery_alias_by_offset = HashMap::new();
         for (subquery_offset, (subquery_id, _)) in
             node_info.columns_accesses_by_subquery_id.iter().enumerate()
         {
-            let subquery_node = self.nodes.get(subquery_id).unwrap();
+            let subquery_node = self
+                .nodes
+                .get(subquery_id)
+                .ok_or(internal_datafusion_err!("node {subquery_id} not found"))?;
             let alias = self
                 .alias_generator
                 .next(&subquery_node.subquery_type.prefix());
@@ -769,10 +792,20 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 )?;
             }
             LogicalPlan::Join(join) => {
+                // this is lateral join
                 assert!(node_info.columns_accesses_by_subquery_id.len() == 1);
-                let (_, column_accesses) =
-                    node_info.columns_accesses_by_subquery_id.first().unwrap();
-                let alias = subquery_alias_by_offset.get(&0).unwrap();
+                let (_, column_accesses) = node_info
+                    .columns_accesses_by_subquery_id
+                    .first()
+                    .ok_or(internal_datafusion_err!(
+                        "a lateral join should always have one child subquery"
+                    ))?;
+                let alias =
+                    subquery_alias_by_offset
+                        .get(&0)
+                        .ok_or(internal_datafusion_err!(
+                            "cannot find subquery alias for only-child of lateral join"
+                        ))?;
                 let correlated_columns = column_accesses
                     .iter()
                     .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
@@ -902,8 +935,46 @@ mod tests {
             )
         }};
     }
+
     #[test]
-    fn lateral_join() -> Result<()> {
+    fn uncorrelated_lateral_join() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+
+        let lateral_join_rhs = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(col("inner_table_lv1.c").eq(lit(1)))?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
+            .join_on(
+                LogicalPlan::Subquery(Subquery {
+                    subquery: lateral_join_rhs,
+                    outer_ref_columns: vec![],
+                    spans: Spans::new(),
+                }),
+                JoinType::Inner,
+                vec![lit(true)],
+            )?
+            .build()?;
+
+        // Inner Join:  Filter: Boolean(true)
+        //   TableScan: outer_table
+        //   Subquery:
+        //     Filter: inner_table_lv1.c = outer_ref(outer_table.c)
+        //       TableScan: inner_table_lv1
+
+        assert_dependent_join_rewrite!(plan, @r"
+        DependentJoin on [outer_table.c lvl 1] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+          Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+        ");
+        Ok(())
+    }
+    #[test]
+    fn correlated_lateral_join() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
 
