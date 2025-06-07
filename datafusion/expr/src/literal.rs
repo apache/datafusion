@@ -17,20 +17,16 @@
 
 //! Literal module contains foundational types that are used to represent literals in DataFusion.
 
+use crate::expr::FieldMetadata;
 use crate::Expr;
 use datafusion_common::ScalarValue;
-use std::collections::HashMap;
 
 /// Create a literal expression
 pub fn lit<T: Literal>(n: T) -> Expr {
     n.lit()
 }
 
-pub fn lit_with_metadata<T: Literal>(
-    n: T,
-    metadata: impl Into<Option<HashMap<String, String>>>,
-) -> Expr {
-    let metadata = metadata.into();
+pub fn lit_with_metadata<T: Literal>(n: T, metadata: Option<FieldMetadata>) -> Expr {
     let Some(metadata) = metadata else {
         return n.lit();
     };
@@ -38,13 +34,12 @@ pub fn lit_with_metadata<T: Literal>(
     let Expr::Literal(sv, prior_metadata) = n.lit() else {
         unreachable!();
     };
-
     let new_metadata = match prior_metadata {
         Some(mut prior) => {
             prior.extend(metadata);
             prior
         }
-        None => metadata.into_iter().collect(),
+        None => metadata,
     };
 
     Expr::Literal(sv, Some(new_metadata))
