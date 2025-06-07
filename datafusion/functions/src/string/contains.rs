@@ -191,8 +191,11 @@ mod test {
     #[test]
     fn test_contains_api() {
         let expr = contains(
-            Expr::Literal(ScalarValue::Utf8(Some("the quick brown fox".to_string()))),
-            Expr::Literal(ScalarValue::Utf8(Some("row".to_string()))),
+            Expr::Literal(
+                ScalarValue::Utf8(Some("the quick brown fox".to_string())),
+                None,
+            ),
+            Expr::Literal(ScalarValue::Utf8(Some("row".to_string())), None),
         );
         assert_eq!(
             expr.to_string(),

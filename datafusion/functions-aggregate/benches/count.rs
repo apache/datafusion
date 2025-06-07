@@ -15,20 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use arrow::util::bench_util::{
     create_boolean_array, create_dict_from_values, create_primitive_array,
     create_string_array_with_len,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, GroupsAccumulator,
-};
+
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_expr::{Accumulator, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use std::sync::Arc;
+
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn prepare_group_accumulator() -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int32, true)]));
@@ -36,7 +37,7 @@ fn prepare_group_accumulator() -> Box<dyn GroupsAccumulator> {
         return_field: Field::new("f", DataType::Int64, true).into(),
         schema: &schema,
         ignore_nulls: false,
-        ordering_req: &LexOrdering::default(),
+        order_bys: &[],
         is_reversed: false,
         name: "COUNT(f)",
         is_distinct: false,
@@ -59,7 +60,7 @@ fn prepare_accumulator() -> Box<dyn Accumulator> {
         return_field: Arc::new(Field::new_list_field(DataType::Int64, true)),
         schema: &schema,
         ignore_nulls: false,
-        ordering_req: &LexOrdering::default(),
+        order_bys: &[],
         is_reversed: false,
         name: "COUNT(f)",
         is_distinct: true,

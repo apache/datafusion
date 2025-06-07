@@ -18,13 +18,14 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
-    coalesce_partitions_exec, create_test_schema, create_test_schema2,
-    create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec,
-    local_limit_exec, memory_exec, parquet_exec, repartition_exec, sort_exec,
-    sort_exec_with_fetch, sort_expr, sort_expr_options, sort_merge_join_exec,
-    sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,
-    spr_repartition_exec, stream_exec_ordered, union_exec, RequirementsTestExec,
+    aggregate_exec, bounded_window_exec, bounded_window_exec_with_partition,
+    check_integrity, coalesce_batches_exec, coalesce_partitions_exec, create_test_schema,
+    create_test_schema2, create_test_schema3, filter_exec, global_limit_exec,
+    hash_join_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_with_sort,
+    projection_exec, repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr,
+    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
+    sort_preserving_merge_exec_with_fetch, spr_repartition_exec, stream_exec_ordered,
+    union_exec, RequirementsTestExec,
 };
 
 use arrow::compute::SortOptions;
@@ -32,89 +33,53 @@ use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_expr_common::operator::Operator;
 use datafusion_expr::{JoinType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_expr::expressions::{col, Column, NotExpr};
-use datafusion_physical_expr::Partitioning;
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
+};
+use datafusion_physical_expr::{Distribution, Partitioning};
+use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, InputOrderMode};
-use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
+use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting, PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
+use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_functions_aggregate::average::avg_udaf;
-use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_datasource::source::DataSourceExec;
 use rstest::rstest;
-
-/// Create a csv exec for tests
-fn csv_exec_ordered(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        schema.clone(),
-        Arc::new(CsvSource::new(true, 0, b'"')),
-    )
-    .with_file(PartitionedFile::new("file_path".to_string(), 100))
-    .with_output_ordering(vec![sort_exprs])
-    .build();
-
-    DataSourceExec::from_data_source(config)
-}
-
-/// Created a sorted parquet exec
-pub fn parquet_exec_sorted(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    let source = Arc::new(ParquetSource::default());
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        schema.clone(),
-        source,
-    )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .with_output_ordering(vec![sort_exprs])
-    .build();
-
-    DataSourceExec::from_data_source(config)
-}
 
 /// Create a sorted Csv exec
 fn csv_exec_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    let config = FileScanConfigBuilder::new(
+    let mut builder = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         Arc::new(CsvSource::new(false, 0, 0)),
     )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .with_output_ordering(vec![sort_exprs])
-    .build();
+    .with_file(PartitionedFile::new("x".to_string(), 100));
+    if let Some(ordering) = LexOrdering::new(sort_exprs) {
+        builder = builder.with_output_ordering(vec![ordering]);
+    }
 
+    let config = builder.build();
     DataSourceExec::from_data_source(config)
 }
 
@@ -163,7 +128,7 @@ macro_rules! assert_optimized {
                         plan_with_pipeline_fixer,
                         false,
                         true,
-                       &config,
+                        &config,
                     )
                 })
                 .data()
@@ -210,24 +175,27 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
     let left_schema = create_test_schema2()?;
     let right_schema = create_test_schema3()?;
     let left_input = memory_exec(&left_schema);
-    let parquet_sort_exprs = vec![sort_expr("a", &right_schema)];
-    let right_input = parquet_exec_sorted(&right_schema, parquet_sort_exprs);
-
+    let parquet_ordering = [sort_expr("a", &right_schema)].into();
+    let right_input =
+        parquet_exec_with_sort(right_schema.clone(), vec![parquet_ordering]);
     let on = vec![(
         Arc::new(Column::new_with_schema("col_a", &left_schema)?) as _,
         Arc::new(Column::new_with_schema("c", &right_schema)?) as _,
     )];
     let join = hash_join_exec(left_input, right_input, on, None, &JoinType::Inner)?;
-    let physical_plan = sort_exec(vec![sort_expr("a", &join.schema())], join);
+    let physical_plan = sort_exec([sort_expr("a", &join.schema())].into(), join);
 
-    let expected_input = ["SortExec: expr=[a@2 ASC], preserve_partitioning=[false]",
+    let expected_input = [
+        "SortExec: expr=[a@2 ASC], preserve_partitioning=[false]",
         "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
         "    DataSourceExec: partitions=1, partition_sizes=[0]",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet"];
-
-    let expected_optimized = ["HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
+    ];
+    let expected_optimized = [
+        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
         "  DataSourceExec: partitions=1, partition_sizes=[0]",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet"];
+        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -236,41 +204,40 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
 #[tokio::test]
 async fn test_do_not_remove_sort_with_limit() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs = vec![
+    let source1 = parquet_exec(schema.clone());
+    let ordering: LexOrdering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let sort = sort_exec(sort_exprs.clone(), source1);
-    let limit = limit_exec(sort);
-
-    let parquet_sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs);
-
+    ]
+    .into();
+    let sort = sort_exec(ordering.clone(), source1);
+    let limit = local_limit_exec(sort, 100);
+    let parquet_ordering = [sort_expr("nullable_col", &schema)].into();
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering]);
     let union = union_exec(vec![source2, limit]);
     let repartition = repartition_exec(union);
-    let physical_plan = sort_preserving_merge_exec(sort_exprs, repartition);
+    let physical_plan = sort_preserving_merge_exec(ordering, repartition);
 
-    let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
         "    UnionExec",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
-        "      GlobalLimitExec: skip=0, fetch=100",
-        "        LocalLimitExec: fetch=100",
-        "          SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
-
+        "      LocalLimitExec: fetch=100",
+        "        SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     // We should keep the bottom `SortExec`.
-    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
+    let expected_optimized = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[true]",
         "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
         "      UnionExec",
         "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
-        "        GlobalLimitExec: skip=0, fetch=100",
-        "          LocalLimitExec: fetch=100",
-        "            SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "        LocalLimitExec: fetch=100",
+        "          SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
+        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -279,18 +246,15 @@ async fn test_do_not_remove_sort_with_limit() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_sorted() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let sort = sort_exec(sort_exprs.clone(), source1);
-
-    let source2 = parquet_exec_sorted(&schema, sort_exprs.clone());
-
+    let source1 = parquet_exec(schema.clone());
+    let ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
+    let sort = sort_exec(ordering.clone(), source1);
+    let source2 = parquet_exec_with_sort(schema, vec![ordering.clone()]);
     let union = union_exec(vec![source2, sort]);
-    let physical_plan = sort_preserving_merge_exec(sort_exprs, union);
+    let physical_plan = sort_preserving_merge_exec(ordering, union);
 
     // one input to the union is already sorted, one is not.
-    let expected_input = vec![
+    let expected_input = [
         "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
@@ -298,8 +262,7 @@ async fn test_union_inputs_sorted() -> Result<()> {
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     // should not add a sort at the output of the union, input plan should not be changed
-    let expected_optimized = expected_input.clone();
-    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    assert_optimized!(expected_input, expected_input, physical_plan, true);
 
     Ok(())
 }
@@ -307,22 +270,20 @@ async fn test_union_inputs_sorted() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let sort = sort_exec(sort_exprs.clone(), source1);
-
-    let parquet_sort_exprs = vec![
+    let source1 = parquet_exec(schema.clone());
+    let ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
+    let sort = sort_exec(ordering.clone(), source1);
+    let parquet_ordering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs);
-
+    ]
+    .into();
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering]);
     let union = union_exec(vec![source2, sort]);
-    let physical_plan = sort_preserving_merge_exec(sort_exprs, union);
+    let physical_plan = sort_preserving_merge_exec(ordering, union);
 
     // one input to the union is already sorted, one is not.
-    let expected_input = vec![
+    let expected_input = [
         "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], file_type=parquet",
@@ -330,8 +291,7 @@ async fn test_union_inputs_different_sorted() -> Result<()> {
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     // should not add a sort at the output of the union, input plan should not be changed
-    let expected_optimized = expected_input.clone();
-    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    assert_optimized!(expected_input, expected_input, physical_plan, true);
 
     Ok(())
 }
@@ -339,35 +299,36 @@ async fn test_union_inputs_different_sorted() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted2() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs = vec![
+    let source1 = parquet_exec(schema.clone());
+    let sort_exprs: LexOrdering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
+    ]
+    .into();
     let sort = sort_exec(sort_exprs.clone(), source1);
-
-    let parquet_sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs);
-
+    let parquet_ordering = [sort_expr("nullable_col", &schema)].into();
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering]);
     let union = union_exec(vec![source2, sort]);
     let physical_plan = sort_preserving_merge_exec(sort_exprs, union);
 
     // Input is an invalid plan. In this case rule should add required sorting in appropriate places.
     // First DataSourceExec has output ordering(nullable_col@0 ASC). However, it doesn't satisfy the
     // required ordering of SortPreservingMergeExec.
-    let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  UnionExec",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
-
-    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    let expected_optimized = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -376,40 +337,42 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted3() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs1 = vec![
+    let source1 = parquet_exec(schema.clone());
+    let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let sort1 = sort_exec(sort_exprs1, source1.clone());
-    let sort_exprs2 = vec![sort_expr("nullable_col", &schema)];
-    let sort2 = sort_exec(sort_exprs2, source1);
-
-    let parquet_sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs.clone());
-
+    ]
+    .into();
+    let sort1 = sort_exec(ordering1, source1.clone());
+    let ordering2 = [sort_expr("nullable_col", &schema)].into();
+    let sort2 = sort_exec(ordering2, source1);
+    let parquet_ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering.clone()]);
     let union = union_exec(vec![sort1, source2, sort2]);
-    let physical_plan = sort_preserving_merge_exec(parquet_sort_exprs, union);
+    let physical_plan = sort_preserving_merge_exec(parquet_ordering, union);
 
     // First input to the union is not Sorted (SortExec is finer than required ordering by the SortPreservingMergeExec above).
     // Second input to the union is already Sorted (matches with the required ordering by the SortPreservingMergeExec above).
     // Third input to the union is not Sorted (SortExec is matches required ordering by the SortPreservingMergeExec above).
-    let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     // should adjust sorting in the first input of the union such that it is not unnecessarily fine
-    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+    let expected_optimized = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -418,40 +381,42 @@ async fn test_union_inputs_different_sorted3() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted4() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs1 = vec![
+    let source1 = parquet_exec(schema.clone());
+    let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let sort_exprs2 = vec![sort_expr("nullable_col", &schema)];
-    let sort1 = sort_exec(sort_exprs2.clone(), source1.clone());
-    let sort2 = sort_exec(sort_exprs2.clone(), source1);
-
-    let source2 = parquet_exec_sorted(&schema, sort_exprs2);
-
+    ]
+    .into();
+    let ordering2: LexOrdering = [sort_expr("nullable_col", &schema)].into();
+    let sort1 = sort_exec(ordering2.clone(), source1.clone());
+    let sort2 = sort_exec(ordering2.clone(), source1);
+    let source2 = parquet_exec_with_sort(schema, vec![ordering2]);
     let union = union_exec(vec![sort1, source2, sort2]);
-    let physical_plan = sort_preserving_merge_exec(sort_exprs1, union);
+    let physical_plan = sort_preserving_merge_exec(ordering1, union);
 
     // Ordering requirement of the `SortPreservingMergeExec` is not met.
     // Should modify the plan to ensure that all three inputs to the
     // `UnionExec` satisfy the ordering, OR add a single sort after
     // the `UnionExec` (both of which are equally good for this example).
-    let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
-    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    let expected_optimized = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -460,13 +425,13 @@ async fn test_union_inputs_different_sorted4() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted5() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs1 = vec![
+    let source1 = parquet_exec(schema.clone());
+    let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let sort_exprs2 = vec![
+    ]
+    .into();
+    let ordering2 = [
         sort_expr("nullable_col", &schema),
         sort_expr_options(
             "non_nullable_col",
@@ -476,29 +441,33 @@ async fn test_union_inputs_different_sorted5() -> Result<()> {
                 nulls_first: false,
             },
         ),
-    ];
-    let sort_exprs3 = vec![sort_expr("nullable_col", &schema)];
-    let sort1 = sort_exec(sort_exprs1, source1.clone());
-    let sort2 = sort_exec(sort_exprs2, source1);
-
+    ]
+    .into();
+    let ordering3 = [sort_expr("nullable_col", &schema)].into();
+    let sort1 = sort_exec(ordering1, source1.clone());
+    let sort2 = sort_exec(ordering2, source1);
     let union = union_exec(vec![sort1, sort2]);
-    let physical_plan = sort_preserving_merge_exec(sort_exprs3, union);
+    let physical_plan = sort_preserving_merge_exec(ordering3, union);
 
     // The `UnionExec` doesn't preserve any of the inputs ordering in the
     // example below. However, we should be able to change the unnecessarily
     // fine `SortExec`s below with required `SortExec`s that are absolutely necessary.
-    let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 DESC NULLS LAST], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
-    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    let expected_optimized = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -507,22 +476,20 @@ async fn test_union_inputs_different_sorted5() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted6() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs1 = vec![sort_expr("nullable_col", &schema)];
-    let sort1 = sort_exec(sort_exprs1, source1.clone());
-    let sort_exprs2 = vec![
+    let source1 = parquet_exec(schema.clone());
+    let ordering1 = [sort_expr("nullable_col", &schema)].into();
+    let sort1 = sort_exec(ordering1, source1.clone());
+    let ordering2 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
+    ]
+    .into();
     let repartition = repartition_exec(source1);
-    let spm = sort_preserving_merge_exec(sort_exprs2, repartition);
-
-    let parquet_sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs.clone());
-
+    let spm = sort_preserving_merge_exec(ordering2, repartition);
+    let parquet_ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering.clone()]);
     let union = union_exec(vec![sort1, source2, spm]);
-    let physical_plan = sort_preserving_merge_exec(parquet_sort_exprs, union);
+    let physical_plan = sort_preserving_merge_exec(parquet_ordering, union);
 
     // The plan is not valid as it is -- the input ordering requirement
     // of the `SortPreservingMergeExec` under the third child of the
@@ -530,24 +497,28 @@ async fn test_union_inputs_different_sorted6() -> Result<()> {
     // At the same time, this ordering requirement is unnecessarily fine.
     // The final plan should be valid AND the ordering of the third child
     // shouldn't be finer than necessary.
-    let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
         "    SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     // Should adjust the requirement in the third input of the union so
     // that it is not unnecessarily fine.
-    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+    let expected_optimized = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[true]",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -556,33 +527,36 @@ async fn test_union_inputs_different_sorted6() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted7() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs1 = vec![
+    let source1 = parquet_exec(schema.clone());
+    let ordering1: LexOrdering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let sort_exprs3 = vec![sort_expr("nullable_col", &schema)];
-    let sort1 = sort_exec(sort_exprs1.clone(), source1.clone());
-    let sort2 = sort_exec(sort_exprs1, source1);
-
+    ]
+    .into();
+    let sort1 = sort_exec(ordering1.clone(), source1.clone());
+    let sort2 = sort_exec(ordering1, source1);
     let union = union_exec(vec![sort1, sort2]);
-    let physical_plan = sort_preserving_merge_exec(sort_exprs3, union);
+    let ordering2 = [sort_expr("nullable_col", &schema)].into();
+    let physical_plan = sort_preserving_merge_exec(ordering2, union);
 
     // Union has unnecessarily fine ordering below it. We should be able to replace them with absolutely necessary ordering.
-    let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     // Union preserves the inputs ordering and we should not change any of the SortExecs under UnionExec
-    let expected_output = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+    let expected_output = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_output, physical_plan, true);
 
     Ok(())
@@ -591,13 +565,13 @@ async fn test_union_inputs_different_sorted7() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted8() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs1 = vec![
+    let source1 = parquet_exec(schema.clone());
+    let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let sort_exprs2 = vec![
+    ]
+    .into();
+    let ordering2 = [
         sort_expr_options(
             "nullable_col",
             &schema,
@@ -614,55 +588,454 @@ async fn test_union_inputs_different_sorted8() -> Result<()> {
                 nulls_first: false,
             },
         ),
-    ];
-    let sort1 = sort_exec(sort_exprs1, source1.clone());
-    let sort2 = sort_exec(sort_exprs2, source1);
-
+    ]
+    .into();
+    let sort1 = sort_exec(ordering1, source1.clone());
+    let sort2 = sort_exec(ordering2, source1);
     let physical_plan = union_exec(vec![sort1, sort2]);
 
     // The `UnionExec` doesn't preserve any of the inputs ordering in the
     // example below.
-    let expected_input = ["UnionExec",
+    let expected_input = [
+        "UnionExec",
         "  SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "  SortExec: expr=[nullable_col@0 DESC NULLS LAST, non_nullable_col@1 DESC NULLS LAST], preserve_partitioning=[false]",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     // Since `UnionExec` doesn't preserve ordering in the plan above.
     // We shouldn't keep SortExecs in the plan.
-    let expected_optimized = ["UnionExec",
+    let expected_optimized = [
+        "UnionExec",
         "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
-        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
 }
 
 #[tokio::test]
-async fn test_window_multi_path_sort() -> Result<()> {
+async fn test_soft_hard_requirements_remove_soft_requirement() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let sort_exprs1 = vec![
-        sort_expr("nullable_col", &schema),
-        sort_expr("non_nullable_col", &schema),
-    ];
-    let sort_exprs2 = vec![sort_expr("nullable_col", &schema)];
-    // reverse sorting of sort_exprs2
-    let sort_exprs3 = vec![sort_expr_options(
+    let source = parquet_exec(schema.clone());
+    let sort_exprs = [sort_expr_options(
         "nullable_col",
         &schema,
         SortOptions {
             descending: true,
             nulls_first: false,
         },
-    )];
-    let source1 = parquet_exec_sorted(&schema, sort_exprs1);
-    let source2 = parquet_exec_sorted(&schema, sort_exprs2);
-    let sort1 = sort_exec(sort_exprs3.clone(), source1);
-    let sort2 = sort_exec(sort_exprs3.clone(), source2);
+    )]
+    .into();
+    let sort = sort_exec(sort_exprs, source);
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let physical_plan =
+        bounded_window_exec_with_partition("nullable_col", vec![], partition_bys, sort);
 
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns(
+) -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec(schema.clone());
+    let ordering = [sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let sort = sort_exec(ordering, source.clone());
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema)?,
+            Operator::Plus,
+            col("non_nullable_col", &schema)?,
+        )) as _,
+        "count".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let bounded_window =
+        bounded_window_exec_with_partition("nullable_col", vec![], partition_bys, sort);
+    let physical_plan = projection_exec(proj_exprs, bounded_window)?;
+
+    let expected_input = [
+        "ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as count]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as count]",
+    //     "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as count]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+    let ordering = [sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let sort = sort_exec(ordering, source);
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema)?,
+            Operator::Plus,
+            col("non_nullable_col", &schema)?,
+        )) as _,
+        "nullable_col".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let projection = projection_exec(proj_exprs, sort)?;
+    let physical_plan = bounded_window_exec_with_partition(
+        "nullable_col",
+        vec![],
+        partition_bys,
+        projection,
+    );
+
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+    //     "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "    ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "      SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_soft_hard_requirements_multiple_soft_requirements() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec(schema.clone());
+    let ordering = [sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let sort = sort_exec(ordering, source.clone());
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema)?,
+            Operator::Plus,
+            col("non_nullable_col", &schema)?,
+        )) as _,
+        "nullable_col".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let projection = projection_exec(proj_exprs, sort)?;
+    let bounded_window = bounded_window_exec_with_partition(
+        "nullable_col",
+        vec![],
+        partition_bys,
+        projection,
+    );
+    let physical_plan = bounded_window_exec_with_partition(
+        "count",
+        vec![],
+        partition_bys,
+        bounded_window,
+    );
+
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "      SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "    ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+    //     "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "        SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+    let ordering = [sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let sort = sort_exec(ordering, source);
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema)?,
+            Operator::Plus,
+            col("non_nullable_col", &schema)?,
+        )) as _,
+        "nullable_col".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let projection = projection_exec(proj_exprs, sort)?;
+    let bounded_window = bounded_window_exec_with_partition(
+        "nullable_col",
+        vec![],
+        partition_bys,
+        projection,
+    );
+
+    let ordering2: LexOrdering = [sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let sort2 = sort_exec(ordering2.clone(), bounded_window);
+    let sort3 = sort_exec(ordering2, sort2);
+    let physical_plan =
+        bounded_window_exec_with_partition("count", vec![], partition_bys, sort3);
+
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "        ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "          SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "    ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+    //     "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "        SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
+#[tokio::test]
+async fn test_soft_hard_requirements_multiple_sorts() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec(schema.clone());
+    let ordering = [sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let sort = sort_exec(ordering, source);
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema)?,
+            Operator::Plus,
+            col("non_nullable_col", &schema)?,
+        )) as _,
+        "nullable_col".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let projection = projection_exec(proj_exprs, sort)?;
+    let bounded_window = bounded_window_exec_with_partition(
+        "nullable_col",
+        vec![],
+        partition_bys,
+        projection,
+    );
+    let ordering2: LexOrdering = [sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let sort2 = sort_exec(ordering2.clone(), bounded_window);
+    let physical_plan = sort_exec(ordering2, sort2);
+
+    let expected_input = [
+        "SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "  SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "      ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "        SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+    //     "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "        SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_requirement(
+) -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec(schema.clone());
+    let ordering = [sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let sort = sort_exec(ordering, source);
+    let partition_bys1 = &[col("nullable_col", &schema)?];
+    let bounded_window =
+        bounded_window_exec_with_partition("nullable_col", vec![], partition_bys1, sort);
+    let partition_bys2 = &[col("non_nullable_col", &schema)?];
+    let bounded_window2 = bounded_window_exec_with_partition(
+        "non_nullable_col",
+        vec![],
+        partition_bys2,
+        bounded_window,
+    );
+    let requirement = [PhysicalSortRequirement::new(
+        col("non_nullable_col", &schema)?,
+        Some(SortOptions::new(false, true)),
+    )]
+    .into();
+    let physical_plan = Arc::new(OutputRequirementExec::new(
+        bounded_window2,
+        Some(OrderingRequirements::new(requirement)),
+        Distribution::SinglePartition,
+    ));
+
+    let expected_input = [
+        "OutputRequirementExec",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "      SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "OutputRequirementExec",
+    //     "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+    //     "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
+    //     "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "OutputRequirementExec",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "        SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_window_multi_path_sort() -> Result<()> {
+    let schema = create_test_schema()?;
+    let ordering1 = [
+        sort_expr("nullable_col", &schema),
+        sort_expr("non_nullable_col", &schema),
+    ]
+    .into();
+    let ordering2 = [sort_expr("nullable_col", &schema)].into();
+    // Reverse of the above
+    let ordering3: LexOrdering = [sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let source1 = parquet_exec_with_sort(schema.clone(), vec![ordering1]);
+    let source2 = parquet_exec_with_sort(schema, vec![ordering2]);
+    let sort1 = sort_exec(ordering3.clone(), source1);
+    let sort2 = sort_exec(ordering3.clone(), source2);
     let union = union_exec(vec![sort1, sort2]);
-    let spm = sort_preserving_merge_exec(sort_exprs3.clone(), union);
-    let physical_plan = bounded_window_exec("nullable_col", sort_exprs3, spm);
+    let spm = sort_preserving_merge_exec(ordering3.clone(), union);
+    let physical_plan = bounded_window_exec("nullable_col", ordering3, spm);
 
     // The `WindowAggExec` gets its sorting from multiple children jointly.
     // During the removal of `SortExec`s, it should be able to remove the
@@ -675,13 +1048,15 @@ async fn test_window_multi_path_sort() -> Result<()> {
         "      SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
         "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], file_type=parquet",
         "      SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet"];
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
+    ];
     let expected_optimized = [
         "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL), is_causal: false }]",
         "  SortPreservingMergeExec: [nullable_col@0 ASC]",
         "    UnionExec",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], file_type=parquet",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -690,35 +1065,38 @@ async fn test_window_multi_path_sort() -> Result<()> {
 #[tokio::test]
 async fn test_window_multi_path_sort2() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let sort_exprs1 = LexOrdering::new(vec![
+    let ordering1: LexOrdering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ]);
-    let sort_exprs2 = vec![sort_expr("nullable_col", &schema)];
-    let source1 = parquet_exec_sorted(&schema, sort_exprs2.clone());
-    let source2 = parquet_exec_sorted(&schema, sort_exprs2.clone());
-    let sort1 = sort_exec(sort_exprs1.clone(), source1);
-    let sort2 = sort_exec(sort_exprs1.clone(), source2);
-
+    ]
+    .into();
+    let ordering2: LexOrdering = [sort_expr("nullable_col", &schema)].into();
+    let source1 = parquet_exec_with_sort(schema.clone(), vec![ordering2.clone()]);
+    let source2 = parquet_exec_with_sort(schema, vec![ordering2.clone()]);
+    let sort1 = sort_exec(ordering1.clone(), source1);
+    let sort2 = sort_exec(ordering1.clone(), source2);
     let union = union_exec(vec![sort1, sort2]);
-    let spm = Arc::new(SortPreservingMergeExec::new(sort_exprs1, union)) as _;
-    let physical_plan = bounded_window_exec("nullable_col", sort_exprs2, spm);
+    let spm = Arc::new(SortPreservingMergeExec::new(ordering1, union)) as _;
+    let physical_plan = bounded_window_exec("nullable_col", ordering2, spm);
 
     // The `WindowAggExec` can get its required sorting from the leaf nodes directly.
     // The unnecessary SortExecs should be removed
-    let expected_input = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "    UnionExec",
         "      SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
         "      SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet"];
-    let expected_optimized = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
+    ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  SortPreservingMergeExec: [nullable_col@0 ASC]",
         "    UnionExec",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -727,13 +1105,13 @@ async fn test_window_multi_path_sort2() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted_with_limit() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
-    let sort_exprs1 = vec![
+    let source1 = parquet_exec(schema.clone());
+    let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let sort_exprs2 = vec![
+    ]
+    .into();
+    let ordering2 = [
         sort_expr("nullable_col", &schema),
         sort_expr_options(
             "non_nullable_col",
@@ -743,34 +1121,37 @@ async fn test_union_inputs_different_sorted_with_limit() -> Result<()> {
                 nulls_first: false,
             },
         ),
-    ];
-    let sort_exprs3 = vec![sort_expr("nullable_col", &schema)];
-    let sort1 = sort_exec(sort_exprs1, source1.clone());
-
-    let sort2 = sort_exec(sort_exprs2, source1);
-    let limit = local_limit_exec(sort2);
-    let limit = global_limit_exec(limit);
-
+    ]
+    .into();
+    let sort1 = sort_exec(ordering1, source1.clone());
+    let sort2 = sort_exec(ordering2, source1);
+    let limit = local_limit_exec(sort2, 100);
+    let limit = global_limit_exec(limit, 0, Some(100));
     let union = union_exec(vec![sort1, limit]);
-    let physical_plan = sort_preserving_merge_exec(sort_exprs3, union);
+    let ordering3 = [sort_expr("nullable_col", &schema)].into();
+    let physical_plan = sort_preserving_merge_exec(ordering3, union);
 
     // Should not change the unnecessarily fine `SortExec`s because there is `LimitExec`
-    let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    GlobalLimitExec: skip=0, fetch=100",
         "      LocalLimitExec: fetch=100",
         "        SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 DESC NULLS LAST], preserve_partitioning=[false]",
-        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
-    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    let expected_optimized = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  UnionExec",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    GlobalLimitExec: skip=0, fetch=100",
         "      LocalLimitExec: fetch=100",
         "        SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 DESC NULLS LAST], preserve_partitioning=[false]",
-        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -781,13 +1162,13 @@ async fn test_sort_merge_join_order_by_left() -> Result<()> {
     let left_schema = create_test_schema()?;
     let right_schema = create_test_schema2()?;
 
-    let left = parquet_exec(&left_schema);
-    let right = parquet_exec(&right_schema);
+    let left = parquet_exec(left_schema);
+    let right = parquet_exec(right_schema);
 
     // Join on (nullable_col == col_a)
     let join_on = vec![(
-        Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap()) as _,
-        Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
+        Arc::new(Column::new_with_schema("nullable_col", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("col_a", &right.schema())?) as _,
     )];
 
     let join_types = vec![
@@ -801,11 +1182,12 @@ async fn test_sort_merge_join_order_by_left() -> Result<()> {
     for join_type in join_types {
         let join =
             sort_merge_join_exec(left.clone(), right.clone(), &join_on, &join_type);
-        let sort_exprs = vec![
+        let ordering = [
             sort_expr("nullable_col", &join.schema()),
             sort_expr("non_nullable_col", &join.schema()),
-        ];
-        let physical_plan = sort_preserving_merge_exec(sort_exprs.clone(), join);
+        ]
+        .into();
+        let physical_plan = sort_preserving_merge_exec(ordering, join);
 
         let join_plan = format!(
             "SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
@@ -853,13 +1235,13 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
     let left_schema = create_test_schema()?;
     let right_schema = create_test_schema2()?;
 
-    let left = parquet_exec(&left_schema);
-    let right = parquet_exec(&right_schema);
+    let left = parquet_exec(left_schema);
+    let right = parquet_exec(right_schema);
 
     // Join on (nullable_col == col_a)
     let join_on = vec![(
-        Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap()) as _,
-        Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
+        Arc::new(Column::new_with_schema("nullable_col", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("col_a", &right.schema())?) as _,
     )];
 
     let join_types = vec![
@@ -872,11 +1254,12 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
     for join_type in join_types {
         let join =
             sort_merge_join_exec(left.clone(), right.clone(), &join_on, &join_type);
-        let sort_exprs = vec![
+        let ordering = [
             sort_expr("col_a", &join.schema()),
             sort_expr("col_b", &join.schema()),
-        ];
-        let physical_plan = sort_preserving_merge_exec(sort_exprs, join);
+        ]
+        .into();
+        let physical_plan = sort_preserving_merge_exec(ordering, join);
 
         let join_plan = format!(
             "SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
@@ -925,58 +1308,65 @@ async fn test_sort_merge_join_complex_order_by() -> Result<()> {
     let left_schema = create_test_schema()?;
     let right_schema = create_test_schema2()?;
 
-    let left = parquet_exec(&left_schema);
-    let right = parquet_exec(&right_schema);
+    let left = parquet_exec(left_schema);
+    let right = parquet_exec(right_schema);
 
     // Join on (nullable_col == col_a)
     let join_on = vec![(
-        Arc::new(Column::new_with_schema("nullable_col", &left.schema()).unwrap()) as _,
-        Arc::new(Column::new_with_schema("col_a", &right.schema()).unwrap()) as _,
+        Arc::new(Column::new_with_schema("nullable_col", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("col_a", &right.schema())?) as _,
     )];
 
     let join = sort_merge_join_exec(left, right, &join_on, &JoinType::Inner);
 
     // order by (col_b, col_a)
-    let sort_exprs1 = vec![
+    let ordering = [
         sort_expr("col_b", &join.schema()),
         sort_expr("col_a", &join.schema()),
-    ];
-    let physical_plan = sort_preserving_merge_exec(sort_exprs1, join.clone());
+    ]
+    .into();
+    let physical_plan = sort_preserving_merge_exec(ordering, join.clone());
 
-    let expected_input = ["SortPreservingMergeExec: [col_b@3 ASC, col_a@2 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [col_b@3 ASC, col_a@2 ASC]",
         "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet"];
-
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet",
+    ];
     // can not push down the sort requirements, need to add SortExec
-    let expected_optimized = ["SortExec: expr=[col_b@3 ASC, col_a@2 ASC], preserve_partitioning=[false]",
+    let expected_optimized = [
+        "SortExec: expr=[col_b@3 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
         "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
         "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
         "    SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet"];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     // order by (nullable_col, col_b, col_a)
-    let sort_exprs2 = vec![
+    let ordering2 = [
         sort_expr("nullable_col", &join.schema()),
         sort_expr("col_b", &join.schema()),
         sort_expr("col_a", &join.schema()),
-    ];
-    let physical_plan = sort_preserving_merge_exec(sort_exprs2, join);
+    ]
+    .into();
+    let physical_plan = sort_preserving_merge_exec(ordering2, join);
 
-    let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC, col_b@3 ASC, col_a@2 ASC]",
+    let expected_input = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC, col_b@3 ASC, col_a@2 ASC]",
         "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
-        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet"];
-
-    // can not push down the sort requirements, need to add SortExec
-    let expected_optimized = ["SortExec: expr=[nullable_col@0 ASC, col_b@3 ASC, col_a@2 ASC], preserve_partitioning=[false]",
-        "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
-        "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
-        "    SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet"];
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet",
+    ];
+    // Can push down the sort requirements since col_a = nullable_col
+    let expected_optimized = [
+        "SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
+        "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+        "  SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -985,33 +1375,34 @@ async fn test_sort_merge_join_complex_order_by() -> Result<()> {
 #[tokio::test]
 async fn test_multilayer_coalesce_partitions() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let repartition = repartition_exec(source1);
-    let coalesce = Arc::new(CoalescePartitionsExec::new(repartition)) as _;
+    let coalesce = coalesce_partitions_exec(repartition) as _;
     // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
     let filter = filter_exec(
-        Arc::new(NotExpr::new(
-            col("non_nullable_col", schema.as_ref()).unwrap(),
-        )),
+        Arc::new(NotExpr::new(col("non_nullable_col", schema.as_ref())?)),
         coalesce,
     );
-    let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let physical_plan = sort_exec(sort_exprs, filter);
+    let ordering = [sort_expr("nullable_col", &schema)].into();
+    let physical_plan = sort_exec(ordering, filter);
 
     // CoalescePartitionsExec and SortExec are not directly consecutive. In this case
     // we should be able to parallelize Sorting also (given that executors in between don't require)
     // single partition.
-    let expected_input = ["SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
+    let expected_input = [
+        "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "  FilterExec: NOT non_nullable_col@1",
         "    CoalescePartitionsExec",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
-    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    let expected_optimized = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[true]",
         "    FilterExec: NOT non_nullable_col@1",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -1020,26 +1411,30 @@ async fn test_multilayer_coalesce_partitions() -> Result<()> {
 #[tokio::test]
 async fn test_with_lost_ordering_bounded() -> Result<()> {
     let schema = create_test_schema3()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let sort_exprs = [sort_expr("a", &schema)];
     let source = csv_exec_sorted(&schema, sort_exprs);
     let repartition_rr = repartition_exec(source);
     let repartition_hash = Arc::new(RepartitionExec::try_new(
         repartition_rr,
-        Partitioning::Hash(vec![col("c", &schema).unwrap()], 10),
+        Partitioning::Hash(vec![col("c", &schema)?], 10),
     )?) as _;
     let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-    let physical_plan = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
+    let physical_plan = sort_exec([sort_expr("a", &schema)].into(), coalesce_partitions);
 
-    let expected_input = ["SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+    let expected_input = [
+        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
         "  CoalescePartitionsExec",
         "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false"];
-    let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC]",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false",
+    ];
+    let expected_optimized = [
+        "SortPreservingMergeExec: [a@0 ASC]",
         "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
         "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false"];
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -1051,20 +1446,20 @@ async fn test_with_lost_ordering_unbounded_bounded(
     #[values(false, true)] source_unbounded: bool,
 ) -> Result<()> {
     let schema = create_test_schema3()?;
-    let sort_exprs = vec![sort_expr("a", &schema)];
+    let sort_exprs = [sort_expr("a", &schema)];
     // create either bounded or unbounded source
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered(&schema, sort_exprs.clone().into())
     } else {
-        csv_exec_ordered(&schema, sort_exprs)
+        csv_exec_sorted(&schema, sort_exprs.clone())
     };
     let repartition_rr = repartition_exec(source);
     let repartition_hash = Arc::new(RepartitionExec::try_new(
         repartition_rr,
-        Partitioning::Hash(vec![col("c", &schema).unwrap()], 10),
+        Partitioning::Hash(vec![col("c", &schema)?], 10),
     )?) as _;
     let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-    let physical_plan = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
+    let physical_plan = sort_exec(sort_exprs.into(), coalesce_partitions);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = vec![
@@ -1079,7 +1474,7 @@ async fn test_with_lost_ordering_unbounded_bounded(
         "  CoalescePartitionsExec",
         "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=true",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false",
     ];
 
     // Expected unbounded result (same for with and without flag)
@@ -1096,14 +1491,14 @@ async fn test_with_lost_ordering_unbounded_bounded(
         "  CoalescePartitionsExec",
         "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=true",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false",
     ];
     let expected_optimized_bounded_parallelize_sort = vec![
         "SortPreservingMergeExec: [a@0 ASC]",
         "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
         "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=true",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false",
     ];
     let (expected_input, expected_optimized, expected_optimized_sort_parallelize) =
         if source_unbounded {
@@ -1138,20 +1533,24 @@ async fn test_with_lost_ordering_unbounded_bounded(
 #[tokio::test]
 async fn test_do_not_pushdown_through_spm() -> Result<()> {
     let schema = create_test_schema3()?;
-    let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+    let sort_exprs = [sort_expr("a", &schema), sort_expr("b", &schema)];
     let source = csv_exec_sorted(&schema, sort_exprs.clone());
     let repartition_rr = repartition_exec(source);
-    let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
-    let physical_plan = sort_exec(vec![sort_expr("b", &schema)], spm);
+    let spm = sort_preserving_merge_exec(sort_exprs.into(), repartition_rr);
+    let physical_plan = sort_exec([sort_expr("b", &schema)].into(), spm);
 
-    let expected_input = ["SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
+    let expected_input = [
+        "SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
         "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
         "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false",];
-    let expected_optimized = ["SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false",
+    ];
+    let expected_optimized = [
+        "SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
         "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
         "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false",];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, false);
 
     Ok(())
@@ -1160,27 +1559,31 @@ async fn test_do_not_pushdown_through_spm() -> Result<()> {
 #[tokio::test]
 async fn test_pushdown_through_spm() -> Result<()> {
     let schema = create_test_schema3()?;
-    let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+    let sort_exprs = [sort_expr("a", &schema), sort_expr("b", &schema)];
     let source = csv_exec_sorted(&schema, sort_exprs.clone());
     let repartition_rr = repartition_exec(source);
-    let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
+    let spm = sort_preserving_merge_exec(sort_exprs.into(), repartition_rr);
     let physical_plan = sort_exec(
-        vec![
+        [
             sort_expr("a", &schema),
             sort_expr("b", &schema),
             sort_expr("c", &schema),
-        ],
+        ]
+        .into(),
         spm,
     );
 
-    let expected_input = ["SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
+    let expected_input = [
+        "SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
         "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
         "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false",];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false",
+    ];
     let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
         "  SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[true]",
         "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false",];
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, false);
 
     Ok(())
@@ -1189,13 +1592,12 @@ async fn test_pushdown_through_spm() -> Result<()> {
 #[tokio::test]
 async fn test_window_multi_layer_requirement() -> Result<()> {
     let schema = create_test_schema3()?;
-    let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+    let sort_exprs = [sort_expr("a", &schema), sort_expr("b", &schema)];
     let source = csv_exec_sorted(&schema, vec![]);
-    let sort = sort_exec(sort_exprs.clone(), source);
+    let sort = sort_exec(sort_exprs.clone().into(), source);
     let repartition = repartition_exec(sort);
     let repartition = spr_repartition_exec(repartition);
-    let spm = sort_preserving_merge_exec(sort_exprs.clone(), repartition);
-
+    let spm = sort_preserving_merge_exec(sort_exprs.clone().into(), repartition);
     let physical_plan = bounded_window_exec("a", sort_exprs, spm);
 
     let expected_input = [
@@ -1221,15 +1623,15 @@ async fn test_window_multi_layer_requirement() -> Result<()> {
 #[tokio::test]
 async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
-    let parquet_input = parquet_exec_sorted(&schema, input_sort_exprs);
-
+    let parquet_ordering = [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let parquet_input = parquet_exec_with_sort(schema.clone(), vec![parquet_ordering]);
     let physical_plan = sort_exec(
-        vec![
+        [
             sort_expr("a", &schema),
             sort_expr("b", &schema),
             sort_expr("c", &schema),
-        ],
+        ]
+        .into(),
         parquet_input,
     );
     let expected_input = [
@@ -1333,8 +1735,8 @@ macro_rules! assert_optimized {
 async fn test_remove_unnecessary_sort() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let input = sort_exec(vec![sort_expr("non_nullable_col", &schema)], source);
-    let physical_plan = sort_exec(vec![sort_expr("nullable_col", &schema)], input);
+    let input = sort_exec([sort_expr("non_nullable_col", &schema)].into(), source);
+    let physical_plan = sort_exec([sort_expr("nullable_col", &schema)].into(), input);
 
     let expected_input = [
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
@@ -1354,57 +1756,54 @@ async fn test_remove_unnecessary_sort() -> Result<()> {
 async fn test_remove_unnecessary_sort_window_multilayer() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-
-    let sort_exprs = vec![sort_expr_options(
+    let ordering: LexOrdering = [sort_expr_options(
         "non_nullable_col",
         &source.schema(),
         SortOptions {
             descending: true,
             nulls_first: true,
         },
-    )];
-    let sort = sort_exec(sort_exprs.clone(), source);
+    )]
+    .into();
+    let sort = sort_exec(ordering.clone(), source);
     // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
-    let coalesce_batches = coalesce_batches_exec(sort);
-
-    let window_agg =
-        bounded_window_exec("non_nullable_col", sort_exprs, coalesce_batches);
-
-    let sort_exprs = vec![sort_expr_options(
+    let coalesce_batches = coalesce_batches_exec(sort, 128);
+    let window_agg = bounded_window_exec("non_nullable_col", ordering, coalesce_batches);
+    let ordering2: LexOrdering = [sort_expr_options(
         "non_nullable_col",
         &window_agg.schema(),
         SortOptions {
             descending: false,
             nulls_first: false,
         },
-    )];
-
-    let sort = sort_exec(sort_exprs.clone(), window_agg);
-
+    )]
+    .into();
+    let sort = sort_exec(ordering2.clone(), window_agg);
     // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
     let filter = filter_exec(
-        Arc::new(NotExpr::new(
-            col("non_nullable_col", schema.as_ref()).unwrap(),
-        )),
+        Arc::new(NotExpr::new(col("non_nullable_col", schema.as_ref())?)),
         sort,
     );
+    let physical_plan = bounded_window_exec("non_nullable_col", ordering2, filter);
 
-    let physical_plan = bounded_window_exec("non_nullable_col", sort_exprs, filter);
-
-    let expected_input = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  FilterExec: NOT non_nullable_col@1",
         "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
         "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "        CoalesceBatchesExec: target_batch_size=128",
         "          SortExec: expr=[non_nullable_col@1 DESC], preserve_partitioning=[false]",
-        "            DataSourceExec: partitions=1, partition_sizes=[0]"];
+        "            DataSourceExec: partitions=1, partition_sizes=[0]"
+    ];
 
-    let expected_optimized = ["WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL), is_causal: false }]",
+    let expected_optimized = [
+        "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL), is_causal: false }]",
         "  FilterExec: NOT non_nullable_col@1",
         "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "      CoalesceBatchesExec: target_batch_size=128",
         "        SortExec: expr=[non_nullable_col@1 DESC], preserve_partitioning=[false]",
-        "          DataSourceExec: partitions=1, partition_sizes=[0]"];
+        "          DataSourceExec: partitions=1, partition_sizes=[0]"
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -1414,10 +1813,8 @@ async fn test_remove_unnecessary_sort_window_multilayer() -> Result<()> {
 async fn test_add_required_sort() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-
-    let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-
-    let physical_plan = sort_preserving_merge_exec(sort_exprs, source);
+    let ordering = [sort_expr("nullable_col", &schema)].into();
+    let physical_plan = sort_preserving_merge_exec(ordering, source);
 
     let expected_input = [
         "SortPreservingMergeExec: [nullable_col@0 ASC]",
@@ -1436,13 +1833,12 @@ async fn test_add_required_sort() -> Result<()> {
 async fn test_remove_unnecessary_sort1() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let sort = sort_exec(sort_exprs.clone(), source);
-    let spm = sort_preserving_merge_exec(sort_exprs, sort);
+    let ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
+    let sort = sort_exec(ordering.clone(), source);
+    let spm = sort_preserving_merge_exec(ordering.clone(), sort);
+    let sort = sort_exec(ordering.clone(), spm);
+    let physical_plan = sort_preserving_merge_exec(ordering, sort);
 
-    let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let sort = sort_exec(sort_exprs.clone(), spm);
-    let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
     let expected_input = [
         "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
@@ -1463,19 +1859,18 @@ async fn test_remove_unnecessary_sort1() -> Result<()> {
 async fn test_remove_unnecessary_sort2() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let sort_exprs = vec![sort_expr("non_nullable_col", &schema)];
-    let sort = sort_exec(sort_exprs.clone(), source);
-    let spm = sort_preserving_merge_exec(sort_exprs, sort);
-
-    let sort_exprs = vec![
+    let ordering: LexOrdering = [sort_expr("non_nullable_col", &schema)].into();
+    let sort = sort_exec(ordering.clone(), source);
+    let spm = sort_preserving_merge_exec(ordering, sort);
+    let ordering2: LexOrdering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let sort2 = sort_exec(sort_exprs.clone(), spm);
-    let spm2 = sort_preserving_merge_exec(sort_exprs, sort2);
-
-    let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-    let sort3 = sort_exec(sort_exprs, spm2);
+    ]
+    .into();
+    let sort2 = sort_exec(ordering2.clone(), spm);
+    let spm2 = sort_preserving_merge_exec(ordering2, sort2);
+    let ordering3 = [sort_expr("nullable_col", &schema)].into();
+    let sort3 = sort_exec(ordering3, spm2);
     let physical_plan = repartition_exec(repartition_exec(sort3));
 
     let expected_input = [
@@ -1488,7 +1883,6 @@ async fn test_remove_unnecessary_sort2() -> Result<()> {
         "            SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "              DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
-
     let expected_optimized = [
         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
         "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -1503,21 +1897,20 @@ async fn test_remove_unnecessary_sort2() -> Result<()> {
 async fn test_remove_unnecessary_sort3() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let sort_exprs = vec![sort_expr("non_nullable_col", &schema)];
-    let sort = sort_exec(sort_exprs.clone(), source);
-    let spm = sort_preserving_merge_exec(sort_exprs, sort);
-
-    let sort_exprs = LexOrdering::new(vec![
+    let ordering: LexOrdering = [sort_expr("non_nullable_col", &schema)].into();
+    let sort = sort_exec(ordering.clone(), source);
+    let spm = sort_preserving_merge_exec(ordering, sort);
+    let repartition_exec = repartition_exec(spm);
+    let ordering2: LexOrdering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ]);
-    let repartition_exec = repartition_exec(spm);
+    ]
+    .into();
     let sort2 = Arc::new(
-        SortExec::new(sort_exprs.clone(), repartition_exec)
+        SortExec::new(ordering2.clone(), repartition_exec)
             .with_preserve_partitioning(true),
     ) as _;
-    let spm2 = sort_preserving_merge_exec(sort_exprs, sort2);
-
+    let spm2 = sort_preserving_merge_exec(ordering2, sort2);
     let physical_plan = aggregate_exec(spm2);
 
     // When removing a `SortPreservingMergeExec`, make sure that partitioning
@@ -1532,7 +1925,6 @@ async fn test_remove_unnecessary_sort3() -> Result<()> {
         "          SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "            DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
-
     let expected_optimized = [
         "AggregateExec: mode=Final, gby=[], aggr=[]",
         "  CoalescePartitionsExec",
@@ -1548,34 +1940,29 @@ async fn test_remove_unnecessary_sort3() -> Result<()> {
 async fn test_remove_unnecessary_sort4() -> Result<()> {
     let schema = create_test_schema()?;
     let source1 = repartition_exec(memory_exec(&schema));
-
     let source2 = repartition_exec(memory_exec(&schema));
     let union = union_exec(vec![source1, source2]);
-
-    let sort_exprs = LexOrdering::new(vec![sort_expr("non_nullable_col", &schema)]);
-    // let sort = sort_exec(sort_exprs.clone(), union);
-    let sort = Arc::new(
-        SortExec::new(sort_exprs.clone(), union).with_preserve_partitioning(true),
-    ) as _;
-    let spm = sort_preserving_merge_exec(sort_exprs, sort);
-
+    let ordering: LexOrdering = [sort_expr("non_nullable_col", &schema)].into();
+    let sort =
+        Arc::new(SortExec::new(ordering.clone(), union).with_preserve_partitioning(true))
+            as _;
+    let spm = sort_preserving_merge_exec(ordering, sort);
     let filter = filter_exec(
-        Arc::new(NotExpr::new(
-            col("non_nullable_col", schema.as_ref()).unwrap(),
-        )),
+        Arc::new(NotExpr::new(col("non_nullable_col", schema.as_ref())?)),
         spm,
     );
-
-    let sort_exprs = vec![
+    let ordering2 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let physical_plan = sort_exec(sort_exprs, filter);
+    ]
+    .into();
+    let physical_plan = sort_exec(ordering2, filter);
 
     // When removing a `SortPreservingMergeExec`, make sure that partitioning
     // requirements are not violated. In some cases, we may need to replace
     // it with a `CoalescePartitionsExec` instead of directly removing it.
-    let expected_input = ["SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
+    let expected_input = [
+        "SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "  FilterExec: NOT non_nullable_col@1",
         "    SortPreservingMergeExec: [non_nullable_col@1 ASC]",
         "      SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[true]",
@@ -1583,16 +1970,18 @@ async fn test_remove_unnecessary_sort4() -> Result<()> {
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "            DataSourceExec: partitions=1, partition_sizes=[0]",
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "            DataSourceExec: partitions=1, partition_sizes=[0]"];
-
-    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
+        "            DataSourceExec: partitions=1, partition_sizes=[0]",
+    ];
+    let expected_optimized = [
+        "SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[true]",
         "    FilterExec: NOT non_nullable_col@1",
         "      UnionExec",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "          DataSourceExec: partitions=1, partition_sizes=[0]",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "          DataSourceExec: partitions=1, partition_sizes=[0]"];
+        "          DataSourceExec: partitions=1, partition_sizes=[0]",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -1602,18 +1991,17 @@ async fn test_remove_unnecessary_sort4() -> Result<()> {
 async fn test_remove_unnecessary_sort6() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let input = Arc::new(
-        SortExec::new(
-            LexOrdering::new(vec![sort_expr("non_nullable_col", &schema)]),
-            source,
-        )
-        .with_fetch(Some(2)),
+    let input = sort_exec_with_fetch(
+        [sort_expr("non_nullable_col", &schema)].into(),
+        Some(2),
+        source,
     );
     let physical_plan = sort_exec(
-        vec![
+        [
             sort_expr("non_nullable_col", &schema),
             sort_expr("nullable_col", &schema),
-        ],
+        ]
+        .into(),
         input,
     );
 
@@ -1635,21 +2023,19 @@ async fn test_remove_unnecessary_sort6() -> Result<()> {
 async fn test_remove_unnecessary_sort7() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let input = Arc::new(SortExec::new(
-        LexOrdering::new(vec![
+    let input = sort_exec(
+        [
             sort_expr("non_nullable_col", &schema),
             sort_expr("nullable_col", &schema),
-        ]),
+        ]
+        .into(),
         source,
-    ));
-
-    let physical_plan = Arc::new(
-        SortExec::new(
-            LexOrdering::new(vec![sort_expr("non_nullable_col", &schema)]),
-            input,
-        )
-        .with_fetch(Some(2)),
-    ) as Arc<dyn ExecutionPlan>;
+    );
+    let physical_plan = sort_exec_with_fetch(
+        [sort_expr("non_nullable_col", &schema)].into(),
+        Some(2),
+        input,
+    );
 
     let expected_input = [
         "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false], sort_prefix=[non_nullable_col@1 ASC]",
@@ -1670,16 +2056,14 @@ async fn test_remove_unnecessary_sort7() -> Result<()> {
 async fn test_remove_unnecessary_sort8() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let input = Arc::new(SortExec::new(
-        LexOrdering::new(vec![sort_expr("non_nullable_col", &schema)]),
-        source,
-    ));
+    let input = sort_exec([sort_expr("non_nullable_col", &schema)].into(), source);
     let limit = Arc::new(LocalLimitExec::new(input, 2));
     let physical_plan = sort_exec(
-        vec![
+        [
             sort_expr("non_nullable_col", &schema),
             sort_expr("nullable_col", &schema),
-        ],
+        ]
+        .into(),
         limit,
     );
 
@@ -1703,13 +2087,9 @@ async fn test_remove_unnecessary_sort8() -> Result<()> {
 async fn test_do_not_pushdown_through_limit() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    // let input = sort_exec(vec![sort_expr("non_nullable_col", &schema)], source);
-    let input = Arc::new(SortExec::new(
-        LexOrdering::new(vec![sort_expr("non_nullable_col", &schema)]),
-        source,
-    ));
+    let input = sort_exec([sort_expr("non_nullable_col", &schema)].into(), source);
     let limit = Arc::new(GlobalLimitExec::new(input, 0, Some(5))) as _;
-    let physical_plan = sort_exec(vec![sort_expr("nullable_col", &schema)], limit);
+    let physical_plan = sort_exec([sort_expr("nullable_col", &schema)].into(), limit);
 
     let expected_input = [
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
@@ -1732,12 +2112,11 @@ async fn test_do_not_pushdown_through_limit() -> Result<()> {
 async fn test_remove_unnecessary_spm1() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let input =
-        sort_preserving_merge_exec(vec![sort_expr("non_nullable_col", &schema)], source);
-    let input2 =
-        sort_preserving_merge_exec(vec![sort_expr("non_nullable_col", &schema)], input);
+    let ordering: LexOrdering = [sort_expr("non_nullable_col", &schema)].into();
+    let input = sort_preserving_merge_exec(ordering.clone(), source);
+    let input2 = sort_preserving_merge_exec(ordering, input);
     let physical_plan =
-        sort_preserving_merge_exec(vec![sort_expr("nullable_col", &schema)], input2);
+        sort_preserving_merge_exec([sort_expr("nullable_col", &schema)].into(), input2);
 
     let expected_input = [
         "SortPreservingMergeExec: [nullable_col@0 ASC]",
@@ -1759,7 +2138,7 @@ async fn test_remove_unnecessary_spm2() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
     let input = sort_preserving_merge_exec_with_fetch(
-        vec![sort_expr("non_nullable_col", &schema)],
+        [sort_expr("non_nullable_col", &schema)].into(),
         source,
         100,
     );
@@ -1782,12 +2161,13 @@ async fn test_remove_unnecessary_spm2() -> Result<()> {
 async fn test_change_wrong_sorting() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let sort_exprs = vec![
+    let sort_exprs = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
     ];
-    let sort = sort_exec(vec![sort_exprs[0].clone()], source);
-    let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
+    let sort = sort_exec([sort_exprs[0].clone()].into(), source);
+    let physical_plan = sort_preserving_merge_exec(sort_exprs.into(), sort);
+
     let expected_input = [
         "SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
@@ -1806,13 +2186,13 @@ async fn test_change_wrong_sorting() -> Result<()> {
 async fn test_change_wrong_sorting2() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-    let sort_exprs = vec![
+    let sort_exprs = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
     ];
-    let spm1 = sort_preserving_merge_exec(sort_exprs.clone(), source);
-    let sort2 = sort_exec(vec![sort_exprs[0].clone()], spm1);
-    let physical_plan = sort_preserving_merge_exec(vec![sort_exprs[1].clone()], sort2);
+    let spm1 = sort_preserving_merge_exec(sort_exprs.clone().into(), source);
+    let sort2 = sort_exec([sort_exprs[0].clone()].into(), spm1);
+    let physical_plan = sort_preserving_merge_exec([sort_exprs[1].clone()].into(), sort2);
 
     let expected_input = [
         "SortPreservingMergeExec: [non_nullable_col@1 ASC]",
@@ -1833,31 +2213,31 @@ async fn test_change_wrong_sorting2() -> Result<()> {
 async fn test_multiple_sort_window_exec() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
-
-    let sort_exprs1 = vec![sort_expr("nullable_col", &schema)];
-    let sort_exprs2 = vec![
+    let ordering1 = [sort_expr("nullable_col", &schema)];
+    let sort1 = sort_exec(ordering1.clone().into(), source);
+    let window_agg1 = bounded_window_exec("non_nullable_col", ordering1.clone(), sort1);
+    let ordering2 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
     ];
+    let window_agg2 = bounded_window_exec("non_nullable_col", ordering2, window_agg1);
+    let physical_plan = bounded_window_exec("non_nullable_col", ordering1, window_agg2);
 
-    let sort1 = sort_exec(sort_exprs1.clone(), source);
-    let window_agg1 = bounded_window_exec("non_nullable_col", sort_exprs1.clone(), sort1);
-    let window_agg2 = bounded_window_exec("non_nullable_col", sort_exprs2, window_agg1);
-    // let filter_exec = sort_exec;
-    let physical_plan = bounded_window_exec("non_nullable_col", sort_exprs1, window_agg2);
-
-    let expected_input = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "      SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "        DataSourceExec: partitions=1, partition_sizes=[0]"];
-
-    let expected_optimized = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "        DataSourceExec: partitions=1, partition_sizes=[0]",
+    ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "        SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "          DataSourceExec: partitions=1, partition_sizes=[0]"];
+        "          DataSourceExec: partitions=1, partition_sizes=[0]",
+    ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -1871,15 +2251,12 @@ async fn test_multiple_sort_window_exec() -> Result<()> {
 // EnforceDistribution may invalidate ordering invariant.
 async fn test_commutativity() -> Result<()> {
     let schema = create_test_schema()?;
-    let config = ConfigOptions::new();
-
     let memory_exec = memory_exec(&schema);
-    let sort_exprs = LexOrdering::new(vec![sort_expr("nullable_col", &schema)]);
+    let sort_exprs = [sort_expr("nullable_col", &schema)];
     let window = bounded_window_exec("nullable_col", sort_exprs.clone(), memory_exec);
     let repartition = repartition_exec(window);
+    let orig_plan = sort_exec(sort_exprs.into(), repartition);
 
-    let orig_plan =
-        Arc::new(SortExec::new(sort_exprs, repartition)) as Arc<dyn ExecutionPlan>;
     let actual = get_plan_string(&orig_plan);
     let expected_input = vec![
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
@@ -1892,26 +2269,25 @@ async fn test_commutativity() -> Result<()> {
         "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_input:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let mut plan = orig_plan.clone();
+    let config = ConfigOptions::new();
     let rules = vec![
         Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
     ];
+    let mut first_plan = orig_plan.clone();
     for rule in rules {
-        plan = rule.optimize(plan, &config)?;
+        first_plan = rule.optimize(first_plan, &config)?;
     }
-    let first_plan = plan.clone();
 
-    let mut plan = orig_plan.clone();
     let rules = vec![
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
         Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
     ];
+    let mut second_plan = orig_plan.clone();
     for rule in rules {
-        plan = rule.optimize(plan, &config)?;
+        second_plan = rule.optimize(second_plan, &config)?;
     }
-    let second_plan = plan.clone();
 
     assert_eq!(get_plan_string(&first_plan), get_plan_string(&second_plan));
     Ok(())
@@ -1922,15 +2298,15 @@ async fn test_coalesce_propagate() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);
     let repartition = repartition_exec(source);
-    let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(repartition));
+    let coalesce_partitions = coalesce_partitions_exec(repartition);
     let repartition = repartition_exec(coalesce_partitions);
-    let sort_exprs = LexOrdering::new(vec![sort_expr("nullable_col", &schema)]);
+    let ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
     // Add local sort
     let sort = Arc::new(
-        SortExec::new(sort_exprs.clone(), repartition).with_preserve_partitioning(true),
+        SortExec::new(ordering.clone(), repartition).with_preserve_partitioning(true),
     ) as _;
-    let spm = sort_preserving_merge_exec(sort_exprs.clone(), sort);
-    let sort = sort_exec(sort_exprs, spm);
+    let spm = sort_preserving_merge_exec(ordering.clone(), sort);
+    let sort = sort_exec(ordering, spm);
 
     let physical_plan = sort.clone();
     // Sort Parallelize rule should end Coalesce + Sort linkage when Sort is Global Sort
@@ -1958,15 +2334,15 @@ async fn test_coalesce_propagate() -> Result<()> {
 #[tokio::test]
 async fn test_replace_with_partial_sort2() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = vec![sort_expr("a", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
-
+    let input_ordering = [sort_expr("a", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering);
     let physical_plan = sort_exec(
-        vec![
+        [
             sort_expr("a", &schema),
             sort_expr("c", &schema),
             sort_expr("d", &schema),
-        ],
+        ]
+        .into(),
         unbounded_input,
     );
 
@@ -1985,76 +2361,65 @@ async fn test_replace_with_partial_sort2() -> Result<()> {
 
 #[tokio::test]
 async fn test_push_with_required_input_ordering_prohibited() -> Result<()> {
-    // SortExec: expr=[b]            <-- can't push this down
-    //  RequiredInputOrder expr=[a]  <-- this requires input sorted by a, and preserves the input order
-    //    SortExec: expr=[a]
-    //      DataSourceExec
     let schema = create_test_schema3()?;
-    let sort_exprs_a = LexOrdering::new(vec![sort_expr("a", &schema)]);
-    let sort_exprs_b = LexOrdering::new(vec![sort_expr("b", &schema)]);
+    let ordering_a: LexOrdering = [sort_expr("a", &schema)].into();
+    let ordering_b: LexOrdering = [sort_expr("b", &schema)].into();
     let plan = memory_exec(&schema);
-    let plan = sort_exec(sort_exprs_a.clone(), plan);
+    let plan = sort_exec(ordering_a.clone(), plan);
     let plan = RequirementsTestExec::new(plan)
-        .with_required_input_ordering(sort_exprs_a)
+        .with_required_input_ordering(Some(ordering_a))
         .with_maintains_input_order(true)
         .into_arc();
-    let plan = sort_exec(sort_exprs_b, plan);
+    let plan = sort_exec(ordering_b, plan);
 
     let expected_input = [
-        "SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
-        "  RequiredInputOrderingExec",
+        "SortExec: expr=[b@1 ASC], preserve_partitioning=[false]", // <-- can't push this down
+        "  RequiredInputOrderingExec", // <-- this requires input sorted by a, and preserves the input order
         "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     // should not be able to push shorts
-    let expected_no_change = expected_input;
-    assert_optimized!(expected_input, expected_no_change, plan, true);
+    assert_optimized!(expected_input, expected_input, plan, true);
     Ok(())
 }
 
 // test when the required input ordering is satisfied so could push through
 #[tokio::test]
 async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
-    // SortExec: expr=[a,b]          <-- can push this down (as it is compatible with the required input ordering)
-    //  RequiredInputOrder expr=[a]  <-- this requires input sorted by a, and preserves the input order
-    //    SortExec: expr=[a]
-    //      DataSourceExec
     let schema = create_test_schema3()?;
-    let sort_exprs_a = LexOrdering::new(vec![sort_expr("a", &schema)]);
-    let sort_exprs_ab =
-        LexOrdering::new(vec![sort_expr("a", &schema), sort_expr("b", &schema)]);
+    let ordering_a: LexOrdering = [sort_expr("a", &schema)].into();
+    let ordering_ab = [sort_expr("a", &schema), sort_expr("b", &schema)].into();
     let plan = memory_exec(&schema);
-    let plan = sort_exec(sort_exprs_a.clone(), plan);
+    let plan = sort_exec(ordering_a.clone(), plan);
     let plan = RequirementsTestExec::new(plan)
-        .with_required_input_ordering(sort_exprs_a)
+        .with_required_input_ordering(Some(ordering_a))
         .with_maintains_input_order(true)
         .into_arc();
-    let plan = sort_exec(sort_exprs_ab, plan);
+    let plan = sort_exec(ordering_ab, plan);
 
     let expected_input = [
-        "SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]",
-        "  RequiredInputOrderingExec",
+        "SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]", // <-- can push this down (as it is compatible with the required input ordering)
+        "  RequiredInputOrderingExec", // <-- this requires input sorted by a, and preserves the input order
         "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
         "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
-    // should able to push shorts
-    let expected = [
+    // Should be able to push down
+    let expected_optimized = [
         "RequiredInputOrderingExec",
         "  SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]",
         "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
-    assert_optimized!(expected_input, expected, plan, true);
+    assert_optimized!(expected_input, expected_optimized, plan, true);
     Ok(())
 }
 
 #[tokio::test]
 async fn test_replace_with_partial_sort() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = vec![sort_expr("a", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
-
+    let input_ordering = [sort_expr("a", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering);
     let physical_plan = sort_exec(
-        vec![sort_expr("a", &schema), sort_expr("c", &schema)],
+        [sort_expr("a", &schema), sort_expr("c", &schema)].into(),
         unbounded_input,
     );
 
@@ -2073,38 +2438,38 @@ async fn test_replace_with_partial_sort() -> Result<()> {
 #[tokio::test]
 async fn test_not_replaced_with_partial_sort_for_unbounded_input() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
-
+    let input_ordering = [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering);
     let physical_plan = sort_exec(
-        vec![
+        [
             sort_expr("a", &schema),
             sort_expr("b", &schema),
             sort_expr("c", &schema),
-        ],
+        ]
+        .into(),
         unbounded_input,
     );
     let expected_input = [
         "SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
         "  StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
     ];
-    let expected_no_change = expected_input;
-    assert_optimized!(expected_input, expected_no_change, physical_plan, true);
+    assert_optimized!(expected_input, expected_input, physical_plan, true);
     Ok(())
 }
 
 #[tokio::test]
 async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
     let input_schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr_options(
+    let ordering = [sort_expr_options(
         "nullable_col",
         &input_schema,
         SortOptions {
             descending: false,
             nulls_first: false,
         },
-    )];
-    let source = parquet_exec_sorted(&input_schema, sort_exprs);
+    )]
+    .into();
+    let source = parquet_exec_with_sort(input_schema.clone(), vec![ordering]) as _;
 
     // Function definition - Alias of the resulting column - Arguments of the function
     #[derive(Clone)]
@@ -3307,7 +3672,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             case.func.1,
             &case.func.2,
             &partition_by,
-            &LexOrdering::default(),
+            &[],
             case.window_frame,
             input_schema.as_ref(),
             false,
@@ -3341,7 +3706,8 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
                 )
             })
             .collect::<Vec<_>>();
-        let physical_plan = sort_exec(sort_expr, window_exec);
+        let ordering = LexOrdering::new(sort_expr).unwrap();
+        let physical_plan = sort_exec(ordering, window_exec);
 
         assert_optimized!(
             case.initial_plan,
@@ -3358,11 +3724,11 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
 #[test]
 fn test_removes_unused_orthogonal_sort() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs.clone());
-
-    let orthogonal_sort = sort_exec(vec![sort_expr("a", &schema)], unbounded_input);
-    let output_sort = sort_exec(input_sort_exprs, orthogonal_sort); // same sort as data source
+    let input_ordering: LexOrdering =
+        [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering.clone());
+    let orthogonal_sort = sort_exec([sort_expr("a", &schema)].into(), unbounded_input);
+    let output_sort = sort_exec(input_ordering, orthogonal_sort); // same sort as data source
 
     // Test scenario/input has an orthogonal sort:
     let expected_input = [
@@ -3370,7 +3736,7 @@ fn test_removes_unused_orthogonal_sort() -> Result<()> {
         "  SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
         "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
     ];
-    assert_eq!(get_plan_string(&output_sort), expected_input,);
+    assert_eq!(get_plan_string(&output_sort), expected_input);
 
     // Test: should remove orthogonal sort, and the uppermost (unneeded) sort:
     let expected_optimized = [
@@ -3384,12 +3750,12 @@ fn test_removes_unused_orthogonal_sort() -> Result<()> {
 #[test]
 fn test_keeps_used_orthogonal_sort() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs.clone());
-
+    let input_ordering: LexOrdering =
+        [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering.clone());
     let orthogonal_sort =
-        sort_exec_with_fetch(vec![sort_expr("a", &schema)], Some(3), unbounded_input); // has fetch, so this orthogonal sort changes the output
-    let output_sort = sort_exec(input_sort_exprs, orthogonal_sort);
+        sort_exec_with_fetch([sort_expr("a", &schema)].into(), Some(3), unbounded_input); // has fetch, so this orthogonal sort changes the output
+    let output_sort = sort_exec(input_ordering, orthogonal_sort);
 
     // Test scenario/input has an orthogonal sort:
     let expected_input = [
@@ -3397,7 +3763,7 @@ fn test_keeps_used_orthogonal_sort() -> Result<()> {
         "  SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]",
         "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
     ];
-    assert_eq!(get_plan_string(&output_sort), expected_input,);
+    assert_eq!(get_plan_string(&output_sort), expected_input);
 
     // Test: should keep the orthogonal sort, since it modifies the output:
     let expected_optimized = expected_input;
@@ -3409,15 +3775,17 @@ fn test_keeps_used_orthogonal_sort() -> Result<()> {
 #[test]
 fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs.clone());
-
-    let orthogonal_sort_0 = sort_exec(vec![sort_expr("c", &schema)], unbounded_input); // has no fetch, so can be removed
+    let input_ordering: LexOrdering =
+        [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering.clone());
+    let ordering0: LexOrdering = [sort_expr("c", &schema)].into();
+    let orthogonal_sort_0 = sort_exec(ordering0.clone(), unbounded_input); // has no fetch, so can be removed
+    let ordering1: LexOrdering = [sort_expr("a", &schema)].into();
     let orthogonal_sort_1 =
-        sort_exec_with_fetch(vec![sort_expr("a", &schema)], Some(3), orthogonal_sort_0); // has fetch, so this orthogonal sort changes the output
-    let orthogonal_sort_2 = sort_exec(vec![sort_expr("c", &schema)], orthogonal_sort_1); // has no fetch, so can be removed
-    let orthogonal_sort_3 = sort_exec(vec![sort_expr("a", &schema)], orthogonal_sort_2); // has no fetch, so can be removed
-    let output_sort = sort_exec(input_sort_exprs, orthogonal_sort_3); // final sort
+        sort_exec_with_fetch(ordering1.clone(), Some(3), orthogonal_sort_0); // has fetch, so this orthogonal sort changes the output
+    let orthogonal_sort_2 = sort_exec(ordering0, orthogonal_sort_1); // has no fetch, so can be removed
+    let orthogonal_sort_3 = sort_exec(ordering1, orthogonal_sort_2); // has no fetch, so can be removed
+    let output_sort = sort_exec(input_ordering, orthogonal_sort_3); // final sort
 
     // Test scenario/input has an orthogonal sort:
     let expected_input = [
@@ -3428,7 +3796,7 @@ fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
         "        SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
         "          StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]",
     ];
-    assert_eq!(get_plan_string(&output_sort), expected_input,);
+    assert_eq!(get_plan_string(&output_sort), expected_input);
 
     // Test: should keep only the needed orthogonal sort, and remove the unneeded ones:
     let expected_optimized = [
@@ -3445,13 +3813,14 @@ fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
 fn test_parallelize_sort_preserves_fetch() -> Result<()> {
     // Create a schema
     let schema = create_test_schema3()?;
-    let parquet_exec = parquet_exec(&schema);
-    let coalesced = Arc::new(CoalescePartitionsExec::new(parquet_exec.clone()));
-    let top_coalesced =
-        Arc::new(CoalescePartitionsExec::new(coalesced.clone()).with_fetch(Some(10)));
+    let parquet_exec = parquet_exec(schema);
+    let coalesced = coalesce_partitions_exec(parquet_exec.clone());
+    let top_coalesced = coalesce_partitions_exec(coalesced.clone())
+        .with_fetch(Some(10))
+        .unwrap();
 
     let requirements = PlanWithCorrespondingCoalescePartitions::new(
-        top_coalesced.clone(),
+        top_coalesced,
         true,
         vec![PlanWithCorrespondingCoalescePartitions::new(
             coalesced,

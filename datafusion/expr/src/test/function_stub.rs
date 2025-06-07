@@ -179,10 +179,6 @@ impl AggregateUDFImpl for Sum {
         unreachable!("stub should not have state_fields()")
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         false
     }
@@ -344,10 +340,6 @@ impl AggregateUDFImpl for Min {
         not_impl_err!("no impl for stub")
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn create_groups_accumulator(
         &self,
         _args: AccumulatorArgs,
@@ -429,10 +421,6 @@ impl AggregateUDFImpl for Max {
         not_impl_err!("no impl for stub")
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn create_groups_accumulator(
         &self,
         _args: AccumulatorArgs,
@@ -494,6 +482,7 @@ impl AggregateUDFImpl for Avg {
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
