@@ -30,9 +30,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::cast;
-use datafusion_physical_expr::{expressions, expressions::col, PhysicalSortExpr};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr::expressions::{self, cast, col};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode},
     collect,
@@ -236,12 +235,13 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
 
 #[test]
 fn test_has_order_by() -> Result<()> {
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema()).unwrap(),
+    let schema = schema();
+    let sort_key = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
         options: SortOptions::default(),
-    }]);
-    let source = parquet_exec_with_sort(vec![sort_key]);
-    let schema = source.schema();
+    }]
+    .into();
+    let source = parquet_exec_with_sort(schema.clone(), vec![sort_key]);
 
     // `SELECT a FROM DataSourceExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
     // the `a > 1` filter is applied in the AggregateExec
@@ -263,7 +263,7 @@ fn test_has_order_by() -> Result<()> {
         "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], ordering_mode=Sorted",
         "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
-    let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
+    let plan = Arc::new(limit_exec) as _;
     assert_plan_matches_expected(&plan, &expected)?;
     Ok(())
 }

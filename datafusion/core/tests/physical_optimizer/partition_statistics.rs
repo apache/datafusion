@@ -17,6 +17,8 @@
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use arrow::array::{Int32Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion::datasource::listing::ListingTable;
@@ -32,7 +34,7 @@ mod test {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use datafusion_physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -49,8 +51,8 @@ mod test {
         execute_stream_partitioned, get_plan_string, ExecutionPlan,
         ExecutionPlanProperties,
     };
+
     use futures::TryStreamExt;
-    use std::sync::Arc;
 
     /// Creates a test table with statistics from the test data directory.
     ///
@@ -258,17 +260,12 @@ mod test {
     async fn test_statistics_by_partition_of_sort() -> Result<()> {
         let scan_1 = create_scan_exec_with_statistics(None, Some(1)).await;
         // Add sort execution plan
-        let sort = SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
-                expr: Arc::new(Column::new("id", 0)),
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }]),
-            scan_1,
-        );
-        let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(sort.clone());
+        let ordering = [PhysicalSortExpr::new(
+            Arc::new(Column::new("id", 0)),
+            SortOptions::new(false, false),
+        )];
+        let sort = SortExec::new(ordering.clone().into(), scan_1);
+        let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(sort);
         let statistics = (0..sort_exec.output_partitioning().partition_count())
             .map(|idx| sort_exec.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
@@ -284,17 +281,7 @@ mod test {
         let scan_2 = create_scan_exec_with_statistics(None, Some(2)).await;
         // Add sort execution plan
         let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(
-            SortExec::new(
-                LexOrdering::new(vec![PhysicalSortExpr {
-                    expr: Arc::new(Column::new("id", 0)),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                }]),
-                scan_2,
-            )
-            .with_preserve_partitioning(true),
+            SortExec::new(ordering.into(), scan_2).with_preserve_partitioning(true),
         );
         let expected_statistic_partition_1 =
             create_partition_statistics(2, 110, 3, 4, true);

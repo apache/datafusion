@@ -27,6 +27,7 @@ use crate::{
     execution::context::SessionState,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
+use arrow_schema::Schema;
 use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::{
@@ -47,7 +48,7 @@ use datafusion_expr::{
     dml::InsertOp, Expr, SortExpr, TableProviderFilterPushDown, TableType,
 };
 use datafusion_physical_expr::{LexOrdering, PhysicalSortRequirement};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -840,7 +841,7 @@ impl ListingTable {
             options,
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
         };
 
@@ -1101,25 +1102,9 @@ impl TableProvider for ListingTable {
             file_extension: self.options().format.get_ext(),
         };
 
-        let order_requirements = if !self.options().file_sort_order.is_empty() {
-            // Multiple sort orders in outer vec are equivalent, so we pass only the first one
-            let orderings = self.try_create_output_ordering()?;
-            let Some(ordering) = orderings.first() else {
-                return internal_err!(
-                    "Expected ListingTable to have a sort order, but none found!"
-                );
-            };
-            // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
-            Some(LexRequirement::new(
-                ordering
-                    .into_iter()
-                    .cloned()
-                    .map(PhysicalSortRequirement::from)
-                    .collect::<Vec<_>>(),
-            ))
-        } else {
-            None
-        };
+        let orderings = self.try_create_output_ordering()?;
+        // It is sufficient to pass only one of the equivalent orderings:
+        let order_requirements = orderings.into_iter().next().map(Into::into);
 
         self.options()
             .format
@@ -1325,7 +1310,10 @@ mod tests {
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
-    use crate::test::{columns, object_store::register_test_store};
+    use crate::test::columns;
+    use crate::test::object_store::{
+        ensure_head_concurrency, make_test_store_and_state, register_test_store,
+    };
 
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
@@ -1335,8 +1323,7 @@ mod tests {
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_plan::collect;
-    use datafusion_physical_plan::ExecutionPlanProperties;
+    use datafusion_physical_plan::{collect, ExecutionPlanProperties};
 
     use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
     use std::io::Write;
@@ -1473,7 +1460,7 @@ mod tests {
 
         // (file_sort_order, expected_result)
         let cases = vec![
-            (vec![], Ok(vec![])),
+            (vec![], Ok(Vec::<LexOrdering>::new())),
             // sort expr, but non column
             (
                 vec![vec![
@@ -1484,15 +1471,13 @@ mod tests {
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![LexOrdering::new(
-                        vec![PhysicalSortExpr {
+                Ok(vec![[PhysicalSortExpr {
                             expr: physical_col("string_col", &schema).unwrap(),
                             options: SortOptions {
                                 descending: false,
                                 nulls_first: false,
                             },
-                        }],
-                )
+                        }].into(),
                 ])
             ),
             // ok with two columns, different options
@@ -1501,16 +1486,14 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![LexOrdering::new(
-                        vec![
+                Ok(vec![[
                             PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
                                         .asc()
                                         .nulls_last(),
                             PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
                                         .desc()
                                         .nulls_first()
-                        ],
-                )
+                        ].into(),
                 ])
             ),
         ];
