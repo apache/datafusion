@@ -220,10 +220,6 @@ impl AggregateUDFImpl for Sum {
         }
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         !args.is_distinct
     }

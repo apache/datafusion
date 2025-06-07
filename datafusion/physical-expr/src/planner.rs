@@ -409,7 +409,7 @@ where
     exprs
         .into_iter()
         .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 /// Convert a logical expression to a physical expression (without any simplification, etc)

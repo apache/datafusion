@@ -347,10 +347,6 @@ impl AggregateUDFImpl for Count {
         })
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         // groups accumulator only supports `COUNT(c1)`, not
         // `COUNT(c1, c2)`, etc
@@ -762,13 +758,14 @@ impl Accumulator for DistinctCountAccumulator {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+
     use arrow::array::{Int32Array, NullArray};
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_expr::function::AccumulatorArgs;
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr::LexOrdering;
-    use std::sync::Arc;
 
     #[test]
     fn count_accumulator_nulls() -> Result<()> {
@@ -803,7 +800,7 @@ mod tests {
             ignore_nulls: false,
             is_reversed: false,
             return_field: Arc::new(Field::new_list_field(DataType::Int64, true)),
-            ordering_req: &LexOrdering::default(),
+            order_bys: &[],
         };
 
         let inner_dict = arrow::array::DictionaryArray::<Int32Type>::from_iter([
