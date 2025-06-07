@@ -239,8 +239,7 @@ async fn test_infinite_sort_cancel(
         Arc::new(Column::new_with_schema("value", &schema)?),
         sort_options,
     );
-    let lex_ordering: datafusion::physical_expr::LexOrdering = vec![sort_expr].into();
-    let sort_exec = Arc::new(SortExec::new(lex_ordering, inf));
+    let sort_exec = Arc::new(SortExec::new([sort_expr].into(), inf));
 
     // 4) optimize the plan with WrapLeaves to auto-insert Yield
     let config = ConfigOptions::new();
