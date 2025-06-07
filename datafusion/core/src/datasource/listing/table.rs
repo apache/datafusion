@@ -1253,7 +1253,6 @@ impl ListingTable {
 /// * `limit` - An optional row count limit. If provided, the function will stop collecting files
 ///   once the accumulated number of rows exceeds this limit
 /// * `collect_stats` - Whether to collect and accumulate statistics from the files
-
 ///
 /// # Returns
 /// A `Result` containing a `FileGroup` with the collected files
@@ -1440,9 +1439,6 @@ mod tests {
 
         Ok(())
     }
-
-    // do_not_load_table_stats_by_default and load_table_stats_when_no_stats
-    // have been replaced by test_table_stats_behaviors
 
     #[cfg(feature = "parquet")]
     #[tokio::test]
@@ -1709,12 +1705,6 @@ mod tests {
 
         Ok(())
     }
-
-    // The following tests have been replaced by test_insert_into_parameterized:
-    // - test_insert_into_append_new_json_files
-    // - test_insert_into_append_new_csv_files
-    // - test_insert_into_append_2_new_parquet_files_defaults
-    // - test_insert_into_append_1_new_parquet_files_defaults
 
     #[tokio::test]
     async fn test_insert_into_sql_csv_defaults() -> Result<()> {
@@ -2211,8 +2201,6 @@ mod tests {
 
         Ok(())
     }
-
-    // test_schema_source_tracking was replaced by test_schema_source_tracking_comprehensive
 
     #[tokio::test]
     async fn test_listing_table_config_with_multiple_files_comprehensive() -> Result<()> {
