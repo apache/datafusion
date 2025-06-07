@@ -17,46 +17,42 @@
 
 //! The table implementation.
 
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
-use super::{ListingTableUrl, PartitionedFile};
-use std::collections::HashMap;
-use std::{any::Any, str::FromStr, sync::Arc};
-
-use crate::datasource::{
-    create_ordering,
-    file_format::{file_compression_type::FileCompressionType, FileFormat},
-    physical_plan::FileSinkConfig,
+use super::{
+    helpers::{expr_applicable_for_cols, pruned_partition_list},
+    ListingTableUrl, PartitionedFile,
 };
-use crate::execution::context::SessionState;
-use datafusion_catalog::TableProvider;
-use datafusion_common::{config_err, DataFusionError, Result};
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
-use datafusion_execution::config::SessionConfig;
-use datafusion_expr::dml::InsertOp;
-use datafusion_expr::{Expr, TableProviderFilterPushDown};
-use datafusion_expr::{SortExpr, TableType};
-use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::{ExecutionPlan, Statistics};
-
+use crate::{
+    datasource::file_format::{file_compression_type::FileCompressionType, FileFormat},
+    datasource::{create_ordering, physical_plan::FileSinkConfig},
+    execution::context::SessionState,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
+use async_trait::async_trait;
+use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::{
-    config_datafusion_err, internal_err, plan_err, project_schema, Constraints, SchemaExt,
+    config_datafusion_err, config_err, internal_err, plan_err, project_schema,
+    stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
 };
-use datafusion_execution::cache::{
-    cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
+use datafusion_datasource::{
+    compute_all_files_statistics,
+    file_groups::FileGroup,
+    file_scan_config::{FileScanConfig, FileScanConfigBuilder},
+    schema_adapter::DefaultSchemaAdapterFactory,
+};
+use datafusion_execution::{
+    cache::{cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache},
+    config::SessionConfig,
+};
+use datafusion_expr::{
+    dml::InsertOp, Expr, SortExpr, TableProviderFilterPushDown, TableType,
 };
 use datafusion_physical_expr::{LexOrdering, PhysicalSortRequirement};
-
-use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_common::stats::Precision;
-use datafusion_datasource::compute_all_files_statistics;
-use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
+use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
 
 /// Indicates the source of the schema for a [`ListingTable`]
 #[derive(Debug, Clone, PartialEq, Eq)]
