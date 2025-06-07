@@ -966,9 +966,9 @@ mod tests {
         //       TableScan: inner_table_lv1
 
         assert_dependent_join_rewrite!(plan, @r"
-        DependentJoin on [outer_table.c lvl 1] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
+        DependentJoin on [] lateral Inner join with Boolean(true) depth 1 [a:UInt32, b:UInt32, c:UInt32]
           TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
-          Filter: inner_table_lv1.c = outer_ref(outer_table.c) [a:UInt32, b:UInt32, c:UInt32]
+          Filter: inner_table_lv1.c = Int32(1) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
         ");
         Ok(())
