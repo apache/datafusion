@@ -2047,7 +2047,7 @@ mod tests {
 
         // Read the records in the table
         let batches = session_ctx
-            .sql("select count(*) as count from foo")
+            .sql("select count(*) as count from t")
             .await?
             .collect()
             .await?;
