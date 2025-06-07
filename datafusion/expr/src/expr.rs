@@ -415,11 +415,35 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
 
 /// Literal metadata
 ///
-/// This structure is used to store metadata associated with a literal expressions
-/// and is designed to be cheap to `clone`.
+/// Stores metadata associated with a literal expressions
+/// and is designed to be fast to `clone`.
 ///
 /// This structure is used to store metadata associated with a literal expression, and it
-/// corresponds to the `metadata` field on [`FieldRef`].
+/// corresponds to the `metadata` field on [`Field`].
+///
+/// # Example: Create [`FieldMetadata`] from a [`Field`]
+/// ```
+/// # use std::collections::HashMap;
+/// # use datafusion_expr::expr::FieldMetadata;
+/// # use arrow::datatypes::{Field, DataType};
+/// # let field = Field::new("c1", DataType::Int32, true)
+/// #  .with_metadata(HashMap::from([("foo".to_string(), "bar".to_string())]));
+/// // Create a new `FieldMetadata` instance from a `Field`
+/// let metadata = FieldMetadata::new_from_field(&field);
+/// // There is also a `From` impl:
+/// let metadata = FieldMetadata::from(&field);
+/// ```
+///
+/// # Example: Update a [`Field`] with [`FieldMetadata`]
+/// ```
+/// # use datafusion_expr::expr::FieldMetadata;
+/// # use arrow::datatypes::{Field, DataType};
+/// # let field = Field::new("c1", DataType::Int32, true);
+/// # let metadata = FieldMetadata::new_from_field(&field);
+/// // Add any metadata from `FieldMetadata` to `Field`
+/// let updated_field = metadata.add_to_field(field);
+/// ```
+///
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct FieldMetadata {
     /// The inner metadata of a literal expression, which is a map of string
@@ -485,6 +509,10 @@ impl FieldMetadata {
 
     /// Updates the metadata on the Field with this metadata
     pub fn add_to_field(&self, field: Field) -> Field {
+        if self.inner.is_empty() {
+            return field;
+        }
+
         field.with_metadata(
             self.inner
                 .iter()
