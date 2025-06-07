@@ -1252,6 +1252,7 @@ impl ListingTable {
 /// * `files` - A stream of `Result<PartitionedFile>` items to process
 /// * `limit` - An optional row count limit. If provided, the function will stop collecting files
 ///   once the accumulated number of rows exceeds this limit
+/// * `collect_stats` - Whether to collect and accumulate statistics from the files
 ///
 /// # Returns
 /// A `Result` containing a `FileGroup` with the collected files
