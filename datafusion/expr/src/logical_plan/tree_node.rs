@@ -430,10 +430,10 @@ impl LogicalPlan {
                     .iter()
                     .map(|(_, c, _)| Expr::Column(c.clone()))
                     .collect::<Vec<_>>();
-                let maybe_lateral_join_condition = match lateral_join_condition {
-                    Some((_, condition)) => Some(condition.clone()),
-                    None => None,
-                };
+                let maybe_lateral_join_condition = lateral_join_condition
+                    .as_ref()
+                    .map(|(_, condition)| condition.clone());
+
                 (&correlated_column_exprs, &maybe_lateral_join_condition)
                     .apply_ref_elements(f)
             }

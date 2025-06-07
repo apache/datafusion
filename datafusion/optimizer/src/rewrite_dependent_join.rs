@@ -911,9 +911,15 @@ impl TreeNodeRewriter for DependentJoinRewriter {
 #[derive(Debug)]
 pub struct RewriteDependentJoin {}
 
+impl Default for RewriteDependentJoin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RewriteDependentJoin {
     pub fn new() -> Self {
-        return RewriteDependentJoin {};
+        RewriteDependentJoin {}
     }
 }
 
