@@ -27,10 +27,7 @@ use crate::utils::{
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
-use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_plan::internal_err;
-
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -145,8 +142,8 @@ pub fn plan_with_order_preserving_variants(
                 if let Some(sort_fetch) = fetch {
                     if coalesce_fetch < sort_fetch {
                         return internal_err!(
-                                "CoalescePartitionsExec fetch [{:?}] should be greater than or equal to SortExec fetch [{:?}]", coalesce_fetch, sort_fetch
-                            );
+                            "CoalescePartitionsExec fetch [{:?}] should be greater than or equal to SortExec fetch [{:?}]", coalesce_fetch, sort_fetch
+                        );
                     }
                 } else {
                     // If the sort node does not have a fetch, we need to keep the coalesce node's fetch.
@@ -181,18 +178,17 @@ pub fn plan_with_order_breaking_variants(
     .map(|(node, maintains, required_ordering)| {
         // Replace with non-order preserving variants as long as ordering is
         // not required by intermediate operators:
-        if maintains
-            && (is_sort_preserving_merge(plan)
-                || !required_ordering.is_some_and(|required_ordering| {
-                    node.plan
-                        .equivalence_properties()
-                        .ordering_satisfy_requirement(&required_ordering)
-                }))
-        {
-            plan_with_order_breaking_variants(node)
-        } else {
-            Ok(node)
+        if !maintains {
+            return Ok(node);
+        } else if is_sort_preserving_merge(plan) {
+            return plan_with_order_breaking_variants(node);
+        } else if let Some(required_ordering) = required_ordering {
+            let eqp = node.plan.equivalence_properties();
+            if eqp.ordering_satisfy_requirement(required_ordering.into_single())? {
+                return Ok(node);
+            }
         }
+        plan_with_order_breaking_variants(node)
     })
     .collect::<Result<_>>()?;
     sort_input.data = false;
@@ -281,25 +277,18 @@ pub fn replace_with_order_preserving_variants(
     )?;
 
     // If the alternate plan makes this sort unnecessary, accept the alternate:
-    if alternate_plan
-        .plan
-        .equivalence_properties()
-        .ordering_satisfy(
-            requirements
-                .plan
-                .output_ordering()
-                .unwrap_or_else(|| LexOrdering::empty()),
-        )
-    {
-        for child in alternate_plan.children.iter_mut() {
-            child.data = false;
+    if let Some(ordering) = requirements.plan.output_ordering() {
+        let eqp = alternate_plan.plan.equivalence_properties();
+        if !eqp.ordering_satisfy(ordering.clone())? {
+            // The alternate plan does not help, use faster order-breaking variants:
+            alternate_plan = plan_with_order_breaking_variants(alternate_plan)?;
+            alternate_plan.data = false;
+            requirements.children = vec![alternate_plan];
+            return Ok(Transformed::yes(requirements));
         }
-        Ok(Transformed::yes(alternate_plan))
-    } else {
-        // The alternate plan does not help, use faster order-breaking variants:
-        alternate_plan = plan_with_order_breaking_variants(alternate_plan)?;
-        alternate_plan.data = false;
-        requirements.children = vec![alternate_plan];
-        Ok(Transformed::yes(requirements))
     }
+    for child in alternate_plan.children.iter_mut() {
+        child.data = false;
+    }
+    Ok(Transformed::yes(alternate_plan))
 }
