@@ -3367,10 +3367,16 @@ select array_concat(make_array(column3), column1, column2) from arrays_values_v2
 ## array_position (aliases: `list_position`, `array_indexof`, `list_indexof`)
 
 ## array_position with NULL (follow PostgreSQL)
-#query I
-#select array_position([1, 2, 3, 4, 5], null), array_position(NULL, 1);
-#----
-#NULL NULL
+query II
+select array_position([1, 2, 3, 4, 5], arrow_cast(NULL, 'Int64')), array_position(arrow_cast(NULL, 'List(Int64)'), 1);
+----
+NULL NULL
+
+# array_position with no match (incl. empty array) returns NULL
+query II
+select array_position([], 1), array_position([2], 1);
+----
+NULL NULL
 
 # array_position scalar function #1
 query III

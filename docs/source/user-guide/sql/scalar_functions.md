@@ -3142,7 +3142,7 @@ array_pop_front(array)
 
 ### `array_position`
 
-Returns the position of the first occurrence of the specified element in the array.
+Returns the position of the first occurrence of the specified element in the array, or NULL if not found.
 
 ```sql
 array_position(array, element)
@@ -3153,7 +3153,7 @@ array_position(array, element, index)
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to search for position in the array.
-- **index**: Index at which to start searching.
+- **index**: Index at which to start searching (1-indexed).
 
 #### Example
 

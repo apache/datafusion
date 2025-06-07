@@ -52,7 +52,7 @@ make_udf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns the position of the first occurrence of the specified element in the array.",
+    description = "Returns the position of the first occurrence of the specified element in the array, or NULL if not found.",
     syntax_example = "array_position(array, element)\narray_position(array, element, index)",
     sql_example = r#"```sql
 > select array_position([1, 2, 2, 3, 1, 4], 2);
@@ -76,7 +76,10 @@ make_udf_expr_and_func!(
         name = "element",
         description = "Element to search for position in the array."
     ),
-    argument(name = "index", description = "Index at which to start searching.")
+    argument(
+        name = "index",
+        description = "Index at which to start searching (1-indexed)."
+    )
 )]
 #[derive(Debug)]
 pub struct ArrayPosition {
@@ -170,7 +173,7 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
     // if `start_from` index is out of bounds, return error
     for (arr, &from) in list_array.iter().zip(arr_from.iter()) {
         if let Some(arr) = arr {
-            if from < 0 || from as usize >= arr.len() {
+            if from < 0 || from as usize > arr.len() {
                 return internal_err!("start_from index out of bounds");
             }
         } else {
