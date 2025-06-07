@@ -413,6 +413,12 @@ config_namespace! {
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
+
+        /// The maximum number of times pipeline breaking operators may poll
+        /// their children in a loop before yielding. Setting this to a value
+        /// greater than zero ensures running queries can be cancelled in a
+        /// timely fashion.
+        pub poll_budget: Option<u8>, default = Some(128)
     }
 }
 

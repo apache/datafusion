@@ -19,11 +19,6 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use std::any::Any;
-use std::fmt;
-use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
-
 use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
@@ -43,6 +38,10 @@ use crate::{
     ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
+use std::any::Any;
+use std::fmt;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
@@ -55,6 +54,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use crate::r#yield::PollBudget;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -1093,7 +1093,7 @@ impl ExecutionPlan for SortExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let mut input = self.input.execute(partition, Arc::clone(&context))?;
+        let input = self.input.execute(partition, Arc::clone(&context))?;
 
         let execution_options = &context.session_config().options().execution;
 
@@ -1108,6 +1108,7 @@ impl ExecutionPlan for SortExec {
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(
+                // limit is not a pipeline breaking stream, so poll budget is not required
                 input,
                 0,
                 Some(*fetch),
@@ -1125,6 +1126,7 @@ impl ExecutionPlan for SortExec {
                     context.runtime_env(),
                     &self.metrics_set,
                 )?;
+                let mut input = PollBudget::from(context.as_ref()).wrap_stream(input);
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
@@ -1151,6 +1153,7 @@ impl ExecutionPlan for SortExec {
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;
+                let mut input = PollBudget::from(context.as_ref()).wrap_stream(input);
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {

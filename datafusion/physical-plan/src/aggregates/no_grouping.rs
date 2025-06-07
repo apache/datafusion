@@ -22,7 +22,7 @@ use crate::aggregates::{
     AggregateMode,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
-use crate::{RecordBatchStream, SendableRecordBatchStream};
+use crate::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -33,11 +33,11 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::AggregateExec;
 use crate::filter::batch_filter;
+use crate::r#yield::{PollBudget, YieldStream};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
-
-use super::AggregateExec;
 
 /// stream struct for aggregation without grouping columns
 pub(crate) struct AggregateStream {
@@ -55,7 +55,7 @@ pub(crate) struct AggregateStream {
 struct AggregateStreamInner {
     schema: SchemaRef,
     mode: AggregateMode,
-    input: SendableRecordBatchStream,
+    input: YieldStream,
     baseline_metrics: BaselineMetrics,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
@@ -94,7 +94,7 @@ impl AggregateStream {
         let inner = AggregateStreamInner {
             schema: Arc::clone(&agg.schema),
             mode: agg.mode,
-            input,
+            input: PollBudget::from(context.as_ref()).wrap_stream(input),
             baseline_metrics,
             aggregate_expressions,
             filter_expressions,

@@ -46,6 +46,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
+use crate::r#yield::{PollBudget, YieldStream};
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -188,7 +189,7 @@ impl CrossJoinExec {
 
 /// Asynchronously collect the result of the left child
 async fn load_left_input(
-    stream: SendableRecordBatchStream,
+    stream: YieldStream,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
@@ -302,10 +303,10 @@ impl ExecutionPlan for CrossJoinExec {
             context.session_config().enforce_batch_size_in_joins();
 
         let left_fut = self.left_fut.try_once(|| {
+            let poll_budget = PollBudget::from(context.as_ref());
             let left_stream = self.left.execute(0, context)?;
-
             Ok(load_left_input(
-                left_stream,
+                poll_budget.wrap_stream(left_stream),
                 join_metrics.clone(),
                 reservation,
             ))
