@@ -59,7 +59,7 @@ use itertools::Itertools;
 use object_store::ObjectStore;
 
 /// Indicates the source of the schema for a [`ListingTable`]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum SchemaSource {
     /// Schema is not yet set (initial state)
     None,
