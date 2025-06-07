@@ -26,7 +26,7 @@ use crate::{
     datasource::{create_ordering, physical_plan::FileSinkConfig},
     execution::context::SessionState,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider};
@@ -47,14 +47,12 @@ use datafusion_execution::{
 use datafusion_expr::{
     dml::InsertOp, Expr, SortExpr, TableProviderFilterPushDown, TableType,
 };
-use datafusion_physical_expr::{LexOrdering, PhysicalSortRequirement};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
 use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
-
 /// Indicates the source of the schema for a [`ListingTable`]
 /// PartialEq required for assert_eq! in tests
 #[derive(Debug, Clone, PartialEq)]
@@ -1303,29 +1301,30 @@ async fn get_files_with_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::csv::CsvFormat;
-    use crate::datasource::file_format::json::JsonFormat;
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
-    use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
-    use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
-    use crate::test::columns;
-    use crate::test::object_store::{
-        ensure_head_concurrency, make_test_store_and_state, register_test_store,
+    use crate::{
+        datasource::{
+            file_format::csv::CsvFormat, file_format::json::JsonFormat,
+            provider_as_source, DefaultTableSource, MemTable,
+        },
+        execution::options::ArrowReadOptions,
+        test::{
+            columns, object_store::ensure_head_concurrency,
+            object_store::make_test_store_and_state, object_store::register_test_store,
+        },
     };
-
-    use arrow::compute::SortOptions;
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::stats::Precision;
-    use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::test_util::datafusion_test_data;
-    use datafusion_common::{assert_contains, ScalarValue};
+    use arrow::{compute::SortOptions, record_batch::RecordBatch};
+    use datafusion_common::{
+        assert_contains,
+        stats::Precision,
+        test_util::{batches_to_string, datafusion_test_data},
+        ScalarValue,
+    };
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::{collect, ExecutionPlanProperties};
-
-    use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
     use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
