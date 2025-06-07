@@ -1346,6 +1346,16 @@ mod tests {
     use tempfile::TempDir;
     use url::Url;
 
+    /// Creates a test schema with standard field types used in tests
+    fn create_test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Float32, true),
+            Field::new("c2", DataType::Float64, true),
+            Field::new("c3", DataType::Boolean, true),
+            Field::new("c4", DataType::Utf8, true),
+        ]))
+    }
+
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
         let ctx = SessionContext::new_with_config(
@@ -2535,12 +2545,7 @@ mod tests {
         let filename = format!("{testdata}/aggregate_simple.csv");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
-        let provided_schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Float32, true),
-            Field::new("c2", DataType::Float64, true),
-            Field::new("c3", DataType::Boolean, true),
-            Field::new("c4", DataType::Utf8, true),
-        ]));
+        let provided_schema = create_test_schema();
 
         let config =
             ListingTableConfig::new(table_path).with_schema(Arc::clone(&provided_schema));
@@ -2565,12 +2570,7 @@ mod tests {
         assert_eq!(*config.schema_source(), SchemaSource::None);
 
         // Test schema source after setting a schema explicitly
-        let provided_schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Float32, true),
-            Field::new("c2", DataType::Float64, true),
-            Field::new("c3", DataType::Boolean, true),
-            Field::new("c4", DataType::Utf8, true),
-        ]));
+        let provided_schema = create_test_schema();
 
         let config = config.with_schema(provided_schema.clone());
         assert_eq!(*config.schema_source(), SchemaSource::Specified);
@@ -2600,12 +2600,7 @@ mod tests {
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         // Create a table with specified schema
-        let specified_schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Float32, true),
-            Field::new("c2", DataType::Float64, true),
-            Field::new("c3", DataType::Boolean, true),
-            Field::new("c4", DataType::Utf8, true),
-        ]));
+        let specified_schema = create_test_schema();
 
         let format = CsvFormat::default();
         let options = ListingOptions::new(Arc::new(format));
@@ -2636,12 +2631,7 @@ mod tests {
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         // Start with a specified schema
-        let specified_schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Float32, true),
-            Field::new("c2", DataType::Float64, true),
-            Field::new("c3", DataType::Boolean, true),
-            Field::new("c4", DataType::Utf8, true),
-        ]));
+        let specified_schema = create_test_schema();
 
         let config =
             ListingTableConfig::new(table_path.clone()).with_schema(specified_schema);
