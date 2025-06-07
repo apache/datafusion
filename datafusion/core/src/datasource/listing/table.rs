@@ -1253,6 +1253,7 @@ impl ListingTable {
 /// * `limit` - An optional row count limit. If provided, the function will stop collecting files
 ///   once the accumulated number of rows exceeds this limit
 /// * `collect_stats` - Whether to collect and accumulate statistics from the files
+
 ///
 /// # Returns
 /// A `Result` containing a `FileGroup` with the collected files
@@ -1357,6 +1358,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_schema_source_tracking_comprehensive() -> Result<()> {
+        let ctx = SessionContext::new();
+        let testdata = datafusion_test_data();
+        let filename = format!("{testdata}/aggregate_simple.csv");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        // Test default schema source
+        let config = ListingTableConfig::new(table_path.clone());
+        assert_eq!(*config.schema_source(), SchemaSource::None);
+
+        // Test schema source after setting a schema explicitly
+        let provided_schema = create_test_schema();
+        let config_with_schema = config.clone().with_schema(provided_schema.clone());
+        assert_eq!(*config_with_schema.schema_source(), SchemaSource::Specified);
+
+        // Test schema source after inferring schema
+        let format = CsvFormat::default();
+        let options = ListingOptions::new(Arc::new(format));
+        let config_with_options = config.with_listing_options(options.clone());
+        assert_eq!(*config_with_options.schema_source(), SchemaSource::None);
+
+        let config_with_inferred = config_with_options.infer_schema(&ctx.state()).await?;
+        assert_eq!(
+            *config_with_inferred.schema_source(),
+            SchemaSource::Inferred
+        );
+
+        // Test schema preservation through operations
+        let config_with_schema_and_options = config_with_schema
+            .clone()
+            .with_listing_options(options.clone());
+        assert_eq!(
+            *config_with_schema_and_options.schema_source(),
+            SchemaSource::Specified
+        );
+
+        // Make sure inferred schema doesn't override specified schema
+        let config_with_schema_and_infer =
+            config_with_schema_and_options.infer(&ctx.state()).await?;
+        assert_eq!(
+            *config_with_schema_and_infer.schema_source(),
+            SchemaSource::Specified
+        );
+
+        // Verify sources in actual ListingTable objects
+        let table_specified = ListingTable::try_new(config_with_schema_and_options)?;
+        assert_eq!(*table_specified.schema_source(), SchemaSource::Specified);
+
+        let table_inferred = ListingTable::try_new(config_with_inferred)?;
+        assert_eq!(*table_inferred.schema_source(), SchemaSource::Inferred);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn read_single_file() -> Result<()> {
         let ctx = SessionContext::new_with_config(
             SessionConfig::new().with_collect_statistics(true),
@@ -1385,84 +1441,8 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "parquet")]
-    #[tokio::test]
-    async fn do_not_load_table_stats_by_default() -> Result<()> {
-        use crate::datasource::file_format::parquet::ParquetFormat;
-
-        let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
-
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let schema = opt.infer_schema(&state, &table_path).await?;
-        let config = ListingTableConfig::new(table_path.clone())
-            .with_listing_options(opt)
-            .with_schema(schema);
-        let table = ListingTable::try_new(config)?;
-
-        let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
-            Precision::Absent
-        );
-
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
-            .with_collect_stat(true);
-        let schema = opt.infer_schema(&state, &table_path).await?;
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(opt)
-            .with_schema(schema);
-        let table = ListingTable::try_new(config)?;
-
-        let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(
-            exec.partition_statistics(None)?.num_rows,
-            Precision::Exact(8)
-        );
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
-            Precision::Exact(671)
-        );
-
-        Ok(())
-    }
-
-    #[cfg(feature = "parquet")]
-    #[tokio::test]
-    async fn load_table_stats_when_no_stats() -> Result<()> {
-        use crate::datasource::file_format::parquet::ParquetFormat;
-
-        let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
-
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
-            .with_collect_stat(false);
-        let schema = opt.infer_schema(&state, &table_path).await?;
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(opt)
-            .with_schema(schema);
-        let table = ListingTable::try_new(config)?;
-
-        let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
-        assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
-            Precision::Absent
-        );
-
-        Ok(())
-    }
+    // do_not_load_table_stats_by_default and load_table_stats_when_no_stats
+    // have been replaced by test_table_stats_behaviors
 
     #[cfg(feature = "parquet")]
     #[tokio::test]
@@ -1598,263 +1578,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_assert_list_files_for_scan_grouping() -> Result<()> {
-        // more expected partitions than files
-        assert_list_files_for_scan_grouping(
-            &[
-                "bucket/key-prefix/file0",
-                "bucket/key-prefix/file1",
-                "bucket/key-prefix/file2",
-                "bucket/key-prefix/file3",
-                "bucket/key-prefix/file4",
-            ],
-            "test:///bucket/key-prefix/",
-            12,
-            5,
-            Some(""),
-        )
-        .await?;
-
-        // as many expected partitions as files
-        assert_list_files_for_scan_grouping(
-            &[
-                "bucket/key-prefix/file0",
-                "bucket/key-prefix/file1",
-                "bucket/key-prefix/file2",
-                "bucket/key-prefix/file3",
-            ],
-            "test:///bucket/key-prefix/",
-            4,
-            4,
-            Some(""),
-        )
-        .await?;
-
-        // more files as expected partitions
-        assert_list_files_for_scan_grouping(
-            &[
-                "bucket/key-prefix/file0",
-                "bucket/key-prefix/file1",
-                "bucket/key-prefix/file2",
-                "bucket/key-prefix/file3",
-                "bucket/key-prefix/file4",
-            ],
-            "test:///bucket/key-prefix/",
-            2,
-            2,
-            Some(""),
-        )
-        .await?;
-
-        // no files => no groups
-        assert_list_files_for_scan_grouping(
-            &[],
-            "test:///bucket/key-prefix/",
-            2,
-            0,
-            Some(""),
-        )
-        .await?;
-
-        // files that don't match the prefix
-        assert_list_files_for_scan_grouping(
-            &[
-                "bucket/key-prefix/file0",
-                "bucket/key-prefix/file1",
-                "bucket/other-prefix/roguefile",
-            ],
-            "test:///bucket/key-prefix/",
-            10,
-            2,
-            Some(""),
-        )
-        .await?;
-
-        // files that don't match the prefix or the default file extention
-        assert_list_files_for_scan_grouping(
-            &[
-                "bucket/key-prefix/file0.json",
-                "bucket/key-prefix/file1.parquet",
-                "bucket/other-prefix/roguefile.json",
-            ],
-            "test:///bucket/key-prefix/",
-            10,
-            1,
-            None,
-        )
-        .await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_assert_list_files_for_multi_path() -> Result<()> {
-        // more expected partitions than files
-        assert_list_files_for_multi_paths(
-            &[
-                "bucket/key1/file0",
-                "bucket/key1/file1",
-                "bucket/key1/file2",
-                "bucket/key2/file3",
-                "bucket/key2/file4",
-                "bucket/key3/file5",
-            ],
-            &["test:///bucket/key1/", "test:///bucket/key2/"],
-            12,
-            5,
-            Some(""),
-        )
-        .await?;
-
-        // as many expected partitions as files
-        assert_list_files_for_multi_paths(
-            &[
-                "bucket/key1/file0",
-                "bucket/key1/file1",
-                "bucket/key1/file2",
-                "bucket/key2/file3",
-                "bucket/key2/file4",
-                "bucket/key3/file5",
-            ],
-            &["test:///bucket/key1/", "test:///bucket/key2/"],
-            5,
-            5,
-            Some(""),
-        )
-        .await?;
-
-        // more files as expected partitions
-        assert_list_files_for_multi_paths(
-            &[
-                "bucket/key1/file0",
-                "bucket/key1/file1",
-                "bucket/key1/file2",
-                "bucket/key2/file3",
-                "bucket/key2/file4",
-                "bucket/key3/file5",
-            ],
-            &["test:///bucket/key1/"],
-            2,
-            2,
-            Some(""),
-        )
-        .await?;
-
-        // no files => no groups
-        assert_list_files_for_multi_paths(&[], &["test:///bucket/key1/"], 2, 0, Some(""))
-            .await?;
-
-        // files that don't match the prefix
-        assert_list_files_for_multi_paths(
-            &[
-                "bucket/key1/file0",
-                "bucket/key1/file1",
-                "bucket/key1/file2",
-                "bucket/key2/file3",
-                "bucket/key2/file4",
-                "bucket/key3/file5",
-            ],
-            &["test:///bucket/key3/"],
-            2,
-            1,
-            Some(""),
-        )
-        .await?;
-
-        // files that don't match the prefix or the default file ext
-        assert_list_files_for_multi_paths(
-            &[
-                "bucket/key1/file0.json",
-                "bucket/key1/file1.csv",
-                "bucket/key1/file2.json",
-                "bucket/key2/file3.csv",
-                "bucket/key2/file4.json",
-                "bucket/key3/file5.csv",
-            ],
-            &["test:///bucket/key1/", "test:///bucket/key3/"],
-            2,
-            2,
-            None,
-        )
-        .await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_assert_list_files_for_exact_paths() -> Result<()> {
-        // more expected partitions than files
-        assert_list_files_for_exact_paths(
-            &[
-                "bucket/key1/file0",
-                "bucket/key1/file1",
-                "bucket/key1/file2",
-                "bucket/key2/file3",
-                "bucket/key2/file4",
-            ],
-            12,
-            5,
-            Some(""),
-        )
-        .await?;
-
-        // more files than meta_fetch_concurrency (32)
-        let files: Vec<String> =
-            (0..64).map(|i| format!("bucket/key1/file{i}")).collect();
-        // Collect references to each string
-        let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
-        assert_list_files_for_exact_paths(file_refs.as_slice(), 5, 5, Some("")).await?;
-
-        // as many expected partitions as files
-        assert_list_files_for_exact_paths(
-            &[
-                "bucket/key1/file0",
-                "bucket/key1/file1",
-                "bucket/key1/file2",
-                "bucket/key2/file3",
-                "bucket/key2/file4",
-            ],
-            5,
-            5,
-            Some(""),
-        )
-        .await?;
-
-        // more files as expected partitions
-        assert_list_files_for_exact_paths(
-            &[
-                "bucket/key1/file0",
-                "bucket/key1/file1",
-                "bucket/key1/file2",
-                "bucket/key2/file3",
-                "bucket/key2/file4",
-            ],
-            2,
-            2,
-            Some(""),
-        )
-        .await?;
-
-        // no files => no groups
-        assert_list_files_for_exact_paths(&[], 2, 0, Some("")).await?;
-
-        // files that don't match the default file ext
-        assert_list_files_for_exact_paths(
-            &[
-                "bucket/key1/file0.json",
-                "bucket/key1/file1.csv",
-                "bucket/key1/file2.json",
-                "bucket/key2/file3.csv",
-                "bucket/key2/file4.json",
-                "bucket/key3/file5.csv",
-            ],
-            2,
-            2,
-            None,
-        )
-        .await?;
-        Ok(())
-    }
-
     async fn load_table(
         ctx: &SessionContext,
         name: &str,
@@ -1957,10 +1680,10 @@ mod tests {
             .execution
             .meta_fetch_concurrency;
         let expected_concurrency = files.len().min(meta_fetch_concurrency);
-        let head_blocking_store = ensure_head_concurrency(store, expected_concurrency);
+        let head_concurrency_store = ensure_head_concurrency(store, expected_concurrency);
 
         let url = Url::parse("test://").unwrap();
-        ctx.register_object_store(&url, head_blocking_store.clone());
+        ctx.register_object_store(&url, head_concurrency_store.clone());
 
         let format = JsonFormat::default();
 
@@ -1987,79 +1710,11 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_insert_into_append_new_json_files() -> Result<()> {
-        let mut config_map: HashMap<String, String> = HashMap::new();
-        config_map.insert("datafusion.execution.batch_size".into(), "10".into());
-        config_map.insert(
-            "datafusion.execution.soft_max_rows_per_output_file".into(),
-            "10".into(),
-        );
-        helper_test_append_new_files_to_table(
-            JsonFormat::default().get_ext(),
-            FileCompressionType::UNCOMPRESSED,
-            Some(config_map),
-            2,
-        )
-        .await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_insert_into_append_new_csv_files() -> Result<()> {
-        let mut config_map: HashMap<String, String> = HashMap::new();
-        config_map.insert("datafusion.execution.batch_size".into(), "10".into());
-        config_map.insert(
-            "datafusion.execution.soft_max_rows_per_output_file".into(),
-            "10".into(),
-        );
-        helper_test_append_new_files_to_table(
-            CsvFormat::default().get_ext(),
-            FileCompressionType::UNCOMPRESSED,
-            Some(config_map),
-            2,
-        )
-        .await?;
-        Ok(())
-    }
-
-    #[cfg(feature = "parquet")]
-    #[tokio::test]
-    async fn test_insert_into_append_2_new_parquet_files_defaults() -> Result<()> {
-        let mut config_map: HashMap<String, String> = HashMap::new();
-        config_map.insert("datafusion.execution.batch_size".into(), "10".into());
-        config_map.insert(
-            "datafusion.execution.soft_max_rows_per_output_file".into(),
-            "10".into(),
-        );
-        helper_test_append_new_files_to_table(
-            ParquetFormat::default().get_ext(),
-            FileCompressionType::UNCOMPRESSED,
-            Some(config_map),
-            2,
-        )
-        .await?;
-        Ok(())
-    }
-
-    #[cfg(feature = "parquet")]
-    #[tokio::test]
-    async fn test_insert_into_append_1_new_parquet_files_defaults() -> Result<()> {
-        let mut config_map: HashMap<String, String> = HashMap::new();
-        config_map.insert("datafusion.execution.batch_size".into(), "20".into());
-        config_map.insert(
-            "datafusion.execution.soft_max_rows_per_output_file".into(),
-            "20".into(),
-        );
-        helper_test_append_new_files_to_table(
-            ParquetFormat::default().get_ext(),
-            FileCompressionType::UNCOMPRESSED,
-            Some(config_map),
-            1,
-        )
-        .await?;
-        Ok(())
-    }
+    // The following tests have been replaced by test_insert_into_parameterized:
+    // - test_insert_into_append_new_json_files
+    // - test_insert_into_append_new_csv_files
+    // - test_insert_into_append_2_new_parquet_files_defaults
+    // - test_insert_into_append_1_new_parquet_files_defaults
 
     #[tokio::test]
     async fn test_insert_into_sql_csv_defaults() -> Result<()> {
@@ -2400,7 +2055,7 @@ mod tests {
 
         // Read the records in the table
         let batches = session_ctx
-            .sql("select count(*) as count from t")
+            .sql("select count(*) as count from foo")
             .await?
             .collect()
             .await?;
@@ -2557,107 +2212,13 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_schema_source_tracking() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        let testdata = datafusion_test_data();
-        let filename = format!("{testdata}/aggregate_simple.csv");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
-
-        // Test default schema source
-        let config = ListingTableConfig::new(table_path.clone());
-        assert_eq!(*config.schema_source(), SchemaSource::None);
-
-        // Test schema source after setting a schema explicitly
-        let provided_schema = create_test_schema();
-
-        let config = config.with_schema(provided_schema.clone());
-        assert_eq!(*config.schema_source(), SchemaSource::Specified);
-
-        // Test schema source after inferring schema
-        let format = CsvFormat::default();
-        let options = ListingOptions::new(Arc::new(format));
-        let config_without_schema =
-            ListingTableConfig::new(table_path).with_listing_options(options);
-        assert_eq!(*config_without_schema.schema_source(), SchemaSource::None);
-
-        let config_with_inferred =
-            config_without_schema.infer_schema(&ctx.state()).await?;
-        assert_eq!(
-            *config_with_inferred.schema_source(),
-            SchemaSource::Inferred
-        );
-
-        Ok(())
-    }
+    // test_schema_source_tracking was replaced by test_schema_source_tracking_comprehensive
 
     #[tokio::test]
-    async fn test_schema_source_in_listing_table() -> Result<()> {
-        let ctx = SessionContext::new();
-        let testdata = datafusion_test_data();
-        let filename = format!("{testdata}/aggregate_simple.csv");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
-
-        // Create a table with specified schema
-        let specified_schema = create_test_schema();
-
-        let format = CsvFormat::default();
-        let options = ListingOptions::new(Arc::new(format));
-
-        let config_specified = ListingTableConfig::new(table_path.clone())
-            .with_listing_options(options.clone())
-            .with_schema(specified_schema);
-
-        let table_specified = ListingTable::try_new(config_specified)?;
-        assert_eq!(*table_specified.schema_source(), SchemaSource::Specified);
-
-        // Create a table with inferred schema
-        let config_to_infer =
-            ListingTableConfig::new(table_path).with_listing_options(options);
-
-        let config_inferred = config_to_infer.infer_schema(&ctx.state()).await?;
-        let table_inferred = ListingTable::try_new(config_inferred)?;
-        assert_eq!(*table_inferred.schema_source(), SchemaSource::Inferred);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_schema_source_preserved_through_config_operations() -> Result<()> {
-        let ctx = SessionContext::new();
-        let testdata = datafusion_test_data();
-        let filename = format!("{testdata}/aggregate_simple.csv");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
-
-        // Start with a specified schema
-        let specified_schema = create_test_schema();
-
-        let config =
-            ListingTableConfig::new(table_path.clone()).with_schema(specified_schema);
-
-        assert_eq!(*config.schema_source(), SchemaSource::Specified);
-
-        // Make sure source is preserved after adding options
-        let format = CsvFormat::default();
-        let options = ListingOptions::new(Arc::new(format));
-        let config = config.with_listing_options(options);
-
-        assert_eq!(*config.schema_source(), SchemaSource::Specified);
-
-        // Make sure inferred schema doesn't override specified schema
-        let config = config.infer(&ctx.state()).await?;
-        assert_eq!(*config.schema_source(), SchemaSource::Specified);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_listing_table_config_with_multiple_files_inferred() -> Result<()> {
-        // Test case 1: Inferred schema with multiple files having different schemas
+    async fn test_listing_table_config_with_multiple_files_comprehensive() -> Result<()> {
         let ctx = SessionContext::new();
 
-        // Create two test files with different schemas
+        // Create test files with different schemas
         let tmp_dir = TempDir::new()?;
         let file_path1 = tmp_dir.path().join("file1.csv");
         let file_path2 = tmp_dir.path().join("file2.csv");
@@ -2678,213 +2239,351 @@ mod tests {
         let table_path1 = ListingTableUrl::parse(file_path1.to_str().unwrap())?;
         let table_path2 = ListingTableUrl::parse(file_path2.to_str().unwrap())?;
 
-        // Create config with both paths
-        let config =
-            ListingTableConfig::new_with_multi_paths(vec![table_path1, table_path2]);
-        assert_eq!(*config.schema_source(), SchemaSource::None);
-
-        // Set up options
+        // Create format and options
         let format = CsvFormat::default().with_has_header(true);
         let options = ListingOptions::new(Arc::new(format));
-        let config = config.with_listing_options(options);
 
-        // Infer schema (should use first file's schema)
-        let config = config.infer_schema(&ctx.state()).await?;
-        assert_eq!(*config.schema_source(), SchemaSource::Inferred);
+        // Test case 1: Infer schema using first file's schema
+        let config1 = ListingTableConfig::new_with_multi_paths(vec![
+            table_path1.clone(),
+            table_path2.clone(),
+        ])
+        .with_listing_options(options.clone());
+        let config1 = config1.infer_schema(&ctx.state()).await?;
+        assert_eq!(*config1.schema_source(), SchemaSource::Inferred);
 
-        // Verify that the inferred schema matches the first file's schema (3 columns)
-        let schema = config.file_schema.as_ref().unwrap().clone();
-        assert_eq!(schema.fields().len(), 3);
-        assert_eq!(schema.field(0).name(), "c1");
-        assert_eq!(schema.field(1).name(), "c2");
-        assert_eq!(schema.field(2).name(), "c3");
+        // Verify schema matches first file
+        let schema1 = config1.file_schema.as_ref().unwrap().clone();
+        assert_eq!(schema1.fields().len(), 3);
+        assert_eq!(schema1.field(0).name(), "c1");
+        assert_eq!(schema1.field(1).name(), "c2");
+        assert_eq!(schema1.field(2).name(), "c3");
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_listing_table_config_with_multiple_files_specified_schema1(
-    ) -> Result<()> {
-        // Test case 2: Specified schema matching first file schema
-        let ctx = SessionContext::new();
-
-        // Create two test files with different schemas
-        let tmp_dir = TempDir::new()?;
-        let file_path1 = tmp_dir.path().join("file1.csv");
-        let file_path2 = tmp_dir.path().join("file2.csv");
-
-        // File 1: c1,c2,c3
-        let mut file1 = std::fs::File::create(&file_path1)?;
-        writeln!(file1, "c1,c2,c3")?;
-        writeln!(file1, "1,2,3")?;
-        writeln!(file1, "4,5,6")?;
-
-        // File 2: c1,c2,c3,c4
-        let mut file2 = std::fs::File::create(&file_path2)?;
-        writeln!(file2, "c1,c2,c3,c4")?;
-        writeln!(file2, "7,8,9,10")?;
-        writeln!(file2, "11,12,13,14")?;
-
-        // Parse paths
-        let table_path1 = ListingTableUrl::parse(file_path1.to_str().unwrap())?;
-        let table_path2 = ListingTableUrl::parse(file_path2.to_str().unwrap())?;
-
-        // Create specified schema matching first file
-        let specified_schema = Arc::new(Schema::new(vec![
+        // Test case 2: Use specified schema with 3 columns
+        let schema_3cols = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
             Field::new("c2", DataType::Utf8, true),
             Field::new("c3", DataType::Utf8, true),
         ]));
 
-        // Create config with both paths and specified schema
-        let config =
-            ListingTableConfig::new_with_multi_paths(vec![table_path1, table_path2])
-                .with_schema(specified_schema);
-
-        assert_eq!(*config.schema_source(), SchemaSource::Specified);
-
-        // Set up options
-        let format = CsvFormat::default().with_has_header(true);
-        let options = ListingOptions::new(Arc::new(format));
-        let config = config.with_listing_options(options);
-
-        // Infer should not change the schema because it's already specified
-        let config = config.infer_schema(&ctx.state()).await?;
-        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+        let config2 = ListingTableConfig::new_with_multi_paths(vec![
+            table_path1.clone(),
+            table_path2.clone(),
+        ])
+        .with_schema(schema_3cols)
+        .with_listing_options(options.clone());
+        let config2 = config2.infer_schema(&ctx.state()).await?;
+        assert_eq!(*config2.schema_source(), SchemaSource::Specified);
 
         // Verify that the schema is still the one we specified (3 columns)
-        let schema = config.file_schema.as_ref().unwrap().clone();
-        assert_eq!(schema.fields().len(), 3);
-        assert_eq!(schema.field(0).name(), "c1");
-        assert_eq!(schema.field(1).name(), "c2");
-        assert_eq!(schema.field(2).name(), "c3");
+        let schema2 = config2.file_schema.as_ref().unwrap().clone();
+        assert_eq!(schema2.fields().len(), 3);
+        assert_eq!(schema2.field(0).name(), "c1");
+        assert_eq!(schema2.field(1).name(), "c2");
+        assert_eq!(schema2.field(2).name(), "c3");
 
-        // Create the ListingTable and verify it maintains the schema source
-        let table = ListingTable::try_new(config)?;
-        assert_eq!(*table.schema_source(), SchemaSource::Specified);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_listing_table_config_with_multiple_files_specified_schema2(
-    ) -> Result<()> {
-        // Test case 3: Specified schema matching second file schema
-        let ctx = SessionContext::new();
-
-        // Create two test files with different schemas
-        let tmp_dir = TempDir::new()?;
-        let file_path1 = tmp_dir.path().join("file1.csv");
-        let file_path2 = tmp_dir.path().join("file2.csv");
-
-        // File 1: c1,c2,c3
-        let mut file1 = std::fs::File::create(&file_path1)?;
-        writeln!(file1, "c1,c2,c3")?;
-        writeln!(file1, "1,2,3")?;
-        writeln!(file1, "4,5,6")?;
-
-        // File 2: c1,c2,c3,c4
-        let mut file2 = std::fs::File::create(&file_path2)?;
-        writeln!(file2, "c1,c2,c3,c4")?;
-        writeln!(file2, "7,8,9,10")?;
-        writeln!(file2, "11,12,13,14")?;
-
-        // Parse paths
-        let table_path1 = ListingTableUrl::parse(file_path1.to_str().unwrap())?;
-        let table_path2 = ListingTableUrl::parse(file_path2.to_str().unwrap())?;
-
-        // Create specified schema matching second file (with 4 columns)
-        let specified_schema = Arc::new(Schema::new(vec![
+        // Test case 3: Use specified schema with 4 columns
+        let schema_4cols = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
             Field::new("c2", DataType::Utf8, true),
             Field::new("c3", DataType::Utf8, true),
             Field::new("c4", DataType::Utf8, true),
         ]));
 
-        // Create config with both paths and specified schema
-        let config =
-            ListingTableConfig::new_with_multi_paths(vec![table_path1, table_path2])
-                .with_schema(specified_schema.clone());
-
-        assert_eq!(*config.schema_source(), SchemaSource::Specified);
-
-        // Set up options
-        let format = CsvFormat::default().with_has_header(true);
-        let options = ListingOptions::new(Arc::new(format));
-        let config = config.with_listing_options(options);
-
-        // Infer should not change the schema because it's already specified
-        let config = config.infer_schema(&ctx.state()).await?;
-        assert_eq!(*config.schema_source(), SchemaSource::Specified);
+        let config3 = ListingTableConfig::new_with_multi_paths(vec![
+            table_path1.clone(),
+            table_path2.clone(),
+        ])
+        .with_schema(schema_4cols)
+        .with_listing_options(options.clone());
+        let config3 = config3.infer_schema(&ctx.state()).await?;
+        assert_eq!(*config3.schema_source(), SchemaSource::Specified);
 
         // Verify that the schema is still the one we specified (4 columns)
-        let schema = config.file_schema.as_ref().unwrap().clone();
-        assert_eq!(schema.fields().len(), 4);
-        assert_eq!(schema.field(0).name(), "c1");
-        assert_eq!(schema.field(1).name(), "c2");
-        assert_eq!(schema.field(2).name(), "c3");
-        assert_eq!(schema.field(3).name(), "c4");
+        let schema3 = config3.file_schema.as_ref().unwrap().clone();
+        assert_eq!(schema3.fields().len(), 4);
+        assert_eq!(schema3.field(0).name(), "c1");
+        assert_eq!(schema3.field(1).name(), "c2");
+        assert_eq!(schema3.field(2).name(), "c3");
+        assert_eq!(schema3.field(3).name(), "c4");
 
-        // Create the ListingTable and verify it maintains the schema source
-        let table = ListingTable::try_new(config)?;
-        assert_eq!(*table.schema_source(), SchemaSource::Specified);
+        // Test case 4: Verify order matters when inferring schema
+        let config4 = ListingTableConfig::new_with_multi_paths(vec![
+            table_path2.clone(),
+            table_path1.clone(),
+        ])
+        .with_listing_options(options);
+        let config4 = config4.infer_schema(&ctx.state()).await?;
+
+        // Should use first file's schema, which now has 4 columns
+        let schema4 = config4.file_schema.as_ref().unwrap().clone();
+        assert_eq!(schema4.fields().len(), 4);
+        assert_eq!(schema4.field(0).name(), "c1");
+        assert_eq!(schema4.field(1).name(), "c2");
+        assert_eq!(schema4.field(2).name(), "c3");
+        assert_eq!(schema4.field(3).name(), "c4");
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_listing_table_config_with_multiple_files_inferred_reversed(
-    ) -> Result<()> {
-        // Test case: Inferred schema with multiple files having different schemas,
-        // but with the order reversed (schema2 first, then schema1)
+    async fn test_list_files_configurations() -> Result<()> {
+        // Define common test cases as (description, files, paths, target_partitions, expected_partitions, file_ext)
+        let test_cases = vec![
+            // Single path cases
+            (
+                "Single path, more partitions than files",
+                vec![
+                    "bucket/key-prefix/file0",
+                    "bucket/key-prefix/file1",
+                    "bucket/key-prefix/file2",
+                    "bucket/key-prefix/file3",
+                    "bucket/key-prefix/file4",
+                ],
+                vec!["test:///bucket/key-prefix/"],
+                12,
+                5,
+                Some(""),
+            ),
+            (
+                "Single path, equal partitions and files",
+                vec![
+                    "bucket/key-prefix/file0",
+                    "bucket/key-prefix/file1",
+                    "bucket/key-prefix/file2",
+                    "bucket/key-prefix/file3",
+                ],
+                vec!["test:///bucket/key-prefix/"],
+                4,
+                4,
+                Some(""),
+            ),
+            (
+                "Single path, more files than partitions",
+                vec![
+                    "bucket/key-prefix/file0",
+                    "bucket/key-prefix/file1",
+                    "bucket/key-prefix/file2",
+                    "bucket/key-prefix/file3",
+                    "bucket/key-prefix/file4",
+                ],
+                vec!["test:///bucket/key-prefix/"],
+                2,
+                2,
+                Some(""),
+            ),
+            // Multi path cases
+            (
+                "Multi path, more partitions than files",
+                vec![
+                    "bucket/key1/file0",
+                    "bucket/key1/file1",
+                    "bucket/key1/file2",
+                    "bucket/key2/file3",
+                    "bucket/key2/file4",
+                    "bucket/key3/file5",
+                ],
+                vec!["test:///bucket/key1/", "test:///bucket/key2/"],
+                12,
+                5,
+                Some(""),
+            ),
+            // No files case
+            (
+                "No files",
+                vec![],
+                vec!["test:///bucket/key-prefix/"],
+                2,
+                0,
+                Some(""),
+            ),
+            // Exact path cases
+            (
+                "Exact paths test",
+                vec![
+                    "bucket/key1/file0",
+                    "bucket/key1/file1",
+                    "bucket/key1/file2",
+                    "bucket/key2/file3",
+                    "bucket/key2/file4",
+                ],
+                vec![
+                    "test:///bucket/key1/file0",
+                    "test:///bucket/key1/file1",
+                    "test:///bucket/key1/file2",
+                    "test:///bucket/key2/file3",
+                    "test:///bucket/key2/file4",
+                ],
+                12,
+                5,
+                Some(""),
+            ),
+        ];
+
+        // Run each test case
+        for (test_name, files, paths, target_partitions, expected_partitions, file_ext) in
+            test_cases
+        {
+            println!("Running test: {}", test_name);
+
+            if files.is_empty() {
+                // Test empty files case
+                assert_list_files_for_multi_paths(
+                    &[],
+                    &paths.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    target_partitions,
+                    expected_partitions,
+                    file_ext,
+                )
+                .await?;
+            } else if paths.len() == 1 {
+                // Test using single path API
+                assert_list_files_for_scan_grouping(
+                    &files.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    paths[0],
+                    target_partitions,
+                    expected_partitions,
+                    file_ext,
+                )
+                .await?;
+            } else if paths[0].contains("test:///bucket/key") {
+                // Test using multi path API
+                assert_list_files_for_multi_paths(
+                    &files.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    &paths.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    target_partitions,
+                    expected_partitions,
+                    file_ext,
+                )
+                .await?;
+            } else {
+                // Test using exact path API for specific cases
+                let file_strs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+                assert_list_files_for_exact_paths(
+                    &file_strs,
+                    target_partitions,
+                    expected_partitions,
+                    file_ext,
+                )
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "parquet")]
+    #[tokio::test]
+    async fn test_table_stats_behaviors() -> Result<()> {
+        use crate::datasource::file_format::parquet::ParquetFormat;
+
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
         let ctx = SessionContext::new();
+        let state = ctx.state();
 
-        // Create two test files with different schemas
-        let tmp_dir = TempDir::new()?;
-        let file_path1 = tmp_dir.path().join("file1.csv");
-        let file_path2 = tmp_dir.path().join("file2.csv");
+        // Test 1: Default behavior - stats not collected
+        let opt_default = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema_default = opt_default.infer_schema(&state, &table_path).await?;
+        let config_default = ListingTableConfig::new(table_path.clone())
+            .with_listing_options(opt_default)
+            .with_schema(schema_default);
+        let table_default = ListingTable::try_new(config_default)?;
 
-        // File 1: c1,c2,c3,c4 (now schema2 with 4 columns)
-        let mut file1 = std::fs::File::create(&file_path1)?;
-        writeln!(file1, "c1,c2,c3,c4")?;
-        writeln!(file1, "7,8,9,10")?;
-        writeln!(file1, "11,12,13,14")?;
+        let exec_default = table_default.scan(&state, None, &[], None).await?;
+        assert_eq!(
+            exec_default.partition_statistics(None)?.num_rows,
+            Precision::Absent
+        );
+        assert_eq!(
+            exec_default.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
 
-        // File 2: c1,c2,c3 (now schema1 with 3 columns)
-        let mut file2 = std::fs::File::create(&file_path2)?;
-        writeln!(file2, "c1,c2,c3")?;
-        writeln!(file2, "1,2,3")?;
-        writeln!(file2, "4,5,6")?;
+        // Test 2: Explicitly disable stats
+        let opt_disabled = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_collect_stat(false);
+        let schema_disabled = opt_disabled.infer_schema(&state, &table_path).await?;
+        let config_disabled = ListingTableConfig::new(table_path.clone())
+            .with_listing_options(opt_disabled)
+            .with_schema(schema_disabled);
+        let table_disabled = ListingTable::try_new(config_disabled)?;
 
-        // Parse paths
-        let table_path1 = ListingTableUrl::parse(file_path1.to_str().unwrap())?;
-        let table_path2 = ListingTableUrl::parse(file_path2.to_str().unwrap())?;
+        let exec_disabled = table_disabled.scan(&state, None, &[], None).await?;
+        assert_eq!(
+            exec_disabled.partition_statistics(None)?.num_rows,
+            Precision::Absent
+        );
+        assert_eq!(
+            exec_disabled.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
 
-        // Create config with both paths, with schema2 (4-column) file first
-        let config =
-            ListingTableConfig::new_with_multi_paths(vec![table_path1, table_path2]);
-        assert_eq!(*config.schema_source(), SchemaSource::None);
+        // Test 3: Explicitly enable stats
+        let opt_enabled = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_collect_stat(true);
+        let schema_enabled = opt_enabled.infer_schema(&state, &table_path).await?;
+        let config_enabled = ListingTableConfig::new(table_path)
+            .with_listing_options(opt_enabled)
+            .with_schema(schema_enabled);
+        let table_enabled = ListingTable::try_new(config_enabled)?;
 
-        // Set up options
-        let format = CsvFormat::default().with_has_header(true);
-        let options = ListingOptions::new(Arc::new(format));
-        let config = config.with_listing_options(options);
+        let exec_enabled = table_enabled.scan(&state, None, &[], None).await?;
+        assert_eq!(
+            exec_enabled.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
+        assert_eq!(
+            exec_enabled.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
-        // Infer schema (should use first file's schema which is now schema2 with 4 columns)
-        let config = config.infer_schema(&ctx.state()).await?;
-        assert_eq!(*config.schema_source(), SchemaSource::Inferred);
+        Ok(())
+    }
 
-        // Verify that the inferred schema matches the first file's schema, which now has 4 columns
-        let schema = config.file_schema.as_ref().unwrap().clone();
-        assert_eq!(schema.fields().len(), 4);
-        assert_eq!(schema.field(0).name(), "c1");
-        assert_eq!(schema.field(1).name(), "c2");
-        assert_eq!(schema.field(2).name(), "c3");
-        assert_eq!(schema.field(3).name(), "c4");
+    #[tokio::test]
+    async fn test_insert_into_parameterized() -> Result<()> {
+        let test_cases = vec![
+            // (file_format, batch_size, soft_max_rows, expected_files)
+            ("json", 10, 10, 2),
+            ("csv", 10, 10, 2),
+            #[cfg(feature = "parquet")]
+            ("parquet", 10, 10, 2),
+            #[cfg(feature = "parquet")]
+            ("parquet", 20, 20, 1),
+        ];
 
-        // Create a ListingTable and verify it maintains the schema source
-        let table = ListingTable::try_new(config)?;
-        assert_eq!(*table.schema_source(), SchemaSource::Inferred);
+        for (format, batch_size, soft_max_rows, expected_files) in test_cases {
+            println!("Testing insert with format: {format}, batch_size: {batch_size}, expected files: {expected_files}");
+
+            let mut config_map = HashMap::new();
+            config_map.insert(
+                "datafusion.execution.batch_size".into(),
+                batch_size.to_string(),
+            );
+            config_map.insert(
+                "datafusion.execution.soft_max_rows_per_output_file".into(),
+                soft_max_rows.to_string(),
+            );
+
+            let file_extension = match format {
+                "json" => JsonFormat::default().get_ext(),
+                "csv" => CsvFormat::default().get_ext(),
+                #[cfg(feature = "parquet")]
+                "parquet" => ParquetFormat::default().get_ext(),
+                _ => unreachable!("Unsupported format"),
+            };
+
+            helper_test_append_new_files_to_table(
+                file_extension,
+                FileCompressionType::UNCOMPRESSED,
+                Some(config_map),
+                expected_files,
+            )
+            .await?;
+        }
 
         Ok(())
     }
