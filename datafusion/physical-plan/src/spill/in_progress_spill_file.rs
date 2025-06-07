@@ -64,9 +64,11 @@ impl InProgressSpillFile {
         if self.writer.is_none() {
             let schema = batch.schema();
             if let Some(ref in_progress_file) = self.in_progress_file {
+                // TODO hmm passing compresion option again?
                 self.writer = Some(IPCStreamWriter::new(
                     in_progress_file.path(),
                     schema.as_ref(),
+                    self.spill_writer.compression,
                 )?);
 
                 // Update metrics

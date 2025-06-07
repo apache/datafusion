@@ -30,9 +30,12 @@ use std::task::{Context, Poll};
 
 use arrow::array::ArrayData;
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
+use arrow::ipc::{CompressionType, MetadataVersion};
 use arrow::record_batch::RecordBatch;
 
+use datafusion_common::config::SpillCompression;
 use datafusion_common::{exec_datafusion_err, DataFusionError, HashSet, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -194,7 +197,8 @@ pub fn spill_record_batch_by_size(
 ) -> Result<()> {
     let mut offset = 0;
     let total_rows = batch.num_rows();
-    let mut writer = IPCStreamWriter::new(&path, schema.as_ref())?;
+    let mut writer =
+        IPCStreamWriter::new(&path, schema.as_ref(), SpillCompression::Uncompressed)?;
 
     while offset < total_rows {
         let length = std::cmp::min(total_rows - offset, batch_size_rows);
@@ -292,15 +296,28 @@ struct IPCStreamWriter {
 
 impl IPCStreamWriter {
     /// Create new writer
-    pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
+    pub fn new(
+        path: &Path,
+        schema: &Schema,
+        compression_type: SpillCompression,
+    ) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
             exec_datafusion_err!("Failed to create partition file at {path:?}: {e:?}")
         })?;
+
+        // TODO what should be default metadata version & alignment?
+        let metadata_version = MetadataVersion::V5;
+        let alignment = 8;
+        let mut write_options =
+            IpcWriteOptions::try_new(alignment, false, metadata_version)?;
+        write_options = write_options.try_with_compression(compression_type.into())?;
+
+        let writer = StreamWriter::try_new_with_options(file, schema, write_options)?;
         Ok(Self {
             num_batches: 0,
             num_rows: 0,
             num_bytes: 0,
-            writer: StreamWriter::try_new(file, schema)?,
+            writer,
         })
     }
 
@@ -362,7 +379,12 @@ mod tests {
         // Construct SpillManager
         let env = Arc::new(RuntimeEnv::default());
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+        let spill_manager = SpillManager::new(
+            env,
+            metrics,
+            Arc::clone(&schema),
+            SpillCompression::Uncompressed,
+        );
 
         let spill_file = spill_manager
             .spill_record_batch_and_finish(&[batch1, batch2], "Test")?
@@ -426,7 +448,12 @@ mod tests {
         // Construct SpillManager
         let env = Arc::new(RuntimeEnv::default());
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&dict_schema));
+        let spill_manager = SpillManager::new(
+            env,
+            metrics,
+            Arc::clone(&dict_schema),
+            SpillCompression::Uncompressed,
+        );
 
         let num_rows = batch1.num_rows() + batch2.num_rows();
         let spill_file = spill_manager
@@ -454,7 +481,12 @@ mod tests {
         let schema = batch1.schema();
         let env = Arc::new(RuntimeEnv::default());
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+        let spill_manager = SpillManager::new(
+            env,
+            metrics,
+            Arc::clone(&schema),
+            SpillCompression::Uncompressed,
+        );
 
         let spill_file = spill_manager
             .spill_record_batch_by_size(&batch1, "Test Spill", 1)?
@@ -608,7 +640,12 @@ mod tests {
             Field::new("b", DataType::Utf8, false),
         ]));
 
-        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+        let spill_manager = SpillManager::new(
+            env,
+            metrics,
+            Arc::clone(&schema),
+            SpillCompression::Uncompressed,
+        );
 
         let batch = RecordBatch::try_new(
             schema,
@@ -665,8 +702,12 @@ mod tests {
             Field::new("b", DataType::Utf8, false),
         ]));
 
-        let spill_manager =
-            Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
+        let spill_manager = Arc::new(SpillManager::new(
+            env,
+            metrics,
+            Arc::clone(&schema),
+            SpillCompression::Uncompressed,
+        ));
         let mut in_progress_file = spill_manager.create_in_progress_file("Test")?;
 
         let batch1 = RecordBatch::try_new(
@@ -712,8 +753,12 @@ mod tests {
             Field::new("b", DataType::Utf8, false),
         ]));
 
-        let spill_manager =
-            Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
+        let spill_manager = Arc::new(SpillManager::new(
+            env,
+            metrics,
+            Arc::clone(&schema),
+            SpillCompression::Uncompressed,
+        ));
 
         // Test write empty batch with interface `InProgressSpillFile` and `append_batch()`
         let mut in_progress_file = spill_manager.create_in_progress_file("Test")?;
@@ -758,7 +803,12 @@ mod tests {
                 // Construct SpillManager
                 let env = Arc::new(RuntimeEnv::default());
                 let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-                let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+                let spill_manager = SpillManager::new(
+                    env,
+                    metrics,
+                    Arc::clone(&schema),
+                    SpillCompression::Uncompressed,
+                );
                 let batches: [_; 10] = std::array::from_fn(|_| batch.clone());
 
                 let spill_file_1 = spill_manager
