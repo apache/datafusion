@@ -988,7 +988,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                     CreateMemoryTable {
                         input: Arc::new(input),
-                        constraints: Constraints::empty(),
+                        constraints: Constraints::default(),
                         name: name.clone(),
                         if_not_exists: *if_not_exists,
                         or_replace: *or_replace,

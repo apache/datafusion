@@ -24,7 +24,17 @@ use std::sync::Arc;
 
 use crate::sink::DataSink;
 use crate::source::{DataSource, DataSourceExec};
-use async_trait::async_trait;
+
+use arrow::array::{RecordBatch, RecordBatchOptions};
+use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::{
+    OrderingEquivalenceClass, ProjectionMapping,
+};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::projection::{
     all_alias_free_columns, new_projections_for_columns, ProjectionExec,
@@ -34,14 +44,7 @@ use datafusion_physical_plan::{
     PhysicalExpr, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use async_trait::async_trait;
 use futures::StreamExt;
 use itertools::Itertools;
 use tokio::sync::RwLock;
@@ -181,7 +184,7 @@ impl DataSource for MemorySourceConfig {
     fn eq_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new_with_orderings(
             Arc::clone(&self.projected_schema),
-            self.sort_information.as_slice(),
+            self.sort_information.clone(),
         )
     }
 
@@ -424,24 +427,21 @@ impl MemorySourceConfig {
 
         // If there is a projection on the source, we also need to project orderings
         if let Some(projection) = &self.projection {
-            let base_eqp = EquivalenceProperties::new_with_orderings(
-                self.original_schema(),
-                &sort_information,
-            );
-            let proj_exprs = projection
-                .iter()
-                .map(|idx| {
-                    let base_schema = self.original_schema();
-                    let name = base_schema.field(*idx).name();
-                    (Arc::new(Column::new(name, *idx)) as _, name.to_string())
-                })
-                .collect::<Vec<_>>();
+            let base_schema = self.original_schema();
+            let proj_exprs = projection.iter().map(|idx| {
+                let name = base_schema.field(*idx).name();
+                (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+            });
             let projection_mapping =
-                ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
-            sort_information = base_eqp
-                .project(&projection_mapping, Arc::clone(&self.projected_schema))
-                .into_oeq_class()
-                .into_inner();
+                ProjectionMapping::try_new(proj_exprs, &base_schema)?;
+            let base_eqp = EquivalenceProperties::new_with_orderings(
+                Arc::clone(&base_schema),
+                sort_information,
+            );
+            let proj_eqp =
+                base_eqp.project(&projection_mapping, Arc::clone(&self.projected_schema));
+            let oeq_class: OrderingEquivalenceClass = proj_eqp.into();
+            sort_information = oeq_class.into();
         }
 
         self.sort_information = sort_information;
@@ -463,7 +463,7 @@ impl MemorySourceConfig {
         target_partitions: usize,
         output_ordering: LexOrdering,
     ) -> Result<Option<Vec<Vec<RecordBatch>>>> {
-        if !self.eq_properties().ordering_satisfy(&output_ordering) {
+        if !self.eq_properties().ordering_satisfy(output_ordering)? {
             Ok(None)
         } else {
             let total_num_batches =
@@ -765,22 +765,22 @@ mod memory_source_tests {
 
     use crate::memory::MemorySourceConfig;
     use crate::source::DataSourceExec;
-    use datafusion_physical_plan::ExecutionPlan;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::Result;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_plan::ExecutionPlan;
 
     #[test]
-    fn test_memory_order_eq() -> datafusion_common::Result<()> {
+    fn test_memory_order_eq() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
             Field::new("c", DataType::Int64, false),
         ]));
-        let sort1 = LexOrdering::new(vec![
+        let sort1: LexOrdering = [
             PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
@@ -789,13 +789,14 @@ mod memory_source_tests {
                 expr: col("b", &schema)?,
                 options: SortOptions::default(),
             },
-        ]);
-        let sort2 = LexOrdering::new(vec![PhysicalSortExpr {
+        ]
+        .into();
+        let sort2: LexOrdering = [PhysicalSortExpr {
             expr: col("c", &schema)?,
             options: SortOptions::default(),
-        }]);
-        let mut expected_output_order = LexOrdering::default();
-        expected_output_order.extend(sort1.clone());
+        }]
+        .into();
+        let mut expected_output_order = sort1.clone();
         expected_output_order.extend(sort2.clone());
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
@@ -817,19 +818,17 @@ mod memory_source_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::test_util::col;
     use crate::tests::{aggr_test_schema, make_partition};
 
-    use super::*;
-
     use arrow::array::{ArrayRef, Int32Array, Int64Array, StringArray};
-    use arrow::compute::SortOptions;
-    use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_plan::expressions::lit;
-
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::{ColumnStatistics, Precision};
+    use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_plan::expressions::lit;
+
     use futures::StreamExt;
 
     #[tokio::test]
@@ -1310,10 +1309,8 @@ mod tests {
     #[test]
     fn test_repartition_with_sort_information() -> Result<()> {
         let schema = schema();
-        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
-            options: SortOptions::default(),
-        }]);
+        let sort_key: LexOrdering =
+            [PhysicalSortExpr::new_default(col("c", &schema)?)].into();
         let has_sort = vec![sort_key.clone()];
         let output_ordering = Some(sort_key);
 
@@ -1360,10 +1357,8 @@ mod tests {
     #[test]
     fn test_repartition_with_batch_ordering_not_matching_sizing() -> Result<()> {
         let schema = schema();
-        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
-            options: SortOptions::default(),
-        }]);
+        let sort_key: LexOrdering =
+            [PhysicalSortExpr::new_default(col("c", &schema)?)].into();
         let has_sort = vec![sort_key.clone()];
         let output_ordering = Some(sort_key);
 

@@ -17,20 +17,20 @@
 
 //! Sort expressions
 
-use crate::physical_expr::{fmt_sql, PhysicalExpr};
-use std::fmt;
-use std::fmt::{Display, Formatter};
+use std::cmp::Ordering;
+use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, Index, Range, RangeFrom, RangeTo};
-use std::sync::{Arc, LazyLock};
+use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 use std::vec::IntoIter;
+
+use crate::physical_expr::{fmt_sql, PhysicalExpr};
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{HashSet, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
-use itertools::Itertools;
 
 /// Represents Sort operation for a column in a RecordBatch
 ///
@@ -77,7 +77,7 @@ use itertools::Itertools;
 ///   .nulls_last();
 /// assert_eq!(sort_expr.to_string(), "a DESC NULLS LAST");
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq)]
 pub struct PhysicalSortExpr {
     /// Physical expression representing the column to sort
     pub expr: Arc<dyn PhysicalExpr>,
@@ -94,6 +94,15 @@ impl PhysicalSortExpr {
     /// Create a new PhysicalSortExpr with default [`SortOptions`]
     pub fn new_default(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self::new(expr, SortOptions::default())
+    }
+
+    /// Reverses the sort expression. For instance, `[a ASC NULLS LAST]` turns
+    /// into `[a DESC NULLS FIRST]`. Such reversals are useful in planning, e.g.
+    /// when constructing equivalent window expressions.
+    pub fn reverse(&self) -> Self {
+        let mut result = self.clone();
+        result.options = !result.options;
+        result
     }
 
     /// Set the sort sort options to ASC
@@ -129,22 +138,57 @@ impl PhysicalSortExpr {
             to_str(&self.options)
         )
     }
-}
 
-/// Access the PhysicalSortExpr as a PhysicalExpr
-impl AsRef<dyn PhysicalExpr> for PhysicalSortExpr {
-    fn as_ref(&self) -> &(dyn PhysicalExpr + 'static) {
-        self.expr.as_ref()
+    /// Evaluates the sort expression into a `SortColumn` that can be passed
+    /// into the arrow sort kernel.
+    pub fn evaluate_to_sort_column(&self, batch: &RecordBatch) -> Result<SortColumn> {
+        let array_to_sort = match self.expr.evaluate(batch)? {
+            ColumnarValue::Array(array) => array,
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(batch.num_rows())?,
+        };
+        Ok(SortColumn {
+            values: array_to_sort,
+            options: Some(self.options),
+        })
+    }
+
+    /// Checks whether this sort expression satisfies the given `requirement`.
+    /// If sort options are unspecified in `requirement`, only expressions are
+    /// compared for inequality. See [`options_compatible`] for details on
+    /// how sort options compare with one another.
+    pub fn satisfy(
+        &self,
+        requirement: &PhysicalSortRequirement,
+        schema: &Schema,
+    ) -> bool {
+        self.expr.eq(&requirement.expr)
+            && requirement.options.is_none_or(|opts| {
+                options_compatible(
+                    &self.options,
+                    &opts,
+                    self.expr.nullable(schema).unwrap_or(true),
+                )
+            })
+    }
+
+    /// Checks whether this sort expression satisfies the given `sort_expr`.
+    /// See [`options_compatible`] for details on how sort options compare with
+    /// one another.
+    pub fn satisfy_expr(&self, sort_expr: &Self, schema: &Schema) -> bool {
+        self.expr.eq(&sort_expr.expr)
+            && options_compatible(
+                &self.options,
+                &sort_expr.options,
+                self.expr.nullable(schema).unwrap_or(true),
+            )
     }
 }
 
 impl PartialEq for PhysicalSortExpr {
-    fn eq(&self, other: &PhysicalSortExpr) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         self.options == other.options && self.expr.eq(&other.expr)
     }
 }
-
-impl Eq for PhysicalSortExpr {}
 
 impl Hash for PhysicalSortExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -159,38 +203,20 @@ impl Display for PhysicalSortExpr {
     }
 }
 
-impl PhysicalSortExpr {
-    /// evaluate the sort expression into SortColumn that can be passed into arrow sort kernel
-    pub fn evaluate_to_sort_column(&self, batch: &RecordBatch) -> Result<SortColumn> {
-        let value_to_sort = self.expr.evaluate(batch)?;
-        let array_to_sort = match value_to_sort {
-            ColumnarValue::Array(array) => array,
-            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(batch.num_rows())?,
-        };
-        Ok(SortColumn {
-            values: array_to_sort,
-            options: Some(self.options),
-        })
-    }
-
-    /// Checks whether this sort expression satisfies the given `requirement`.
-    /// If sort options are unspecified in `requirement`, only expressions are
-    /// compared for inequality.
-    pub fn satisfy(
-        &self,
-        requirement: &PhysicalSortRequirement,
-        schema: &Schema,
-    ) -> bool {
+/// Returns whether the given two [`SortOptions`] are compatible. Here,
+/// compatibility means that they are either exactly equal, or they differ only
+/// in whether NULL values come in first/last, which is immaterial because the
+/// column in question is not nullable (specified by the `nullable` parameter).
+pub fn options_compatible(
+    options_lhs: &SortOptions,
+    options_rhs: &SortOptions,
+    nullable: bool,
+) -> bool {
+    if nullable {
+        options_lhs == options_rhs
+    } else {
         // If the column is not nullable, NULLS FIRST/LAST is not important.
-        let nullable = self.expr.nullable(schema).unwrap_or(true);
-        self.expr.eq(&requirement.expr)
-            && if nullable {
-                requirement.options.is_none_or(|opts| self.options == opts)
-            } else {
-                requirement
-                    .options
-                    .is_none_or(|opts| self.options.descending == opts.descending)
-            }
+        options_lhs.descending == options_rhs.descending
     }
 }
 
@@ -222,28 +248,8 @@ pub struct PhysicalSortRequirement {
     pub options: Option<SortOptions>,
 }
 
-impl From<PhysicalSortRequirement> for PhysicalSortExpr {
-    /// If options is `None`, the default sort options `ASC, NULLS LAST` is used.
-    ///
-    /// The default is picked to be consistent with
-    /// PostgreSQL: <https://www.postgresql.org/docs/current/queries-order.html>
-    fn from(value: PhysicalSortRequirement) -> Self {
-        let options = value.options.unwrap_or(SortOptions {
-            descending: false,
-            nulls_first: false,
-        });
-        PhysicalSortExpr::new(value.expr, options)
-    }
-}
-
-impl From<PhysicalSortExpr> for PhysicalSortRequirement {
-    fn from(value: PhysicalSortExpr) -> Self {
-        PhysicalSortRequirement::new(value.expr, Some(value.options))
-    }
-}
-
 impl PartialEq for PhysicalSortRequirement {
-    fn eq(&self, other: &PhysicalSortRequirement) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         self.options == other.options && self.expr.eq(&other.expr)
     }
 }
@@ -293,37 +299,16 @@ impl PhysicalSortRequirement {
         Self { expr, options }
     }
 
-    /// Replace the required expression for this requirement with the new one
-    pub fn with_expr(mut self, expr: Arc<dyn PhysicalExpr>) -> Self {
-        self.expr = expr;
-        self
-    }
-
     /// Returns whether this requirement is equal or more specific than `other`.
-    pub fn compatible(&self, other: &PhysicalSortRequirement) -> bool {
+    pub fn compatible(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
             && other
                 .options
                 .is_none_or(|other_opts| self.options == Some(other_opts))
     }
-
-    #[deprecated(since = "43.0.0", note = "use  LexRequirement::from_lex_ordering")]
-    pub fn from_sort_exprs<'a>(
-        ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
-    ) -> LexRequirement {
-        let ordering = ordering.into_iter().cloned().collect();
-        LexRequirement::from_lex_ordering(ordering)
-    }
-    #[deprecated(since = "43.0.0", note = "use  LexOrdering::from_lex_requirement")]
-    pub fn to_sort_exprs(
-        requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
-    ) -> LexOrdering {
-        let requirements = requirements.into_iter().collect();
-        LexOrdering::from_lex_requirement(requirements)
-    }
 }
 
-/// Returns the SQL string representation of the given [SortOptions] object.
+/// Returns the SQL string representation of the given [`SortOptions`] object.
 #[inline]
 fn to_str(options: &SortOptions) -> &str {
     match (options.descending, options.nulls_first) {
@@ -334,162 +319,135 @@ fn to_str(options: &SortOptions) -> &str {
     }
 }
 
-///`LexOrdering` contains a `Vec<PhysicalSortExpr>`, which represents
-/// a lexicographical ordering.
-///
-/// For example, `vec![a ASC, b DESC]` represents a lexicographical ordering
-/// that first sorts by column `a` in ascending order, then by column `b` in
-/// descending order.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
-pub struct LexOrdering {
-    inner: Vec<PhysicalSortExpr>,
+// Cross-conversion utilities between `PhysicalSortExpr` and `PhysicalSortRequirement`
+impl From<PhysicalSortExpr> for PhysicalSortRequirement {
+    fn from(value: PhysicalSortExpr) -> Self {
+        Self::new(value.expr, Some(value.options))
+    }
 }
 
-impl AsRef<LexOrdering> for LexOrdering {
-    fn as_ref(&self) -> &LexOrdering {
-        self
+impl From<PhysicalSortRequirement> for PhysicalSortExpr {
+    /// The default sort options `ASC, NULLS LAST` when the requirement does
+    /// not specify sort options. This default is consistent with PostgreSQL.
+    ///
+    /// Reference: <https://www.postgresql.org/docs/current/queries-order.html>
+    fn from(value: PhysicalSortRequirement) -> Self {
+        let options = value
+            .options
+            .unwrap_or_else(|| SortOptions::new(false, false));
+        Self::new(value.expr, options)
     }
+}
+
+/// This object represents a lexicographical ordering and contains a vector
+/// of `PhysicalSortExpr` objects.
+///
+/// For example, a `vec![a ASC, b DESC]` represents a lexicographical ordering
+/// that first sorts by column `a` in ascending order, then by column `b` in
+/// descending order.
+///
+/// # Invariants
+///
+/// The following always hold true for a `LexOrdering`:
+///
+/// 1. It is non-degenerate, meaning it contains at least one element.
+/// 2. It is duplicate-free, meaning it does not contain multiple entries for
+///    the same column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LexOrdering {
+    /// Vector of sort expressions representing the lexicographical ordering.
+    exprs: Vec<PhysicalSortExpr>,
+    /// Set of expressions in the lexicographical ordering, used to ensure
+    /// that the ordering is duplicate-free. Note that the elements in this
+    /// set are the same underlying physical expressions as in `exprs`.
+    set: HashSet<Arc<dyn PhysicalExpr>>,
 }
 
 impl LexOrdering {
-    /// Creates a new [`LexOrdering`] from a vector
-    pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
-        Self { inner }
+    /// Creates a new [`LexOrdering`] from the given vector of sort expressions.
+    /// If the vector is empty, returns `None`.
+    pub fn new(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
+        let (non_empty, ordering) = Self::construct(exprs);
+        non_empty.then_some(ordering)
     }
 
-    /// Return an empty LexOrdering (no expressions)
-    pub fn empty() -> &'static LexOrdering {
-        static EMPTY_ORDER: LazyLock<LexOrdering> = LazyLock::new(LexOrdering::default);
-        &EMPTY_ORDER
+    /// Appends an element to the back of the `LexOrdering`.
+    pub fn push(&mut self, sort_expr: PhysicalSortExpr) {
+        if self.set.insert(Arc::clone(&sort_expr.expr)) {
+            self.exprs.push(sort_expr);
+        }
     }
 
-    /// Returns the number of elements that can be stored in the LexOrdering
+    /// Add all elements from `iter` to the `LexOrdering`.
+    pub fn extend(&mut self, sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>) {
+        for sort_expr in sort_exprs {
+            self.push(sort_expr);
+        }
+    }
+
+    /// Returns the leading `PhysicalSortExpr` of the `LexOrdering`. Note that
+    /// this function does not return an `Option`, as a `LexOrdering` is always
+    /// non-degenerate (i.e. it contains at least one element).
+    pub fn first(&self) -> &PhysicalSortExpr {
+        // Can safely `unwrap` because `LexOrdering` is non-degenerate:
+        self.exprs.first().unwrap()
+    }
+
+    /// Returns the number of elements that can be stored in the `LexOrdering`
     /// without reallocating.
     pub fn capacity(&self) -> usize {
-        self.inner.capacity()
+        self.exprs.capacity()
     }
 
-    /// Clears the LexOrdering, removing all elements.
-    pub fn clear(&mut self) {
-        self.inner.clear()
-    }
-
-    /// Takes ownership of the actual vector of `PhysicalSortExpr`s in the LexOrdering.
-    pub fn take_exprs(self) -> Vec<PhysicalSortExpr> {
-        self.inner
-    }
-
-    /// Returns `true` if the LexOrdering contains `expr`
-    pub fn contains(&self, expr: &PhysicalSortExpr) -> bool {
-        self.inner.contains(expr)
-    }
-
-    /// Add all elements from `iter` to the LexOrdering.
-    pub fn extend<I: IntoIterator<Item = PhysicalSortExpr>>(&mut self, iter: I) {
-        self.inner.extend(iter)
-    }
-
-    /// Remove all elements from the LexOrdering where `f` evaluates to `false`.
-    pub fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&PhysicalSortExpr) -> bool,
-    {
-        self.inner.retain(f)
-    }
-
-    /// Returns `true` if the LexOrdering contains no elements.
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    /// Returns an iterator over each `&PhysicalSortExpr` in the LexOrdering.
-    pub fn iter(&self) -> core::slice::Iter<PhysicalSortExpr> {
-        self.inner.iter()
-    }
-
-    /// Returns the number of elements in the LexOrdering.
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Removes the last element from the LexOrdering and returns it, or `None` if it is empty.
-    pub fn pop(&mut self) -> Option<PhysicalSortExpr> {
-        self.inner.pop()
-    }
-
-    /// Appends an element to the back of the LexOrdering.
-    pub fn push(&mut self, physical_sort_expr: PhysicalSortExpr) {
-        self.inner.push(physical_sort_expr)
-    }
-
-    /// Truncates the LexOrdering, keeping only the first `len` elements.
-    pub fn truncate(&mut self, len: usize) {
-        self.inner.truncate(len)
-    }
-
-    /// Merge the contents of `other` into `self`, removing duplicates.
-    pub fn merge(mut self, other: LexOrdering) -> Self {
-        self.inner = self.inner.into_iter().chain(other).unique().collect();
-        self
-    }
-
-    /// Converts a `LexRequirement` into a `LexOrdering`.
-    ///
-    /// This function converts [`PhysicalSortRequirement`] to [`PhysicalSortExpr`]
-    /// for each entry in the input.
-    ///
-    /// If the required ordering is `None` for an entry in `requirement`, the
-    /// default ordering `ASC, NULLS LAST` is used (see
-    /// [`PhysicalSortExpr::from`]).
-    pub fn from_lex_requirement(requirement: LexRequirement) -> LexOrdering {
-        requirement
-            .into_iter()
-            .map(PhysicalSortExpr::from)
-            .collect()
-    }
-
-    /// Collapse a `LexOrdering` into a new duplicate-free `LexOrdering` based on expression.
-    ///
-    /// This function filters  duplicate entries that have same physical
-    /// expression inside, ignoring [`SortOptions`]. For example:
-    ///
-    /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
-    pub fn collapse(self) -> Self {
-        let mut output = LexOrdering::default();
-        for item in self {
-            if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-                output.push(item);
-            }
+    /// Truncates the `LexOrdering`, keeping only the first `len` elements.
+    /// Returns `true` if truncation made a change, `false` otherwise. Negative
+    /// cases happen in two scenarios: (1) When `len` is greater than or equal
+    /// to the number of expressions inside this `LexOrdering`, making truncation
+    /// a no-op, or (2) when `len` is `0`, making truncation impossible.
+    pub fn truncate(&mut self, len: usize) -> bool {
+        if len == 0 || len >= self.exprs.len() {
+            return false;
         }
-        output
+        for PhysicalSortExpr { expr, .. } in self.exprs[len..].iter() {
+            self.set.remove(expr);
+        }
+        self.exprs.truncate(len);
+        true
     }
 
-    /// Transforms each `PhysicalSortExpr` in the `LexOrdering`
-    /// in place using the provided closure `f`.
-    pub fn transform<F>(&mut self, f: F)
-    where
-        F: FnMut(&mut PhysicalSortExpr),
-    {
-        self.inner.iter_mut().for_each(f);
-    }
-}
-
-impl From<Vec<PhysicalSortExpr>> for LexOrdering {
-    fn from(value: Vec<PhysicalSortExpr>) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<LexRequirement> for LexOrdering {
-    fn from(value: LexRequirement) -> Self {
-        Self::from_lex_requirement(value)
+    /// Constructs a new `LexOrdering` from the given sort requirements w/o
+    /// enforcing non-degeneracy. This function is used internally and is not
+    /// meant (or safe) for external use.
+    fn construct(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> (bool, Self) {
+        let mut set = HashSet::new();
+        let exprs = exprs
+            .into_iter()
+            .filter_map(|s| set.insert(Arc::clone(&s.expr)).then_some(s))
+            .collect();
+        (!set.is_empty(), Self { exprs, set })
     }
 }
 
-/// Convert a `LexOrdering` into a `Arc[<PhysicalSortExpr>]` for fast copies
-impl From<LexOrdering> for Arc<[PhysicalSortExpr]> {
-    fn from(value: LexOrdering) -> Self {
-        value.inner.into()
+impl PartialOrd for LexOrdering {
+    /// There is a partial ordering among `LexOrdering` objects. For example, the
+    /// ordering `[a ASC]` is coarser (less) than ordering `[a ASC, b ASC]`.
+    /// If two orderings do not share a prefix, they are incomparable.
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter()
+            .zip(other.iter())
+            .all(|(lhs, rhs)| lhs == rhs)
+            .then(|| self.len().cmp(&other.len()))
+    }
+}
+
+impl<const N: usize> From<[PhysicalSortExpr; N]> for LexOrdering {
+    fn from(value: [PhysicalSortExpr; N]) -> Self {
+        // TODO: Replace this assertion with a condition on the generic parameter
+        //       when Rust supports it.
+        assert!(N > 0);
+        let (non_empty, ordering) = Self::construct(value);
+        debug_assert!(non_empty);
+        ordering
     }
 }
 
@@ -497,14 +455,14 @@ impl Deref for LexOrdering {
     type Target = [PhysicalSortExpr];
 
     fn deref(&self) -> &Self::Target {
-        self.inner.as_slice()
+        self.exprs.as_slice()
     }
 }
 
 impl Display for LexOrdering {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let mut first = true;
-        for sort_expr in &self.inner {
+        for sort_expr in &self.exprs {
             if first {
                 first = false;
             } else {
@@ -516,149 +474,12 @@ impl Display for LexOrdering {
     }
 }
 
-impl FromIterator<PhysicalSortExpr> for LexOrdering {
-    fn from_iter<T: IntoIterator<Item = PhysicalSortExpr>>(iter: T) -> Self {
-        let mut lex_ordering = LexOrdering::default();
-
-        for i in iter {
-            lex_ordering.push(i);
-        }
-
-        lex_ordering
-    }
-}
-
-impl Index<usize> for LexOrdering {
-    type Output = PhysicalSortExpr;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.inner[index]
-    }
-}
-
-impl Index<Range<usize>> for LexOrdering {
-    type Output = [PhysicalSortExpr];
-
-    fn index(&self, range: Range<usize>) -> &Self::Output {
-        &self.inner[range]
-    }
-}
-
-impl Index<RangeFrom<usize>> for LexOrdering {
-    type Output = [PhysicalSortExpr];
-
-    fn index(&self, range_from: RangeFrom<usize>) -> &Self::Output {
-        &self.inner[range_from]
-    }
-}
-
-impl Index<RangeTo<usize>> for LexOrdering {
-    type Output = [PhysicalSortExpr];
-
-    fn index(&self, range_to: RangeTo<usize>) -> &Self::Output {
-        &self.inner[range_to]
-    }
-}
-
 impl IntoIterator for LexOrdering {
     type Item = PhysicalSortExpr;
-    type IntoIter = IntoIter<PhysicalSortExpr>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.inner.into_iter()
-    }
-}
-
-///`LexOrderingRef` is an alias for the type &`[PhysicalSortExpr]`, which represents
-/// a reference to a lexicographical ordering.
-#[deprecated(since = "43.0.0", note = "use &LexOrdering instead")]
-pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
-
-///`LexRequirement` is an struct containing a `Vec<PhysicalSortRequirement>`, which
-/// represents a lexicographical ordering requirement.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct LexRequirement {
-    pub inner: Vec<PhysicalSortRequirement>,
-}
-
-impl LexRequirement {
-    pub fn new(inner: Vec<PhysicalSortRequirement>) -> Self {
-        Self { inner }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortRequirement> {
-        self.inner.iter()
-    }
-
-    pub fn push(&mut self, physical_sort_requirement: PhysicalSortRequirement) {
-        self.inner.push(physical_sort_requirement)
-    }
-
-    /// Create a new [`LexRequirement`] from a [`LexOrdering`]
-    ///
-    /// Returns [`LexRequirement`] that requires the exact
-    /// sort of the [`PhysicalSortExpr`]s in `ordering`
-    pub fn from_lex_ordering(ordering: LexOrdering) -> Self {
-        Self::new(
-            ordering
-                .into_iter()
-                .map(PhysicalSortRequirement::from)
-                .collect(),
-        )
-    }
-
-    /// Constructs a duplicate-free `LexOrderingReq` by filtering out
-    /// duplicate entries that have same physical expression inside.
-    ///
-    /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
-    /// Some(ASC)]`.
-    pub fn collapse(self) -> Self {
-        let mut output = Vec::<PhysicalSortRequirement>::new();
-        for item in self {
-            if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-                output.push(item);
-            }
-        }
-        LexRequirement::new(output)
-    }
-}
-
-impl From<LexOrdering> for LexRequirement {
-    fn from(value: LexOrdering) -> Self {
-        Self::from_lex_ordering(value)
-    }
-}
-
-impl Deref for LexRequirement {
-    type Target = [PhysicalSortRequirement];
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.as_slice()
-    }
-}
-
-impl FromIterator<PhysicalSortRequirement> for LexRequirement {
-    fn from_iter<T: IntoIterator<Item = PhysicalSortRequirement>>(iter: T) -> Self {
-        let mut lex_requirement = LexRequirement::new(vec![]);
-
-        for i in iter {
-            lex_requirement.inner.push(i);
-        }
-
-        lex_requirement
-    }
-}
-
-impl IntoIterator for LexRequirement {
-    type Item = PhysicalSortRequirement;
     type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.into_iter()
+        self.exprs.into_iter()
     }
 }
 
@@ -667,11 +488,236 @@ impl<'a> IntoIterator for &'a LexOrdering {
     type IntoIter = std::slice::Iter<'a, PhysicalSortExpr>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.iter()
+        self.exprs.iter()
     }
 }
 
-///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
-/// represents a reference to a lexicographical ordering requirement.
-/// #[deprecated(since = "43.0.0", note = "use &LexRequirement instead")]
-pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];
+impl From<LexOrdering> for Vec<PhysicalSortExpr> {
+    fn from(ordering: LexOrdering) -> Self {
+        ordering.exprs
+    }
+}
+
+/// This object represents a lexicographical ordering requirement and contains
+/// a vector of `PhysicalSortRequirement` objects.
+///
+/// For example, a `vec![a Some(ASC), b None]` represents a lexicographical
+/// requirement that firsts imposes an ordering by column `a` in ascending
+/// order, then by column `b` in *any* (ascending or descending) order. The
+/// ordering is non-degenerate, meaning it contains at least one element, and
+/// it is duplicate-free, meaning it does not contain multiple entries for the
+/// same column.
+///
+/// Note that a `LexRequirement` need not enforce the uniqueness of its sort
+/// expressions after construction like a `LexOrdering` does, because it provides
+/// no mutation methods. If such methods become necessary, we will need to
+/// enforce uniqueness like the latter object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LexRequirement {
+    reqs: Vec<PhysicalSortRequirement>,
+}
+
+impl LexRequirement {
+    /// Creates a new [`LexRequirement`] from the given vector of sort expressions.
+    /// If the vector is empty, returns `None`.
+    pub fn new(reqs: impl IntoIterator<Item = PhysicalSortRequirement>) -> Option<Self> {
+        let (non_empty, requirements) = Self::construct(reqs);
+        non_empty.then_some(requirements)
+    }
+
+    /// Returns the leading `PhysicalSortRequirement` of the `LexRequirement`.
+    /// Note that this function does not return an `Option`, as a `LexRequirement`
+    /// is always non-degenerate (i.e. it contains at least one element).
+    pub fn first(&self) -> &PhysicalSortRequirement {
+        // Can safely `unwrap` because `LexRequirement` is non-degenerate:
+        self.reqs.first().unwrap()
+    }
+
+    /// Constructs a new `LexRequirement` from the given sort requirements w/o
+    /// enforcing non-degeneracy. This function is used internally and is not
+    /// meant (or safe) for external use.
+    fn construct(
+        reqs: impl IntoIterator<Item = PhysicalSortRequirement>,
+    ) -> (bool, Self) {
+        let mut set = HashSet::new();
+        let reqs = reqs
+            .into_iter()
+            .filter_map(|r| set.insert(Arc::clone(&r.expr)).then_some(r))
+            .collect();
+        (!set.is_empty(), Self { reqs })
+    }
+}
+
+impl<const N: usize> From<[PhysicalSortRequirement; N]> for LexRequirement {
+    fn from(value: [PhysicalSortRequirement; N]) -> Self {
+        // TODO: Replace this assertion with a condition on the generic parameter
+        //       when Rust supports it.
+        assert!(N > 0);
+        let (non_empty, requirement) = Self::construct(value);
+        debug_assert!(non_empty);
+        requirement
+    }
+}
+
+impl Deref for LexRequirement {
+    type Target = [PhysicalSortRequirement];
+
+    fn deref(&self) -> &Self::Target {
+        self.reqs.as_slice()
+    }
+}
+
+impl IntoIterator for LexRequirement {
+    type Item = PhysicalSortRequirement;
+    type IntoIter = IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.reqs.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a LexRequirement {
+    type Item = &'a PhysicalSortRequirement;
+    type IntoIter = std::slice::Iter<'a, PhysicalSortRequirement>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.reqs.iter()
+    }
+}
+
+impl From<LexRequirement> for Vec<PhysicalSortRequirement> {
+    fn from(requirement: LexRequirement) -> Self {
+        requirement.reqs
+    }
+}
+
+// Cross-conversion utilities between `LexOrdering` and `LexRequirement`
+impl From<LexOrdering> for LexRequirement {
+    fn from(value: LexOrdering) -> Self {
+        // Can construct directly as `value` is non-degenerate:
+        let (non_empty, requirements) =
+            Self::construct(value.into_iter().map(Into::into));
+        debug_assert!(non_empty);
+        requirements
+    }
+}
+
+impl From<LexRequirement> for LexOrdering {
+    fn from(value: LexRequirement) -> Self {
+        // Can construct directly as `value` is non-degenerate:
+        let (non_empty, ordering) = Self::construct(value.into_iter().map(Into::into));
+        debug_assert!(non_empty);
+        ordering
+    }
+}
+
+/// Represents a plan's input ordering requirements. Vector elements represent
+/// alternative ordering requirements in the order of preference. The list of
+/// alternatives can be either hard or soft, depending on whether the operator
+/// can work without an input ordering.
+///
+/// # Invariants
+///
+/// The following always hold true for a `OrderingRequirements`:
+///
+/// 1. It is non-degenerate, meaning it contains at least one ordering. The
+///    absence of an input ordering requirement is represented by a `None` value
+///    in `ExecutionPlan` APIs, which return an `Option<OrderingRequirements>`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OrderingRequirements {
+    /// The operator is not able to work without one of these requirements.
+    Hard(Vec<LexRequirement>),
+    /// The operator can benefit from these input orderings when available,
+    /// but can still work in the absence of any input ordering.
+    Soft(Vec<LexRequirement>),
+}
+
+impl OrderingRequirements {
+    /// Creates a new instance from the given alternatives. If an empty list of
+    /// alternatives are given, returns `None`.
+    pub fn new_alternatives(
+        alternatives: impl IntoIterator<Item = LexRequirement>,
+        soft: bool,
+    ) -> Option<Self> {
+        let alternatives = alternatives.into_iter().collect::<Vec<_>>();
+        (!alternatives.is_empty()).then(|| {
+            if soft {
+                Self::Soft(alternatives)
+            } else {
+                Self::Hard(alternatives)
+            }
+        })
+    }
+
+    /// Creates a new instance with a single hard requirement.
+    pub fn new(requirement: LexRequirement) -> Self {
+        Self::Hard(vec![requirement])
+    }
+
+    /// Creates a new instance with a single soft requirement.
+    pub fn new_soft(requirement: LexRequirement) -> Self {
+        Self::Soft(vec![requirement])
+    }
+
+    /// Adds an alternative requirement to the list of alternatives.
+    pub fn add_alternative(&mut self, requirement: LexRequirement) {
+        match self {
+            Self::Hard(alts) | Self::Soft(alts) => alts.push(requirement),
+        }
+    }
+
+    /// Returns the first (i.e. most preferred) `LexRequirement` among
+    /// alternative requirements.
+    pub fn into_single(self) -> LexRequirement {
+        match self {
+            Self::Hard(mut alts) | Self::Soft(mut alts) => alts.swap_remove(0),
+        }
+    }
+
+    /// Returns a reference to the first (i.e. most preferred) `LexRequirement`
+    /// among alternative requirements.
+    pub fn first(&self) -> &LexRequirement {
+        match self {
+            Self::Hard(alts) | Self::Soft(alts) => &alts[0],
+        }
+    }
+
+    /// Returns all alternatives as a vector of `LexRequirement` objects and a
+    /// boolean value indicating softness/hardness of the requirements.
+    pub fn into_alternatives(self) -> (Vec<LexRequirement>, bool) {
+        match self {
+            Self::Hard(alts) => (alts, false),
+            Self::Soft(alts) => (alts, true),
+        }
+    }
+}
+
+impl From<LexRequirement> for OrderingRequirements {
+    fn from(requirement: LexRequirement) -> Self {
+        Self::new(requirement)
+    }
+}
+
+impl From<LexOrdering> for OrderingRequirements {
+    fn from(ordering: LexOrdering) -> Self {
+        Self::new(ordering.into())
+    }
+}
+
+impl Deref for OrderingRequirements {
+    type Target = [LexRequirement];
+
+    fn deref(&self) -> &Self::Target {
+        match &self {
+            Self::Hard(alts) | Self::Soft(alts) => alts.as_slice(),
+        }
+    }
+}
+
+impl DerefMut for OrderingRequirements {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Hard(alts) | Self::Soft(alts) => alts.as_mut_slice(),
+        }
+    }
+}
