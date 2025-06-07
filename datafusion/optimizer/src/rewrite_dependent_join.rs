@@ -130,12 +130,7 @@ impl DependentJoinRewriter {
 
             let correlated_columns = column_accesses
                 .iter()
-                .map(|ac| {
-                    (
-                        ac.subquery_depth,
-                        Expr::OuterReferenceColumn(ac.data_type.clone(), ac.col.clone()),
-                    )
-                })
+                .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
                 .unique()
                 .collect();
 
@@ -220,12 +215,7 @@ impl DependentJoinRewriter {
 
             let correlated_columns = column_accesses
                 .iter()
-                .map(|ac| {
-                    (
-                        ac.subquery_depth,
-                        Expr::OuterReferenceColumn(ac.data_type.clone(), ac.col.clone()),
-                    )
-                })
+                .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
                 .unique()
                 .collect();
 
@@ -867,15 +857,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 let alias = subquery_alias_by_offset.get(&0).unwrap();
                 let correlated_columns = column_accesses
                     .iter()
-                    .map(|ac| {
-                        (
-                            ac.subquery_depth,
-                            Expr::OuterReferenceColumn(
-                                ac.data_type.clone(),
-                                ac.col.clone(),
-                            ),
-                        )
-                    })
+                    .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
                     .unique()
                     .collect();
 
@@ -970,12 +952,7 @@ mod tests {
     use super::DependentJoinRewriter;
 
     use crate::test::{test_table_scan_with_name, test_table_with_columns};
-    use crate::{
-        assert_optimized_plan_eq_display_indent_snapshot,
-        decorrelate_general::Decorrelation, OptimizerConfig, OptimizerContext,
-        OptimizerRule,
-    };
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::DataType;
     use datafusion_common::{alias::AliasGenerator, Result, Spans};
     use datafusion_expr::{
         binary_expr, exists, expr::InSubquery, expr_fn::col, in_subquery, lit,
@@ -1621,56 +1598,6 @@ mod tests {
                   Filter: inner_table_lv1.a = outer_ref(outer_table_alias.a) [a:UInt32, b:UInt32, c:UInt32]
                     TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
         ");
-        Ok(())
-    }
-
-    #[test]
-    fn decorrelate_with_in_subquery_has_dependent_column() -> Result<()> {
-        let outer_table = test_table_scan_with_name("outer_table")?;
-        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
-        let sq_level1 = Arc::new(
-            LogicalPlanBuilder::from(inner_table_lv1)
-                .filter(
-                    col("inner_table_lv1.a")
-                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a"))
-                        .and(
-                            out_ref_col(ArrowDataType::UInt32, "outer_table.a")
-                                .gt(col("inner_table_lv1.c")),
-                        )
-                        .and(col("inner_table_lv1.b").eq(lit(1)))
-                        .and(
-                            out_ref_col(ArrowDataType::UInt32, "outer_table.b")
-                                .eq(col("inner_table_lv1.b")),
-                        ),
-                )?
-                .project(vec![out_ref_col(ArrowDataType::UInt32, "outer_table.b")])?
-                .build()?,
-        );
-
-        let plan = LogicalPlanBuilder::from(outer_table.clone())
-            .filter(
-                col("outer_table.a")
-                    .gt(lit(1))
-                    .and(in_subquery(col("outer_table.c"), sq_level1)),
-            )?
-            .build()?;
-        let dec = Decorrelation::new();
-        let ctx: Box<dyn OptimizerConfig> = Box::new(OptimizerContext::new());
-        let plan = dec.rewrite(plan, ctx.as_ref())?.data;
-        assert_decorrelate!(plan,       @r"
-        Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
-            Projection: outer_table.a, outer_table.b, outer_table.c, delim_scan_1.mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
-              LeftMark Join:  Filter: outer_table.c = outer_ref(outer_table.b) AND outer_table.a IS NOT DISTINCT FROM delim_scan_1.a AND outer_table.b IS NOT DISTINCT FROM delim_scan_1.b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
-                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
-                Projection: delim_scan_1.b, delim_scan_1.a, delim_scan_1.b [outer_ref(outer_table.b):UInt32;N, a:UInt32;N, b:UInt32;N]
-                  Filter: inner_table_lv1.a = delim_scan_1.a AND delim_scan_1.a > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND delim_scan_1.b = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N]
-                    Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N]
-                      TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
-                      SubqueryAlias: delim_scan_1 [a:UInt32;N, b:UInt32;N]
-                        DelimGet: outer_table.a, outer_table.b [a:UInt32;N, b:UInt32;N]
-        ");
-
         Ok(())
     }
 

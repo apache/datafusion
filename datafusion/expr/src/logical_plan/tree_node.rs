@@ -428,7 +428,7 @@ impl LogicalPlan {
             }) => {
                 let correlated_column_exprs = correlated_columns
                     .iter()
-                    .map(|(_, c, _)| c.clone())
+                    .map(|(_, c, _)| Expr::Column(c.clone()))
                     .collect::<Vec<_>>();
                 let maybe_lateral_join_condition = match lateral_join_condition {
                     Some((_, condition)) => Some(condition.clone()),
