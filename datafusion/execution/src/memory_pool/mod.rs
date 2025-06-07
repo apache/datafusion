@@ -117,7 +117,10 @@ pub use pool::*;
 ///   enables cleaner operator implementations:
 ///   - Different `MemoryReservation`s can be used for different purposes
 ///   - `MemoryReservation` follows RAII principles - to release a reservation,
-///     simply drop the corresponding `MemoryReservation` object
+///     simply drop the `MemoryReservation` object. When all `MemoryReservation`s
+///     for a `SharedRegistration` are dropped, the `SharedRegistration` is dropped
+///     when its reference count reaches zero, automatically unregistering the
+///     `MemoryConsumer` from the `MemoryPool`.
 ///
 /// ## Relationship Diagram
 ///
