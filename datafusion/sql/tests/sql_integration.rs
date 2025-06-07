@@ -4714,3 +4714,115 @@ fn test_using_join_wildcard_schema() {
         ]
     );
 }
+
+#[test]
+fn select_tablesample_value() {
+    let sql = "SELECT count(*)
+                   FROM person
+                   TABLESAMPLE 42
+                   WHERE id > 5";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: count(*)
+          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+            Filter: random() < Int64(42) / Float64(100)
+              Filter: person.id > Int64(5)
+                TableScan: person
+        "#
+    );
+}
+
+#[test]
+fn select_tablesample_value_float() {
+    let sql = "SELECT count(*)
+                   FROM person
+                   TABLESAMPLE 42.3
+                   WHERE id > 5";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: count(*)
+          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+            Filter: random() < Float64(42.3) / Float64(100)
+              Filter: person.id > Int64(5)
+                TableScan: person
+        "#
+    );
+}
+
+#[test]
+fn select_tablesample_percent() {
+    let sql = "SELECT count(*)
+                   FROM person
+                   TABLESAMPLE SYSTEM (42 PERCENT)
+                   WHERE id > 5";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: count(*)
+          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+            Filter: random() < Int64(42) / Float64(100)
+              Filter: person.id > Int64(5)
+                TableScan: person
+        "#
+    );
+}
+
+#[test]
+fn select_sample() {
+    let sql = "SELECT count(*)
+                   FROM person
+                   SAMPLE 0.42
+                   WHERE id > 5";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: count(*)
+          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+            Filter: random() < Float64(0.42)
+              Filter: person.id > Int64(5)
+                TableScan: person
+        "#
+    );
+}
+
+#[test]
+fn select_sample_rows_unsupported() {
+    let sql = "SELECT count(*)
+                   FROM person
+                   TABLESAMPLE (5 ROWS)";
+    let err = logical_plan(sql);
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "Table sample with rows unit is not supported"
+    );
+}
+
+#[test]
+fn select_sample_bucket_unsupported() {
+    let sql = "SELECT count(*)
+                   FROM person
+                   TABLESAMPLE (BUCKET 3 OUT OF 16 ON id)";
+    let err = logical_plan(sql);
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "Table sample bucket is not supported"
+    );
+}
+
+#[test]
+fn select_sample_seed_unsupported() {
+    let sql = "SELECT count(*)
+                   FROM person
+                   TABLESAMPLE SYSTEM (3) REPEATABLE (82)";
+    let err = logical_plan(sql);
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "Table sample seed is not supported"
+    );
+}
