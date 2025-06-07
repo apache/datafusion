@@ -55,7 +55,8 @@ use object_store::ObjectStore;
 use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
 
 /// Indicates the source of the schema for a [`ListingTable`]
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// PartialEq required for assert_eq! in tests
+#[derive(Debug, Clone, PartialEq)]
 pub enum SchemaSource {
     /// Schema is not yet set (initial state)
     None,
@@ -1352,6 +1353,22 @@ mod tests {
         ]))
     }
 
+    /// Helper function to generate test file paths with given prefix, count, and optional start index
+    fn generate_test_files(prefix: &str, count: usize) -> Vec<String> {
+        generate_test_files_with_start(prefix, count, 0)
+    }
+
+    /// Helper function to generate test file paths with given prefix, count, and start index
+    fn generate_test_files_with_start(
+        prefix: &str,
+        count: usize,
+        start_index: usize,
+    ) -> Vec<String> {
+        (start_index..start_index + count)
+            .map(|i| format!("{prefix}/file{i}"))
+            .collect()
+    }
+
     #[tokio::test]
     async fn test_schema_source_tracking_comprehensive() -> Result<()> {
         let ctx = SessionContext::new();
@@ -2319,13 +2336,7 @@ mod tests {
             // Single path cases
             (
                 "Single path, more partitions than files",
-                vec![
-                    "bucket/key-prefix/file0",
-                    "bucket/key-prefix/file1",
-                    "bucket/key-prefix/file2",
-                    "bucket/key-prefix/file3",
-                    "bucket/key-prefix/file4",
-                ],
+                generate_test_files("bucket/key-prefix", 5),
                 vec!["test:///bucket/key-prefix/"],
                 12,
                 5,
@@ -2333,12 +2344,7 @@ mod tests {
             ),
             (
                 "Single path, equal partitions and files",
-                vec![
-                    "bucket/key-prefix/file0",
-                    "bucket/key-prefix/file1",
-                    "bucket/key-prefix/file2",
-                    "bucket/key-prefix/file3",
-                ],
+                generate_test_files("bucket/key-prefix", 4),
                 vec!["test:///bucket/key-prefix/"],
                 4,
                 4,
@@ -2346,13 +2352,7 @@ mod tests {
             ),
             (
                 "Single path, more files than partitions",
-                vec![
-                    "bucket/key-prefix/file0",
-                    "bucket/key-prefix/file1",
-                    "bucket/key-prefix/file2",
-                    "bucket/key-prefix/file3",
-                    "bucket/key-prefix/file4",
-                ],
+                generate_test_files("bucket/key-prefix", 5),
                 vec!["test:///bucket/key-prefix/"],
                 2,
                 2,
@@ -2361,14 +2361,12 @@ mod tests {
             // Multi path cases
             (
                 "Multi path, more partitions than files",
-                vec![
-                    "bucket/key1/file0",
-                    "bucket/key1/file1",
-                    "bucket/key1/file2",
-                    "bucket/key2/file3",
-                    "bucket/key2/file4",
-                    "bucket/key3/file5",
-                ],
+                {
+                    let mut files = generate_test_files("bucket/key1", 3);
+                    files.extend(generate_test_files_with_start("bucket/key2", 2, 3));
+                    files.extend(generate_test_files_with_start("bucket/key3", 1, 5));
+                    files
+                },
                 vec!["test:///bucket/key1/", "test:///bucket/key2/"],
                 12,
                 5,
@@ -2386,13 +2384,11 @@ mod tests {
             // Exact path cases
             (
                 "Exact paths test",
-                vec![
-                    "bucket/key1/file0",
-                    "bucket/key1/file1",
-                    "bucket/key1/file2",
-                    "bucket/key2/file3",
-                    "bucket/key2/file4",
-                ],
+                {
+                    let mut files = generate_test_files("bucket/key1", 3);
+                    files.extend(generate_test_files_with_start("bucket/key2", 2, 3));
+                    files
+                },
                 vec![
                     "test:///bucket/key1/file0",
                     "test:///bucket/key1/file1",
@@ -2424,8 +2420,9 @@ mod tests {
                 .await?;
             } else if paths.len() == 1 {
                 // Test using single path API
+                let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
                 assert_list_files_for_scan_grouping(
-                    &files,
+                    &file_refs,
                     paths[0],
                     target_partitions,
                     expected_partitions,
@@ -2434,8 +2431,9 @@ mod tests {
                 .await?;
             } else if paths[0].contains("test:///bucket/key") {
                 // Test using multi path API
+                let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
                 assert_list_files_for_multi_paths(
-                    &files,
+                    &file_refs,
                     &paths,
                     target_partitions,
                     expected_partitions,
@@ -2444,8 +2442,9 @@ mod tests {
                 .await?;
             } else {
                 // Test using exact path API for specific cases
+                let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
                 assert_list_files_for_exact_paths(
-                    &files,
+                    &file_refs,
                     target_partitions,
                     expected_partitions,
                     file_ext,
