@@ -722,6 +722,15 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+
+        /// When DataFusion detects that a plan might not be promply cancellable
+        /// due to the presence of tight-looping operators, it will attempt to
+        /// mitigate this by inserting explicit yielding (in as few places as
+        /// possible to avoid performance degradation). This value represents the
+        /// yielding period (in batches) at such explicit yielding points. The
+        /// default value is 64. If set to 0, no DataFusion will not perform
+        /// any explicit yielding.
+        pub yield_period: usize, default = 64
     }
 }
 

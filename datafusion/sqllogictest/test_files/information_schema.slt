@@ -303,6 +303,7 @@ datafusion.optimizer.repartition_sorts true
 datafusion.optimizer.repartition_windows true
 datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
+datafusion.optimizer.yield_period 64
 datafusion.sql_parser.collect_spans false
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
@@ -413,6 +414,7 @@ datafusion.optimizer.repartition_sorts true Should DataFusion execute sorts in a
 datafusion.optimizer.repartition_windows true Should DataFusion repartition data using the partitions keys to execute window functions in parallel using the provided `target_partitions` level
 datafusion.optimizer.skip_failed_rules false When set to true, the logical plan optimizer will produce warning messages if any optimization rules produce errors and then proceed to the next rule. When set to false, any rules that produce errors will cause the query to fail
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
+datafusion.optimizer.yield_period 64 When DataFusion detects that a plan might not be promply cancellable due to the presence of tight-looping operators, it will attempt to mitigate this by inserting explicit yielding (in as few places as possible to avoid performance degradation). This value represents the yielding period (in batches) at such explicit yielding points. The default value is 64. If set to 0, no DataFusion will not perform any explicit yielding.
 datafusion.sql_parser.collect_spans false When set to true, the source locations relative to the original SQL query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected and recorded in the logical plan nodes.
 datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
 datafusion.sql_parser.enable_ident_normalization true When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)

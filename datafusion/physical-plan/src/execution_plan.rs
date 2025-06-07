@@ -546,6 +546,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             child_pushdown_result,
         ))
     }
+
+    /// Returns a version of this plan that cooperates with the runtime via
+    /// built‐in yielding. If such a version doesn't exist, returns `None`.
+    /// You do not need to do provide such a version of a custom operator,
+    /// but DataFusion will utilize it while optimizing the plan if it exists.
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        // Conservative default implementation assumes that a leaf does not
+        // cooperate with yielding.
+        None
+    }
 }
 
 /// [`ExecutionPlan`] Invariant Level
