@@ -531,7 +531,6 @@ impl TableFunctionImpl for GlobFunc {
             let glob = Pattern::new(glob_part).map_err(|e| {
                 DataFusionError::Plan(format!("Invalid glob pattern: {}", e))
             })?;
-            println!("base_url: [{:?}] glob: [{:?}]", base_url, glob);
             ListingTableUrl::try_new(base_url, Some(glob))?
         } else {
             // Local path or URL without globs - parse() handles this correctly
