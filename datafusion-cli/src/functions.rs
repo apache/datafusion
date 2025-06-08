@@ -537,7 +537,7 @@ impl TableFunctionImpl for GlobFunc {
             ListingTableUrl::parse(pattern)?
         };
 
-        // 3. Determine file format
+        // Determine file format for the table configuration
         let file_extension = format
             .or_else(|| {
                 // Extract extension from original pattern (before any URL manipulation)
@@ -552,7 +552,7 @@ impl TableFunctionImpl for GlobFunc {
             other => return plan_err!("glob(): unsupported format '{other}'"),
         };
 
-        // 4. Build and return table
+        // Create the listing table - block is needed in order to infer schema which is an async io operation within a sync function.
         let listing_opts =
             ListingOptions::new(file_format).with_file_extension(file_extension);
         let schema = block_on(listing_opts.infer_schema(&self.ctx.state(), &url))?;
