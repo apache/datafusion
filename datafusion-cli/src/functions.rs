@@ -496,7 +496,7 @@ impl GlobFunc {
     }
 }
 
-fn expr_to_literal<'a>(expr: &'a Expr, arg_name: &str) -> Result<&'a str> {
+fn as_utf8_literal<'a>(expr: &'a Expr, arg_name: &str) -> Result<&'a str> {
     match expr {
         Expr::Literal(ScalarValue::Utf8(Some(s)), _) => Ok(s),
         Expr::Column(Column { name, .. }) => Ok(name),
@@ -506,103 +506,60 @@ fn expr_to_literal<'a>(expr: &'a Expr, arg_name: &str) -> Result<&'a str> {
 
 impl TableFunctionImpl for GlobFunc {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        // Parse arguments
         if exprs.is_empty() {
-            return plan_err!("glob() requires glob pattern");
+            return plan_err!("glob() requires a glob pattern");
         }
-        let pattern = expr_to_literal(&exprs[0], "pattern")?;
+        let pattern = as_utf8_literal(&exprs[0], "pattern")?;
         let format = if exprs.len() > 1 {
-            Some(expr_to_literal(&exprs[1], "format")?)
+            Some(as_utf8_literal(&exprs[1], "format")?)
         } else {
             None
         };
 
-        // Extract file extension from original pattern before any splitting
-        let pattern_extension = pattern
-            .split('/')
-            .last()
-            .and_then(|filename| {
-                if filename.contains('.') && !filename.ends_with('.') {
-                    filename.split('.').last()
-                } else {
-                    None
-                }
-            })
-            .map(|ext| ext.to_ascii_lowercase());
-
-        // Check if this is a URL with a scheme (s3://, http://, etc.) AND contains glob characters
+        // Create ListingTableUrl - distinguish between URLs with schemes and local paths
         let url = if pattern.contains("://") && pattern.contains(['*', '?', '[']) {
-            // This is a URL with scheme and glob characters - manual splitting required
-            // Find the first glob character (e.g. * or ?)
-            let glob_pos = pattern.find(['*', '?', '[']).ok_or_else(|| {
-                DataFusionError::Plan("No glob pattern found".to_string())
-            })?;
-
-            // Find the last '/' before the glob to split base path from glob pattern
-            let split_pos = pattern[..glob_pos]
-                .rfind('/')
-                .map(|pos| pos + 1)
-                .ok_or_else(|| {
-                    DataFusionError::Plan(
-                        "Invalid glob pattern: no base path found".to_string(),
-                    )
-                })?;
-
+            // URL with scheme and glob - split manually to avoid URL encoding of glob chars
+            let glob_pos = pattern.find(['*', '?', '[']).unwrap(); // we already checked it exists
+            let split_pos = pattern[..glob_pos].rfind('/').unwrap() + 1; // find last '/' before glob
             let (base_path, glob_part) = pattern.split_at(split_pos);
 
-            // Ensure base path ends with '/' for proper object store URL
-            let base_path = if base_path.ends_with('/') {
-                base_path.to_string()
-            } else {
-                format!("{}/", base_path)
-            };
-
-            // Parse the base URL
-            let base_url = Url::parse(&base_path).map_err(|e| {
-                DataFusionError::Plan(format!("Invalid base URL '{}': {}", base_path, e))
+            let base_url = Url::parse(&format!("{}/", base_path.trim_end_matches('/')))
+                .map_err(|e| {
+                DataFusionError::Plan(format!("Invalid base URL: {}", e))
             })?;
-
-            // Create glob pattern
             let glob = Pattern::new(glob_part).map_err(|e| {
-                DataFusionError::Plan(format!(
-                    "Invalid glob pattern '{}': {}",
-                    glob_part, e
-                ))
+                DataFusionError::Plan(format!("Invalid glob pattern: {}", e))
             })?;
-
+            println!("base_url: [{:?}] glob: [{:?}]", base_url, glob);
             ListingTableUrl::try_new(base_url, Some(glob))?
         } else {
-            // Either scheme-less path (parse handles globs) or URL without globs
+            // Local path or URL without globs - parse() handles this correctly
             ListingTableUrl::parse(pattern)?
         };
 
-        // 4. Resolve file format using extracted extension or format parameter
-        let format_string = format
-            .map(|s| s.to_string())
-            .or(pattern_extension)
-            .or_else(|| url.file_extension().map(|s| s.to_ascii_lowercase()));
+        // 3. Determine file format
+        let file_extension = format
+            .or_else(|| {
+                // Extract extension from original pattern (before any URL manipulation)
+                pattern.split('/').last()?.split('.').last()
+            })
+            .unwrap_or("parquet");
 
-        let (fmt, ext): (Arc<dyn FileFormat>, &str) = match format_string.as_deref() {
-            Some("parquet") | None => (Arc::new(ParquetFormat::default()), "parquet"),
-            Some("csv") => (Arc::new(CsvFormat::default().with_has_header(true)), "csv"),
-            Some("json") => (Arc::new(NdJsonFormat::default()), "json"),
-            Some(other) => {
-                return Err(DataFusionError::Plan(format!(
-                    "glob(): unsupported format '{other}'"
-                )))
-            }
+        let file_format: Arc<dyn FileFormat> = match file_extension {
+            "parquet" => Arc::new(ParquetFormat::default()),
+            "csv" => Arc::new(CsvFormat::default().with_has_header(true)),
+            "json" => Arc::new(NdJsonFormat::default()),
+            other => return plan_err!("glob(): unsupported format '{other}'"),
         };
 
-        let listing_opts = ListingOptions::new(fmt).with_file_extension(ext);
-
-        // 5. Infer schema (sync wrapper around async)
-        let state = self.ctx.state();
-        let schema = block_on(listing_opts.infer_schema(&state, &url))?;
-
-        // 6. Build ListingTable
+        // 4. Build and return table
+        let listing_opts =
+            ListingOptions::new(file_format).with_file_extension(file_extension);
+        let schema = block_on(listing_opts.infer_schema(&self.ctx.state(), &url))?;
         let config = ListingTableConfig::new(url)
             .with_listing_options(listing_opts)
             .with_schema(schema);
-
         let table = ListingTable::try_new(config)?;
 
         Ok(Arc::new(table))
