@@ -732,6 +732,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 }
 
                 // If expr has correlated subquery.
+                // TODO: what if both child and expr has subquery?
                 if let Some(filter) = &join.filter {
                     if contains_subquery(filter) {
                         is_dependent_join_node = true;
