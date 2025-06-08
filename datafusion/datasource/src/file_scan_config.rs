@@ -43,18 +43,18 @@ use arrow::{
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    config::ConfigOptions, exec_err, ColumnStatistics, Constraints, Result, Statistics,
+    exec_err, ColumnStatistics, Constraints, DataFusionError, Result, ScalarValue,
+    Statistics,
 };
-use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::{
-    expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
-    PhysicalSortExpr,
-};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
@@ -62,6 +62,7 @@ use datafusion_physical_plan::{
     projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
     DisplayAs, DisplayFormatType, ExecutionPlan,
 };
+
 use log::{debug, warn};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
@@ -76,6 +77,7 @@ use log::{debug, warn};
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Statistics;
+/// # use datafusion_common::Result;
 /// # use datafusion_datasource::file::FileSource;
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
@@ -106,9 +108,9 @@ use log::{debug, warn};
 /// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: Some(statistics), schema_adapter_factory: self.schema_adapter_factory.clone()} ) }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
-/// #  fn statistics(&self) -> datafusion_common::Result<Statistics> { Ok(self.projected_statistics.clone().expect("projected_statistics should be set")) }
+/// #  fn statistics(&self) -> Result<Statistics> { Ok(self.projected_statistics.clone().expect("projected_statistics should be set")) }
 /// #  fn file_type(&self) -> &str { "parquet" }
-/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: self.projected_statistics.clone(), schema_adapter_factory: Some(factory)} ) }
+/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Result<Arc<dyn FileSource>> { Ok(Arc::new(Self {projected_statistics: self.projected_statistics.clone(), schema_adapter_factory: Some(factory)} )) }
 /// #  fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> { self.schema_adapter_factory.clone() }
 /// #  }
 /// # impl ParquetSource {
@@ -546,7 +548,7 @@ impl DataSource for FileScanConfig {
 
     fn eq_properties(&self) -> EquivalenceProperties {
         let (schema, constraints, _, orderings) = self.project();
-        EquivalenceProperties::new_with_orderings(schema, orderings.as_slice())
+        EquivalenceProperties::new_with_orderings(schema, orderings)
             .with_constraints(constraints)
     }
 
@@ -658,7 +660,7 @@ impl FileScanConfig {
             object_store_url,
             file_schema,
             file_groups: vec![],
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -747,10 +749,7 @@ impl FileScanConfig {
 
     pub fn projected_constraints(&self) -> Constraints {
         let indexes = self.projection_indices();
-
-        self.constraints
-            .project(&indexes)
-            .unwrap_or_else(Constraints::empty)
+        self.constraints.project(&indexes).unwrap_or_default()
     }
 
     /// Set the projection of the files
@@ -1434,16 +1433,16 @@ fn get_projected_output_ordering(
 ) -> Vec<LexOrdering> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        let mut new_ordering = LexOrdering::default();
+        let mut new_ordering = vec![];
         for PhysicalSortExpr { expr, options } in output_ordering.iter() {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let name = col.name();
                 if let Some((idx, _)) = projected_schema.column_with_name(name) {
                     // Compute the new sort expression (with correct index) after projection:
-                    new_ordering.push(PhysicalSortExpr {
-                        expr: Arc::new(Column::new(name, idx)),
-                        options: *options,
-                    });
+                    new_ordering.push(PhysicalSortExpr::new(
+                        Arc::new(Column::new(name, idx)),
+                        *options,
+                    ));
                     continue;
                 }
             }
@@ -1452,11 +1451,9 @@ fn get_projected_output_ordering(
             break;
         }
 
-        // do not push empty entries
-        // otherwise we may have `Some(vec![])` at the output ordering.
-        if new_ordering.is_empty() {
+        let Some(new_ordering) = LexOrdering::new(new_ordering) else {
             continue;
-        }
+        };
 
         // Check if any file groups are not sorted
         if base_config.file_groups.iter().any(|group| {
@@ -1517,41 +1514,17 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{
         generate_test_files, test_util::MockSource, tests::aggr_test_schema,
         verify_sort_integrity,
     };
 
-    use super::*;
-    use arrow::{
-        array::{Int32Array, RecordBatch},
-        compute::SortOptions,
-    };
-
+    use arrow::array::{Int32Array, RecordBatch};
     use datafusion_common::stats::Precision;
-    use datafusion_common::{assert_batches_eq, DFSchema};
-    use datafusion_expr::{execution_props::ExecutionProps, SortExpr};
-    use datafusion_physical_expr::create_physical_expr;
-    use std::collections::HashMap;
-
-    fn create_physical_sort_expr(
-        e: &SortExpr,
-        input_dfschema: &DFSchema,
-        execution_props: &ExecutionProps,
-    ) -> Result<PhysicalSortExpr> {
-        let SortExpr {
-            expr,
-            asc,
-            nulls_first,
-        } = e;
-        Ok(PhysicalSortExpr {
-            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-            options: SortOptions {
-                descending: !asc,
-                nulls_first: *nulls_first,
-            },
-        })
-    }
+    use datafusion_common::{assert_batches_eq, internal_err};
+    use datafusion_expr::SortExpr;
+    use datafusion_physical_expr::create_physical_sort_expr;
 
     /// Returns the column names on the schema
     pub fn columns(schema: &Schema) -> Vec<String> {
@@ -2068,7 +2041,7 @@ mod tests {
                     ))))
                     .collect::<Vec<_>>(),
             ));
-            let sort_order = LexOrdering::from(
+            let Some(sort_order) = LexOrdering::new(
                 case.sort
                     .into_iter()
                     .map(|expr| {
@@ -2079,7 +2052,9 @@ mod tests {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?,
-            );
+            ) else {
+                return internal_err!("This test should always use an ordering");
+            };
 
             let partitioned_files = FileGroup::new(
                 case.files.into_iter().map(From::from).collect::<Vec<_>>(),
@@ -2242,13 +2217,15 @@ mod tests {
                 wrap_partition_type_in_dict(DataType::Utf8),
                 false,
             )])
-            .with_constraints(Constraints::empty())
             .with_statistics(Statistics::new_unknown(&file_schema))
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "test.parquet".to_string(),
                 1024,
             )])])
-            .with_output_ordering(vec![LexOrdering::default()])
+            .with_output_ordering(vec![[PhysicalSortExpr::new_default(Arc::new(
+                Column::new("date", 0),
+            ))]
+            .into()])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .with_newlines_in_values(true)
             .build();
@@ -2391,14 +2368,12 @@ mod tests {
         // Setup sort expression
         let exec_props = ExecutionProps::new();
         let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
-        let sort_expr = vec![col("value").sort(true, false)];
-
-        let physical_sort_exprs: Vec<_> = sort_expr
-            .iter()
-            .map(|expr| create_physical_sort_expr(expr, &df_schema, &exec_props).unwrap())
-            .collect();
-
-        let sort_ordering = LexOrdering::from(physical_sort_exprs);
+        let sort_expr = [col("value").sort(true, false)];
+        let sort_ordering = sort_expr
+            .map(|expr| {
+                create_physical_sort_expr(&expr, &df_schema, &exec_props).unwrap()
+            })
+            .into();
 
         // Test case parameters
         struct TestCase {

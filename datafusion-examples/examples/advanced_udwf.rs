@@ -191,7 +191,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
     /// default implementation will not be called (left as `todo!()`)
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         let simplify = |window_function: WindowFunction, _: &dyn SimplifyInfo| {
-            Ok(Expr::WindowFunction(WindowFunction {
+            Ok(Expr::from(WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(avg_udaf()),
                 params: WindowFunctionParams {
                     args: window_function.params.args,

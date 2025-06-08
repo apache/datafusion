@@ -988,7 +988,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                     CreateMemoryTable {
                         input: Arc::new(input),
-                        constraints: Constraints::empty(),
+                        constraints: Constraints::default(),
                         name: name.clone(),
                         if_not_exists: *if_not_exists,
                         or_replace: *or_replace,
@@ -1305,7 +1305,7 @@ impl LogicalPlan {
                 // Empty group_expr will return Some(1)
                 if group_expr
                     .iter()
-                    .all(|expr| matches!(expr, Expr::Literal(_)))
+                    .all(|expr| matches!(expr, Expr::Literal(_, _)))
                 {
                     Some(1)
                 } else {
@@ -1455,7 +1455,7 @@ impl LogicalPlan {
                     let transformed_expr = e.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
                             let value = param_values.get_placeholders_with_values(&id)?;
-                            Ok(Transformed::yes(Expr::Literal(value)))
+                            Ok(Transformed::yes(Expr::Literal(value, None)))
                         } else {
                             Ok(Transformed::no(e))
                         }
@@ -2422,18 +2422,23 @@ impl Window {
             .iter()
             .enumerate()
             .filter_map(|(idx, expr)| {
-                if let Expr::WindowFunction(WindowFunction {
+                let Expr::WindowFunction(window_fun) = expr else {
+                    return None;
+                };
+                let WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(udwf),
                     params: WindowFunctionParams { partition_by, .. },
-                }) = expr
-                {
-                    // When there is no PARTITION BY, row number will be unique
-                    // across the entire table.
-                    if udwf.name() == "row_number" && partition_by.is_empty() {
-                        return Some(idx + input_len);
-                    }
+                } = window_fun.as_ref()
+                else {
+                    return None;
+                };
+                // When there is no PARTITION BY, row number will be unique
+                // across the entire table.
+                if udwf.name() == "row_number" && partition_by.is_empty() {
+                    Some(idx + input_len)
+                } else {
+                    None
                 }
-                None
             })
             .map(|idx| {
                 FunctionalDependence::new(vec![idx], vec![], false)
@@ -2693,7 +2698,9 @@ impl Union {
                 {
                     expr.push(Expr::Column(column));
                 } else {
-                    expr.push(Expr::Literal(ScalarValue::Null).alias(column.name()));
+                    expr.push(
+                        Expr::Literal(ScalarValue::Null, None).alias(column.name()),
+                    );
                 }
             }
             wrapped_inputs.push(Arc::new(LogicalPlan::Projection(
@@ -3219,7 +3226,7 @@ impl Limit {
     pub fn get_skip_type(&self) -> Result<SkipType> {
         match self.skip.as_deref() {
             Some(expr) => match *expr {
-                Expr::Literal(ScalarValue::Int64(s)) => {
+                Expr::Literal(ScalarValue::Int64(s), _) => {
                     // `skip = NULL` is equivalent to `skip = 0`
                     let s = s.unwrap_or(0);
                     if s >= 0 {
@@ -3239,14 +3246,16 @@ impl Limit {
     pub fn get_fetch_type(&self) -> Result<FetchType> {
         match self.fetch.as_deref() {
             Some(expr) => match *expr {
-                Expr::Literal(ScalarValue::Int64(Some(s))) => {
+                Expr::Literal(ScalarValue::Int64(Some(s)), _) => {
                     if s >= 0 {
                         Ok(FetchType::Literal(Some(s as usize)))
                     } else {
                         plan_err!("LIMIT must be >= 0, '{}' was provided", s)
                     }
                 }
-                Expr::Literal(ScalarValue::Int64(None)) => Ok(FetchType::Literal(None)),
+                Expr::Literal(ScalarValue::Int64(None), _) => {
+                    Ok(FetchType::Literal(None))
+                }
                 _ => Ok(FetchType::UnsupportedExpr),
             },
             None => Ok(FetchType::Literal(None)),
@@ -4534,7 +4543,7 @@ mod tests {
         let col = schema.field_names()[0].clone();
 
         let filter = Filter::try_new(
-            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
             scan,
         )
         .unwrap();
@@ -4661,12 +4670,14 @@ mod tests {
                 skip: None,
                 fetch: Some(Box::new(Expr::Literal(
                     ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+                    None,
                 ))),
                 input: Arc::clone(&input),
             }),
             LogicalPlan::Limit(Limit {
                 skip: Some(Box::new(Expr::Literal(
                     ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+                    None,
                 ))),
                 fetch: None,
                 input: Arc::clone(&input),
@@ -4674,9 +4685,11 @@ mod tests {
             LogicalPlan::Limit(Limit {
                 skip: Some(Box::new(Expr::Literal(
                     ScalarValue::new_one(&DataType::UInt32).unwrap(),
+                    None,
                 ))),
                 fetch: Some(Box::new(Expr::Literal(
                     ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+                    None,
                 ))),
                 input,
             }),

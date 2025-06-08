@@ -141,7 +141,7 @@ mod parquet_adapter_tests {
             prefix: "test_".to_string(),
         });
 
-        let file_source = source.clone().with_schema_adapter_factory(factory);
+        let file_source = source.clone().with_schema_adapter_factory(factory).unwrap();
 
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
@@ -151,7 +151,7 @@ mod parquet_adapter_tests {
         .build();
 
         // Apply schema adapter to a new source
-        let result_source = source.apply_schema_adapter(&config);
+        let result_source = source.apply_schema_adapter(&config).unwrap();
 
         // Verify the adapter was applied
         assert!(result_source.schema_adapter_factory().is_some());
@@ -198,7 +198,7 @@ mod parquet_adapter_tests {
         .build();
 
         // Apply schema adapter function - should pass through the source unchanged
-        let result_source = source.apply_schema_adapter(&config);
+        let result_source = source.apply_schema_adapter(&config).unwrap();
 
         // Verify no adapter was applied
         assert!(result_source.schema_adapter_factory().is_none());

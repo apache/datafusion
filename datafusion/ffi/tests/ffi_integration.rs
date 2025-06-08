@@ -19,7 +19,6 @@
 /// when the feature integtation-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
     use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
