@@ -669,7 +669,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 }
             }
             LogicalPlan::Join(join) => {
-                let mut is_has_correlated_subquery = false;
+                let mut is_child_subquery = false;
                 let mut sq_count = if let LogicalPlan::Subquery(_) = &join.left.as_ref() {
                     1
                 } else {
@@ -683,7 +683,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 match sq_count {
                     0 => {}
                     1 => {
-                        is_has_correlated_subquery = true;
+                        is_child_subquery = true;
                     }
                     _ => {
                         return internal_err!(
@@ -693,14 +693,14 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     }
                 };
 
-                if is_has_correlated_subquery {
+                if is_child_subquery {
                     self.subquery_depth += 1;
                     self.stack.push(new_id);
                     self.nodes.insert(
                         new_id,
                         Node {
                             plan: node.clone(),
-                            is_dependent_join_node: is_has_correlated_subquery,
+                            is_dependent_join_node: is_child_subquery,
                             columns_accesses_by_subquery_id: IndexMap::new(),
                             subquery_type,
                         },
