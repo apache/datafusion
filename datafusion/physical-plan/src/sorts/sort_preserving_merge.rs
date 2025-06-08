@@ -378,6 +378,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::fmt::Formatter;
     use std::pin::Pin;
     use std::sync::Mutex;
@@ -1286,33 +1287,38 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct CongestionState {
+        wakers: Vec<Waker>,
+        unpolled_partitions: HashSet<usize>,
+    }
+
+    #[derive(Debug)]
     struct Congestion {
-        congestion_cleared: Mutex<Option<Vec<Waker>>>,
+        congestion_state: Mutex<CongestionState>,
     }
 
     impl Congestion {
-        fn new() -> Self {
+        fn new(partition_count: usize) -> Self {
             Congestion {
-                congestion_cleared: Mutex::new(Some(vec![])),
+                congestion_state: Mutex::new(CongestionState {
+                    wakers: vec![],
+                    unpolled_partitions: (0usize..partition_count).collect(),
+                }),
             }
         }
 
-        fn clear_congestion(&self) {
-            let mut cleared = self.congestion_cleared.lock().unwrap();
-            if let Some(wakers) = &mut *cleared {
-                wakers.iter().for_each(|w| w.wake_by_ref());
-                *cleared = None;
-            }
-        }
+        fn check_congested(&self, partition: usize, cx: &mut Context<'_>) -> Poll<()> {
+            let mut state = self.congestion_state.lock().unwrap();
 
-        fn check_congested(&self, cx: &mut Context<'_>) -> Poll<()> {
-            let mut cleared = self.congestion_cleared.lock().unwrap();
-            match &mut *cleared {
-                None => Poll::Ready(()),
-                Some(wakers) => {
-                    wakers.push(cx.waker().clone());
-                    Poll::Pending
-                }
+            state.unpolled_partitions.remove(&partition);
+
+            if state.unpolled_partitions.is_empty() {
+                state.wakers.iter().for_each(|w| w.wake_by_ref());
+                state.wakers.clear();
+                Poll::Ready(())
+            } else {
+                state.wakers.push(cx.waker().clone());
+                Poll::Pending
             }
         }
     }
@@ -1417,6 +1423,7 @@ mod tests {
         ) -> Poll<Option<Self::Item>> {
             match self.partition {
                 0 => {
+                    let _ = self.congestion.check_congested(self.partition, cx);
                     if self.none_polled_once {
                         panic!("Exhausted stream is polled more than once")
                     } else {
@@ -1424,15 +1431,10 @@ mod tests {
                         Poll::Ready(None)
                     }
                 }
-                1 => {
-                    ready!(self.congestion.check_congested(cx));
+                _ => {
+                    ready!(self.congestion.check_congested(self.partition, cx));
                     Poll::Ready(None)
                 }
-                2 => {
-                    self.congestion.clear_congestion();
-                    Poll::Ready(None)
-                }
-                _ => unreachable!(),
             }
         }
     }
@@ -1447,10 +1449,16 @@ mod tests {
     async fn test_spm_congestion() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt64, false)]);
+        let properties = CongestedExec::compute_properties(Arc::new(schema.clone()));
+        let &partition_count = match properties.output_partitioning() {
+            Partitioning::RoundRobinBatch(partitions) => partitions,
+            Partitioning::Hash(_, partitions) => partitions,
+            Partitioning::UnknownPartitioning(partitions) => partitions,
+        };
         let source = CongestedExec {
             schema: schema.clone(),
-            cache: CongestedExec::compute_properties(Arc::new(schema.clone())),
-            congestion: Arc::new(Congestion::new()),
+            cache: properties,
+            congestion: Arc::new(Congestion::new(partition_count)),
         };
         let spm = SortPreservingMergeExec::new(
             [PhysicalSortExpr::new_default(Arc::new(Column::new(
