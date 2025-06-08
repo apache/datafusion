@@ -36,9 +36,7 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::{aggregate::AggregateExprBuilder, Partitioning};
 use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::{
-    filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
-};
+use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
@@ -386,7 +384,8 @@ async fn test_topk_dynamic_filter_pushdown() {
             LexOrdering::new(vec![PhysicalSortExpr::new(
                 col("b", &schema()).unwrap(),
                 SortOptions::new(true, false), // descending, nulls_first
-            )]).unwrap(),
+            )])
+            .unwrap(),
             Arc::clone(&scan),
         )
         .with_fetch(Some(1)),
@@ -410,7 +409,6 @@ async fn test_topk_dynamic_filter_pushdown() {
     // Actually apply the optimization to the plan
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
-    let plan = FilterPushdown {}.optimize(plan, &config).unwrap();
     let config = SessionConfig::new().with_batch_size(2);
     let session_ctx = SessionContext::new_with_config(config);
     session_ctx.register_object_store(

@@ -258,7 +258,7 @@ async fn test_fuzz_topk_filter_pushdown() {
             for null_order in &null_orders {
                 // if there is a vec for this column insert the order, otherwise create a new vec
                 let ordering =
-                    format!("{} {} {}", order_column, order_direction, null_order);
+                    format!("{order_column} {order_direction} {null_order}");
                 match orders.get_mut(*order_column) {
                     Some(order_vec) => {
                         order_vec.push(ordering);

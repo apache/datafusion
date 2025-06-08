@@ -53,8 +53,8 @@ use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::expressions::{lit, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 
 use futures::{StreamExt, TryStreamExt};
@@ -1027,7 +1027,7 @@ impl DisplayAs for SortExec {
                         if let Some(filter) = &self.filter {
                             if let Ok(current) = filter.current() {
                                 if !current.eq(&lit(true)) {
-                                    write!(f, ", filter=[{}]", current)?;
+                                    write!(f, ", filter=[{current}]")?;
                                 }
                             }
                         }
