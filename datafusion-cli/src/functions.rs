@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::catalog::{Session, TableFunctionImpl};
-use datafusion::common::{plan_err, Column};
+use datafusion::common::{plan_datafusion_err, plan_err, Column};
 use datafusion::datasource::file_format::{
     csv::CsvFormat, json::JsonFormat as NdJsonFormat, parquet::ParquetFormat, FileFormat,
 };
@@ -524,13 +524,11 @@ impl TableFunctionImpl for GlobFunc {
             let split_pos = pattern[..glob_pos].rfind('/').unwrap() + 1; // find last '/' before glob
             let (base_path, glob_part) = pattern.split_at(split_pos);
 
-            let base_url = Url::parse(&format!("{}/", base_path.trim_end_matches('/')))
-                .map_err(|e| {
-                DataFusionError::Plan(format!("Invalid base URL: {}", e))
-            })?;
-            let glob = Pattern::new(glob_part).map_err(|e| {
-                DataFusionError::Plan(format!("Invalid glob pattern: {}", e))
-            })?;
+            let base_url =
+                Url::parse(&format!("{}/", base_path.trim_end_matches('/')))
+                    .map_err(|e| plan_datafusion_err!("Invalid base URL: {}", e))?;
+            let glob = Pattern::new(glob_part)
+                .map_err(|e| plan_datafusion_err!("Invalid glob pattern: {}", e))?;
             ListingTableUrl::try_new(base_url, Some(glob))?
         } else {
             // Local path or URL without globs - parse() handles this correctly
