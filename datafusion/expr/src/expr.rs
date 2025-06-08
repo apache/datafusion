@@ -454,6 +454,12 @@ pub struct FieldMetadata {
     inner: Arc<BTreeMap<String, String>>,
 }
 
+impl Default for FieldMetadata {
+    fn default() -> Self {
+        Self::new_empty()
+    }
+}
+
 impl FieldMetadata {
     /// Create a new empty metadata instance.
     pub fn new_empty() -> Self {
