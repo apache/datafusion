@@ -21,6 +21,56 @@
 
 ## DataFusion `48.0.0`
 
+### `Expr::WindowFunction` is now `Box`ed
+
+`Expr::WindowFunction` is now a `Box<WindowFunction>` instead of a `WindowFunction` directly.
+This change was made to reduce the size of `Expr` and improve performance when
+planning queries (see [details on #16207]).
+
+This is a breaking change, so you will need to update your code if you match
+on `Expr::WindowFunction` directly. For example, if you have code like this:
+
+```rust
+match expr {
+  Expr::WindowFunction(WindowFunction {
+    params:
+      WindowFunctionParams {
+       partition_by,
+       order_by,
+      ..
+    }
+  }) => {
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+```
+
+You will need to change it to:
+
+```rust
+match expr {
+  Expr::WindowFunction(window_fun) => {
+    let WindowFunction {
+      fun,
+      params: WindowFunctionParams {
+        args,
+        partition_by,
+        ..
+        },
+    } = window_fun.as_ref();
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+```
+
+[details on #16207]: https://github.com/apache/datafusion/pull/16207#issuecomment-2922659103
+
 ### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow.
 
 The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`

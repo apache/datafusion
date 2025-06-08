@@ -538,6 +538,22 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#expr-windowfunction-is-now-boxed">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Expr::WindowFunction
+      </span>
+     </code>
+     is now
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Box
+      </span>
+     </code>
+     ed
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#the-varchar-sql-type-is-now-represented-as-utf8view-in-arrow">
      The
      <code class="docutils literal notranslate">
@@ -864,6 +880,50 @@
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">¶</a></h1>
 <section id="datafusion-48-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">48.0.0</span></code><a class="headerlink" href="#datafusion-48-0-0" title="Link to this heading">¶</a></h2>
+<section id="expr-windowfunction-is-now-boxed">
+<h3><code class="docutils literal notranslate"><span class="pre">Expr::WindowFunction</span></code> is now <code class="docutils literal notranslate"><span class="pre">Box</span></code>ed<a class="headerlink" href="#expr-windowfunction-is-now-boxed" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">Expr::WindowFunction</span></code> is now a <code class="docutils literal notranslate"><span class="pre">Box&lt;WindowFunction&gt;</span></code> instead of a <code class="docutils literal notranslate"><span class="pre">WindowFunction</span></code> directly.
+This change was made to reduce the size of <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and improve performance when
+planning queries (see <a class="reference external" href="https://github.com/apache/datafusion/pull/16207#issuecomment-2922659103">details on #16207</a>).</p>
+<p>This is a breaking change, so you will need to update your code if you match
+on <code class="docutils literal notranslate"><span class="pre">Expr::WindowFunction</span></code> directly. For example, if you have code like this:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">match</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">Expr</span><span class="p">::</span><span class="n">WindowFunction</span><span class="p">(</span><span class="n">WindowFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">params</span><span class="p">:</span>
+<span class="w">      </span><span class="nc">WindowFunctionParams</span><span class="w"> </span><span class="p">{</span>
+<span class="w">       </span><span class="n">partition_by</span><span class="p">,</span>
+<span class="w">       </span><span class="n">order_by</span><span class="p">,</span>
+<span class="w">      </span><span class="o">..</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">})</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Use partition_by and order_by as needed</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// other expr</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>You will need to change it to:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">match</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">Expr</span><span class="p">::</span><span class="n">WindowFunction</span><span class="p">(</span><span class="n">window_fun</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">WindowFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">fun</span><span class="p">,</span>
+<span class="w">      </span><span class="n">params</span><span class="p">:</span><span class="w"> </span><span class="nc">WindowFunctionParams</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">args</span><span class="p">,</span>
+<span class="w">        </span><span class="n">partition_by</span><span class="p">,</span>
+<span class="w">        </span><span class="o">..</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">window_fun</span><span class="p">.</span><span class="n">as_ref</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// Use partition_by and order_by as needed</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="w">  </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// other expr</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
 <section id="the-varchar-sql-type-is-now-represented-as-utf8view-in-arrow">
 <h3>The <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> SQL type is now represented as <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> in Arrow.<a class="headerlink" href="#the-varchar-sql-type-is-now-represented-as-utf8view-in-arrow" title="Link to this heading">¶</a></h3>
 <p>The mapping of the SQL <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> type has been changed from <code class="docutils literal notranslate"><span class="pre">Utf8</span></code> to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code>
