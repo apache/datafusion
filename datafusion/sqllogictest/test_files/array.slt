@@ -5707,14 +5707,13 @@ from fixed_size_array_has_table_1D;
 true
 false
 
-#TODO: array_has_all and array_has_any cannot handle FixedSizeList
-#query BB
-#select array_has_all(column3, column4),
-#       array_has_any(column5, column6)
-#from fixed_size_array_has_table_1D;
-#----
-#true true
-#false false
+query BB
+select array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from fixed_size_array_has_table_1D;
+----
+true true
+false false
 
 query BBB
 select array_has(column1, column2),
@@ -5741,14 +5740,13 @@ from fixed_size_array_has_table_1D_Float;
 true
 false
 
-#TODO: array_has_all and array_has_any cannot handle FixedSizeList
-#query BB
-#select array_has_all(column3, column4),
-#       array_has_any(column5, column6)
-#from fixed_size_array_has_table_1D_Float;
-#----
-#true true
-#false true
+query BB
+select array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from fixed_size_array_has_table_1D_Float;
+----
+true true
+false true
 
 query BBB
 select array_has(column1, column2),
@@ -5775,14 +5773,13 @@ from fixed_size_array_has_table_1D_Boolean;
 false
 true
 
-#TODO: array_has_all and array_has_any cannot handle FixedSizeList
-#query BB
-#select array_has_all(column3, column4),
-#       array_has_any(column5, column6)
-#from fixed_size_array_has_table_1D_Boolean;
-#----
-#true true
-#true true
+query BB
+select array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from fixed_size_array_has_table_1D_Boolean;
+----
+true true
+true true
 
 query BBB
 select array_has(column1, column2),

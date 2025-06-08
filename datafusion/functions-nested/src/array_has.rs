@@ -18,10 +18,10 @@
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Datum, GenericListArray, OffsetSizeTrait, Scalar,
+    as_fixed_size_list_array, Array, ArrayRef, BooleanArray, Datum, GenericListArray, OffsetSizeTrait, Scalar
 };
 use arrow::buffer::BooleanBuffer;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
@@ -221,6 +221,7 @@ fn array_has_inner_for_scalar(
     match haystack.data_type() {
         DataType::List(_) => array_has_dispatch_for_scalar::<i32>(haystack, needle),
         DataType::LargeList(_) => array_has_dispatch_for_scalar::<i64>(haystack, needle),
+        DataType::FixedSizeList(_, _) => array_has_dispatch_for_fixed_size_list_scalar(haystack, needle),
         _ => exec_err!(
             "array_has does not support type '{:?}'.",
             haystack.data_type()
@@ -232,6 +233,7 @@ fn array_has_inner_for_array(haystack: &ArrayRef, needle: &ArrayRef) -> Result<A
     match haystack.data_type() {
         DataType::List(_) => array_has_dispatch_for_array::<i32>(haystack, needle),
         DataType::LargeList(_) => array_has_dispatch_for_array::<i64>(haystack, needle),
+        DataType::FixedSizeList(_, _) => array_has_dispatch_for_fixed_size_list_array(haystack, needle),
         _ => exec_err!(
             "array_has does not support type '{:?}'.",
             haystack.data_type()
@@ -239,26 +241,85 @@ fn array_has_inner_for_array(haystack: &ArrayRef, needle: &ArrayRef) -> Result<A
     }
 }
 
+
+macro_rules! array_has_dispatch_for_array {
+    ($haystack:expr, $needle:expr) => {
+        {
+            let mut boolean_builder = BooleanArray::builder($haystack.len());
+
+            for (i, arr) in $haystack.iter().enumerate() {
+                if arr.is_none() || $needle.is_null(i) {
+                    boolean_builder.append_null();
+                    continue;
+                }
+                let arr = arr.unwrap();
+                let is_nested = arr.data_type().is_nested();
+                let needle_row = Scalar::new($needle.slice(i, 1));
+                let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
+                boolean_builder.append_value(eq_array.true_count() > 0);
+            }
+    
+            Ok(Arc::new(boolean_builder.finish()))
+        }
+    };
+}
+
+fn array_has_dispatch_for_fixed_size_list_array(
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let haystack = as_fixed_size_list_array(haystack);
+    array_has_dispatch_for_array!(haystack, needle)
+}
+
 fn array_has_dispatch_for_array<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let haystack = as_generic_list_array::<O>(haystack)?;
-    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    array_has_dispatch_for_array!(haystack, needle)
+}
 
-    for (i, arr) in haystack.iter().enumerate() {
-        if arr.is_none() || needle.is_null(i) {
-            boolean_builder.append_null();
-            continue;
+macro_rules! array_has_dispatch_for_scalar {
+    ($haystack:expr, $offsets:expr, $needle:expr) => {
+        {
+            let values = $haystack.values();
+            let is_nested = values.data_type().is_nested();
+            // If first argument is empty list (second argument is non-null), return false
+            // i.e. array_has([], non-null element) -> false
+            if values.is_empty() {
+                return Ok(Arc::new(BooleanArray::new(
+                    BooleanBuffer::new_unset($haystack.len()),
+                    None,
+                )));
+            }
+            let eq_array = compare_with_eq(values, $needle, is_nested)?;
+            let mut final_contained = vec![None; $haystack.len()];
+            for (i, offset) in $offsets.windows(2).enumerate() {
+                let start = offset[0].to_usize().unwrap();
+                let end = offset[1].to_usize().unwrap();
+                let length = end - start;
+                // For non-nested list, length is 0 for null
+                if length == 0 {
+                    continue;
+                }
+                let sliced_array = eq_array.slice(start, length);
+                final_contained[i] = Some(sliced_array.true_count() > 0);
+            }
+
+            Ok(Arc::new(BooleanArray::from(final_contained)))
         }
-        let arr = arr.unwrap();
-        let is_nested = arr.data_type().is_nested();
-        let needle_row = Scalar::new(needle.slice(i, 1));
-        let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
-        boolean_builder.append_value(eq_array.true_count() > 0);
-    }
+    };
+}
 
-    Ok(Arc::new(boolean_builder.finish()))
+fn array_has_dispatch_for_fixed_size_list_scalar(
+    haystack: &ArrayRef,
+    needle: &dyn Datum,
+) -> Result<ArrayRef> {
+    let haystack = as_fixed_size_list_array(haystack);
+    let value_length = haystack.value_length() as usize;
+    let offsets = (0_i32..haystack.len() as i32).step_by(value_length).collect::<Vec<_>>();
+    array_has_dispatch_for_scalar!(haystack, offsets, needle)
 }
 
 fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
@@ -266,32 +327,8 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
     needle: &dyn Datum,
 ) -> Result<ArrayRef> {
     let haystack = as_generic_list_array::<O>(haystack)?;
-    let values = haystack.values();
-    let is_nested = values.data_type().is_nested();
     let offsets = haystack.value_offsets();
-    // If first argument is empty list (second argument is non-null), return false
-    // i.e. array_has([], non-null element) -> false
-    if values.is_empty() {
-        return Ok(Arc::new(BooleanArray::new(
-            BooleanBuffer::new_unset(haystack.len()),
-            None,
-        )));
-    }
-    let eq_array = compare_with_eq(values, needle, is_nested)?;
-    let mut final_contained = vec![None; haystack.len()];
-    for (i, offset) in offsets.windows(2).enumerate() {
-        let start = offset[0].to_usize().unwrap();
-        let end = offset[1].to_usize().unwrap();
-        let length = end - start;
-        // For non-nested list, length is 0 for null
-        if length == 0 {
-            continue;
-        }
-        let sliced_array = eq_array.slice(start, length);
-        final_contained[i] = Some(sliced_array.true_count() > 0);
-    }
-
-    Ok(Arc::new(BooleanArray::from(final_contained)))
+    array_has_dispatch_for_scalar!(haystack, offsets, needle)
 }
 
 fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -301,6 +338,9 @@ fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::LargeList(_) => {
             array_has_all_and_any_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
+        }
+        DataType::FixedSizeList(_, _) => {
+            array_has_all_and_any_dispatch_for_fixed_size_list(&args[0], &args[1], ComparisonType::All)
         }
         _ => exec_err!(
             "array_has does not support type '{:?}'.",
@@ -316,6 +356,9 @@ fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::LargeList(_) => {
             array_has_all_and_any_dispatch::<i64>(&args[0], &args[1], ComparisonType::Any)
+        }
+        DataType::FixedSizeList(_, _) => {
+            array_has_all_and_any_dispatch_for_fixed_size_list(&args[0], &args[1], ComparisonType::Any)
         }
         _ => exec_err!(
             "array_has does not support type '{:?}'.",
