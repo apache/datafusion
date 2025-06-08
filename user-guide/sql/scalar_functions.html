@@ -7895,7 +7895,7 @@ an error will be returned.</p></li>
 </section>
 <section id="array-position">
 <h3><code class="docutils literal notranslate"><span class="pre">array_position</span></code><a class="headerlink" href="#array-position" title="Link to this heading">¶</a></h3>
-<p>Returns the position of the first occurrence of the specified element in the array.</p>
+<p>Returns the position of the first occurrence of the specified element in the array, or NULL if not found.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_position</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">)</span>
 <span class="n">array_position</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">,</span><span class="w"> </span><span class="k">index</span><span class="p">)</span>
 </pre></div>
@@ -7905,7 +7905,7 @@ an error will be returned.</p></li>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 <li><p><strong>element</strong>: Element to search for position in the array.</p></li>
-<li><p><strong>index</strong>: Index at which to start searching.</p></li>
+<li><p><strong>index</strong>: Index at which to start searching (1-indexed).</p></li>
 </ul>
 </section>
 <section id="id216">
