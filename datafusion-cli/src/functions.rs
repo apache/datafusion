@@ -529,7 +529,7 @@ impl TableFunctionImpl for GlobFunc {
                 DataFusionError::Plan(format!("Invalid base URL: {}", e))
             })?;
             let glob = Pattern::new(glob_part).map_err(|e| {
-                DataFusionError::Plan(format!("Invalid glob pattern: {}", e))
+                plan_datafusion_err!("Invalid glob pattern: {}", e))
             })?;
             ListingTableUrl::try_new(base_url, Some(glob))?
         } else {
