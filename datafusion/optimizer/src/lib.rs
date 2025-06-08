@@ -39,6 +39,7 @@
 //! [`TypeCoercion`]: analyzer::type_coercion::TypeCoercion
 pub mod analyzer;
 pub mod common_subexpr_eliminate;
+pub mod create_dependent_join;
 pub mod decorrelate;
 pub mod decorrelate_lateral_join;
 pub mod decorrelate_predicate_subquery;
