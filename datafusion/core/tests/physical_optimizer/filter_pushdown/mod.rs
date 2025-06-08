@@ -386,7 +386,7 @@ async fn test_topk_dynamic_filter_pushdown() {
             LexOrdering::new(vec![PhysicalSortExpr::new(
                 col("b", &schema()).unwrap(),
                 SortOptions::new(true, false), // descending, nulls_first
-            )]),
+            )]).unwrap(),
             Arc::clone(&scan),
         )
         .with_fetch(Some(1)),

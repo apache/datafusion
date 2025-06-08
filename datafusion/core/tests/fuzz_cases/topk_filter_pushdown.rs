@@ -108,30 +108,30 @@ async fn test_files() -> Vec<TestDataSet> {
 
                 // Generate 5 files, some with overlapping or repeated ids some without
                 for i in 0..5 {
-                    let num_batches = rng.gen_range(1..3);
+                    let num_batches = rng.random_range(1..3);
                     let mut batches = Vec::with_capacity(num_batches);
                     for _ in 0..num_batches {
                         let num_rows = 25;
                         let ids = Int32Array::from_iter((0..num_rows).map(|file| {
                             if nulls_in_ids {
-                                if rng.gen_bool(1.0 / 10.0) {
+                                if rng.random_bool(1.0 / 10.0) {
                                     None
                                 } else {
-                                    Some(rng.gen_range(file..file + 5))
+                                    Some(rng.random_range(file..file + 5))
                                 }
                             } else {
-                                Some(rng.gen_range(file..file + 5))
+                                Some(rng.random_range(file..file + 5))
                             }
                         }));
                         let names = StringArray::from_iter((0..num_rows).map(|_| {
                             // randomly select a name
-                            let idx = rng.gen_range(0..name_choices.len());
+                            let idx = rng.random_range(0..name_choices.len());
                             name_choices[idx].map(|s| s.to_string())
                         }));
                         let mut departments = StringDictionaryBuilder::<Int32Type>::new();
                         for _ in 0..num_rows {
                             // randomly select a department
-                            let idx = rng.gen_range(0..department_choices.len());
+                            let idx = rng.random_range(0..department_choices.len());
                             departments.append_option(department_choices[idx].as_ref());
                         }
                         let batch = RecordBatch::try_new(
