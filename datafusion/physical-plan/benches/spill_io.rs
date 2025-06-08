@@ -83,7 +83,8 @@ fn bench_spill_io(c: &mut Criterion) {
         Field::new("c2", DataType::Date32, true),
         Field::new("c3", DataType::Decimal128(11, 2), true),
     ]));
-    let spill_manager = SpillManager::new(env, metrics, schema, SpillCompression::Uncompressed);
+    let spill_manager =
+        SpillManager::new(env, metrics, schema, SpillCompression::Uncompressed);
 
     let mut group = c.benchmark_group("spill_io");
     let rt = Runtime::new().unwrap();

@@ -31,8 +31,8 @@ use std::task::{Context, Poll};
 use arrow::array::ArrayData;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::writer::IpcWriteOptions;
+use arrow::ipc::MetadataVersion;
 use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
-use arrow::ipc::{CompressionType, MetadataVersion};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::config::SpillCompression;
@@ -349,6 +349,7 @@ mod tests {
     use crate::metrics::SpillMetrics;
     use crate::spill::spill_manager::SpillManager;
     use crate::test::build_table_i32;
+    use arrow::array::ArrayRef;
     use arrow::array::{Float64Array, Int32Array, ListArray, StringArray};
     use arrow::compute::cast;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
@@ -499,6 +500,121 @@ mod tests {
         let batches = collect(stream).await?;
         assert_eq!(batches.len(), 4);
 
+        Ok(())
+    }
+
+    fn build_compressible_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, true),
+        ]));
+
+        let a: ArrayRef = Arc::new(StringArray::from_iter_values(
+            std::iter::repeat("repeated").take(100),
+        ));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![1; 100]));
+        let c: ArrayRef = Arc::new(Int32Array::from(vec![2; 100]));
+
+        RecordBatch::try_new(schema, vec![a, b, c]).unwrap()
+    }
+
+    async fn validate(
+        spill_manager: &SpillManager,
+        spill_file: RefCountedTempFile,
+        num_rows: usize,
+        schema: SchemaRef,
+        batch_count: usize,
+    ) -> Result<()> {
+        let spilled_rows = spill_manager.metrics.spilled_rows.value();
+        assert_eq!(spilled_rows, num_rows);
+
+        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        assert_eq!(stream.schema(), schema);
+
+        let batches = collect(stream).await?;
+        assert_eq!(batches.len(), batch_count);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_compression() -> Result<()> {
+        let batch = build_compressible_batch();
+        let num_rows = batch.num_rows();
+        let schema = batch.schema();
+        let batch_count = 1;
+        let batches = [batch];
+
+        // Construct SpillManager
+        let env = Arc::new(RuntimeEnv::default());
+        let uncompressed_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let lz4_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let zstd_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let uncompressed_spill_manager = SpillManager::new(
+            env.clone(),
+            uncompressed_metrics,
+            Arc::clone(&schema),
+            SpillCompression::Uncompressed,
+        );
+        let lz4_spill_manager = SpillManager::new(
+            env.clone(),
+            lz4_metrics,
+            Arc::clone(&schema),
+            SpillCompression::Lz4Frame,
+        );
+        let zstd_spill_manager = SpillManager::new(
+            env,
+            zstd_metrics,
+            Arc::clone(&schema),
+            SpillCompression::Zstd,
+        );
+        let uncompressed_spill_file = uncompressed_spill_manager
+            .spill_record_batch_and_finish(&batches, "Test")?
+            .unwrap();
+        let lz4_spill_file = lz4_spill_manager
+            .spill_record_batch_and_finish(&batches, "Lz4_Test")?
+            .unwrap();
+        let zstd_spill_file = zstd_spill_manager
+            .spill_record_batch_and_finish(&batches, "ZSTD_Test")?
+            .unwrap();
+        assert!(uncompressed_spill_file.path().exists());
+        assert!(lz4_spill_file.path().exists());
+        assert!(zstd_spill_file.path().exists());
+
+        let lz4_spill_size = std::fs::metadata(lz4_spill_file.path())?.len();
+        let zstd_spill_size = std::fs::metadata(zstd_spill_file.path())?.len();
+        let uncompressed_spill_size =
+            std::fs::metadata(uncompressed_spill_file.path())?.len();
+
+        assert!(uncompressed_spill_size > lz4_spill_size);
+        assert!(uncompressed_spill_size > zstd_spill_size);
+
+        // TODO validate with function
+        validate(
+            &lz4_spill_manager,
+            lz4_spill_file,
+            num_rows,
+            schema.clone(),
+            batch_count,
+        )
+        .await?;
+        validate(
+            &zstd_spill_manager,
+            zstd_spill_file,
+            num_rows,
+            schema.clone(),
+            batch_count,
+        )
+        .await?;
+        validate(
+            &uncompressed_spill_manager,
+            uncompressed_spill_file,
+            num_rows,
+            schema,
+            batch_count,
+        )
+        .await?;
         Ok(())
     }
 
