@@ -36,7 +36,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-pub struct GroupedTopKAggregateStream {
+pub fn aggregate_stream(
+    aggr: &AggregateExec,
+    context: Arc<TaskContext>,
+    partition: usize,
+    limit: usize,
+) -> Result<SendableRecordBatchStream> {
+    Ok(Box::pin(GroupedTopKAggregateStream::new(
+        aggr, context, partition, limit,
+    )?))
+}
+
+struct GroupedTopKAggregateStream {
     partition: usize,
     row_count: usize,
     started: bool,

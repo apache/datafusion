@@ -36,11 +36,18 @@ use std::task::{Context, Poll};
 use crate::filter::batch_filter;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
-
 use super::AggregateExec;
 
+pub fn aggregate_stream(
+    agg: &AggregateExec,
+    context: Arc<TaskContext>,
+    partition: usize,
+) -> Result<SendableRecordBatchStream> {
+    Ok(Box::pin(AggregateStream::new(agg, context, partition)?))
+}
+
 /// stream struct for aggregation without grouping columns
-pub(crate) struct AggregateStream {
+struct AggregateStream {
     stream: BoxStream<'static, Result<RecordBatch>>,
     schema: SchemaRef,
 }
