@@ -69,6 +69,59 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
 }
 
 #[tokio::test]
+async fn count_distinct_dictionary_null_values() -> Result<()> {
+    let n: usize = 5;
+    let num: ArrayRef = Arc::new(Int32Array::from_iter(0..n as i32));
+
+    let dict_values = StringArray::from(vec![None, Some("abc")]);
+    let dict_indices = Int32Array::from(vec![0; n]);
+    let dict = DictionaryArray::new(dict_indices, Arc::new(dict_values));
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("num1", DataType::Int32, false),
+        Field::new("num2", DataType::Int32, false),
+        Field::new(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![num.clone(), num.clone(), Arc::new(dict) as ArrayRef],
+    )?;
+
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let df = ctx
+        .sql("select count(distinct dict) as cnt, count(num2) from t group by num1")
+        .await?;
+    let results = df.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +-----+---------------+
+    | cnt | count(t.num2) |
+    +-----+---------------+
+    | 0   | 1             |
+    | 0   | 1             |
+    | 0   | 1             |
+    | 0   | 1             |
+    | 0   | 1             |
+    +-----+---------------+
+    "###
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn count_partitioned() -> Result<()> {
     let results =
         execute_with_partition("SELECT count(c1), count(c2) FROM test", 4).await?;
