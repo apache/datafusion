@@ -837,8 +837,10 @@ SELECT greatest([2, 3], [1, 4], [5, 0]);
 ----
 [5, 0]
 
-query error DataFusion error: Error during planning: Execution error: Function 'greatest' user\-defined coercion failed with "Error during planning: Cannot find a common type for arguments"
+query I
 SELECT greatest(1::int, 2::text)
+----
+2
 
 query R
 SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4))
@@ -1033,8 +1035,10 @@ SELECT least([2, 3], [1, 4], [5, 0]);
 ----
 [1, 4]
 
-query error DataFusion error: Error during planning: Execution error: Function 'least' user\-defined coercion failed with "Error during planning: Cannot find a common type for arguments"
+query I
 SELECT least(1::int, 2::text)
+----
+1
 
 query R
 SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4))
