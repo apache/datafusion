@@ -282,10 +282,13 @@ fn select_date_plus_interval() -> Result<()> {
 
     let date_plus_interval_expr = to_timestamp_expr(ts_string)
         .cast_to(&DataType::Date32, schema)?
-        + Expr::Literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-            days: 123,
-            milliseconds: 0,
-        })));
+        + Expr::Literal(
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 123,
+                milliseconds: 0,
+            })),
+            None,
+        );
 
     let plan = LogicalPlanBuilder::from(table_scan.clone())
         .project(vec![date_plus_interval_expr])?

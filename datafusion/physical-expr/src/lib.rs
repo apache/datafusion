@@ -54,20 +54,19 @@ pub use equivalence::{
 };
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
-    create_ordering, create_physical_sort_expr, create_physical_sort_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
-    PhysicalExprRef,
+    add_offset_to_expr, add_offset_to_physical_sort_exprs, create_ordering,
+    create_physical_sort_expr, create_physical_sort_exprs, physical_exprs_bag_equal,
+    physical_exprs_contains, physical_exprs_equal,
 };
 
-pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+pub use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 pub use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
+    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
-
-pub use datafusion_physical_expr_common::utils::reverse_order_bys;
 pub use utils::{conjunction, conjunction_opt, split_conjunction};
 
 // For backwards compatibility
