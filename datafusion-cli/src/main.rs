@@ -30,7 +30,7 @@ use datafusion::execution::memory_pool::{
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
-use datafusion_cli::functions::ParquetMetadataFunc;
+use datafusion_cli::functions::{GlobFunc, ParquetMetadataFunc};
 use datafusion_cli::{
     exec,
     pool_type::PoolType,
@@ -217,7 +217,7 @@ async fn main_inner() -> Result<()> {
         ctx.state_weak_ref(),
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
-    ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+    register_builtin_functions(&ctx)?;
 
     let mut print_options = PrintOptions {
         format: args.format,
@@ -392,6 +392,17 @@ pub fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 
 pub fn extract_disk_limit(size: &str) -> Result<usize, String> {
     parse_size_string(size, "disk limit")
+}
+
+fn register_builtin_functions(ctx: &SessionContext) -> Result<()> {
+    // register parquet_metadata
+    ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+
+    // register glob
+    let glob_func = Arc::new(GlobFunc::new(ctx.clone()));
+    ctx.register_udtf("glob", glob_func);
+
+    Ok(())
 }
 
 #[cfg(test)]

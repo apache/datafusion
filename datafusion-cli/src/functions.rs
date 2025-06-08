@@ -28,9 +28,15 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::catalog::{Session, TableFunctionImpl};
 use datafusion::common::{plan_err, Column};
+use datafusion::datasource::file_format::{
+    csv::CsvFormat, json::JsonFormat as NdJsonFormat, parquet::ParquetFormat, FileFormat,
+};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
@@ -41,6 +47,13 @@ use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics;
+
+use datafusion::prelude::SessionContext;
+
+use futures::executor::block_on;
+
+use glob::Pattern;
+use url::Url;
 
 #[derive(Debug)]
 pub enum Function {
@@ -458,5 +471,140 @@ impl TableFunctionImpl for ParquetMetadataFunc {
 
         let parquet_metadata = ParquetMetadataTable { schema, batch: rb };
         Ok(Arc::new(parquet_metadata))
+    }
+}
+
+/// A table function that allows users to query files using glob patterns
+/// for example: SELECT * FROM glob('path/to/*/file.parquet')
+pub struct GlobFunc {
+    // we need the ctx here to get the schema from the listing table later
+    ctx: SessionContext,
+}
+
+impl std::fmt::Debug for GlobFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GlobFunc")
+            .field("ctx", &"<SessionContext>")
+            .finish()
+    }
+}
+
+impl GlobFunc {
+    /// Create a new GlobFunc
+    pub fn new(ctx: SessionContext) -> Self {
+        Self { ctx }
+    }
+}
+
+fn expr_to_literal<'a>(expr: &'a Expr, arg_name: &str) -> Result<&'a str> {
+    match expr {
+        Expr::Literal(ScalarValue::Utf8(Some(s)), _) => Ok(s),
+        Expr::Column(Column { name, .. }) => Ok(name),
+        _ => plan_err!("glob() requires a string literal for the '{arg_name}' argument"),
+    }
+}
+
+impl TableFunctionImpl for GlobFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        if exprs.is_empty() {
+            return plan_err!("glob() requires glob pattern");
+        }
+        let pattern = expr_to_literal(&exprs[0], "pattern")?;
+        let format = if exprs.len() > 1 {
+            Some(expr_to_literal(&exprs[1], "format")?)
+        } else {
+            None
+        };
+
+        // Extract file extension from original pattern before any splitting
+        let pattern_extension = pattern
+            .split('/')
+            .last()
+            .and_then(|filename| {
+                if filename.contains('.') && !filename.ends_with('.') {
+                    filename.split('.').last()
+                } else {
+                    None
+                }
+            })
+            .map(|ext| ext.to_ascii_lowercase());
+
+        // Check if this is a URL with a scheme (s3://, http://, etc.) AND contains glob characters
+        let url = if pattern.contains("://") && pattern.contains(['*', '?', '[']) {
+            // This is a URL with scheme and glob characters - manual splitting required
+            // Find the first glob character (e.g. * or ?)
+            let glob_pos = pattern.find(['*', '?', '[']).ok_or_else(|| {
+                DataFusionError::Plan("No glob pattern found".to_string())
+            })?;
+
+            // Find the last '/' before the glob to split base path from glob pattern
+            let split_pos = pattern[..glob_pos]
+                .rfind('/')
+                .map(|pos| pos + 1)
+                .ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "Invalid glob pattern: no base path found".to_string(),
+                    )
+                })?;
+
+            let (base_path, glob_part) = pattern.split_at(split_pos);
+
+            // Ensure base path ends with '/' for proper object store URL
+            let base_path = if base_path.ends_with('/') {
+                base_path.to_string()
+            } else {
+                format!("{}/", base_path)
+            };
+
+            // Parse the base URL
+            let base_url = Url::parse(&base_path).map_err(|e| {
+                DataFusionError::Plan(format!("Invalid base URL '{}': {}", base_path, e))
+            })?;
+
+            // Create glob pattern
+            let glob = Pattern::new(glob_part).map_err(|e| {
+                DataFusionError::Plan(format!(
+                    "Invalid glob pattern '{}': {}",
+                    glob_part, e
+                ))
+            })?;
+
+            ListingTableUrl::try_new(base_url, Some(glob))?
+        } else {
+            // Either scheme-less path (parse handles globs) or URL without globs
+            ListingTableUrl::parse(pattern)?
+        };
+
+        // 4. Resolve file format using extracted extension or format parameter
+        let format_string = format
+            .map(|s| s.to_string())
+            .or(pattern_extension)
+            .or_else(|| url.file_extension().map(|s| s.to_ascii_lowercase()));
+
+        let (fmt, ext): (Arc<dyn FileFormat>, &str) = match format_string.as_deref() {
+            Some("parquet") | None => (Arc::new(ParquetFormat::default()), "parquet"),
+            Some("csv") => (Arc::new(CsvFormat::default().with_has_header(true)), "csv"),
+            Some("json") => (Arc::new(NdJsonFormat::default()), "json"),
+            Some(other) => {
+                return Err(DataFusionError::Plan(format!(
+                    "glob(): unsupported format '{other}'"
+                )))
+            }
+        };
+
+        let listing_opts = ListingOptions::new(fmt).with_file_extension(ext);
+
+        // 5. Infer schema (sync wrapper around async)
+        let state = self.ctx.state();
+        let schema = block_on(listing_opts.infer_schema(&state, &url))?;
+
+        // 6. Build ListingTable
+        let config = ListingTableConfig::new(url)
+            .with_listing_options(listing_opts)
+            .with_schema(schema);
+
+        let table = ListingTable::try_new(config)?;
+
+        Ok(Arc::new(table))
     }
 }
