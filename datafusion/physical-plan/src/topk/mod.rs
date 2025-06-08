@@ -32,16 +32,18 @@ use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_datafusion_err, internal_err, HashMap, Result, ScalarValue};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, HashMap, Result, ScalarValue,
+};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr::{
     expressions::{is_not_null, is_null, lit, BinaryExpr, DynamicFilterPhysicalExpr},
     PhysicalExpr,
 };
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 /// Global TopK
 ///
