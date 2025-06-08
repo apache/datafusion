@@ -271,6 +271,11 @@ impl TestScanBuilder {
         self
     }
 
+    pub fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
+        self.batches = batches;
+        self
+    }
+
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
         let source = Arc::new(TestSource::new(self.support, self.batches));
         let base_config = FileScanConfigBuilder::new(
@@ -424,6 +429,15 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 
 fn format_lines(s: &str) -> Vec<String> {
     s.trim().split('\n').map(|s| s.to_string()).collect()
+}
+
+pub fn format_plan_for_test(plan: &Arc<dyn ExecutionPlan>) -> String {
+    let mut out = String::new();
+    for line in format_execution_plan(plan) {
+        out.push_str(&format!("  - {line}\n"));
+    }
+    out.push('\n');
+    out
 }
 
 #[derive(Debug)]

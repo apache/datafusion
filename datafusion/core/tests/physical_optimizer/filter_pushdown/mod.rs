@@ -17,28 +17,40 @@
 
 use std::sync::{Arc, LazyLock};
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::{
+    array::record_batch,
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
+use arrow_schema::SortOptions;
 use datafusion::{
     logical_expr::Operator,
     physical_plan::{
         expressions::{BinaryExpr, Column, Literal},
         PhysicalExpr,
     },
+    prelude::{SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
 use datafusion_common::config::ConfigOptions;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{aggregate::AggregateExprBuilder, Partitioning};
-use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_optimizer::{
+    filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
+};
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
     filter::FilterExec,
     repartition::RepartitionExec,
+    sorts::sort::SortExec,
+    ExecutionPlan,
 };
 
-use util::{OptimizationTest, TestNode, TestScanBuilder};
+use futures::StreamExt;
+use object_store::memory::InMemory;
+use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
 
 mod util;
 
@@ -343,6 +355,80 @@ fn test_node_handles_child_pushdown_result() {
           - TestInsertExec { inject_filter: false }
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     ",
+    );
+}
+
+#[tokio::test]
+async fn test_topk_dynamic_filter_pushdown() {
+    // This test is a bit of a hack, but it shows that we can push down dynamic filters
+    // into the DataSourceExec. The test is not perfect because we don't have a real
+    // implementation of the dynamic filter yet, so we just use a static filter.
+    let batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["bd", "bc"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+        record_batch!(
+            ("a", Utf8, ["ac", "ad"]),
+            ("b", Utf8, ["bb", "ba"]),
+            ("c", Float64, [2.0, 1.0])
+        )
+        .unwrap(),
+    ];
+    let scan = TestScanBuilder::new(schema())
+        .with_support(true)
+        .with_batches(batches)
+        .build();
+    let plan = Arc::new(
+        SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr::new(
+                col("b", &schema()).unwrap(),
+                SortOptions::new(true, false), // descending, nulls_first
+            )]),
+            Arc::clone(&scan),
+        )
+        .with_fetch(Some(1)),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // expect the predicate to be pushed down into the DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown{}, true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false]
+        -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false]
+          -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
+    "
+    );
+
+    // Actually apply the optimization to the plan
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    let plan = FilterPushdown {}.optimize(plan, &config).unwrap();
+    let config = SessionConfig::new().with_batch_size(2);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    // Iterate one batch
+    stream.next().await.unwrap().unwrap();
+    // Now check what our filter looks like
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false], filter=[b@1 > bd]
+    -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ b@1 > bd ]
+    "
     );
 }
 

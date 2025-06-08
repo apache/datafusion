@@ -96,10 +96,6 @@ impl PhysicalOptimizer {
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
-            // The FilterPushdown rule tries to push down filters as far as it can.
-            // For example, it will push down filtering from a `FilterExec` to
-            // a `DataSourceExec`, or from a `TopK`'s current state to a `DataSourceExec`.
-            Arc::new(FilterPushdown::new()),
             // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
             // requirements. Please make sure that the whole plan tree is determined before this rule.
             // This rule increases parallelism if doing so is beneficial to the physical plan; i.e. at
@@ -139,6 +135,10 @@ impl PhysicalOptimizer {
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
             Arc::new(InsertYieldExec::new()),
+            // The FilterPushdown rule tries to push down filters as far as it can.
+            // For example, it will push down filtering from a `FilterExec` to
+            // a `DataSourceExec`, or from a `TopK`'s current state to a `DataSourceExec`.
+            Arc::new(FilterPushdown::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query
