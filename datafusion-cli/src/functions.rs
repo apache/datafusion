@@ -526,7 +526,7 @@ impl TableFunctionImpl for GlobFunc {
 
             let base_url = Url::parse(&format!("{}/", base_path.trim_end_matches('/')))
                 .map_err(|e| {
-                DataFusionError::Plan(format!("Invalid base URL: {}", e))
+                plan_datafusion_err!("Invalid base URL: {}", e))
             })?;
             let glob = Pattern::new(glob_part).map_err(|e| {
                 plan_datafusion_err!("Invalid glob pattern: {}", e))
