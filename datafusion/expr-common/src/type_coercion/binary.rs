@@ -1202,7 +1202,8 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Utf8 | LargeUtf8 | Utf8View, other_type) | (other_type, Utf8 | LargeUtf8 | Utf8View)
+        (Utf8 | LargeUtf8 | Utf8View, other_type)
+        | (other_type, Utf8 | LargeUtf8 | Utf8View)
             if other_type.is_numeric() =>
         {
             Some(other_type.clone())
