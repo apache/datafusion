@@ -17,6 +17,7 @@
 
 //! Join related functionality used both on logical and physical plans
 
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
@@ -35,19 +36,24 @@ pub use super::join_hash_map::{JoinHashMap, JoinHashMapType};
 pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
-    builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
-    BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
-    UInt32Array, UInt32Builder, UInt64Array,
+    downcast_array, new_null_array, Array, ArrayRef, ArrowPrimitiveType, BooleanArray,
+    BooleanBufferBuilder, Date32Array, Date64Array, Decimal128Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
+    NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions, StringArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt32Builder, UInt64Array,
+    UInt64Builder, UInt8Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
+use arrow_schema::{DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
+    not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
@@ -303,7 +309,7 @@ pub fn build_join_schema(
         JoinType::LeftSemi | JoinType::LeftAnti => left_fields().unzip(),
         JoinType::LeftMark => {
             let right_field = once((
-                Field::new("mark", arrow::datatypes::DataType::Boolean, false),
+                Field::new("mark", DataType::Boolean, false),
                 ColumnIndex {
                     index: 0,
                     side: JoinSide::None,
@@ -1493,6 +1499,116 @@ pub(super) fn swap_join_projection(
                 .collect()
         }),
     }
+}
+
+/// This is used for join array comparison between left array values + right array values.
+///
+/// When `sort_options` is `Some(&[SortOptions])`, each entry controls:
+/// - whether that column is sorted descending (`descending`),
+/// - whether nulls come first or last (`nulls_first`).
+///
+/// If `sort_options` is `None`, the function behaves like a simple equality check (for
+/// `NestedLoopJoin`), only differentiating between 'equal' and 'not equal'.
+pub fn compare_join_arrays(
+    left_arrays: &[ArrayRef],
+    left: usize,
+    right_arrays: &[ArrayRef],
+    right: usize,
+    sort_options: Option<&[SortOptions]>,
+    null_equals_null: bool,
+) -> Result<Ordering> {
+    let mut res = Ordering::Equal;
+    for (i, (left_array, right_array)) in left_arrays.iter().zip(right_arrays).enumerate()
+    {
+        macro_rules! compare_value {
+            ($T:ty) => {{
+                let left_array = left_array.as_any().downcast_ref::<$T>().unwrap();
+                let right_array = right_array.as_any().downcast_ref::<$T>().unwrap();
+                let sort_opt = sort_options.and_then(|opts| opts.get(i));
+
+                match (left_array.is_null(left), right_array.is_null(right)) {
+                    (false, false) => {
+                        let left_value = &left_array.value(left);
+                        let right_value = &right_array.value(right);
+                        res = left_value.partial_cmp(right_value).unwrap();
+                        if let Some(sort_opt) = sort_opt {
+                            if sort_opt.descending {
+                                res = res.reverse()
+                            }
+                        }
+                    }
+                    (true, false) => {
+                        if let Some(sort_opt) = sort_opt {
+                            res = if sort_opt.nulls_first {
+                                Ordering::Less
+                            } else {
+                                Ordering::Greater
+                            }
+                        } else {
+                            // set as something other than 'Ordering::Equal' for nested loop
+                            res = Ordering::Less;
+                        }
+                    }
+                    (false, true) => {
+                        if let Some(sort_opt) = sort_opt {
+                            res = if sort_opt.nulls_first {
+                                Ordering::Greater
+                            } else {
+                                Ordering::Less
+                            }
+                        } else {
+                            // set as something other than 'Ordering::Equal' for nested loop
+                             res = Ordering::Less;
+                        }
+                    }
+                    _ => {
+                        res = if null_equals_null {
+                            Ordering::Equal
+                        } else {
+                            Ordering::Less
+                        };
+                    }
+                }
+            }};
+        }
+
+        match left_array.data_type() {
+            DataType::Null => {}
+            DataType::Boolean => compare_value!(BooleanArray),
+            DataType::Int8 => compare_value!(Int8Array),
+            DataType::Int16 => compare_value!(Int16Array),
+            DataType::Int32 => compare_value!(Int32Array),
+            DataType::Int64 => compare_value!(Int64Array),
+            DataType::UInt8 => compare_value!(UInt8Array),
+            DataType::UInt16 => compare_value!(UInt16Array),
+            DataType::UInt32 => compare_value!(UInt32Array),
+            DataType::UInt64 => compare_value!(UInt64Array),
+            DataType::Float32 => compare_value!(Float32Array),
+            DataType::Float64 => compare_value!(Float64Array),
+            DataType::Utf8 => compare_value!(StringArray),
+            DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Decimal128(..) => compare_value!(Decimal128Array),
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => compare_value!(TimestampSecondArray),
+                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
+                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
+                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
+            },
+            DataType::Date32 => compare_value!(Date32Array),
+            DataType::Date64 => compare_value!(Date64Array),
+            dt => {
+                return not_impl_err!(
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
+                );
+            }
+        }
+        if !res.is_eq() {
+            return Ok(res);
+        }
+    }
+
+    Ok(res)
 }
 
 #[cfg(test)]

@@ -36,9 +36,9 @@ use std::task::{Context, Poll};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
-    JoinOnRef,
+    build_join_schema, check_join_is_valid, compare_join_arrays,
+    estimate_join_statistics, reorder_output_after_swap,
+    symmetric_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
 };
 use crate::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics,
@@ -1578,7 +1578,7 @@ impl SortMergeJoinStream {
             self.streamed_batch.idx,
             &self.buffered_data.head_batch().join_arrays,
             self.buffered_data.head_batch().range.start,
-            &self.sort_options,
+            Some(&self.sort_options),
             self.null_equals_null,
         )
     }
@@ -2411,95 +2411,6 @@ fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayR
             c.into_array(num_rows).unwrap()
         })
         .collect()
-}
-
-/// Get comparison result of two rows of join arrays
-fn compare_join_arrays(
-    left_arrays: &[ArrayRef],
-    left: usize,
-    right_arrays: &[ArrayRef],
-    right: usize,
-    sort_options: &[SortOptions],
-    null_equals_null: bool,
-) -> Result<Ordering> {
-    let mut res = Ordering::Equal;
-    for ((left_array, right_array), sort_options) in
-        left_arrays.iter().zip(right_arrays).zip(sort_options)
-    {
-        macro_rules! compare_value {
-            ($T:ty) => {{
-                let left_array = left_array.as_any().downcast_ref::<$T>().unwrap();
-                let right_array = right_array.as_any().downcast_ref::<$T>().unwrap();
-                match (left_array.is_null(left), right_array.is_null(right)) {
-                    (false, false) => {
-                        let left_value = &left_array.value(left);
-                        let right_value = &right_array.value(right);
-                        res = left_value.partial_cmp(right_value).unwrap();
-                        if sort_options.descending {
-                            res = res.reverse();
-                        }
-                    }
-                    (true, false) => {
-                        res = if sort_options.nulls_first {
-                            Ordering::Less
-                        } else {
-                            Ordering::Greater
-                        };
-                    }
-                    (false, true) => {
-                        res = if sort_options.nulls_first {
-                            Ordering::Greater
-                        } else {
-                            Ordering::Less
-                        };
-                    }
-                    _ => {
-                        res = if null_equals_null {
-                            Ordering::Equal
-                        } else {
-                            Ordering::Less
-                        };
-                    }
-                }
-            }};
-        }
-
-        match left_array.data_type() {
-            DataType::Null => {}
-            DataType::Boolean => compare_value!(BooleanArray),
-            DataType::Int8 => compare_value!(Int8Array),
-            DataType::Int16 => compare_value!(Int16Array),
-            DataType::Int32 => compare_value!(Int32Array),
-            DataType::Int64 => compare_value!(Int64Array),
-            DataType::UInt8 => compare_value!(UInt8Array),
-            DataType::UInt16 => compare_value!(UInt16Array),
-            DataType::UInt32 => compare_value!(UInt32Array),
-            DataType::UInt64 => compare_value!(UInt64Array),
-            DataType::Float32 => compare_value!(Float32Array),
-            DataType::Float64 => compare_value!(Float64Array),
-            DataType::Utf8 => compare_value!(StringArray),
-            DataType::LargeUtf8 => compare_value!(LargeStringArray),
-            DataType::Decimal128(..) => compare_value!(Decimal128Array),
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => compare_value!(TimestampSecondArray),
-                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
-                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
-                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
-            },
-            DataType::Date32 => compare_value!(Date32Array),
-            DataType::Date64 => compare_value!(Date64Array),
-            dt => {
-                return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator: {}",
-                    dt
-                );
-            }
-        }
-        if !res.is_eq() {
-            break;
-        }
-    }
-    Ok(res)
 }
 
 /// A faster version of compare_join_arrays() that only output whether

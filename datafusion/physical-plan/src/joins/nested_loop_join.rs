@@ -18,8 +18,9 @@
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::fmt::Formatter;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::task::Poll;
 
@@ -32,8 +33,9 @@ use crate::common::can_project;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
+    build_join_schema, check_join_is_valid, compare_join_arrays,
+    estimate_join_statistics, BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync,
+    OnceFut,
 };
 use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -48,19 +50,15 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Date32Array, Date64Array,
-    Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-    UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder, UInt8Array,
+    ArrayRef, BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array,
+    UInt64Builder,
 };
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, TimeUnit};
+
 use datafusion_common::{
-    exec_datafusion_err, internal_err, not_impl_err, project_schema, JoinSide, Result,
-    Statistics,
+    exec_datafusion_err, internal_err, project_schema, JoinSide, Result, Statistics,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -114,7 +112,9 @@ impl JoinLeftData {
     /// Decrements counter of running threads, and returns `true`
     /// if caller is the last running thread
     fn report_probe_completed(&self) -> bool {
-        self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
+        self.probe_threads_counter
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed)
+            == 1
     }
 }
 
@@ -814,11 +814,11 @@ fn build_join_indices(
 
     let (mut left_indices, mut right_indices) =
         match output_row_count.cmp(&cached_output_row_count) {
-            std::cmp::Ordering::Equal => {
+            Ordering::Equal => {
                 // Reuse the cached indices
                 (left_indices_cache.clone(), right_indices_cache.clone())
             }
-            std::cmp::Ordering::Less => {
+            Ordering::Less => {
                 // Left_row_count never changes because it's the build side. The changes to the
                 // right_row_count can be handled trivially by taking the first output_row_count
                 // elements of the cache because of how the indices are generated.
@@ -828,7 +828,7 @@ fn build_join_indices(
                     right_indices_cache.slice(0, output_row_count),
                 )
             }
-            std::cmp::Ordering::Greater => {
+            Ordering::Greater => {
                 // Rebuild the indices cache
 
                 // Produces 0, 1, 2, 0, 1, 2, 0, 1, 2, ...
@@ -902,90 +902,21 @@ fn get_equijoin_match(
 
     // Goes through both left and right indices and compares the values
     for (l_idx, r_idx) in left_indices.values().iter().zip(right_indices.values()) {
-        if compare_arrays(
+        if compare_join_arrays(
             &left_arrays,
             *l_idx as usize,
             &right_arrays,
             *r_idx as usize,
+            None,
             null_equals_null,
-        )? {
+        )? == Ordering::Equal
+        {
             out_l.append_value(*l_idx);
             out_r.append_value(*r_idx);
         }
     }
 
     Ok((out_l.finish(), out_r.finish()))
-}
-
-// Compares values in the array, returns true if match, false otherwise
-fn compare_arrays(
-    left_arrays: &[ArrayRef],
-    left: usize,
-    right_arrays: &[ArrayRef],
-    right: usize,
-    null_equals_null: bool,
-) -> Result<bool> {
-    for (left_array, right_array) in left_arrays.iter().zip(right_arrays.iter()) {
-        macro_rules! compare_value {
-            ($T:ty) => {{
-                let left_array = left_array.as_any().downcast_ref::<$T>().unwrap();
-                let right_array = right_array.as_any().downcast_ref::<$T>().unwrap();
-
-                // Branching logic for values that are null or not
-                match (left_array.is_null(left), right_array.is_null(right)) {
-                    (false, false) => left_array.value(left) == right_array.value(right),
-                    (true, false) => false,
-                    (false, true) => false,
-                    // If both values are true (true, true), it will return based on
-                    // whether `null_equals_null` is true
-                    _ => null_equals_null,
-                }
-            }};
-        }
-
-        let res: bool = match left_array.data_type() {
-            DataType::Null => {
-                if right_array.data_type().is_null() {
-                    null_equals_null
-                } else {
-                    false
-                }
-            }
-            DataType::Boolean => compare_value!(BooleanArray),
-            DataType::Int8 => compare_value!(Int8Array),
-            DataType::Int16 => compare_value!(Int16Array),
-            DataType::Int32 => compare_value!(Int32Array),
-            DataType::Int64 => compare_value!(Int64Array),
-            DataType::UInt8 => compare_value!(UInt8Array),
-            DataType::UInt16 => compare_value!(UInt16Array),
-            DataType::UInt32 => compare_value!(UInt32Array),
-            DataType::UInt64 => compare_value!(UInt64Array),
-            DataType::Float32 => compare_value!(Float32Array),
-            DataType::Float64 => compare_value!(Float64Array),
-            DataType::Utf8 => compare_value!(StringArray),
-            DataType::LargeUtf8 => compare_value!(LargeStringArray),
-            DataType::Decimal128(..) => compare_value!(Decimal128Array),
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => compare_value!(TimestampSecondArray),
-                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
-                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
-                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
-            },
-            DataType::Date32 => compare_value!(Date32Array),
-            DataType::Date64 => compare_value!(Date64Array),
-            dt => {
-                return not_impl_err!(
-                    "Unsupported data type in sort merge join comparator: {}",
-                    dt
-                );
-            }
-        };
-        if !res {
-            return Ok(false);
-        }
-    }
-
-    Ok(true)
 }
 
 impl<T: BatchTransformer> NestedLoopJoinStream<T> {
@@ -1296,6 +1227,16 @@ pub(crate) mod tests {
         Arc::new(TestMemoryExec::update_cache(Arc::new(source)))
     }
 
+    // build_left_table:
+    // +----+----+-----+
+    // | a1 | b1 | c1  |
+    // +----+----+-----+
+    // |  5 |  5 | 50  |
+    // +----+----+-----+
+    // |  9 |  8 | 90  |
+    // +----+----+-----+
+    // | 11 |  8 | 110 |
+    // +----+----+-----+
     fn build_left_table() -> Arc<dyn ExecutionPlan> {
         build_table(
             ("a1", &vec![5, 9, 11]),
@@ -1306,6 +1247,16 @@ pub(crate) mod tests {
         )
     }
 
+    // build_right_table:
+    // +----+----+-----+
+    // | a2 | b2 | c2  |
+    // +----+----+-----+
+    // | 12 | 10 | 40  |
+    // +----+----+-----+
+    // |  2 |  2 | 80  |
+    // +----+----+-----+
+    // | 10 | 10 | 100 |
+    // +----+----+-----+
     fn build_right_table() -> Arc<dyn ExecutionPlan> {
         build_table(
             ("a2", &vec![12, 2, 10]),
@@ -1316,6 +1267,16 @@ pub(crate) mod tests {
         )
     }
 
+    // build_left_table_equijoin:
+    // +----+----+-----+
+    // | a1 | b1 | c1  |
+    // +----+----+-----+
+    // | 12 |  2 | 50  |
+    // +----+----+-----+
+    // |  2 |  2 | 90  |
+    // +----+----+-----+
+    // | 11 |  8 | 110 |
+    // +----+----+-----+
     fn build_left_table_equijoin() -> Arc<dyn ExecutionPlan> {
         build_table(
             ("a1", &vec![12, 2, 11]),
@@ -1326,6 +1287,16 @@ pub(crate) mod tests {
         )
     }
 
+    // build_right_table_equijoin:
+    // +----+----+-----+
+    // | a2 | b2 | c2  |
+    // +----+----+-----+
+    // | 12 | 10 | 40  |
+    // +----+----+-----+
+    // |  2 |  2 | 80  |
+    // +----+----+-----+
+    // | 10 | 10 | 100 |
+    // +----+----+-----+
     fn build_right_table_equijoin() -> Arc<dyn ExecutionPlan> {
         build_table(
             ("a2", &vec![12, 2, 10]),
@@ -1385,6 +1356,18 @@ pub(crate) mod tests {
         Arc::new(TestMemoryExec::update_cache(Arc::new(source)))
     }
 
+    // build_left_table_null:
+    // +----+----+----+
+    // | a1 | b1 | c1 |
+    // +----+----+----+
+    // |  1 |    |  1 |
+    // +----+----+----+
+    // |  1 |  1 |    |
+    // +----+----+----+
+    // |  2 |  2 |  8 |
+    // +----+----+----+
+    // |  2 |  3 |  9 |
+    // +----+----+----+
     fn build_left_table_null() -> Arc<dyn ExecutionPlan> {
         build_table_null(
             ("a1", &vec![Some(1), Some(1), Some(2), Some(2)]),
@@ -1395,6 +1378,18 @@ pub(crate) mod tests {
         )
     }
 
+    // build_right_table_null:
+    // +----+----+----+
+    // | a2 | b2 | c2 |
+    // +----+----+----+
+    // |  1 |    | 10 |
+    // +----+----+----+
+    // |  1 |  1 | 70 |
+    // +----+----+----+
+    // |  2 |  2 | 80 |
+    // +----+----+----+
+    // |  3 |  2 | 90 |
+    // +----+----+----+
     fn build_right_table_null() -> Arc<dyn ExecutionPlan> {
         build_table_null(
             ("a2", &vec![Some(1), Some(1), Some(2), Some(3)]),
