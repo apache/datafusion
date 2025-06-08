@@ -54,10 +54,14 @@ use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
-pub fn aggregate_stream(agg: &AggregateExec,
-                        context: Arc<TaskContext>,
-                        partition: usize,) -> Result<SendableRecordBatchStream> {
-    Ok(Box::pin(GroupedHashAggregateStream::new(agg, context, partition)?))
+pub fn aggregate_stream(
+    agg: &AggregateExec,
+    context: Arc<TaskContext>,
+    partition: usize,
+) -> Result<SendableRecordBatchStream> {
+    Ok(Box::pin(GroupedHashAggregateStream::new(
+        agg, context, partition,
+    )?))
 }
 
 #[derive(Debug, Clone)]

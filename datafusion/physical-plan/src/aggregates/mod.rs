@@ -608,7 +608,9 @@ impl AggregateExec {
         }
 
         // grouping by something else and we need to just materialize all results
-        Ok(StreamType::GroupedHash(row_hash::aggregate_stream(self, context, partition)?))
+        Ok(StreamType::GroupedHash(row_hash::aggregate_stream(
+            self, context, partition,
+        )?))
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
@@ -1260,7 +1262,7 @@ pub fn create_accumulators(
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
 pub fn finalize_aggregation(
     accumulators: &mut [AccumulatorItem],
-    mode: &AggregateMode,
+    mode: AggregateMode,
 ) -> Result<Vec<ArrayRef>> {
     match mode {
         AggregateMode::Partial => {
