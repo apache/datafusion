@@ -134,19 +134,23 @@ fn rewrite_inner_subqueries(
     let alias = config.alias_generator();
     let expr_without_subqueries = expr.transform(|e| match e {
         Expr::Exists(Exists {
-            subquery: Subquery { subquery, .. },
+            subquery: Subquery {
+                subquery, depth, ..
+            },
             negated,
         }) => match mark_join(&cur_input, Arc::clone(&subquery), None, negated, alias)? {
             Some((plan, exists_expr)) => {
                 cur_input = plan;
                 Ok(Transformed::yes(exists_expr))
             }
-            None if negated => Ok(Transformed::no(not_exists(subquery))),
-            None => Ok(Transformed::no(exists(subquery))),
+            None if negated => Ok(Transformed::no(not_exists(subquery, depth))),
+            None => Ok(Transformed::no(exists(subquery, depth))),
         },
         Expr::InSubquery(InSubquery {
             expr,
-            subquery: Subquery { subquery, .. },
+            subquery: Subquery {
+                subquery, depth, ..
+            },
             negated,
         }) => {
             let in_predicate = subquery
@@ -165,8 +169,10 @@ fn rewrite_inner_subqueries(
                     cur_input = plan;
                     Ok(Transformed::yes(exists_expr))
                 }
-                None if negated => Ok(Transformed::no(not_in_subquery(*expr, subquery))),
-                None => Ok(Transformed::no(in_subquery(*expr, subquery))),
+                None if negated => {
+                    Ok(Transformed::no(not_in_subquery(*expr, subquery, depth)))
+                }
+                None => Ok(Transformed::no(in_subquery(*expr, subquery, depth))),
             }
         }
         _ => Ok(Transformed::no(e)),
@@ -409,12 +415,12 @@ impl SubqueryInfo {
     pub fn expr(self) -> Expr {
         match self.where_in_expr {
             Some(expr) => match self.negated {
-                true => not_in_subquery(expr, self.query.subquery),
-                false => in_subquery(expr, self.query.subquery),
+                true => not_in_subquery(expr, self.query.subquery, self.query.depth),
+                false => in_subquery(expr, self.query.subquery, self.query.depth),
             },
             None => match self.negated {
-                true => not_exists(self.query.subquery),
-                false => exists(self.query.subquery),
+                true => not_exists(self.query.subquery, self.query.depth),
+                false => exists(self.query.subquery, self.query.depth),
             },
         }
     }

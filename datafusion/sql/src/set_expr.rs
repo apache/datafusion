@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 use datafusion_common::{
     not_impl_err, plan_err, DataFusionError, Diagnostic, Result, Span,
 };
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{planner_context::PlannerContext, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier, Spanned};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {

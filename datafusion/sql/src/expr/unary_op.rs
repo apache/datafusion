@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 use datafusion_common::{not_impl_err, plan_err, DFSchema, Diagnostic, Result};
 use datafusion_expr::{
-    type_coercion::{is_interval, is_timestamp},
-    Expr, ExprSchemable,
+    planner_context::PlannerContext, type_coercion::{is_interval, is_timestamp}, Expr, ExprSchemable
 };
 use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value, ValueWithSpan};
 

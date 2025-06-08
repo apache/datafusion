@@ -74,6 +74,7 @@ pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
@@ -620,10 +621,14 @@ impl SessionContext {
         sql: &str,
         options: SQLOptions,
     ) -> Result<DataFrame> {
-        let plan = self.state().create_logical_plan(sql).await?;
+        let plan = self
+            .state()
+            .create_logical_plan(sql, &mut PlannerContext::new())
+            .await?;
         options.verify_plan(&plan)?;
 
-        self.execute_logical_plan(plan).await
+        // TODO: fetch planner_context
+        self.execute_logical_plan(plan, None).await
     }
 
     /// Creates logical expressions from SQL query text.
@@ -659,7 +664,11 @@ impl SessionContext {
     /// If you wish to limit the type of plan that can be run from
     /// SQL, see [`Self::sql_with_options`] and
     /// [`SQLOptions::verify_plan`].
-    pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
+    pub async fn execute_logical_plan(
+        &self,
+        plan: LogicalPlan,
+        planner_context: Option<PlannerContext>,
+    ) -> Result<DataFrame> {
         match plan {
             LogicalPlan::Ddl(ddl) => {
                 // Box::pin avoids allocating the stack space within this function's frame
@@ -734,7 +743,10 @@ impl SessionContext {
                     .remove_prepared(deallocate.name.as_str())?;
                 self.return_empty_dataframe()
             }
-            plan => Ok(DataFrame::new(self.state(), plan)),
+            plan => Ok(DataFrame::new(
+                self.with_planner_context_state(planner_context),
+                plan,
+            )),
         }
     }
 
@@ -1640,6 +1652,17 @@ impl SessionContext {
     /// [`ConfigOptions`]: crate::config::ConfigOptions
     pub fn state(&self) -> SessionState {
         let mut state = self.state.read().clone();
+        state.execution_props_mut().start_execution();
+        state
+    }
+
+    /// Return a new  [`SessionState`] with specific [`PlannerContext`].
+    pub fn with_planner_context_state(
+        &self,
+        planner_context: Option<PlannerContext>,
+    ) -> SessionState {
+        let mut state = self.state.read().clone();
+        state.set_planner_context_in_execution_props(planner_context);
         state.execution_props_mut().start_execution();
         state
     }

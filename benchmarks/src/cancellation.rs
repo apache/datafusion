@@ -30,6 +30,7 @@ use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::TaskContext;
+use datafusion::logical_expr::planner_context::PlannerContext;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
@@ -185,7 +186,10 @@ async fn datafusion(store: Arc<dyn ObjectStore>) -> Result<()> {
     .await?;
 
     println!("Creating logical plan...");
-    let logical_plan = ctx.state().create_logical_plan(query).await?;
+    let logical_plan = ctx
+        .state()
+        .create_logical_plan(query, &mut PlannerContext::new())
+        .await?;
 
     println!("Creating physical plan...");
     let physical_plan = Arc::new(CoalescePartitionsExec::new(

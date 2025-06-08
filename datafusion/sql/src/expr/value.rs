@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 use arrow::compute::kernels::cast_utils::{
     parse_interval_month_day_nano_config, IntervalParseConfig, IntervalUnit,
 };
@@ -30,6 +30,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
 use sqlparser::ast::{

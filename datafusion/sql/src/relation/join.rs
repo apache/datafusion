@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 use datafusion_common::{not_impl_err, plan_datafusion_err, Column, Result};
-use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{planner_context::PlannerContext, JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };

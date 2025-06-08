@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
 use datafusion_expr::expr::{Exists, InSubquery};
+use datafusion_expr::planner_context::PlannerContext;
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::ast::{Query, SelectItem, SetExpr};
@@ -31,15 +32,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+        // TODO
+        planner_context.push_outer_query_schema(Some(input_schema.clone().into()));
+        planner_context.increase_depth();
+        let depth = planner_context.cur_depth();
+
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.set_outer_query_schema(old_outer_query_schema);
+
+        planner_context.decrease_depth();
+
         Ok(Expr::Exists(Exists {
             subquery: Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
+                depth,
                 spans: Spans::new(),
             },
             negated,
@@ -54,8 +61,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+        // TODO
+        planner_context.push_outer_query_schema(Some(input_schema.clone().into()));
+        planner_context.increase_depth();
+        let depth = planner_context.cur_depth();
 
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
@@ -70,7 +79,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.set_outer_query_schema(old_outer_query_schema);
 
         self.validate_single_column(
             &sub_plan,
@@ -81,11 +89,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let expr_obj = self.sql_to_expr(expr, input_schema, planner_context)?;
 
+        planner_context.decrease_depth();
+
         Ok(Expr::InSubquery(InSubquery::new(
             Box::new(expr_obj),
             Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
+                depth,
                 spans,
             },
             negated,
@@ -98,8 +109,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema =
-            planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+        planner_context.push_outer_query_schema(Some(input_schema.clone().into()));
+        planner_context.increase_depth();
+        let depth = planner_context.cur_depth();
+
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
             for item in &select.projection {
@@ -112,7 +125,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.set_outer_query_schema(old_outer_query_schema);
+        dbg!(&outer_ref_columns);
 
         self.validate_single_column(
             &sub_plan,
@@ -121,9 +134,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             "Select only one column in the subquery",
         )?;
 
+        planner_context.decrease_depth();
+
         Ok(Expr::ScalarSubquery(Subquery {
             subquery: Arc::new(sub_plan),
             outer_ref_columns,
+            depth,
             spans,
         }))
     }
