@@ -29,7 +29,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{internal_datafusion_err, internal_err, Column, HashMap, Result};
 use datafusion_expr::{
-    col, lit, Aggregate, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Projection,
+    col, lit, Aggregate, Expr, Filter, Join, LogicalPlan, LogicalPlanBuilder, Projection,
 };
 
 use indexmap::map::Entry;
@@ -255,6 +255,42 @@ impl DependentJoinRewriter {
         transformed_plan
             .aggregate(new_group_exprs.clone(), new_aggr_exprs.clone())?
             .project(post_join_projections)
+    }
+
+    fn rewrite_join(
+        &mut self,
+        join: &Join,
+        dependent_join_node: &Node,
+        current_subquery_depth: usize,
+        current_plan: LogicalPlanBuilder,
+        subquery_alias_by_offset: HashMap<usize, String>,
+    ) -> Result<LogicalPlanBuilder> {
+        let filter = if let Some(filter) = &join.filter {
+            filter.clone()
+        } else {
+            return internal_err!("Join filter should not be empty");
+        };
+
+        let (transformed_plan, transformed_exprs) =
+            Self::rewrite_exprs_into_dependent_join_plan(
+                vec![vec![&filter]],
+                dependent_join_node,
+                current_subquery_depth,
+                current_plan,
+                subquery_alias_by_offset,
+            )?;
+
+        let transformed_predicate = transformed_exprs
+            .first()
+            .ok_or(internal_datafusion_err!(
+                "transform predicate does not return 1 element"
+            ))?
+            .first()
+            .ok_or(internal_datafusion_err!(
+                "transform predicate does not return 1 element"
+            ))?;
+
+        transformed_plan.filter(transformed_predicate.clone())
     }
 
     // lowest common ancestor from stack
@@ -633,6 +669,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 }
             }
             LogicalPlan::Join(join) => {
+                let mut is_child_subquery = false;
                 let mut sq_count = if let LogicalPlan::Subquery(_) = &join.left.as_ref() {
                     1
                 } else {
@@ -646,7 +683,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 match sq_count {
                     0 => {}
                     1 => {
-                        is_dependent_join_node = true;
+                        is_child_subquery = true;
                     }
                     _ => {
                         return internal_err!(
@@ -656,14 +693,14 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     }
                 };
 
-                if is_dependent_join_node {
+                if is_child_subquery {
                     self.subquery_depth += 1;
                     self.stack.push(new_id);
                     self.nodes.insert(
                         new_id,
                         Node {
                             plan: node.clone(),
-                            is_dependent_join_node,
+                            is_dependent_join_node: is_child_subquery,
                             columns_accesses_by_subquery_id: IndexMap::new(),
                             subquery_type,
                         },
@@ -692,6 +729,21 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         // since we rewrite the children directly in this function,
                         TreeNodeRecursion::Jump,
                     ));
+                }
+
+                // If expr has correlated subquery.
+                // TODO: what if both child and expr has subquery?
+                if let Some(filter) = &join.filter {
+                    if contains_subquery(filter) {
+                        is_dependent_join_node = true;
+                    }
+
+                    filter.apply(|expr| {
+                        if let Expr::OuterReferenceColumn(data_type, col) = expr {
+                            self.mark_outer_column_access(new_id, data_type, col);
+                        }
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
                 }
             }
             LogicalPlan::Sort(sort) => {
@@ -813,29 +865,35 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     .collect();
 
                 let subquery_plan = &join.right;
-                let sq = if let LogicalPlan::Subquery(sq) = subquery_plan.as_ref() {
-                    sq
+                if let LogicalPlan::Subquery(sq) = subquery_plan.as_ref() {
+                    let right = sq.subquery.deref().clone();
+                    // At the time of implementation lateral join condition is not fully clear yet
+                    // So a TODO for future tracking
+                    let lateral_join_condition = if let Some(ref filter) = join.filter {
+                        filter.clone()
+                    } else {
+                        lit(true)
+                    };
+                    current_plan = current_plan.dependent_join(
+                        right,
+                        correlated_columns,
+                        None,
+                        current_subquery_depth,
+                        alias.to_string(),
+                        Some((join.join_type, lateral_join_condition)),
+                    )?;
                 } else {
-                    return internal_err!(
-                        "lateral join must have right join as a subquery"
-                    );
+                    // Correlated subquery in join filter.
+                    let mut cross_join = join.clone();
+                    cross_join.filter = None;
+                    current_plan = self.rewrite_join(
+                        join,
+                        &node_info,
+                        current_subquery_depth,
+                        LogicalPlanBuilder::new(LogicalPlan::Join(cross_join)),
+                        subquery_alias_by_offset,
+                    )?;
                 };
-                let right = sq.subquery.deref().clone();
-                // At the time of implementation lateral join condition is not fully clear yet
-                // So a TODO for future tracking
-                let lateral_join_condition = if let Some(ref filter) = join.filter {
-                    filter.clone()
-                } else {
-                    lit(true)
-                };
-                current_plan = current_plan.dependent_join(
-                    right,
-                    correlated_columns,
-                    None,
-                    current_subquery_depth,
-                    alias.to_string(),
-                    Some((join.join_type, lateral_join_condition)),
-                )?;
             }
             LogicalPlan::Aggregate(aggregate) => {
                 current_plan = self.rewrite_aggregate(
@@ -912,7 +970,7 @@ mod tests {
     use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::{alias::AliasGenerator, Result, Spans};
     use datafusion_expr::{
-        binary_expr, exists, expr::InSubquery, expr_fn::col, in_subquery, lit,
+        and, binary_expr, exists, expr::InSubquery, expr_fn::col, in_subquery, lit,
         out_ref_col, scalar_subquery, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
         Operator, SortExpr, Subquery,
     };
@@ -973,6 +1031,7 @@ mod tests {
         ");
         Ok(())
     }
+
     #[test]
     fn correlated_lateral_join() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
@@ -1969,6 +2028,77 @@ mod tests {
             TableScan: t0 [c0:Time64(Second), c1:Float64]
             Projection: Utf8("13:35:07") [Utf8("13:35:07"):Utf8]
               TableScan: t1 [c0:Int32]
+        "#
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_correlated_subquery_in_join_filter() -> Result<()> {
+        // Test demonstrates traversal order issue with subquery in JOIN condition
+        // Query pattern:
+        // SELECT * FROM t1
+        // JOIN t2 ON t2.key = t1.key
+        //   AND t2.val > (SELECT COUNT(*) FROM t3 WHERE t3.id = t1.id);
+
+        let t1 = test_table_with_columns(
+            "t1",
+            &[
+                ("key", DataType::Int32),
+                ("id", DataType::Int32),
+                ("val", DataType::Int32),
+            ],
+        )?;
+
+        let t2 = test_table_with_columns(
+            "t2",
+            &[("key", DataType::Int32), ("val", DataType::Int32)],
+        )?;
+
+        let t3 = test_table_with_columns(
+            "t3",
+            &[("id", DataType::Int32), ("val", DataType::Int32)],
+        )?;
+
+        // Subquery in join condition: SELECT COUNT(*) FROM t3 WHERE t3.id = t1.id
+        let scalar_sq = Arc::new(
+            LogicalPlanBuilder::from(t3)
+                .filter(col("t3.id").eq(out_ref_col(DataType::Int32, "t1.id")))?
+                .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])?
+                .build()?,
+        );
+
+        // Build join condition: t2.key = t1.key AND t2.val > scalar_sq AND EXISTS(exists_sq)
+        let join_condition = and(
+            col("t2.key").eq(col("t1.key")),
+            col("t2.val").gt(scalar_subquery(scalar_sq)),
+        );
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_on(t2, JoinType::Inner, vec![join_condition])?
+            .build()?;
+
+        // println!("{}", &plan.display_indent());
+        // Inner Join:  Filter: t2.key = t1.key AND t2.val > (<subquery>)
+        //   Subquery:
+        //     Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
+        //       Filter: t3.id = outer_ref(t1.id)
+        //         TableScan: t3
+        //   TableScan: t1
+        //   TableScan: t2
+
+        assert_dependent_join_rewrite!(
+            plan,
+            @r#"
+            Filter: t2.key = t1.key AND t2.val > __lateral_sq_1.output [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32, output:Int64]
+              DependentJoin on [t1.id lvl 1] with expr (<subquery>) depth 1 [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32, output:Int64]
+                Cross Join:  [key:Int32, id:Int32, val:Int32, key:Int32, val:Int32]
+                  TableScan: t1 [key:Int32, id:Int32, val:Int32]
+                  TableScan: t2 [key:Int32, val:Int32]
+                Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]] [count(Int32(1)):Int64]
+                  Filter: t3.id = outer_ref(t1.id) [id:Int32, val:Int32]
+                    TableScan: t3 [id:Int32, val:Int32]
         "#
         );
 
