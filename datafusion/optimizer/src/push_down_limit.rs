@@ -174,7 +174,7 @@ impl OptimizerRule for PushDownLimit {
                 // Create a new extension node with updated inputs
                 let child_plan = LogicalPlan::Extension(extension_plan);
                 let new_extension =
-                    child_plan.with_new_exprs(child_plan.expressions(), new_children)?;
+                    child_plan.with_new_exprs_inputs(child_plan.expressions(), new_children)?;
 
                 transformed_limit(skip, fetch, new_extension)
             }

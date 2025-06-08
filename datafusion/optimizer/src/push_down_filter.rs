@@ -1202,7 +1202,7 @@ impl OptimizerRule for PushDownFilter {
                 // extension with new inputs.
                 let child_plan = LogicalPlan::Extension(extension_plan);
                 let new_extension =
-                    child_plan.with_new_exprs(child_plan.expressions(), new_children)?;
+                    child_plan.with_new_exprs_inputs(child_plan.expressions(), new_children)?;
 
                 let new_plan = match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
