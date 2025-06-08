@@ -133,7 +133,7 @@ impl ScalarUDFImpl for ArrayHas {
 
         // if the haystack is a constant list, we can use an inlist expression which is more
         // efficient because the haystack is not varying per-row
-        if let Expr::Literal(ScalarValue::List(array)) = haystack {
+        if let Expr::Literal(ScalarValue::List(array), _) = haystack {
             // TODO: support LargeList
             // (not supported by `convert_array_to_scalar_vec`)
             // (FixedSizeList not supported either, but seems to have worked fine when attempting to
@@ -147,7 +147,7 @@ impl ScalarUDFImpl for ArrayHas {
                 let list = scalar_values
                     .into_iter()
                     .flatten()
-                    .map(Expr::Literal)
+                    .map(|v| Expr::Literal(v, None))
                     .collect();
 
                 return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {

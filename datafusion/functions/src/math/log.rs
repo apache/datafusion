@@ -210,7 +210,9 @@ impl ScalarUDFImpl for LogFunc {
         };
 
         match number {
-            Expr::Literal(value) if value == ScalarValue::new_one(&number_datatype)? => {
+            Expr::Literal(value, _)
+                if value == ScalarValue::new_one(&number_datatype)? =>
+            {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
                     &info.get_data_type(&base)?,
                 )?)))

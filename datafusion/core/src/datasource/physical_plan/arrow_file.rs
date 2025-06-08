@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use crate::datasource::physical_plan::{FileMeta, FileOpenFuture, FileOpener};
 use crate::error::Result;
+use datafusion_datasource::as_file_source;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::{as_file_source, impl_schema_adapter_methods};
 
 use arrow::buffer::Buffer;
 use arrow::datatypes::SchemaRef;
@@ -99,7 +99,19 @@ impl FileSource for ArrowSource {
         "arrow"
     }
 
-    impl_schema_adapter_methods!();
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
 
 /// The struct arrow that implements `[FileOpener]` trait
