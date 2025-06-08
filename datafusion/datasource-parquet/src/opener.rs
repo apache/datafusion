@@ -186,17 +186,15 @@ impl FileOpener for ParquetOpener {
                 &predicate_creation_errors,
             );
 
-            // The page index is not stored inline in the parquet footer so the
-            // code above may not have read the page index structures yet. If we
-            // need them for reading and they aren't yet loaded, we need to load them now.
             if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
+                let col_idxs: Vec<usize> = page_pruning_predicate.as_ref().unwrap().columns_needed();
                 reader_metadata = load_page_index(
                     reader_metadata,
                     &mut async_file_reader,
-                    // Since we're manually loading the page index the option here should not matter but we pass it in for consistency
                     options.with_page_index(true),
+                    &col_idxs,
                 )
-                .await?;
+                    .await?;
             }
 
             metadata_timer.stop();
@@ -418,6 +416,7 @@ async fn load_page_index<T: AsyncFileReader>(
     reader_metadata: ArrowReaderMetadata,
     input: &mut T,
     options: ArrowReaderOptions,
+    col_idxs: &[usize],
 ) -> Result<ArrowReaderMetadata> {
     let parquet_metadata = reader_metadata.metadata();
     let missing_column_index = parquet_metadata.column_index().is_none();
@@ -432,7 +431,8 @@ async fn load_page_index<T: AsyncFileReader>(
             .unwrap_or_else(|e| e.as_ref().clone());
         let mut reader =
             ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
-        reader.load_page_index(input).await?;
+        reader.load_page_index_with_columns(input, col_idxs).await?;
+
         let new_parquet_metadata = reader.finish()?;
         let new_arrow_reader =
             ArrowReaderMetadata::try_new(Arc::new(new_parquet_metadata), options)?;
