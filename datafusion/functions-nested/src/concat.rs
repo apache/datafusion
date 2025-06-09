@@ -23,8 +23,8 @@ use std::sync::Arc;
 use crate::make_array::make_array_inner;
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
 use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray,
-    NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, Capacities, FixedSizeListArray, GenericListArray, MutableArrayData,
+    NullArray, NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
@@ -42,6 +42,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use itertools::Itertools;
 
 make_udf_expr_and_func!(
     ArrayAppend,
@@ -361,15 +362,44 @@ pub(crate) fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     for arg in args {
         match arg.data_type() {
             DataType::Null => continue,
-            DataType::LargeList(_) => large_list = true,
-            _ => (),
+            DataType::LargeList(_) => {
+                large_list = true;
+                // Check if this large list array has any non-null rows
+                if arg.null_count() < arg.len() {
+                    all_null = false;
+                }
+            }
+            DataType::List(_) | DataType::FixedSizeList(..) => {
+                // Check if this list array has any non-null rows
+                if arg.null_count() < arg.len() {
+                    all_null = false;
+                }
+            }
+            _ => {
+                all_null = false;
+            }
         }
-
-        all_null = false
     }
 
     if all_null {
-        Ok(Arc::new(NullArray::new(args[0].len())))
+        // Return a null array with the same type as the first non-null-type argument
+        let first_non_null_type = args
+            .iter()
+            .map(|arg| arg.data_type())
+            .find_or_first(|d| !d.is_null());
+
+        match first_non_null_type {
+            Some(DataType::List(field)) => Ok(Arc::new(
+                GenericListArray::<i32>::new_null(field.clone(), args[0].len()),
+            )),
+            Some(DataType::LargeList(field)) => Ok(Arc::new(
+                GenericListArray::<i64>::new_null(field.clone(), args[0].len()),
+            )),
+            Some(DataType::FixedSizeList(field, size)) => Ok(Arc::new(
+                FixedSizeListArray::new_null(field.clone(), *size, args[0].len()),
+            )),
+            _ => Ok(Arc::new(NullArray::new(args[0].len()))),
+        }
     } else if large_list {
         concat_internal::<i64>(args)
     } else {
