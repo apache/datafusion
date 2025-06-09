@@ -353,7 +353,7 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 /// 1. It is non-degenerate, meaning it contains at least one element.
 /// 2. It is duplicate-free, meaning it does not contain multiple entries for
 ///    the same column.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LexOrdering {
     /// Vector of sort expressions representing the lexicographical ordering.
     exprs: Vec<PhysicalSortExpr>,
