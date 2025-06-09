@@ -60,7 +60,11 @@ use url::Url;
 /// as the "current" runtime in a thread local variable, on which any `async`
 /// [`Future`], [`Stream]`s and [`Task]`s are run.
 ///
-/// This example uses the runtime created by [`tokio::main`] to do I/O
+/// This example uses the runtime created by [`tokio::main`] to do I/O and spawn
+/// CPU intensive tasks on a separate [`Runtime`], mirroring the common pattern
+/// when using Rust libraries such as `tonic`. Using a separate `Runtime` for
+/// CPU bound tasks will often be simpler in larger applications, even though it
+/// makes this example slightly more complex.
 #[tokio::main]
 async fn main() -> Result<()> {
     // The first two examples read local files. Enabling the URL table feature
