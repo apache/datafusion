@@ -219,8 +219,8 @@ pub fn check_subquery_expr(
                     }
                 }
                 _ => plan_err!(
-                    "Correlated scalar subquery can only be used in Projection, \
-                    Filter, Aggregate, DependentJoin plan nodes"
+                    "Correlated scalar subquery can only be used in Projection, Filter, \
+                    Aggregate, DependentJoin plan nodes"
                 ),
             }?;
         }
@@ -246,8 +246,8 @@ pub fn check_subquery_expr(
             | LogicalPlan::DependentJoin(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
-                Projection, Filter, TableScan, Window functions, Aggregate, Join and DependentJoin plan nodes, \
-                but was used in [{}]",
+                Projection, Filter, TableScan, Window functions, Aggregate, Join and \
+                Dependent Join plan nodes, but was used in [{}]",
                 outer_plan.display()
             ),
         }?;

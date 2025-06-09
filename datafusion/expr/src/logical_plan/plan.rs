@@ -336,11 +336,10 @@ impl PartialOrd for DelimGet {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DependentJoin {
     pub schema: DFSchemaRef,
-    // All combinatoins of (subquery,OuterReferencedExpr) on the RHS (and its descendant)
-    // which points to a column on the LHS.
-    // The Expr should always be Expr::OuterRefColumn.
+    // All combinations of (subquery depth,Column and its DataType) on the RHS (and its descendant)
+    // which points to a column on the LHS of this dependent join
     // Note that not all outer_refs from the RHS are mentioned in this vectors
-    // because RHS may reference columns provided somewhere from the above join.
+    // because RHS may reference columns provided somewhere from the above parent dependent join.
     // Depths of each correlated_columns should always be gte current dependent join
     // subquery_depth
     pub correlated_columns: Vec<(usize, Column, DataType)>,
@@ -2045,7 +2044,7 @@ impl LogicalPlan {
                     }
 
                     LogicalPlan::DependentJoin(dependent_join) => {
-                        Display::fmt(dependent_join,f)
+                        Display::fmt(dependent_join, f)
                     },
                     LogicalPlan::Join(Join {
                         on: ref keys,
