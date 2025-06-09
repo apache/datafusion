@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The `WrapLeaves` optimizer rule inspects the physical plan to look for
+//! The `InsertYieldExec` optimizer rule inspects the physical plan to look for
 //! tight-looping operators and inserts explicit yielding mechanisms (whether
 //! as a separate operator, or via a yielding variant) at leaf nodes to make
 //! the plan cancellation friendly.
@@ -31,33 +31,33 @@ use datafusion_common::Result;
 use datafusion_physical_plan::yield_stream::YieldStreamExec;
 use datafusion_physical_plan::ExecutionPlan;
 
-/// `WrapLeaves` is a [`PhysicalOptimizerRule`] that finds every leaf node in
+/// `InsertYieldExec` is a [`PhysicalOptimizerRule`] that finds every leaf node in
 /// the plan, and replaces it with a variant that cooperatively yields
 /// either using the its yielding variant given by `with_cooperative_yields`,
 /// or, if none exists, by inserting a [`YieldStreamExec`] operator as a parent.
-pub struct WrapLeaves {}
+pub struct InsertYieldExec {}
 
-impl WrapLeaves {
+impl InsertYieldExec {
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl Default for WrapLeaves {
+impl Default for InsertYieldExec {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Debug for WrapLeaves {
+impl Debug for InsertYieldExec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WrapLeaves").finish()
+        f.debug_struct("InsertYieldExec").finish()
     }
 }
 
-impl PhysicalOptimizerRule for WrapLeaves {
+impl PhysicalOptimizerRule for InsertYieldExec {
     fn name(&self) -> &str {
-        "wrap_leaves"
+        "insert_yield_exec"
     }
 
     fn optimize(

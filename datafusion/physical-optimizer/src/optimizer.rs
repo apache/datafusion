@@ -26,6 +26,7 @@ use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
 use crate::filter_pushdown::FilterPushdown;
+use crate::insert_yield_exec::InsertYieldExec;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
@@ -34,7 +35,6 @@ use crate::projection_pushdown::ProjectionPushdown;
 use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
-use crate::wrap_leaves_cancellation::WrapLeaves;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
@@ -138,7 +138,7 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
-            Arc::new(WrapLeaves::new()),
+            Arc::new(InsertYieldExec::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query

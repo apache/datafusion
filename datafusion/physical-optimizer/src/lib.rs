@@ -30,6 +30,7 @@ pub mod combine_partial_final_agg;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod filter_pushdown;
+pub mod insert_yield_exec;
 pub mod join_selection;
 pub mod limit_pushdown;
 pub mod limited_distinct_aggregation;
@@ -41,6 +42,5 @@ pub mod sanity_checker;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;
 pub mod utils;
-pub mod wrap_leaves_cancellation;
 
 pub use optimizer::PhysicalOptimizerRule;
