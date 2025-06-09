@@ -174,7 +174,7 @@ A `CROSS JOIN` produces a cartesian product that matches every row in the left s
 right side of the join.
 
 ```sql
-SELECT * from x CROSS JOIN x y;
+SELECT * FROM x CROSS JOIN x y;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
