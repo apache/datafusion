@@ -890,16 +890,11 @@ impl Scenario {
                     descending: false,
                     nulls_first: false,
                 };
-                let sort_information = vec![LexOrdering::new(vec![
-                    PhysicalSortExpr {
-                        expr: col("a", &schema).unwrap(),
-                        options,
-                    },
-                    PhysicalSortExpr {
-                        expr: col("b", &schema).unwrap(),
-                        options,
-                    },
-                ])];
+                let sort_information = vec![[
+                    PhysicalSortExpr::new(col("a", &schema).unwrap(), options),
+                    PhysicalSortExpr::new(col("b", &schema).unwrap(), options),
+                ]
+                .into()];
 
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)

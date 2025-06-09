@@ -138,7 +138,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(into) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                 CreateMemoryTable {
                     name: self.object_name_to_table_reference(into.name)?,
-                    constraints: Constraints::empty(),
+                    constraints: Constraints::default(),
                     input: Arc::new(plan),
                     if_not_exists: false,
                     or_replace: false,

@@ -73,7 +73,7 @@ impl TreeNode for Expr {
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard { .. }
@@ -126,7 +126,7 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_) => Transformed::no(self),
+            | Expr::Literal(_, _) => Transformed::no(self),
             Expr::Unnest(Unnest { expr, .. }) => expr
                 .map_elements(f)?
                 .update_data(|expr| Expr::Unnest(Unnest { expr })),
