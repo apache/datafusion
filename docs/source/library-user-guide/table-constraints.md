@@ -41,6 +41,6 @@ The optimizer also does not assume that these constraints hold when
 rewriting queries. For example, declaring a column as a primary key will
 not allow the optimizer to skip a `DISTINCT` aggregation.
 
-[`TableConstraint`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/enum.TableConstraint.html
-[`Constraints`]: https://docs.rs/datafusion/latest/datafusion/common/functional_dependencies/struct.Constraints.html
-[`Field`]: https://docs.rs/arrow/latest/arrow/datatype/struct.Field.html
+[`tableconstraint`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/enum.TableConstraint.html
+[`constraints`]: https://docs.rs/datafusion/latest/datafusion/common/functional_dependencies/struct.Constraints.html
+[`field`]: https://docs.rs/arrow/latest/arrow/datatype/struct.Field.html
