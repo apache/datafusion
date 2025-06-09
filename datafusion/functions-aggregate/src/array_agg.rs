@@ -315,6 +315,9 @@ impl Accumulator for ArrayAggAccumulator {
         };
 
         if !val.is_empty() {
+            // The ArrayRef might be holding a reference to its original input buffer, so
+            // storing it here directly copied/compacted avoids over accounting memory
+            // not used here.
             self.values
                 .push(make_array(copy_array_data(&val.to_data())));
         }
