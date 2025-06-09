@@ -265,10 +265,9 @@ impl ParquetOptions {
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
 
-        let fep: Option<FileEncryptionProperties> = match file_encryption_properties {
-            Some(fe) => Some(fe.clone().into()),
-            None => None,
-        };
+        let fep: Option<FileEncryptionProperties> = file_encryption_properties
+            .as_ref()
+            .map(|fe| fe.clone().into());
 
         if fep.is_some() {
             builder = builder.with_file_encryption_properties(fep.unwrap());
@@ -598,10 +597,7 @@ mod tests {
         };
 
         let fep: Option<ConfigFileEncryptionProperties> =
-            match props.file_encryption_properties() {
-                Some(fe) => Some(fe.into()),
-                None => None,
-            };
+            props.file_encryption_properties().map(|fe| fe.into());
 
         #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {

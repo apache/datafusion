@@ -127,10 +127,10 @@ impl FileOpener for ParquetOpener {
 
         let mut enable_page_index = self.enable_page_index;
         let file_decryption_properties = self.file_decryption_properties.clone();
-        
+
         // For now, page index does not work with encrypted files. See:
         // https://github.com/apache/arrow-rs/issues/7629
-        if file_decryption_properties.is_some()  {
+        if file_decryption_properties.is_some() {
             enable_page_index = false;
         }
 

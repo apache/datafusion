@@ -40,7 +40,9 @@ async fn main() -> datafusion::common::Result<()> {
         .await?;
 
     // Show information from the dataframe
-    println!("===============================================================================");
+    println!(
+        "==============================================================================="
+    );
     println!("Original Parquet DataFrame:");
     query_dataframe(&parquet_df).await?;
 
@@ -71,7 +73,6 @@ async fn main() -> datafusion::common::Result<()> {
         .parquet
         .file_decryption_properties = Some(fd);
 
-
     let state = SessionStateBuilder::new().with_config(sc).build();
     let ctx: SessionContext = SessionContext::new_with_state(state);
 
@@ -101,7 +102,6 @@ async fn query_dataframe(df: &DataFrame) -> Result<(), DataFusionError> {
         .filter(col("id").gt(lit(5)))?
         .show()
         .await?;
-
 
     Ok(())
 }

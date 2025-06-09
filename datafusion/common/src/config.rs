@@ -215,35 +215,35 @@ impl ConfigFileEncryptionProperties {
 
 impl ConfigField for ConfigFileEncryptionProperties {
     fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
-        let key = format!("{}.encrypt_footer", key_prefix);
+        let key = format!("{key_prefix}.encrypt_footer");
         let desc = "Encrypt the footer";
         self.encrypt_footer.visit(v, key.as_str(), desc);
 
-        let key = format!("{}.footer_key_as_hex", key_prefix);
+        let key = format!("{key_prefix}.footer_key_as_hex");
         let desc = "Key to use for the parquet footer";
         self.footer_key_as_hex.visit(v, key.as_str(), desc);
 
-        let key = format!("{}.footer_key_metadata_as_hex", key_prefix);
+        let key = format!("{key_prefix}.footer_key_metadata_as_hex");
         let desc = "Metadata to use for the parquet footer";
         self.footer_key_metadata_as_hex.visit(v, key.as_str(), desc);
 
         let desc = "Per column encryption keys";
         for (col_name, col_val) in self.column_keys_as_hex.iter() {
-            let key = format!("{}.column_keys_as_hex.{}", key_prefix, col_name);
+            let key = format!("{key_prefix}.column_keys_as_hex.{col_name}");
             col_val.visit(v, key.as_str(), desc);
         }
 
         let desc = "Per column metadata";
         for (col_name, col_val) in self.column_metadata_as_hex.iter() {
-            let key = format!("{}.column_metadata_as_hex.{}", key_prefix, col_name);
+            let key = format!("{key_prefix}.column_metadata_as_hex.{col_name}");
             col_val.visit(v, key.as_str(), desc);
         }
 
-        let key = format!("{}.aad_prefix_as_hex", key_prefix);
+        let key = format!("{key_prefix}.aad_prefix_as_hex");
         let desc = "AAD prefix to use";
         self.aad_prefix_as_hex.visit(v, key.as_str(), desc);
 
-        let key = format!("{}.store_aad_prefix", key_prefix);
+        let key = format!("{key_prefix}.store_aad_prefix");
         let desc = "If true, store the AAD prefix";
         self.store_aad_prefix.visit(v, key.as_str(), desc);
     }
@@ -305,25 +305,25 @@ impl ConfigField for ConfigFileEncryptionProperties {
 }
 
 #[cfg(feature = "parquet")]
-impl Into<FileEncryptionProperties> for ConfigFileEncryptionProperties {
-    fn into(self) -> FileEncryptionProperties {
+impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
+    fn from(val: ConfigFileEncryptionProperties) -> Self {
         let mut fep = FileEncryptionProperties::builder(
-            hex::decode(self.footer_key_as_hex).unwrap(),
+            hex::decode(val.footer_key_as_hex).unwrap(),
         )
-        .with_plaintext_footer(!self.encrypt_footer)
-        .with_aad_prefix_storage(self.store_aad_prefix);
+        .with_plaintext_footer(!val.encrypt_footer)
+        .with_aad_prefix_storage(val.store_aad_prefix);
 
-        if self.footer_key_metadata_as_hex.len() > 0 {
+        if !val.footer_key_metadata_as_hex.is_empty() {
             fep = fep.with_footer_key_metadata(
-                hex::decode(&self.footer_key_metadata_as_hex)
+                hex::decode(&val.footer_key_metadata_as_hex)
                     .expect("Invalid footer key metadata"),
             );
         }
 
-        for (column_name, encryption_key) in self.column_keys_as_hex.iter() {
+        for (column_name, encryption_key) in val.column_keys_as_hex.iter() {
             let encryption_key =
                 hex::decode(encryption_key).expect("Invalid column encryption key");
-            let key_metadata = self
+            let key_metadata = val
                 .column_metadata_as_hex
                 .get(column_name)
                 .map(|x| hex::decode(x).expect("Invalid column metadata"));
@@ -341,9 +341,9 @@ impl Into<FileEncryptionProperties> for ConfigFileEncryptionProperties {
             }
         }
 
-        if self.aad_prefix_as_hex.len() > 0 {
+        if !val.aad_prefix_as_hex.is_empty() {
             let aad_prefix: Vec<u8> =
-                hex::decode(&self.aad_prefix_as_hex).expect("Invalid AAD prefix");
+                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
             fep = fep.with_aad_prefix(aad_prefix);
         }
         fep.build().unwrap()
@@ -362,7 +362,7 @@ impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
             column_keys_as_hex
                 .insert(column_name.clone(), hex::encode(column_keys_vec[i].clone()));
             let metadata_as_hex: Option<String> =
-                column_metas_vec.get(i).map(|x| hex::encode(x));
+                column_metas_vec.get(i).map(hex::encode);
             if let Some(metadata_as_hex) = metadata_as_hex {
                 column_metadata_as_hex.insert(column_name.clone(), metadata_as_hex);
             }
@@ -376,7 +376,7 @@ impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
             footer_key_as_hex: hex::encode(f.footer_key()),
             footer_key_metadata_as_hex: f
                 .footer_key_metadata()
-                .map(|x| hex::encode(x))
+                .map(hex::encode)
                 .unwrap_or_default(),
             column_keys_as_hex,
             column_metadata_as_hex,
@@ -413,21 +413,21 @@ impl ConfigFileDecryptionProperties {
 
 impl ConfigField for ConfigFileDecryptionProperties {
     fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
-        let key = format!("{}.footer_key_as_hex", key_prefix);
+        let key = format!("{key_prefix}.footer_key_as_hex");
         let desc = "Key to use for the parquet footer";
         self.footer_key_as_hex.visit(v, key.as_str(), desc);
 
         let desc = "Per column decryption keys";
         for (col_name, col_val) in self.column_keys_as_hex.iter() {
-            let key = format!("{}.column_keys_as_hex.{}", key_prefix, col_name);
+            let key = format!("{key_prefix}.column_keys_as_hex.{col_name}");
             col_val.visit(v, key.as_str(), desc);
         }
 
-        let key = format!("{}.aad_prefix_as_hex", key_prefix);
+        let key = format!("{key_prefix}.aad_prefix_as_hex");
         let desc = "AAD prefix to use";
         self.aad_prefix_as_hex.visit(v, key.as_str(), desc);
 
-        let key = format!("{}.footer_signature_verification", key_prefix);
+        let key = format!("{key_prefix}.footer_signature_verification");
         let desc = "If true, verify the footer signature";
         self.footer_signature_verification
             .visit(v, key.as_str(), desc);
@@ -470,12 +470,12 @@ impl ConfigField for ConfigFileDecryptionProperties {
 }
 
 #[cfg(feature = "parquet")]
-impl Into<FileDecryptionProperties> for ConfigFileDecryptionProperties {
-    fn into(self) -> FileDecryptionProperties {
+impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
+    fn from(val: ConfigFileDecryptionProperties) -> Self {
         let mut column_names: Vec<&str> = Vec::new();
         let mut column_keys: Vec<Vec<u8>> = Vec::new();
 
-        for (col_name, encryption_key) in self.column_keys_as_hex.iter() {
+        for (col_name, encryption_key) in val.column_keys_as_hex.iter() {
             column_names.push(col_name.as_str());
             column_keys.push(
                 hex::decode(encryption_key).expect("Invalid column decryption key"),
@@ -483,18 +483,18 @@ impl Into<FileDecryptionProperties> for ConfigFileDecryptionProperties {
         }
 
         let mut fep = FileDecryptionProperties::builder(
-            hex::decode(self.footer_key_as_hex).expect("Invalid footer key"),
+            hex::decode(val.footer_key_as_hex).expect("Invalid footer key"),
         )
         .with_column_keys(column_names, column_keys)
         .unwrap();
 
-        if !self.footer_signature_verification {
+        if !val.footer_signature_verification {
             fep = fep.disable_footer_signature_verification();
         }
 
-        if self.aad_prefix_as_hex.len() > 0 {
+        if !val.aad_prefix_as_hex.is_empty() {
             let aad_prefix =
-                hex::decode(&self.aad_prefix_as_hex).expect("Invalid AAD prefix");
+                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
             fep = fep.with_aad_prefix(aad_prefix);
         }
 
@@ -2639,8 +2639,7 @@ mod tests {
             .unwrap();
 
         for (i, col_name) in column_names.iter().enumerate() {
-            let key =
-                format!("file_encryption_properties.column_keys_as_hex.{}", col_name);
+            let key = format!("file_encryption_properties.column_keys_as_hex.{col_name}");
             let value = hex::encode(column_keys[i].clone());
             table_config
                 .parquet
@@ -2673,8 +2672,7 @@ mod tests {
             .unwrap();
 
         for (i, col_name) in column_names.iter().enumerate() {
-            let key =
-                format!("file_decryption_properties.column_keys_as_hex.{}", col_name);
+            let key = format!("file_decryption_properties.column_keys_as_hex.{col_name}");
             let value = hex::encode(column_keys[i].clone());
             table_config
                 .parquet
