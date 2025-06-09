@@ -578,7 +578,7 @@ macro_rules! min_max_batch {
 }
 
 /// dynamically-typed min(array) -> ScalarValue
-fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
+pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
     Ok(match values.data_type() {
         DataType::Utf8 => {
             typed_min_max_batch_string!(values, StringArray, Utf8, min_string)
