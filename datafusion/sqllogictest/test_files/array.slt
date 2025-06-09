@@ -5781,6 +5781,20 @@ from fixed_size_array_has_table_1D_Boolean;
 true true
 true true
 
+query BBBBBBBB
+select array_has_all(column3, arrow_cast(column4,'LargeList(Boolean)')),
+       array_has_any(column5, arrow_cast(column6,'LargeList(Boolean)')),
+       array_has_all(column3, arrow_cast(column4,'List(Boolean)')),
+       array_has_any(column5, arrow_cast(column6,'List(Boolean)')),
+       array_has_all(arrow_cast(column3, 'LargeList(Boolean)'), column4),
+       array_has_any(arrow_cast(column5, 'LargeList(Boolean)'), column6),
+       array_has_all(arrow_cast(column3, 'List(Boolean)'), column4),
+       array_has_any(arrow_cast(column5, 'List(Boolean)'), column6)
+from fixed_size_array_has_table_1D_Boolean;
+----
+true true true true true true true true
+true true true true true true true true
+
 query BBB
 select array_has(column1, column2),
        array_has_all(column3, column4),
