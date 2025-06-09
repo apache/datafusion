@@ -54,8 +54,8 @@ use itertools::Itertools;
 use object_store::ObjectStore;
 use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
 /// Indicates the source of the schema for a [`ListingTable`]
-/// PartialEq required for assert_eq! in tests
-#[derive(Debug, Clone, PartialEq)]
+// PartialEq required for assert_eq! in tests
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SchemaSource {
     /// Schema is not yet set (initial state)
     None,
@@ -110,8 +110,8 @@ impl ListingTableConfig {
     }
 
     /// Returns the source of the schema for this configuration
-    pub fn schema_source(&self) -> &SchemaSource {
-        &self.schema_source
+    pub fn schema_source(&self) -> SchemaSource {
+        self.schema_source
     }
     /// Set the `schema` for the overall [`ListingTable`]
     ///
@@ -890,8 +890,8 @@ impl ListingTable {
     }
 
     /// Get the schema source
-    pub fn schema_source(&self) -> &SchemaSource {
-        &self.schema_source
+    pub fn schema_source(&self) -> SchemaSource {
+        self.schema_source
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
@@ -1364,31 +1364,28 @@ mod tests {
 
         // Test default schema source
         let config = ListingTableConfig::new(table_path.clone());
-        assert_eq!(*config.schema_source(), SchemaSource::None);
+        assert_eq!(config.schema_source(), SchemaSource::None);
 
         // Test schema source after setting a schema explicitly
         let provided_schema = create_test_schema();
         let config_with_schema = config.clone().with_schema(provided_schema.clone());
-        assert_eq!(*config_with_schema.schema_source(), SchemaSource::Specified);
+        assert_eq!(config_with_schema.schema_source(), SchemaSource::Specified);
 
         // Test schema source after inferring schema
         let format = CsvFormat::default();
         let options = ListingOptions::new(Arc::new(format));
         let config_with_options = config.with_listing_options(options.clone());
-        assert_eq!(*config_with_options.schema_source(), SchemaSource::None);
+        assert_eq!(config_with_options.schema_source(), SchemaSource::None);
 
         let config_with_inferred = config_with_options.infer_schema(&ctx.state()).await?;
-        assert_eq!(
-            *config_with_inferred.schema_source(),
-            SchemaSource::Inferred
-        );
+        assert_eq!(config_with_inferred.schema_source(), SchemaSource::Inferred);
 
         // Test schema preservation through operations
         let config_with_schema_and_options = config_with_schema
             .clone()
             .with_listing_options(options.clone());
         assert_eq!(
-            *config_with_schema_and_options.schema_source(),
+            config_with_schema_and_options.schema_source(),
             SchemaSource::Specified
         );
 
@@ -1398,16 +1395,16 @@ mod tests {
             .infer(&ctx.state())
             .await?;
         assert_eq!(
-            *config_with_schema_and_infer.schema_source(),
+            config_with_schema_and_infer.schema_source(),
             SchemaSource::Specified
         );
 
         // Verify sources in actual ListingTable objects
         let table_specified = ListingTable::try_new(config_with_schema_and_options)?;
-        assert_eq!(*table_specified.schema_source(), SchemaSource::Specified);
+        assert_eq!(table_specified.schema_source(), SchemaSource::Specified);
 
         let table_inferred = ListingTable::try_new(config_with_inferred)?;
-        assert_eq!(*table_inferred.schema_source(), SchemaSource::Inferred);
+        assert_eq!(table_inferred.schema_source(), SchemaSource::Inferred);
 
         Ok(())
     }
@@ -2235,7 +2232,7 @@ mod tests {
         ])
         .with_listing_options(options.clone());
         let config1 = config1.infer_schema(&ctx.state()).await?;
-        assert_eq!(*config1.schema_source(), SchemaSource::Inferred);
+        assert_eq!(config1.schema_source(), SchemaSource::Inferred);
 
         // Verify schema matches first file
         let schema1 = config1.file_schema.as_ref().unwrap().clone();
@@ -2258,7 +2255,7 @@ mod tests {
         .with_schema(schema_3cols)
         .with_listing_options(options.clone());
         let config2 = config2.infer_schema(&ctx.state()).await?;
-        assert_eq!(*config2.schema_source(), SchemaSource::Specified);
+        assert_eq!(config2.schema_source(), SchemaSource::Specified);
 
         // Verify that the schema is still the one we specified (3 columns)
         let schema2 = config2.file_schema.as_ref().unwrap().clone();
@@ -2282,7 +2279,7 @@ mod tests {
         .with_schema(schema_4cols)
         .with_listing_options(options.clone());
         let config3 = config3.infer_schema(&ctx.state()).await?;
-        assert_eq!(*config3.schema_source(), SchemaSource::Specified);
+        assert_eq!(config3.schema_source(), SchemaSource::Specified);
 
         // Verify that the schema is still the one we specified (4 columns)
         let schema3 = config3.file_schema.as_ref().unwrap().clone();
