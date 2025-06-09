@@ -23,6 +23,7 @@ async fn main() -> datafusion::common::Result<()> {
         .await?;
 
     // Show information from the dataframe
+    println!("===============================================================================");
     println!("Original Parquet DataFrame:");
     query_dataframe(&parquet_df).await?;
 
@@ -62,7 +63,8 @@ async fn main() -> datafusion::common::Result<()> {
         .await?;
 
     // Show information from the dataframe
-    println!("\n\nEncrypted Parquet DataFrame:");
+    println!("\n\n===============================================================================");
+    println!("Encrypted Parquet DataFrame:");
     query_dataframe(&encrypted_parquet_df).await?;
 
     Ok(())
@@ -71,10 +73,12 @@ async fn main() -> datafusion::common::Result<()> {
 // Show information from the dataframe
 async fn query_dataframe(df: &DataFrame) -> Result<(), DataFusionError> {
     // show its schema using 'describe'
+    println!("Schema:");
     df.clone().describe().await?.show().await?;
     
     // Select three columns and filter the results
     // so that only rows where id > 1 are returned
+    println!("\nSelected rows and columns:");
     df.clone()
         .select_columns(&["id", "bool_col", "timestamp_col"])?
         .filter(col("id").gt(lit(5)))?
