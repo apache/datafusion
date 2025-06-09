@@ -181,6 +181,10 @@ impl LazyMemoryExec {
         self.cooperative = cooperative;
         self
     }
+
+    pub fn set_boundedness(&mut self, boundedness: Boundedness) {
+        self.cache.boundedness = boundedness;
+    }
 }
 
 impl fmt::Debug for LazyMemoryExec {

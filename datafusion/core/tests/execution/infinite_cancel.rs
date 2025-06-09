@@ -15,29 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::error::Error;
 use std::fmt::Formatter;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use arrow::array::{Array, Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow_schema::SortOptions;
-use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::functions_aggregate::sum;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::Partitioning;
+use datafusion::physical_plan;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-};
+use datafusion::physical_plan::execution_plan::Boundedness;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion::{common, physical_plan};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, ScalarValue};
 use datafusion_expr_common::operator::Operator::Gt;
@@ -54,101 +48,63 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::union::InterleaveExec;
 
-use futures::{Stream, StreamExt};
+use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
+use futures::StreamExt;
+use parking_lot::RwLock;
 use rstest::rstest;
 use tokio::select;
 
-struct InfiniteStream {
-    batch: RecordBatch,
-    poll_count: usize,
-}
-
-impl RecordBatchStream for InfiniteStream {
-    fn schema(&self) -> SchemaRef {
-        self.batch.schema()
-    }
-}
-
-impl Stream for InfiniteStream {
-    type Item = common::Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.poll_count += 1;
-        Poll::Ready(Some(Ok(self.batch.clone())))
-    }
-}
-
 #[derive(Debug)]
-struct InfiniteExec {
+/// A batch generator that can produce either bounded or boundless infinite stream of the same RecordBatch.
+struct InfiniteGenerator {
+    /// The RecordBatch to return on each call.
     batch: RecordBatch,
-    properties: PlanProperties,
+    /// How many batches have already been generated.
+    counter: usize,
 }
 
-impl InfiniteExec {
-    fn new(batch: RecordBatch, pretend_finite: bool) -> Self {
-        let properties = PlanProperties::new(
-            EquivalenceProperties::new(batch.schema().clone()),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Incremental,
-            if pretend_finite {
-                Boundedness::Bounded
-            } else {
-                Boundedness::Unbounded {
-                    requires_infinite_memory: false,
-                }
-            },
-        );
-        InfiniteExec { batch, properties }
+impl std::fmt::Display for InfiniteGenerator {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        // Display current counter
+        write!(f, "InfiniteGenerator(counter={})", self.counter)
     }
 }
 
-impl DisplayAs for InfiniteExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "infinite")
+impl LazyBatchGenerator for InfiniteGenerator {
+    /// Generate the next RecordBatch.
+    fn generate_next_batch(&mut self) -> datafusion_common::Result<Option<RecordBatch>> {
+        // Increment the counter and return a clone of the batch
+        self.counter += 1;
+        Ok(Some(self.batch.clone()))
     }
 }
 
-impl ExecutionPlan for InfiniteExec {
-    fn name(&self) -> &str {
-        "infinite"
-    }
+/// Build a LazyMemoryExec that yields either a finite or infinite stream depending on `pretend_finite`.
+fn make_lazy_exec(
+    batch: RecordBatch,
+    schema: SchemaRef,
+    pretend_finite: bool,
+) -> Arc<dyn ExecutionPlan> {
+    let boundedness = if pretend_finite {
+        Boundedness::Bounded
+    } else {
+        Boundedness::Unbounded {
+            requires_infinite_memory: false,
+        }
+    };
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
+    // Instantiate the generator with the batch and limit
+    let gen = InfiniteGenerator { batch, counter: 0 };
 
-    fn schema(&self) -> SchemaRef {
-        self.batch.schema()
-    }
+    // Wrap the generator in a trait object behind Arc<RwLock<_>>
+    let generator: Arc<RwLock<dyn LazyBatchGenerator>> = Arc::new(RwLock::new(gen));
 
-    fn properties(&self) -> &PlanProperties {
-        &self.properties
-    }
+    // Create a LazyMemoryExec with one partition using our generator
+    let mut exec = LazyMemoryExec::try_new(schema, vec![generator]).unwrap();
+    exec.set_boundedness(boundedness);
 
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> common::Result<Arc<dyn ExecutionPlan>> {
-        Ok(self.clone())
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> common::Result<SendableRecordBatchStream> {
-        Ok(Box::pin(InfiniteStream {
-            batch: self.batch.clone(),
-            poll_count: 0,
-        }))
-    }
+    // Erase concrete type into a generic ExecutionPlan handle
+    Arc::new(exec) as Arc<dyn ExecutionPlan>
 }
 
 #[rstest]
@@ -170,7 +126,7 @@ async fn test_infinite_agg_cancel(
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(builder.finish())])?;
 
     // 2) set up the infinite source + aggregation
-    let inf = Arc::new(InfiniteExec::new(batch, pretend_finite));
+    let inf = make_lazy_exec(batch.clone(), schema.clone(), pretend_finite);
     let aggr = Arc::new(AggregateExec::try_new(
         AggregateMode::Single,
         PhysicalGroupBy::new(vec![], vec![], vec![]),
@@ -228,7 +184,7 @@ async fn test_infinite_sort_cancel(
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)])?;
 
     // 2) set up the infinite source
-    let inf = Arc::new(InfiniteExec::new(batch, pretend_finite));
+    let inf = make_lazy_exec(batch.clone(), schema.clone(), pretend_finite);
 
     // 3) set up a SortExec that will never finish because input is infinite
     let sort_options = SortOptions {
@@ -289,8 +245,8 @@ async fn test_infinite_interleave_cancel(
     let thresholds = (0..32).map(|i| 8191 - (i * 256) as i64);
 
     for thr in thresholds {
-        // 2a) Construct an InfiniteExec for the sample batch.
-        let inf = Arc::new(InfiniteExec::new(batch.clone(), pretend_finite));
+        // 2a) Set up the infinite source
+        let inf = make_lazy_exec(batch.clone(), schema.clone(), pretend_finite);
 
         // 2b) Apply a FilterExec with predicate "value > thr".
         let filter_expr = Arc::new(BinaryExpr::new(
@@ -373,7 +329,7 @@ async fn test_infinite_interleave_agg_cancel(
 
     for thr in thresholds {
         // 2a) One infinite exec:
-        let inf = Arc::new(InfiniteExec::new(batch.clone(), pretend_finite));
+        let inf = make_lazy_exec(batch.clone(), schema.clone(), pretend_finite);
 
         // 2b) Apply a FilterExec: “value > thr”.
         let filter_expr = Arc::new(BinaryExpr::new(
@@ -478,8 +434,10 @@ async fn test_infinite_join_cancel(
         RecordBatch::try_new(schema.clone(), vec![Arc::new(builder_right.finish())])?;
 
     // 2a) Build two InfiniteExecs (left and right)
-    let infinite_left = Arc::new(InfiniteExec::new(batch_left, pretend_finite));
-    let infinite_right = Arc::new(InfiniteExec::new(batch_right, pretend_finite));
+    let infinite_left =
+        make_lazy_exec(batch_left.clone(), schema.clone(), pretend_finite);
+    let infinite_right =
+        make_lazy_exec(batch_right.clone(), schema.clone(), pretend_finite);
 
     // 2b) Create Join keys → join on “value” = “value”
     let left_keys: Vec<Arc<dyn PhysicalExpr>> =
@@ -559,8 +517,10 @@ async fn test_infinite_join_agg_cancel(
         RecordBatch::try_new(schema.clone(), vec![Arc::new(builder_right.finish())])?;
 
     // 2a) Build two InfiniteExecs (left and right)
-    let infinite_left = Arc::new(InfiniteExec::new(batch_left, pretend_finite));
-    let infinite_right = Arc::new(InfiniteExec::new(batch_right, pretend_finite));
+    let infinite_left =
+        make_lazy_exec(batch_left.clone(), schema.clone(), pretend_finite);
+    let infinite_right =
+        make_lazy_exec(batch_right.clone(), schema.clone(), pretend_finite);
 
     // 2b) Create Join keys → join on “value” = “value”
     let left_keys: Vec<Arc<dyn PhysicalExpr>> =
@@ -669,7 +629,7 @@ async fn test_filter_reject_all_batches_cancel(
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(builder.finish())])?;
 
     // 2a) Wrap this batch in an InfiniteExec
-    let infinite = Arc::new(InfiniteExec::new(batch, pretend_finite));
+    let infinite = make_lazy_exec(batch.clone(), schema.clone(), pretend_finite);
 
     // 2b) Construct a FilterExec that is always false: “value > 10000” (no rows pass)
     let false_predicate = Arc::new(BinaryExpr::new(
@@ -730,8 +690,10 @@ async fn test_infinite_hash_join_without_repartition_and_no_agg(
 
     // 2a) Unlike the test with aggregation, keep this as a pure join—
     //     use InfiniteExec to simulate an infinite stream
-    let infinite_left = Arc::new(InfiniteExec::new(batch_left, pretend_finite));
-    let infinite_right = Arc::new(InfiniteExec::new(batch_right, pretend_finite));
+    let infinite_left =
+        make_lazy_exec(batch_left.clone(), schema.clone(), pretend_finite);
+    let infinite_right =
+        make_lazy_exec(batch_right.clone(), schema.clone(), pretend_finite);
 
     // 2b) To feed a single batch into the Join, we can still use CoalesceBatchesExec,
     //     but do NOT wrap it in a RepartitionExec
@@ -812,8 +774,10 @@ async fn test_infinite_sort_merge_join_without_repartition_and_no_agg(
     let batch_right = RecordBatch::try_new(schema.clone(), vec![right_array])?;
 
     // 2a) Wrap each small batch in an InfiniteExec (pretend_finite toggles finite vs infinite)
-    let infinite_left = Arc::new(InfiniteExec::new(batch_left, pretend_finite));
-    let infinite_right = Arc::new(InfiniteExec::new(batch_right, pretend_finite));
+    let infinite_left =
+        make_lazy_exec(batch_left.clone(), schema.clone(), pretend_finite);
+    let infinite_right =
+        make_lazy_exec(batch_right.clone(), schema.clone(), pretend_finite);
 
     // 2b) Coalesce each InfiniteExec into a single 3-row batch at a time.
     //     (Do NOT wrap in RepartitionExec.)
