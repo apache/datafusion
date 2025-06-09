@@ -179,6 +179,10 @@ impl ExecutionPlan for TestInsertExec {
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         unimplemented!("TestInsertExec is a stub for testing.")
     }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(self)
+    }
 }
 
 fn make_count_schema() -> SchemaRef {
