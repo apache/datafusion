@@ -101,7 +101,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
 /// let expr = col(expr.schema_name().to_string());
 /// ```
 pub fn count_all() -> Expr {
-    count(Expr::Literal(COUNT_STAR_EXPANSION)).alias("count(*)")
+    count(Expr::Literal(COUNT_STAR_EXPANSION, None)).alias("count(*)")
 }
 
 /// Creates window aggregation to count all rows.
@@ -126,7 +126,7 @@ pub fn count_all() -> Expr {
 pub fn count_all_window() -> Expr {
     Expr::from(WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
-        vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+        vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
     ))
 }
 
@@ -345,10 +345,6 @@ impl AggregateUDFImpl for Count {
             }
             _ => get_count_accumulator(data_type),
         })
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -762,7 +758,10 @@ impl Accumulator for DistinctCountAccumulator {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+
     use arrow::{
         array::{DictionaryArray, Int32Array, NullArray, StringArray},
         datatypes::{DataType, Field, Int32Type, Schema},
@@ -818,7 +817,7 @@ mod tests {
             ignore_nulls: false,
             is_reversed: false,
             return_field: Arc::new(Field::new_list_field(DataType::Int64, true)),
-            ordering_req: &LexOrdering::default(),
+            order_bys: &[],
         };
 
         let inner_dict =

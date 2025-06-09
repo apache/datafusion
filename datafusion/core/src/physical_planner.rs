@@ -55,8 +55,7 @@ use crate::physical_plan::{
     displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
     Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
+use crate::schema_equivalence::schema_satisfied_by;
 
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
@@ -69,6 +68,7 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
 };
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
@@ -84,19 +84,21 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{
+    create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
+};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
+use sqlparser::ast::NullTreatment;
 
-use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
-use datafusion_datasource::file_groups::FileGroup;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
-use sqlparser::ast::NullTreatment;
 use tokio::sync::Mutex;
 
 /// Physical query planner that converts a `LogicalPlan` to an
@@ -822,13 +824,17 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
-                let sort_expr = create_physical_sort_exprs(
+                let sort_exprs = create_physical_sort_exprs(
                     expr,
                     input_dfschema,
                     session_state.execution_props(),
                 )?;
-                let new_sort =
-                    SortExec::new(sort_expr, physical_input).with_fetch(*fetch);
+                let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                    return internal_err!(
+                        "SortExec requires at least one sort expression"
+                    );
+                };
+                let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
             }
             LogicalPlan::Subquery(_) => todo!(),
@@ -1538,7 +1544,7 @@ pub fn create_window_expr_with_name(
                 name,
                 &physical_args,
                 &partition_by,
-                order_by.as_ref(),
+                &order_by,
                 window_frame,
                 physical_schema,
                 ignore_nulls,
@@ -1566,8 +1572,8 @@ type AggregateExprWithOptionalArgs = (
     Arc<AggregateFunctionExpr>,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
-    // Ordering requirements, if any
-    Option<LexOrdering>,
+    // Expressions in the ORDER BY clause
+    Vec<PhysicalSortExpr>,
 );
 
 /// Create an aggregate expression with a name from a logical expression
@@ -1611,22 +1617,19 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
 
-            let (agg_expr, filter, order_by) = {
-                let physical_sort_exprs = match order_by {
-                    Some(exprs) => Some(create_physical_sort_exprs(
+            let (agg_expr, filter, order_bys) = {
+                let order_bys = match order_by {
+                    Some(exprs) => create_physical_sort_exprs(
                         exprs,
                         logical_input_schema,
                         execution_props,
-                    )?),
-                    None => None,
+                    )?,
+                    None => vec![],
                 };
-
-                let ordering_reqs: LexOrdering =
-                    physical_sort_exprs.clone().unwrap_or_default();
 
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(ordering_reqs)
+                        .order_by(order_bys.clone())
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
                         .human_display(human_displan)
@@ -1635,10 +1638,10 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .build()
                         .map(Arc::new)?;
 
-                (agg_expr, filter, physical_sort_exprs)
+                (agg_expr, filter, order_bys)
             };
 
-            Ok((agg_expr, filter, order_by))
+            Ok((agg_expr, filter, order_bys))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
@@ -1673,14 +1676,6 @@ pub fn create_aggregate_expr_and_maybe_filter(
         execution_props,
     )
 }
-
-#[deprecated(
-    since = "47.0.0",
-    note = "use datafusion::{create_physical_sort_expr, create_physical_sort_exprs}"
-)]
-pub use datafusion_physical_expr::{
-    create_physical_sort_expr, create_physical_sort_exprs,
-};
 
 impl DefaultPhysicalPlanner {
     /// Handles capturing the various plans for EXPLAIN queries
@@ -2257,7 +2252,8 @@ mod tests {
         // verify that the plan correctly casts u8 to i64
         // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) }, fail_on_overflow: false }";
+        let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "5", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#;
+
         assert!(format!("{exec_plan:?}").contains(expected));
         Ok(())
     }
@@ -2282,7 +2278,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "NULL", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
 
         assert_eq!(format!("{cube:?}"), expected);
 
@@ -2309,7 +2305,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "NULL", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
 
         assert_eq!(format!("{rollup:?}"), expected);
 
@@ -2493,7 +2489,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") }, fail_on_overflow: false }, fail_on_overflow: false }";
+        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"a\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"1\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
 
         let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);

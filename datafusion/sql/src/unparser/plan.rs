@@ -1078,6 +1078,7 @@ impl Unparser<'_> {
                         if project_vec.is_empty() {
                             builder = builder.project(vec![Expr::Literal(
                                 ScalarValue::Int64(Some(1)),
+                                None,
                             )])?;
                         } else {
                             let project_columns = project_vec

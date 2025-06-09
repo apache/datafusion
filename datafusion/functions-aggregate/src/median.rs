@@ -214,10 +214,6 @@ impl AggregateUDFImpl for Median {
         }
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }

@@ -944,12 +944,10 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
         // if any of the following conditions is true
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
-        // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
-        let should_preserve_ordering = input.plan.output_ordering().is_some();
-
-        let new_plan = if should_preserve_ordering {
+        // (determined by flag `config.optimizer.prefer_existing_sort`)
+        let new_plan = if let Some(ordering) = input.plan.output_ordering() {
             Arc::new(SortPreservingMergeExec::new(
-                input.plan.output_ordering().cloned().unwrap_or_default(),
+                ordering.clone(),
                 Arc::clone(&input.plan),
             )) as _
         } else {
@@ -1289,10 +1287,12 @@ pub fn ensure_distribution(
                 // Either:
                 // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
                 // - using order preserving variant is not desirable.
+                let sort_req = required_input_ordering.into_single();
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(&required_input_ordering);
+                    .ordering_satisfy_requirement(sort_req.clone())?;
+
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
                 {
@@ -1303,9 +1303,12 @@ pub fn ensure_distribution(
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
-                            required_input_ordering.clone(),
-                            None,
-                        );
+                            sort_req,
+                            plan.as_any()
+                                .downcast_ref::<OutputRequirementExec>()
+                                .map(|output| output.fetch())
+                                .unwrap_or(None),
+                        )?;
                     }
                 }
                 // Stop tracking distribution changing operators

@@ -588,10 +588,8 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
 mod tests {
     use arrow::datatypes::Schema;
     use datafusion::{
-        common::create_array,
-        functions_aggregate::sum::Sum,
-        physical_expr::{LexOrdering, PhysicalSortExpr},
-        physical_plan::expressions::col,
+        common::create_array, functions_aggregate::sum::Sum,
+        physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
         scalar::ScalarValue,
     };
 
@@ -644,10 +642,7 @@ mod tests {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
             ignore_nulls: true,
-            ordering_req: &LexOrdering::new(vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: Default::default(),
-            }]),
+            order_bys: &[PhysicalSortExpr::new_default(col("a", &schema)?)],
             is_reversed: false,
             name: "round_trip",
             is_distinct: true,
@@ -698,10 +693,7 @@ mod tests {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
             ignore_nulls: true,
-            ordering_req: &LexOrdering::new(vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: Default::default(),
-            }]),
+            order_bys: &[PhysicalSortExpr::new_default(col("a", &schema)?)],
             is_reversed: false,
             name: "round_trip",
             is_distinct: true,

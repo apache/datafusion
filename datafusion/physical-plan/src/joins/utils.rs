@@ -25,7 +25,9 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::projection::ProjectionExec;
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
 };
@@ -45,20 +47,17 @@ use arrow::datatypes::{
 };
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    LexOrdering, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    add_offset_to_expr, add_offset_to_physical_sort_exprs, LexOrdering, PhysicalExpr,
+    PhysicalExprRef,
 };
 
-use crate::joins::SharedBitmapBuilder;
-use crate::projection::ProjectionExec;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -114,113 +113,84 @@ fn check_join_set_is_valid(
 pub fn adjust_right_output_partitioning(
     right_partitioning: &Partitioning,
     left_columns_len: usize,
-) -> Partitioning {
-    match right_partitioning {
+) -> Result<Partitioning> {
+    let result = match right_partitioning {
         Partitioning::Hash(exprs, size) => {
             let new_exprs = exprs
                 .iter()
-                .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len))
-                .collect();
+                .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len as _))
+                .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
         }
         result => result.clone(),
-    }
-}
-
-/// Replaces the right column (first index in the `on_column` tuple) with
-/// the left column (zeroth index in the tuple) inside `right_ordering`.
-fn replace_on_columns_of_right_ordering(
-    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
-    right_ordering: &mut LexOrdering,
-) -> Result<()> {
-    for (left_col, right_col) in on_columns {
-        right_ordering.transform(|item| {
-            let new_expr = Arc::clone(&item.expr)
-                .transform(|e| {
-                    if e.eq(right_col) {
-                        Ok(Transformed::yes(Arc::clone(left_col)))
-                    } else {
-                        Ok(Transformed::no(e))
-                    }
-                })
-                .data()
-                .expect("closure is infallible");
-            item.expr = new_expr;
-        });
-    }
-    Ok(())
-}
-
-fn offset_ordering(
-    ordering: &LexOrdering,
-    join_type: &JoinType,
-    offset: usize,
-) -> LexOrdering {
-    match join_type {
-        // In the case below, right ordering should be offsetted with the left
-        // side length, since we append the right table to the left table.
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => ordering
-            .iter()
-            .map(|sort_expr| PhysicalSortExpr {
-                expr: add_offset_to_expr(Arc::clone(&sort_expr.expr), offset),
-                options: sort_expr.options,
-            })
-            .collect(),
-        _ => ordering.clone(),
-    }
+    };
+    Ok(result)
 }
 
 /// Calculate the output ordering of a given join operation.
 pub fn calculate_join_output_ordering(
-    left_ordering: &LexOrdering,
-    right_ordering: &LexOrdering,
+    left_ordering: Option<&LexOrdering>,
+    right_ordering: Option<&LexOrdering>,
     join_type: JoinType,
-    on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     left_columns_len: usize,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
-) -> Option<LexOrdering> {
-    let output_ordering = match maintains_input_order {
+) -> Result<Option<LexOrdering>> {
+    match maintains_input_order {
         [true, false] => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
-                replace_on_columns_of_right_ordering(
-                    on_columns,
-                    &mut right_ordering.clone(),
-                )
-                .ok()?;
-                merge_vectors(
-                    left_ordering,
-                    offset_ordering(right_ordering, &join_type, left_columns_len)
-                        .as_ref(),
-                )
-            } else {
-                left_ordering.clone()
+                if let Some(right_ordering) = right_ordering.cloned() {
+                    let right_offset = add_offset_to_physical_sort_exprs(
+                        right_ordering,
+                        left_columns_len as _,
+                    )?;
+                    return if let Some(left_ordering) = left_ordering {
+                        let mut result = left_ordering.clone();
+                        result.extend(right_offset);
+                        Ok(Some(result))
+                    } else {
+                        Ok(LexOrdering::new(right_offset))
+                    };
+                }
             }
+            Ok(left_ordering.cloned())
         }
         [false, true] => {
             // Special case, we can prefix ordering of left side with the ordering of right side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
-                replace_on_columns_of_right_ordering(
-                    on_columns,
-                    &mut right_ordering.clone(),
-                )
-                .ok()?;
-                merge_vectors(
-                    offset_ordering(right_ordering, &join_type, left_columns_len)
-                        .as_ref(),
-                    left_ordering,
-                )
-            } else {
-                offset_ordering(right_ordering, &join_type, left_columns_len)
+                return if let Some(right_ordering) = right_ordering.cloned() {
+                    let mut right_offset = add_offset_to_physical_sort_exprs(
+                        right_ordering,
+                        left_columns_len as _,
+                    )?;
+                    if let Some(left_ordering) = left_ordering {
+                        right_offset.extend(left_ordering.clone());
+                    }
+                    Ok(LexOrdering::new(right_offset))
+                } else {
+                    Ok(left_ordering.cloned())
+                };
+            }
+            let Some(right_ordering) = right_ordering else {
+                return Ok(None);
+            };
+            match join_type {
+                JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+                    add_offset_to_physical_sort_exprs(
+                        right_ordering.clone(),
+                        left_columns_len as _,
+                    )
+                    .map(LexOrdering::new)
+                }
+                _ => Ok(Some(right_ordering.clone())),
             }
         }
         // Doesn't maintain ordering, output ordering is None.
-        [false, false] => return None,
+        [false, false] => Ok(None),
         [true, true] => unreachable!("Cannot maintain ordering of both sides"),
         _ => unreachable!("Join operators can not have more than two children"),
-    };
-    (!output_ordering.is_empty()).then_some(output_ordering)
+    }
 }
 
 /// Information about the index and placement (left or right) of the columns
@@ -1299,35 +1269,36 @@ pub(crate) fn symmetric_join_output_partitioning(
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
     join_type: &JoinType,
-) -> Partitioning {
+) -> Result<Partitioning> {
     let left_columns_len = left.schema().fields.len();
     let left_partitioning = left.output_partitioning();
     let right_partitioning = right.output_partitioning();
-    match join_type {
+    let result = match join_type {
         JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
             left_partitioning.clone()
         }
         JoinType::RightSemi | JoinType::RightAnti => right_partitioning.clone(),
         JoinType::Inner | JoinType::Right => {
-            adjust_right_output_partitioning(right_partitioning, left_columns_len)
+            adjust_right_output_partitioning(right_partitioning, left_columns_len)?
         }
         JoinType::Full => {
             // We could also use left partition count as they are necessarily equal.
             Partitioning::UnknownPartitioning(right_partitioning.partition_count())
         }
-    }
+    };
+    Ok(result)
 }
 
 pub(crate) fn asymmetric_join_output_partitioning(
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
     join_type: &JoinType,
-) -> Partitioning {
-    match join_type {
+) -> Result<Partitioning> {
+    let result = match join_type {
         JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
             right.output_partitioning(),
             left.schema().fields().len(),
-        ),
+        )?,
         JoinType::RightSemi | JoinType::RightAnti => right.output_partitioning().clone(),
         JoinType::Left
         | JoinType::LeftSemi
@@ -1336,7 +1307,8 @@ pub(crate) fn asymmetric_join_output_partitioning(
         | JoinType::LeftMark => Partitioning::UnknownPartitioning(
             right.output_partitioning().partition_count(),
         ),
-    }
+    };
+    Ok(result)
 }
 
 /// Trait for incrementally generating Join output.
@@ -1503,16 +1475,17 @@ pub(super) fn swap_join_projection(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
     use std::pin::Pin;
 
+    use super::*;
+
     use arrow::array::Int32Array;
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
+    use datafusion_physical_expr::PhysicalSortExpr;
 
     use rstest::rstest;
 
@@ -2322,85 +2295,35 @@ mod tests {
 
     #[test]
     fn test_calculate_join_output_ordering() -> Result<()> {
-        let options = SortOptions::default();
         let left_ordering = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("a", 0)),
-                options,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("c", 2)),
-                options,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("d", 3)),
-                options,
-            },
+            PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("c", 2))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("d", 3))),
         ]);
         let right_ordering = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("z", 2)),
-                options,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("y", 1)),
-                options,
-            },
+            PhysicalSortExpr::new_default(Arc::new(Column::new("z", 2))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("y", 1))),
         ]);
         let join_type = JoinType::Inner;
-        let on_columns = [(
-            Arc::new(Column::new("b", 1)) as _,
-            Arc::new(Column::new("x", 0)) as _,
-        )];
         let left_columns_len = 5;
         let maintains_input_orders = [[true, false], [false, true]];
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];
 
         let expected = [
-            Some(LexOrdering::new(vec![
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("a", 0)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("c", 2)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("d", 3)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("z", 7)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("y", 6)),
-                    options,
-                },
-            ])),
-            Some(LexOrdering::new(vec![
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("z", 7)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("y", 6)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("a", 0)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("c", 2)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("d", 3)),
-                    options,
-                },
-            ])),
+            LexOrdering::new(vec![
+                PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("c", 2))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("d", 3))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("z", 7))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("y", 6))),
+            ]),
+            LexOrdering::new(vec![
+                PhysicalSortExpr::new_default(Arc::new(Column::new("z", 7))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("y", 6))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("c", 2))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("d", 3))),
+            ]),
         ];
 
         for (i, (maintains_input_order, probe_side)) in
@@ -2411,11 +2334,10 @@ mod tests {
                     left_ordering.as_ref(),
                     right_ordering.as_ref(),
                     join_type,
-                    &on_columns,
                     left_columns_len,
                     maintains_input_order,
                     probe_side,
-                ),
+                )?,
                 expected[i]
             );
         }
