@@ -558,7 +558,7 @@ mod tests {
             if expected_access_key_id.is_none() && expected_secret_access_key.is_none() {
                 Some(String::from("true"))
             } else {
-                None
+                Some(String::from("false"))
             };
         assert_eq!(
             builder.get_config_value(&AmazonS3ConfigKey::Region),
