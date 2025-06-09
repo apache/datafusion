@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::*;
 use datafusion::common::test_util::batches_to_string;
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
-
-use super::*;
 
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
