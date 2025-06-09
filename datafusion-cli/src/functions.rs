@@ -36,7 +36,7 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
@@ -539,7 +539,7 @@ impl TableFunctionImpl for GlobFunc {
         let file_extension = format
             .or_else(|| {
                 // Extract extension from original pattern (before any URL manipulation)
-                pattern.split('/').last()?.split('.').last()
+                pattern.split('/').next_back()?.split('.').next_back()
             })
             .unwrap_or("parquet");
 
