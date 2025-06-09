@@ -93,6 +93,11 @@ impl RecordBatchStream for YieldStream {
 /// batches. This is useful for operators that do not natively support yielding
 /// control, allowing them to be used in a runtime that requires yielding for
 /// cancellation or other purposes.
+///
+/// # Note
+/// If your ExecutionPlan periodically yields control back to the scheduler
+/// implement [`ExecutionPlan::with_cooperative_yields`] to avoid the need for this
+/// node.
 #[derive(Debug)]
 pub struct YieldStreamExec {
     /// The child execution plan that this operator "wraps" to make it
