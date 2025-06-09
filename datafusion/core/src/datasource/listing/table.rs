@@ -809,7 +809,7 @@ impl ListingTable {
     /// See documentation and example on [`ListingTable`] and [`ListingTableConfig`]
     pub fn try_new(config: ListingTableConfig) -> Result<Self> {
         // Extract schema_source before moving other parts of the config
-        let schema_source = config.schema_source().clone();
+        let schema_source = config.schema_source();
 
         let file_schema = config
             .file_schema
