@@ -125,8 +125,14 @@ impl FileOpener for ParquetOpener {
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
             .global_counter("num_predicate_creation_errors");
 
-        let enable_page_index = self.enable_page_index;
+        let mut enable_page_index = self.enable_page_index;
         let file_decryption_properties = self.file_decryption_properties.clone();
+        
+        // For now, page index does not work with encrypted files. See:
+        // https://github.com/apache/arrow-rs/issues/7629
+        if file_decryption_properties.is_some()  {
+            enable_page_index = false;
+        }
 
         Ok(Box::pin(async move {
             // Don't load the page index yet. Since it is not stored inline in

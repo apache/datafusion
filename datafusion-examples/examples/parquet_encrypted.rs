@@ -24,7 +24,7 @@ async fn main() -> datafusion::common::Result<()> {
 
     // Show information from the dataframe
     println!("Original Parquet DataFrame:");
-    query_dataframe(&parquet_df, false).await?;
+    query_dataframe(&parquet_df).await?;
 
     // Setup encryption and decryption properties
     let (encrypt, decrypt) = setup_encryption(&parquet_df)?;
@@ -52,7 +52,8 @@ async fn main() -> datafusion::common::Result<()> {
         .execution
         .parquet
         .file_decryption_properties = Some(fd);
-
+    
+    
     let state = SessionStateBuilder::new().with_config(sc).build();
     let ctx: SessionContext = SessionContext::new_with_state(state);
 
@@ -62,25 +63,24 @@ async fn main() -> datafusion::common::Result<()> {
 
     // Show information from the dataframe
     println!("\n\nEncrypted Parquet DataFrame:");
-    query_dataframe(&encrypted_parquet_df, true).await?;
+    query_dataframe(&encrypted_parquet_df).await?;
 
     Ok(())
 }
 
 // Show information from the dataframe
-async fn query_dataframe(df: &DataFrame, filter: bool) -> Result<(), DataFusionError> {
+async fn query_dataframe(df: &DataFrame) -> Result<(), DataFusionError> {
     // show its schema using 'describe'
     df.clone().describe().await?.show().await?;
+    
+    // Select three columns and filter the results
+    // so that only rows where id > 1 are returned
+    df.clone()
+        .select_columns(&["id", "bool_col", "timestamp_col"])?
+        .filter(col("id").gt(lit(5)))?
+        .show()
+        .await?;
 
-    if filter {
-        // Select three columns and filter the results
-        // so that only rows where id > 1 are returned
-        df.clone()
-            .select_columns(&["id", "bool_col", "timestamp_col"])?
-            .filter(col("id").gt(lit(5)))?
-            .show()
-            .await?;
-    }
 
     Ok(())
 }
