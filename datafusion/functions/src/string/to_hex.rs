@@ -19,25 +19,29 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
-use arrow::datatypes::{
-    ArrowNativeType, ArrowPrimitiveType, DataType, Int32Type, Int64Type,
-};
-
 use crate::utils::make_scalar_function;
+use arrow::array::{ArrayRef, GenericStringBuilder};
+use arrow::datatypes::DataType::{
+    Int16, Int32, Int64, Int8, UInt16, UInt32, UInt64, UInt8, Utf8,
+};
+use arrow::datatypes::{
+    ArrowNativeType, ArrowPrimitiveType, DataType, Int16Type, Int32Type, Int64Type,
+    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::TypeSignature::Exact;
 use datafusion_macros::user_doc;
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
 pub fn to_hex<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
 where
-    T::Native: OffsetSizeTrait,
+    T::Native: std::fmt::LowerHex,
 {
     let integer_array = as_primitive_array::<T>(&args[0])?;
 
@@ -96,9 +100,20 @@ impl Default for ToHexFunc {
 
 impl ToHexFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(1, vec![Int64], Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    Exact(vec![Int8]),
+                    Exact(vec![Int16]),
+                    Exact(vec![Int32]),
+                    Exact(vec![Int64]),
+                    Exact(vec![UInt8]),
+                    Exact(vec![UInt16]),
+                    Exact(vec![UInt32]),
+                    Exact(vec![UInt64]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -117,10 +132,8 @@ impl ScalarUDFImpl for ToHexFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
         Ok(match arg_types[0] {
-            Int8 | Int16 | Int32 | Int64 => Utf8,
+            Int32 | Int64 | UInt32 | UInt64 => Utf8,
             _ => {
                 return plan_err!("The to_hex function can only accept integers.");
             }
@@ -129,12 +142,14 @@ impl ScalarUDFImpl for ToHexFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args.args[0].data_type() {
-            DataType::Int32 => {
-                make_scalar_function(to_hex::<Int32Type>, vec![])(&args.args)
-            }
-            DataType::Int64 => {
-                make_scalar_function(to_hex::<Int64Type>, vec![])(&args.args)
-            }
+            Int64 => make_scalar_function(to_hex::<Int64Type>, vec![])(&args.args),
+            UInt64 => make_scalar_function(to_hex::<UInt64Type>, vec![])(&args.args),
+            Int32 => make_scalar_function(to_hex::<Int32Type>, vec![])(&args.args),
+            UInt32 => make_scalar_function(to_hex::<UInt32Type>, vec![])(&args.args),
+            Int16 => make_scalar_function(to_hex::<Int16Type>, vec![])(&args.args),
+            UInt16 => make_scalar_function(to_hex::<UInt16Type>, vec![])(&args.args),
+            Int8 => make_scalar_function(to_hex::<Int8Type>, vec![])(&args.args),
+            UInt8 => make_scalar_function(to_hex::<UInt8Type>, vec![])(&args.args),
             other => exec_err!("Unsupported data type {other:?} for function to_hex"),
         }
     }
@@ -146,8 +161,7 @@ impl ScalarUDFImpl for ToHexFunc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Int32Array, StringArray};
-
+    use arrow::array::{Int32Array, StringArray, UInt64Array};
     use datafusion_common::cast::as_string_array;
 
     use super::*;
@@ -186,6 +200,19 @@ mod tests {
         let hex_value_arc = to_hex::<Int32Type>(&[array_ref])?;
         let hex_value = as_string_array(&hex_value_arc)?;
         let expected = StringArray::from(vec![Some("ffffffffffffffff")]);
+        assert_eq!(&expected, hex_value);
+
+        Ok(())
+    }
+
+    #[test]
+    // Test to_hex function for unsigned integer
+    fn to_hex_unsigned_int() -> Result<()> {
+        let array = vec![100].into_iter().collect::<UInt64Array>();
+        let array_ref = Arc::new(array);
+        let hex_value_arc = to_hex::<UInt64Type>(&[array_ref])?;
+        let hex_value = as_string_array(&hex_value_arc)?;
+        let expected = StringArray::from(vec![Some("64")]);
         assert_eq!(&expected, hex_value);
 
         Ok(())
