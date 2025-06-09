@@ -215,7 +215,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             SQLExpr::Extract { field, expr, .. } => {
                 let mut extract_args = vec![
-                    Expr::Literal(ScalarValue::from(format!("{field}"))),
+                    Expr::Literal(ScalarValue::from(format!("{field}")), None),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ];
 

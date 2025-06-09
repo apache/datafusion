@@ -17,26 +17,23 @@
 
 //! TopK: Combination of Sort / LIMIT
 
-use arrow::{
-    compute::interleave_record_batch,
-    row::{RowConverter, Rows, SortField},
-};
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
+
 use arrow::array::{ArrayRef, RecordBatch};
+use arrow::compute::interleave_record_batch;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::Result;
-use datafusion_common::{internal_datafusion_err, HashMap};
+use arrow::row::{RowConverter, Rows, SortField};
+use datafusion_common::{internal_datafusion_err, HashMap, Result};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 /// Global TopK
 ///
@@ -102,7 +99,7 @@ pub struct TopK {
     /// The target number of rows for output batches
     batch_size: usize,
     /// sort expressions
-    expr: Arc<[PhysicalSortExpr]>,
+    expr: LexOrdering,
     /// row converter, for sort keys
     row_converter: RowConverter,
     /// scratch space for converting rows
@@ -123,7 +120,7 @@ pub struct TopK {
 const ESTIMATED_BYTES_PER_ROW: usize = 20;
 
 fn build_sort_fields(
-    ordering: &LexOrdering,
+    ordering: &[PhysicalSortExpr],
     schema: &SchemaRef,
 ) -> Result<Vec<SortField>> {
     ordering
@@ -145,7 +142,7 @@ impl TopK {
     pub fn try_new(
         partition_id: usize,
         schema: SchemaRef,
-        common_sort_prefix: LexOrdering,
+        common_sort_prefix: Vec<PhysicalSortExpr>,
         expr: LexOrdering,
         k: usize,
         batch_size: usize,
@@ -155,7 +152,7 @@ impl TopK {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
 
-        let sort_fields: Vec<_> = build_sort_fields(&expr, &schema)?;
+        let sort_fields = build_sort_fields(&expr, &schema)?;
 
         // TODO there is potential to add special cases for single column sort fields
         // to improve performance
@@ -166,8 +163,7 @@ impl TopK {
         let prefix_row_converter = if common_sort_prefix.is_empty() {
             None
         } else {
-            let input_sort_fields: Vec<_> =
-                build_sort_fields(&common_sort_prefix, &schema)?;
+            let input_sort_fields = build_sort_fields(&common_sort_prefix, &schema)?;
             Some(RowConverter::new(input_sort_fields)?)
         };
 
@@ -176,7 +172,7 @@ impl TopK {
             metrics: TopKMetrics::new(metrics, partition_id),
             reservation,
             batch_size,
-            expr: Arc::from(expr),
+            expr,
             row_converter,
             scratch_rows,
             heap: TopKHeap::new(k, batch_size),
@@ -821,8 +817,8 @@ mod tests {
         };
 
         // Input ordering uses only column "a" (a prefix of the full sort).
-        let input_ordering = LexOrdering::from(vec![sort_expr_a.clone()]);
-        let full_expr = LexOrdering::from(vec![sort_expr_a, sort_expr_b]);
+        let prefix = vec![sort_expr_a.clone()];
+        let full_expr = LexOrdering::from([sort_expr_a, sort_expr_b]);
 
         // Create a dummy runtime environment and metrics.
         let runtime = Arc::new(RuntimeEnv::default());
@@ -832,7 +828,7 @@ mod tests {
         let mut topk = TopK::try_new(
             0,
             Arc::clone(&schema),
-            input_ordering,
+            prefix,
             full_expr,
             3,
             2,
