@@ -16,54 +16,49 @@
 // under the License.
 
 use ahash::RandomState;
-use datafusion_common::stats::Precision;
-use datafusion_expr::expr::WindowFunction;
-use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
-use datafusion_macros::user_doc;
-use datafusion_physical_expr::expressions;
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::mem::{size_of, size_of_val};
-use std::ops::BitAnd;
-use std::sync::Arc;
-
 use arrow::{
-    array::{ArrayRef, AsArray},
+    array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
+    buffer::BooleanBuffer,
     compute,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-        Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+        FieldRef, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+        Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
         Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
-
-use arrow::datatypes::FieldRef;
-use arrow::{
-    array::{Array, BooleanArray, Int64Array, PrimitiveArray},
-    buffer::BooleanBuffer,
-};
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, Result, ScalarValue,
-};
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::{
-    function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
+    downcast_value, internal_err, not_impl_err, stats::Precision,
+    utils::expr::COUNT_STAR_EXPANSION, Result, ScalarValue,
 };
 use datafusion_expr::{
-    Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition,
+    expr::WindowFunction,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    utils::format_state_name,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
+    ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
+    WindowFunctionDefinition,
 };
-use datafusion_functions_aggregate_common::aggregate::count_distinct::{
-    BytesDistinctCountAccumulator, DictionaryCountAccumulator,
-    FloatDistinctCountAccumulator, PrimitiveDistinctCountAccumulator,
+use datafusion_functions_aggregate_common::aggregate::{
+    count_distinct::BytesDistinctCountAccumulator,
+    count_distinct::BytesViewDistinctCountAccumulator,
+    count_distinct::DictionaryCountAccumulator,
+    count_distinct::FloatDistinctCountAccumulator,
+    count_distinct::PrimitiveDistinctCountAccumulator,
+    groups_accumulator::accumulate::accumulate_indices,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
+use datafusion_macros::user_doc;
+use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::binary_map::OutputType;
-
-use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+use std::{
+    collections::HashSet,
+    fmt::Debug,
+    mem::{size_of, size_of_val},
+    ops::BitAnd,
+    sync::Arc,
+};
 make_udaf_expr_and_func!(
     Count,
     count,
@@ -758,18 +753,15 @@ impl Accumulator for DistinctCountAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
-
     use arrow::{
         array::{DictionaryArray, Int32Array, NullArray, StringArray},
         datatypes::{DataType, Field, Int32Type, Schema},
     };
     use datafusion_expr::function::AccumulatorArgs;
-    use datafusion_physical_expr::{expressions::Column, LexOrdering};
+    use datafusion_physical_expr::expressions::Column;
     use std::sync::Arc;
-
     /// Helper function to create a dictionary array with non-null keys but some null values
     /// Returns a dictionary array where:
     /// - keys are [0, 1, 2, 0, 1] (all non-null)
