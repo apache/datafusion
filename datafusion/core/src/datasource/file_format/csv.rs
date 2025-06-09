@@ -33,6 +33,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_catalog::Session;
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::config::CsvOptions;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::{arrow_test_data, batches_to_string};
@@ -791,6 +792,27 @@ mod tests {
             ++
             ++
         "###);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_csv_write_empty_file() -> Result<()> {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty.csv", tmp_dir.path().to_string_lossy());
+
+        let ctx = SessionContext::new();
+
+        let df = ctx.sql("SELECT 1 limit 0").await?;
+
+        let mut cfg1 = crate::dataframe::DataFrameWriteOptions::new();
+        cfg1 = cfg1.with_single_file_output(true);
+
+        let mut cfg2 = CsvOptions::default();
+        cfg2.has_header = Some(true);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert_eq!(std::path::Path::new(&path).exists(), true);
 
         Ok(())
     }
