@@ -805,14 +805,11 @@ mod tests {
 
         let df = ctx.sql("SELECT 1 limit 0").await?;
 
-        let mut cfg1 = crate::dataframe::DataFrameWriteOptions::new();
-        cfg1 = cfg1.with_single_file_output(true);
-
-        let mut cfg2 = CsvOptions::default();
-        cfg2.has_header = Some(true);
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
+        let cfg2 = CsvOptions::default().with_has_header(true);
 
         df.write_csv(&path, cfg1, Some(cfg2)).await?;
-        assert_eq!(std::path::Path::new(&path).exists(), true);
+        assert!(std::path::Path::new(&path).exists());
 
         Ok(())
     }
