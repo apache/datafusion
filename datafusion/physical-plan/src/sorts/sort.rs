@@ -1255,9 +1255,9 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::test;
-    use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::{assert_is_pending, panic_exec};
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -2003,6 +2003,25 @@ mod tests {
             | 8  |
             +----+
             "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unpolled_sort_does_not_start_eagerly() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let source = panic_exec(1);
+        let schema = source.schema();
+
+        let sort_exec = Arc::new(SortExec::new(
+            [PhysicalSortExpr {
+                expr: col("i", &schema)?,
+                options: SortOptions::default(),
+            }]
+            .into(),
+            source,
+        ));
+
+        let _ = sort_exec.execute(1, task_ctx);
         Ok(())
     }
 }
