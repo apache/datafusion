@@ -2208,7 +2208,8 @@ mod tests {
         //   TableScan: t2
         assert_dependent_join_rewrite_err!(
             plan,
-            @"This feature is not implemented: subquery inside lateral join condition is not supported"
+            @"This feature is not implemented: subquery inside lateral join condition is not supported
+            "
         );
 
         Ok(())
