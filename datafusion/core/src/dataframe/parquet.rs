@@ -311,6 +311,21 @@ mod tests {
 
         assert_eq!(num_rows_read, num_rows_written);
 
+        // Read encrypted parquet and subset rows + columns
+        let encrypted_parquet_df = ctx
+            .read_parquet(tempfile_str, ParquetReadOptions::default())
+            .await?;
+
+        // Select three columns and filter the results
+        // Test that the filter works as expected
+        let selected = encrypted_parquet_df
+            .clone()
+            .select_columns(&["c1", "c2", "c3"])?
+            .filter(col("c2").gt(lit(4)))?;
+
+        let num_rows_selected = selected.count().await?;
+        assert_eq!(num_rows_selected, 14);
+
         Ok(())
     }
 }
