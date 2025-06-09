@@ -1351,7 +1351,7 @@ pub(crate) fn asymmetric_join_output_partitioning(
         JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
             right.output_partitioning(),
             left.schema().fields().len(),
-        ),
+        )?,
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
             right.output_partitioning().clone()
         }
