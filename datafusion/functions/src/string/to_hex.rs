@@ -161,49 +161,92 @@ impl ScalarUDFImpl for ToHexFunc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Int32Array, Int64Array, StringArray, UInt64Array};
+    use arrow::array::{
+        Int16Array, Int32Array, Int64Array, Int8Array, StringArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
+    };
     use datafusion_common::cast::as_string_array;
 
     use super::*;
 
-    #[test]
-    fn to_hex_base() -> Result<()> {
-        let array = Int32Array::from(vec![Some(100), Some(0), None, Some(-1)]);
-        let array_ref = Arc::new(array);
-        let hex_value_arc = to_hex::<Int32Type>(&[array_ref])?;
-        let hex_value = as_string_array(&hex_value_arc)?;
-        let expected = StringArray::from(vec![
-            Some("64"),
-            Some("0"),
-            None,
-            Some("ffffffffffffffff"),
-        ]);
-        assert_eq!(&expected, hex_value);
-        Ok(())
+    macro_rules! test_to_hex_type {
+        // Default test with standard input/output
+        ($name:ident, $arrow_type:ty, $array_type:ty) => {
+            test_to_hex_type!(
+                $name,
+                $arrow_type,
+                $array_type,
+                vec![Some(100), Some(0), None],
+                vec![Some("64"), Some("0"), None]
+            );
+        };
+
+        // Custom test with custom input/output (eg: positive number)
+        ($name:ident, $arrow_type:ty, $array_type:ty, $input:expr, $expected:expr) => {
+            #[test]
+            fn $name() -> Result<()> {
+                let input = $input;
+                let expected = $expected;
+
+                let array = <$array_type>::from(input);
+                let array_ref = Arc::new(array);
+                let hex_result = to_hex::<$arrow_type>(&[array_ref])?;
+                let hex_array = as_string_array(&hex_result)?;
+                let expected_array = StringArray::from(expected);
+
+                assert_eq!(&expected_array, hex_array);
+                Ok(())
+            }
+        };
     }
 
-    #[test]
-    fn to_hex_large_integers() -> Result<()> {
-        let array = vec![i64::MAX, i64::MIN].into_iter().collect::<Int64Array>();
-        let array_ref = Arc::new(array);
-        let hex_value_arc = to_hex::<Int64Type>(&[array_ref])?;
-        let hex_value = as_string_array(&hex_value_arc)?;
-        let expected =
-            StringArray::from(vec![Some("7fffffffffffffff"), Some("8000000000000000")]);
-        assert_eq!(&expected, hex_value);
-        Ok(())
-    }
+    test_to_hex_type!(
+        to_hex_int8,
+        Int8Type,
+        Int8Array,
+        vec![Some(100), Some(0), None, Some(-1)],
+        vec![Some("64"), Some("0"), None, Some("ffffffffffffffff")]
+    );
+    test_to_hex_type!(
+        to_hex_int16,
+        Int16Type,
+        Int16Array,
+        vec![Some(100), Some(0), None, Some(-1)],
+        vec![Some("64"), Some("0"), None, Some("ffffffffffffffff")]
+    );
+    test_to_hex_type!(
+        to_hex_int32,
+        Int32Type,
+        Int32Array,
+        vec![Some(100), Some(0), None, Some(-1)],
+        vec![Some("64"), Some("0"), None, Some("ffffffffffffffff")]
+    );
+    test_to_hex_type!(
+        to_hex_int64,
+        Int64Type,
+        Int64Array,
+        vec![Some(100), Some(0), None, Some(-1)],
+        vec![Some("64"), Some("0"), None, Some("ffffffffffffffff")]
+    );
 
-    #[test]
-    fn to_hex_large_unsigned_integers() -> Result<()> {
-        let array = vec![u64::MAX, u64::MIN]
-            .into_iter()
-            .collect::<UInt64Array>();
-        let array_ref = Arc::new(array);
-        let hex_value_arc = to_hex::<UInt64Type>(&[array_ref])?;
-        let hex_value = as_string_array(&hex_value_arc)?;
-        let expected = StringArray::from(vec![Some("ffffffffffffffff"), Some("0")]);
-        assert_eq!(&expected, hex_value);
-        Ok(())
-    }
+    test_to_hex_type!(to_hex_uint8, UInt8Type, UInt8Array);
+    test_to_hex_type!(to_hex_uint16, UInt16Type, UInt16Array);
+    test_to_hex_type!(to_hex_uint32, UInt32Type, UInt32Array);
+    test_to_hex_type!(to_hex_uint64, UInt64Type, UInt64Array);
+
+    test_to_hex_type!(
+        to_hex_large_signed,
+        Int64Type,
+        Int64Array,
+        vec![Some(i64::MAX), Some(i64::MIN)],
+        vec![Some("7fffffffffffffff"), Some("8000000000000000")]
+    );
+
+    test_to_hex_type!(
+        to_hex_large_unsigned,
+        UInt64Type,
+        UInt64Array,
+        vec![Some(u64::MAX), Some(u64::MIN)],
+        vec![Some("ffffffffffffffff"), Some("0")]
+    );
 }
