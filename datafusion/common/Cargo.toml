@@ -56,8 +56,8 @@ arrow = { workspace = true }
 arrow-ipc = { workspace = true }
 base64 = "0.22.1"
 half = { workspace = true }
-hex = "0.4.3"
 hashbrown = { workspace = true }
+hex = "0.4.3"
 indexmap = { workspace = true }
 libc = "0.2.172"
 log = { workspace = true }
@@ -68,7 +68,6 @@ pyo3 = { version = "0.24.2", optional = true }
 recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true }
 tokio = { workspace = true }
-
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 web-time = "1.1.0"
