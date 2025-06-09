@@ -794,7 +794,8 @@ impl EquivalenceGroup {
             JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                 right_equivalences.clone()
             }
-        }
+        };
+        Ok(group)
     }
 
     /// Checks if two expressions are equal directly or through equivalence
