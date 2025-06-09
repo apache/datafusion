@@ -350,13 +350,8 @@ impl FileFormat for ParquetFormat {
             Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
             None => None,
         };
-        let config_file_decryption_properties = &state
-            .config()
-            .options()
-            .execution
-            .parquet
-            .file_decryption_properties
-            .clone();
+        let config_file_decryption_properties =
+            &self.options.global.file_decryption_properties;
         let file_decryption_properties: Option<FileDecryptionProperties> =
             match config_file_decryption_properties {
                 Some(cfd) => {
