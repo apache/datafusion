@@ -279,7 +279,7 @@ async fn drain_join_set(mut join_set: JoinSet<Result<()>>) {
 ///
 /// [InfluxDB 3.0]: https://github.com/influxdata/influxdb3_core/tree/6fcbb004232738d55655f32f4ad2385523d10696/executor
 struct CpuRuntime {
-    /// Handle is the tokio structure for interating with a Runtime.
+    /// Handle is the tokio structure for interacting with a Runtime.
     handle: Handle,
     /// Signal to start shutting down
     notify_shutdown: Arc<Notify>,
