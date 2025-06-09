@@ -50,11 +50,8 @@ fn sort_preserving_merge_operator(
 
     let sort = sort
         .iter()
-        .map(|name| PhysicalSortExpr {
-            expr: col(name, &schema).unwrap(),
-            options: Default::default(),
-        })
-        .collect::<LexOrdering>();
+        .map(|name| PhysicalSortExpr::new_default(col(name, &schema).unwrap()));
+    let sort = LexOrdering::new(sort).unwrap();
 
     let exec = MemorySourceConfig::try_new_exec(
         &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),

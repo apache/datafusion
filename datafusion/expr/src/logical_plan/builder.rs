@@ -341,8 +341,11 @@ impl LogicalPlanBuilder {
         // wrap cast if data type is not same as common type.
         for row in &mut values {
             for (j, field_type) in fields.iter().map(|f| f.data_type()).enumerate() {
-                if let Expr::Literal(ScalarValue::Null) = row[j] {
-                    row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
+                if let Expr::Literal(ScalarValue::Null, metadata) = &row[j] {
+                    row[j] = Expr::Literal(
+                        ScalarValue::try_from(field_type)?,
+                        metadata.clone(),
+                    );
                 } else {
                     row[j] = std::mem::take(&mut row[j]).cast_to(field_type, schema)?;
                 }

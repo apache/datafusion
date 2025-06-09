@@ -261,7 +261,7 @@ impl BuiltinExprBuilder {
                 .await?;
 
             match escape_char_expr {
-                Expr::Literal(ScalarValue::Utf8(escape_char_string)) => {
+                Expr::Literal(ScalarValue::Utf8(escape_char_string), _) => {
                     // Convert Option<String> to Option<char>
                     escape_char_string.and_then(|s| s.chars().next())
                 }
@@ -337,7 +337,7 @@ mod tests {
     fn int64_literals(integers: &[i64]) -> Vec<Expr> {
         integers
             .iter()
-            .map(|value| Expr::Literal(ScalarValue::Int64(Some(*value))))
+            .map(|value| Expr::Literal(ScalarValue::Int64(Some(*value)), None))
             .collect()
     }
 

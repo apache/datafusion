@@ -217,7 +217,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Alias(alias)),
             }
         }
-        Expr::Literal(value) => {
+        Expr::Literal(value, _) => {
             let pb_value: protobuf::ScalarValue = value.try_into()?;
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Literal(pb_value)),
@@ -315,28 +315,22 @@ pub fn serialize_expr(
                         null_treatment: _,
                     },
             } = window_fun.as_ref();
-            let (window_function, fun_definition) = match fun {
+            let mut buf = Vec::new();
+            let window_function = match fun {
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
-                    let mut buf = Vec::new();
                     let _ = codec.try_encode_udaf(aggr_udf, &mut buf);
-                    (
-                        protobuf::window_expr_node::WindowFunction::Udaf(
-                            aggr_udf.name().to_string(),
-                        ),
-                        (!buf.is_empty()).then_some(buf),
+                    protobuf::window_expr_node::WindowFunction::Udaf(
+                        aggr_udf.name().to_string(),
                     )
                 }
                 WindowFunctionDefinition::WindowUDF(window_udf) => {
-                    let mut buf = Vec::new();
                     let _ = codec.try_encode_udwf(window_udf, &mut buf);
-                    (
-                        protobuf::window_expr_node::WindowFunction::Udwf(
-                            window_udf.name().to_string(),
-                        ),
-                        (!buf.is_empty()).then_some(buf),
+                    protobuf::window_expr_node::WindowFunction::Udwf(
+                        window_udf.name().to_string(),
                     )
                 }
             };
+            let fun_definition = (!buf.is_empty()).then_some(buf);
             let partition_by = serialize_exprs(partition_by, codec)?;
             let order_by = serialize_sorts(order_by, codec)?;
 

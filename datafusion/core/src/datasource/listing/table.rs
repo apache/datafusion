@@ -17,43 +17,41 @@
 
 //! The table implementation.
 
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
-use super::{ListingTableUrl, PartitionedFile};
 use std::collections::HashMap;
 use std::{any::Any, str::FromStr, sync::Arc};
 
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
+use super::{ListingTableUrl, PartitionedFile};
 use crate::datasource::{
     create_ordering,
     file_format::{file_compression_type::FileCompressionType, FileFormat},
     physical_plan::FileSinkConfig,
 };
 use crate::execution::context::SessionState;
-use datafusion_catalog::TableProvider;
-use datafusion_common::{config_err, DataFusionError, Result};
+
+use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
+use arrow_schema::Schema;
+use datafusion_catalog::{Session, TableProvider};
+use datafusion_common::stats::Precision;
+use datafusion_common::{
+    config_datafusion_err, config_err, internal_err, plan_err, project_schema,
+    Constraints, DataFusionError, Result, SchemaExt,
+};
+use datafusion_datasource::compute_all_files_statistics;
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
-use datafusion_execution::config::SessionConfig;
-use datafusion_expr::dml::InsertOp;
-use datafusion_expr::{Expr, TableProviderFilterPushDown};
-use datafusion_expr::{SortExpr, TableType};
-use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::{ExecutionPlan, Statistics};
-
-use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
-use datafusion_common::{
-    config_datafusion_err, internal_err, plan_err, project_schema, Constraints, SchemaExt,
-};
 use datafusion_execution::cache::{
     cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
 };
-use datafusion_physical_expr::{LexOrdering, PhysicalSortRequirement};
+use datafusion_execution::config::SessionConfig;
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::{Expr, SortExpr, TableProviderFilterPushDown, TableType};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_common::stats::Precision;
-use datafusion_datasource::compute_all_files_statistics;
-use datafusion_datasource::file_groups::FileGroup;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -797,7 +795,7 @@ impl ListingTable {
             options,
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
         };
 
@@ -1053,25 +1051,9 @@ impl TableProvider for ListingTable {
             file_extension: self.options().format.get_ext(),
         };
 
-        let order_requirements = if !self.options().file_sort_order.is_empty() {
-            // Multiple sort orders in outer vec are equivalent, so we pass only the first one
-            let orderings = self.try_create_output_ordering()?;
-            let Some(ordering) = orderings.first() else {
-                return internal_err!(
-                    "Expected ListingTable to have a sort order, but none found!"
-                );
-            };
-            // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
-            Some(LexRequirement::new(
-                ordering
-                    .into_iter()
-                    .cloned()
-                    .map(PhysicalSortRequirement::from)
-                    .collect::<Vec<_>>(),
-            ))
-        } else {
-            None
-        };
+        let orderings = self.try_create_output_ordering()?;
+        // It is sufficient to pass only one of the equivalent orderings:
+        let order_requirements = orderings.into_iter().next().map(Into::into);
 
         self.options()
             .format
@@ -1277,7 +1259,10 @@ mod tests {
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
-    use crate::test::{columns, object_store::register_test_store};
+    use crate::test::columns;
+    use crate::test::object_store::{
+        ensure_head_concurrency, make_test_store_and_state, register_test_store,
+    };
 
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
@@ -1286,10 +1271,8 @@ mod tests {
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_plan::collect;
-    use datafusion_physical_plan::ExecutionPlanProperties;
+    use datafusion_physical_plan::{collect, ExecutionPlanProperties};
 
-    use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
     use tempfile::TempDir;
     use url::Url;
 
@@ -1419,7 +1402,7 @@ mod tests {
 
         // (file_sort_order, expected_result)
         let cases = vec![
-            (vec![], Ok(vec![])),
+            (vec![], Ok(Vec::<LexOrdering>::new())),
             // sort expr, but non column
             (
                 vec![vec![
@@ -1430,15 +1413,13 @@ mod tests {
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![LexOrdering::new(
-                        vec![PhysicalSortExpr {
+                Ok(vec![[PhysicalSortExpr {
                             expr: physical_col("string_col", &schema).unwrap(),
                             options: SortOptions {
                                 descending: false,
                                 nulls_first: false,
                             },
-                        }],
-                )
+                        }].into(),
                 ])
             ),
             // ok with two columns, different options
@@ -1447,16 +1428,14 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![LexOrdering::new(
-                        vec![
+                Ok(vec![[
                             PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
                                         .asc()
                                         .nulls_last(),
                             PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
                                         .desc()
                                         .nulls_first()
-                        ],
-                )
+                        ].into(),
                 ])
             ),
         ];
@@ -2230,7 +2209,7 @@ mod tests {
         let filter_predicate = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(Expr::Column("column1".into())),
             Operator::GtEq,
-            Box::new(Expr::Literal(ScalarValue::Int32(Some(0)))),
+            Box::new(Expr::Literal(ScalarValue::Int32(Some(0)), None)),
         ));
 
         // Create a new batch of data to insert into the table

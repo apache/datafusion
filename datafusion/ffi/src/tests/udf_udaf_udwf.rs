@@ -15,13 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF, udtf::FFI_TableFunction};
+use crate::{
+    udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF, udtf::FFI_TableFunction,
+    udwf::FFI_WindowUDF,
+};
 use datafusion::{
     catalog::TableFunctionImpl,
     functions::math::{abs::AbsFunc, random::RandomFunc},
     functions_aggregate::{stddev::Stddev, sum::Sum},
     functions_table::generate_series::RangeFunc,
-    logical_expr::{AggregateUDF, ScalarUDF},
+    functions_window::rank::Rank,
+    logical_expr::{AggregateUDF, ScalarUDF, WindowUDF},
 };
 
 use std::sync::Arc;
@@ -54,4 +58,16 @@ pub(crate) extern "C" fn create_ffi_stddev_func() -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Stddev::new().into());
 
     udaf.into()
+}
+
+pub(crate) extern "C" fn create_ffi_rank_func() -> FFI_WindowUDF {
+    let udwf: Arc<WindowUDF> = Arc::new(
+        Rank::new(
+            "rank_demo".to_string(),
+            datafusion::functions_window::rank::RankType::Basic,
+        )
+        .into(),
+    );
+
+    udwf.into()
 }

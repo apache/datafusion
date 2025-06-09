@@ -342,7 +342,7 @@ mod test {
         )
         .unwrap();
         let snap = dynamic_filter_1.snapshot().unwrap().unwrap();
-        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
+        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "42", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#);
         let dynamic_filter_2 = reassign_predicate_columns(
             Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
             &filter_schema_2,
@@ -350,7 +350,7 @@ mod test {
         )
         .unwrap();
         let snap = dynamic_filter_2.snapshot().unwrap().unwrap();
-        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
+        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42), field: Field { name: "42", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#);
         // Both filters allow evaluating the same expression
         let batch_1 = RecordBatch::try_new(
             Arc::clone(&filter_schema_1),

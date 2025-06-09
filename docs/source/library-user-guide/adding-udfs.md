@@ -1076,7 +1076,7 @@ pub struct EchoFunction {}
 
 impl TableFunctionImpl for EchoFunction {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        let Some(Expr::Literal(ScalarValue::Int64(Some(value)))) = exprs.get(0) else {
+        let Some(Expr::Literal(ScalarValue::Int64(Some(value)), _)) = exprs.get(0) else {
             return plan_err!("First argument must be an integer");
         };
 
@@ -1117,7 +1117,7 @@ With the UDTF implemented, you can register it with the `SessionContext`:
 #
 # impl TableFunctionImpl for EchoFunction {
 #     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-#         let Some(Expr::Literal(ScalarValue::Int64(Some(value)))) = exprs.get(0) else {
+#         let Some(Expr::Literal(ScalarValue::Int64(Some(value)), _)) = exprs.get(0) else {
 #             return plan_err!("First argument must be an integer");
 #         };
 #

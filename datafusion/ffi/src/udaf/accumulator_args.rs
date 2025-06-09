@@ -25,8 +25,10 @@ use abi_stable::{
 use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
 use datafusion::{
-    error::DataFusionError, logical_expr::function::AccumulatorArgs,
-    physical_expr::LexOrdering, physical_plan::PhysicalExpr, prelude::SessionContext,
+    error::DataFusionError,
+    logical_expr::function::AccumulatorArgs,
+    physical_expr::{PhysicalExpr, PhysicalSortExpr},
+    prelude::SessionContext,
 };
 use datafusion_proto::{
     physical_plan::{
@@ -62,7 +64,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
 
         let codec = DefaultPhysicalExtensionCodec {};
         let ordering_req =
-            serialize_physical_sort_exprs(args.ordering_req.to_owned(), &codec)?;
+            serialize_physical_sort_exprs(args.order_bys.to_owned(), &codec)?;
 
         let expr = serialize_physical_exprs(args.exprs, &codec)?;
 
@@ -94,7 +96,7 @@ pub struct ForeignAccumulatorArgs {
     pub return_field: FieldRef,
     pub schema: Schema,
     pub ignore_nulls: bool,
-    pub ordering_req: LexOrdering,
+    pub order_bys: Vec<PhysicalSortExpr>,
     pub is_reversed: bool,
     pub name: String,
     pub is_distinct: bool,
@@ -115,9 +117,7 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
         let default_ctx = SessionContext::new();
         let codex = DefaultPhysicalExtensionCodec {};
 
-        // let proto_ordering_req =
-        //     rresult_return!(PhysicalSortExprNodeCollection::decode(ordering_req.as_ref()));
-        let ordering_req = parse_physical_sort_exprs(
+        let order_bys = parse_physical_sort_exprs(
             &proto_def.ordering_req,
             &default_ctx,
             &schema,
@@ -130,7 +130,7 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
             return_field,
             schema,
             ignore_nulls: proto_def.ignore_nulls,
-            ordering_req,
+            order_bys,
             is_reversed: value.is_reversed,
             name: value.name.to_string(),
             is_distinct: proto_def.distinct,
@@ -145,7 +145,7 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
             return_field: Arc::clone(&value.return_field),
             schema: &value.schema,
             ignore_nulls: value.ignore_nulls,
-            ordering_req: &value.ordering_req,
+            order_bys: &value.order_bys,
             is_reversed: value.is_reversed,
             name: value.name.as_str(),
             is_distinct: value.is_distinct,
@@ -159,10 +159,8 @@ mod tests {
     use super::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::{
-        error::Result,
-        logical_expr::function::AccumulatorArgs,
-        physical_expr::{LexOrdering, PhysicalSortExpr},
-        physical_plan::expressions::col,
+        error::Result, logical_expr::function::AccumulatorArgs,
+        physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
     };
 
     #[test]
@@ -172,10 +170,7 @@ mod tests {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
             ignore_nulls: false,
-            ordering_req: &LexOrdering::new(vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: Default::default(),
-            }]),
+            order_bys: &[PhysicalSortExpr::new_default(col("a", &schema)?)],
             is_reversed: false,
             name: "round_trip",
             is_distinct: true,
