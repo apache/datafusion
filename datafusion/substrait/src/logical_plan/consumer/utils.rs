@@ -89,11 +89,11 @@ pub fn rename_field(
     name_idx: &mut usize,        // Index into dfs_names
 ) -> datafusion::common::Result<Field> {
     let name = next_struct_field_name(unnamed_field_suffix, dfs_names, name_idx)?;
-    rename_fields_datatype(field.clone().with_name(name), dfs_names, name_idx)
+    rename_fields_data_type(field.clone().with_name(name), dfs_names, name_idx)
 }
 
 /// Rename the field's data type but not the field itself.
-pub fn rename_fields_datatype(
+pub fn rename_fields_data_type(
     field: Field,
     dfs_names: &Vec<String>,
     name_idx: &mut usize, // Index into dfs_names
@@ -119,22 +119,22 @@ pub fn rename_data_type(
                 .collect::<datafusion::common::Result<_>>()?;
             Ok(DataType::Struct(children))
         }
-        DataType::List(inner) => Ok(DataType::List(Arc::new(rename_fields_datatype(
+        DataType::List(inner) => Ok(DataType::List(Arc::new(rename_fields_data_type(
             inner.as_ref().to_owned(),
             dfs_names,
             name_idx,
         )?))),
         DataType::LargeList(inner) => Ok(DataType::LargeList(Arc::new(
-            rename_fields_datatype(inner.as_ref().to_owned(), dfs_names, name_idx)?,
+            rename_fields_data_type(inner.as_ref().to_owned(), dfs_names, name_idx)?,
         ))),
         DataType::ListView(inner) => Ok(DataType::ListView(Arc::new(
-            rename_fields_datatype(inner.as_ref().to_owned(), dfs_names, name_idx)?,
+            rename_fields_data_type(inner.as_ref().to_owned(), dfs_names, name_idx)?,
         ))),
         DataType::LargeListView(inner) => Ok(DataType::LargeListView(Arc::new(
-            rename_fields_datatype(inner.as_ref().to_owned(), dfs_names, name_idx)?,
+            rename_fields_data_type(inner.as_ref().to_owned(), dfs_names, name_idx)?,
         ))),
         DataType::FixedSizeList(inner, len) => Ok(DataType::FixedSizeList(
-            Arc::new(rename_fields_datatype(
+            Arc::new(rename_fields_data_type(
                 inner.as_ref().to_owned(),
                 dfs_names,
                 name_idx,
@@ -148,7 +148,7 @@ pub fn rename_data_type(
                     let fields = fields
                         .iter()
                         .map(|f| {
-                            Ok(rename_fields_datatype(
+                            Ok(rename_fields_data_type(
                                 f.as_ref().to_owned(),
                                 dfs_names,
                                 name_idx,
@@ -179,12 +179,12 @@ pub fn rename_data_type(
         DataType::RunEndEncoded(run_ends_field, values_field) => {
             // At least the run_ends_field shouldn't contain names (since it should be i16/i32/i64),
             // but we'll try renaming its datatype just in case.
-            let run_ends_field = rename_fields_datatype(
+            let run_ends_field = rename_fields_data_type(
                 run_ends_field.as_ref().clone(),
                 dfs_names,
                 name_idx,
             )?;
-            let values_field = rename_fields_datatype(
+            let values_field = rename_fields_data_type(
                 values_field.as_ref().clone(),
                 dfs_names,
                 name_idx,
@@ -201,7 +201,7 @@ pub fn rename_data_type(
                 .map(|(i, f)| {
                     Ok((
                         i,
-                        Arc::new(rename_fields_datatype(
+                        Arc::new(rename_fields_data_type(
                             f.as_ref().clone(),
                             dfs_names,
                             name_idx,
