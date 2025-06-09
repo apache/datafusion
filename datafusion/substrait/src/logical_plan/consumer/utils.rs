@@ -148,11 +148,11 @@ pub fn rename_data_type(
                     let fields = fields
                         .iter()
                         .map(|f| {
-                            Ok(rename_fields_data_type(
+                            rename_fields_data_type(
                                 f.as_ref().to_owned(),
                                 dfs_names,
                                 name_idx,
-                            )?)
+                            )
                         })
                         .collect::<datafusion::common::Result<_>>()?;
                     Ok(DataType::Struct(fields))
