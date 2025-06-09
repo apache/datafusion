@@ -246,6 +246,10 @@ impl ExecutionPlan for DataSinkExec {
     fn metrics(&self) -> Option<MetricsSet> {
         self.sink.metrics()
     }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(self)
+    }
 }
 
 /// Create a output record batch with a count

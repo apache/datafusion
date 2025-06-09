@@ -1048,7 +1048,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1118,6 +1118,8 @@ pub mod physical_plan_node {
         Unnest(::prost::alloc::boxed::Box<super::UnnestExecNode>),
         #[prost(message, tag = "31")]
         JsonScan(super::JsonScanExecNode),
+        #[prost(message, tag = "32")]
+        YieldStream(::prost::alloc::boxed::Box<super::YieldStreamExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1570,6 +1572,13 @@ pub struct JsonScanExecNode {
 pub struct AvroScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct YieldStreamExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(uint32, tag = "2")]
+    pub frequency: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HashJoinExecNode {
