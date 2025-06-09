@@ -133,7 +133,7 @@ impl ScalarUDFImpl for ToHexFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(match arg_types[0] {
-            Int32 | Int64 | UInt32 | UInt64 => Utf8,
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Utf8,
             _ => {
                 return plan_err!("The to_hex function can only accept integers.");
             }
@@ -161,60 +161,49 @@ impl ScalarUDFImpl for ToHexFunc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Int32Array, StringArray, UInt64Array};
+    use arrow::array::{Int32Array, Int64Array, StringArray, UInt64Array};
     use datafusion_common::cast::as_string_array;
 
     use super::*;
 
     #[test]
-    // Test to_hex function for zero
-    fn to_hex_zero() -> Result<()> {
-        let array = vec![0].into_iter().collect::<Int32Array>();
+    fn to_hex_base() -> Result<()> {
+        let array = Int32Array::from(vec![Some(100), Some(0), None, Some(-1)]);
         let array_ref = Arc::new(array);
         let hex_value_arc = to_hex::<Int32Type>(&[array_ref])?;
         let hex_value = as_string_array(&hex_value_arc)?;
-        let expected = StringArray::from(vec![Some("0")]);
+        let expected = StringArray::from(vec![
+            Some("64"),
+            Some("0"),
+            None,
+            Some("ffffffffffffffff"),
+        ]);
         assert_eq!(&expected, hex_value);
-
         Ok(())
     }
 
     #[test]
-    // Test to_hex function for positive number
-    fn to_hex_positive_number() -> Result<()> {
-        let array = vec![100].into_iter().collect::<Int32Array>();
+    fn to_hex_large_integers() -> Result<()> {
+        let array = vec![i64::MAX, i64::MIN].into_iter().collect::<Int64Array>();
         let array_ref = Arc::new(array);
-        let hex_value_arc = to_hex::<Int32Type>(&[array_ref])?;
+        let hex_value_arc = to_hex::<Int64Type>(&[array_ref])?;
         let hex_value = as_string_array(&hex_value_arc)?;
-        let expected = StringArray::from(vec![Some("64")]);
+        let expected =
+            StringArray::from(vec![Some("7fffffffffffffff"), Some("8000000000000000")]);
         assert_eq!(&expected, hex_value);
-
         Ok(())
     }
 
     #[test]
-    // Test to_hex function for negative number
-    fn to_hex_negative_number() -> Result<()> {
-        let array = vec![-1].into_iter().collect::<Int32Array>();
-        let array_ref = Arc::new(array);
-        let hex_value_arc = to_hex::<Int32Type>(&[array_ref])?;
-        let hex_value = as_string_array(&hex_value_arc)?;
-        let expected = StringArray::from(vec![Some("ffffffffffffffff")]);
-        assert_eq!(&expected, hex_value);
-
-        Ok(())
-    }
-
-    #[test]
-    // Test to_hex function for unsigned integer
-    fn to_hex_unsigned_int() -> Result<()> {
-        let array = vec![100].into_iter().collect::<UInt64Array>();
+    fn to_hex_large_unsigned_integers() -> Result<()> {
+        let array = vec![u64::MAX, u64::MIN]
+            .into_iter()
+            .collect::<UInt64Array>();
         let array_ref = Arc::new(array);
         let hex_value_arc = to_hex::<UInt64Type>(&[array_ref])?;
         let hex_value = as_string_array(&hex_value_arc)?;
-        let expected = StringArray::from(vec![Some("64")]);
+        let expected = StringArray::from(vec![Some("ffffffffffffffff"), Some("0")]);
         assert_eq!(&expected, hex_value);
-
         Ok(())
     }
 }
