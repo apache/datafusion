@@ -30,6 +30,7 @@ use crate::projection::{
     all_alias_free_columns, new_projections_for_columns, update_ordering, ProjectionExec,
 };
 use crate::stream::RecordBatchStreamAdapter;
+use crate::yield_stream::wrap_yield_stream;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -68,6 +69,8 @@ pub struct StreamingTableExec {
     limit: Option<usize>,
     cache: PlanProperties,
     metrics: ExecutionPlanMetricsSet,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl StreamingTableExec {
@@ -112,6 +115,7 @@ impl StreamingTableExec {
             limit,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
+            cooperative: true,
         })
     }
 
@@ -262,7 +266,7 @@ impl ExecutionPlan for StreamingTableExec {
         partition: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.partitions[partition].execute(ctx);
+        let stream = self.partitions[partition].execute(Arc::clone(&ctx));
         let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.projected_schema),
@@ -272,16 +276,13 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         };
+        let stream = wrap_yield_stream(projected_stream, &ctx, self.cooperative);
+
         Ok(match self.limit {
-            None => projected_stream,
+            None => stream,
             Some(fetch) => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-                Box::pin(LimitStream::new(
-                    projected_stream,
-                    0,
-                    Some(fetch),
-                    baseline_metrics,
-                ))
+                Box::pin(LimitStream::new(stream, 0, Some(fetch), baseline_metrics))
             }
         })
     }
@@ -338,7 +339,12 @@ impl ExecutionPlan for StreamingTableExec {
             limit,
             cache: self.cache.clone(),
             metrics: self.metrics.clone(),
+            cooperative: self.cooperative,
         }))
+    }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        self.cooperative.then_some(self)
     }
 }
 
