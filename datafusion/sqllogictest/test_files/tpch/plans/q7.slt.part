@@ -63,7 +63,7 @@ logical_plan
 03)----Aggregate: groupBy=[[shipping.supp_nation, shipping.cust_nation, shipping.l_year]], aggr=[[sum(shipping.volume)]]
 04)------SubqueryAlias: shipping
 05)--------Projection: n1.n_name AS supp_nation, n2.n_name AS cust_nation, date_part(Utf8("YEAR"), lineitem.l_shipdate) AS l_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) AS volume
-06)----------Inner Join: customer.c_nationkey = n2.n_nationkey Filter: n1.n_name = Utf8("FRANCE") AND n2.n_name = Utf8("GERMANY") OR n1.n_name = Utf8("GERMANY") AND n2.n_name = Utf8("FRANCE")
+06)----------Inner Join: customer.c_nationkey = n2.n_nationkey Filter: n1.n_name = Utf8View("FRANCE") AND n2.n_name = Utf8View("GERMANY") OR n1.n_name = Utf8View("GERMANY") AND n2.n_name = Utf8View("FRANCE")
 07)------------Projection: lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_shipdate, customer.c_nationkey, n1.n_name
 08)--------------Inner Join: supplier.s_nationkey = n1.n_nationkey
 09)----------------Projection: supplier.s_nationkey, lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_shipdate, customer.c_nationkey
@@ -78,11 +78,11 @@ logical_plan
 18)------------------------TableScan: orders projection=[o_orderkey, o_custkey]
 19)--------------------TableScan: customer projection=[c_custkey, c_nationkey]
 20)----------------SubqueryAlias: n1
-21)------------------Filter: nation.n_name = Utf8("FRANCE") OR nation.n_name = Utf8("GERMANY")
-22)--------------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8("FRANCE") OR nation.n_name = Utf8("GERMANY")]
+21)------------------Filter: nation.n_name = Utf8View("FRANCE") OR nation.n_name = Utf8View("GERMANY")
+22)--------------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8View("FRANCE") OR nation.n_name = Utf8View("GERMANY")]
 23)------------SubqueryAlias: n2
-24)--------------Filter: nation.n_name = Utf8("GERMANY") OR nation.n_name = Utf8("FRANCE")
-25)----------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8("GERMANY") OR nation.n_name = Utf8("FRANCE")]
+24)--------------Filter: nation.n_name = Utf8View("GERMANY") OR nation.n_name = Utf8View("FRANCE")
+25)----------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8View("GERMANY") OR nation.n_name = Utf8View("FRANCE")]
 physical_plan
 01)SortPreservingMergeExec: [supp_nation@0 ASC NULLS LAST, cust_nation@1 ASC NULLS LAST, l_year@2 ASC NULLS LAST]
 02)--SortExec: expr=[supp_nation@0 ASC NULLS LAST, cust_nation@1 ASC NULLS LAST, l_year@2 ASC NULLS LAST], preserve_partitioning=[true]

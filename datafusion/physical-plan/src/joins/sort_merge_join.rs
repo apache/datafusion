@@ -70,9 +70,8 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::PhysicalExprRef;
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use futures::{Stream, StreamExt};
 
@@ -193,11 +192,21 @@ impl SortMergeJoinExec {
                 (left, right)
             })
             .unzip();
+        let Some(left_sort_exprs) = LexOrdering::new(left_sort_exprs) else {
+            return plan_err!(
+                "SortMergeJoinExec requires valid sort expressions for its left side"
+            );
+        };
+        let Some(right_sort_exprs) = LexOrdering::new(right_sort_exprs) else {
+            return plan_err!(
+                "SortMergeJoinExec requires valid sort expressions for its right side"
+            );
+        };
 
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
         let cache =
-            Self::compute_properties(&left, &right, Arc::clone(&schema), join_type, &on);
+            Self::compute_properties(&left, &right, Arc::clone(&schema), join_type, &on)?;
         Ok(Self {
             left,
             right,
@@ -206,8 +215,8 @@ impl SortMergeJoinExec {
             join_type,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
-            left_sort_exprs: LexOrdering::new(left_sort_exprs),
-            right_sort_exprs: LexOrdering::new(right_sort_exprs),
+            left_sort_exprs,
+            right_sort_exprs,
             sort_options,
             null_equals_null,
             cache,
@@ -289,7 +298,7 @@ impl SortMergeJoinExec {
         schema: SchemaRef,
         join_type: JoinType,
         join_on: JoinOnRef,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
@@ -299,17 +308,17 @@ impl SortMergeJoinExec {
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
             join_on,
-        );
+        )?;
 
         let output_partitioning =
-            symmetric_join_output_partitioning(left, right, &join_type);
+            symmetric_join_output_partitioning(left, right, &join_type)?;
 
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             EmissionType::Incremental,
             boundedness_from_children([left, right]),
-        )
+        ))
     }
 
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
@@ -409,10 +418,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![
-            Some(LexRequirement::from(self.left_sort_exprs.clone())),
-            Some(LexRequirement::from(self.right_sort_exprs.clone())),
+            Some(OrderingRequirements::from(self.left_sort_exprs.clone())),
+            Some(OrderingRequirements::from(self.right_sort_exprs.clone())),
         ]
     }
 
@@ -2587,7 +2596,7 @@ mod tests {
         JoinSide,
     };
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::disk_manager::DiskManagerConfig;
+    use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::TaskContext;
     use datafusion_expr::Operator;
@@ -4125,7 +4134,9 @@ mod tests {
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
             .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
@@ -4205,7 +4216,9 @@ mod tests {
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
             .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
@@ -4263,7 +4276,9 @@ mod tests {
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+            )
             .build_arc()?;
 
         for batch_size in [1, 50] {
@@ -4366,7 +4381,9 @@ mod tests {
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(500, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+            )
             .build_arc()?;
 
         for batch_size in [1, 50] {

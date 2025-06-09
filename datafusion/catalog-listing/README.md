@@ -25,6 +25,12 @@ This crate is a submodule of DataFusion with [ListingTable], an implementation
 of [TableProvider] based on files in a directory (either locally or on remote
 object storage such as S3).
 
+Most projects should use the [`datafusion`] crate directly, which re-exports
+this module. If you are already using the [`datafusion`] crate, there is no
+reason to use this crate directly in your project as well.
+
+[df]: https://crates.io/crates/datafusion
 [df]: https://crates.io/crates/datafusion
 [listingtable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 [tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
+[`datafusion`]: https://crates.io/crates/datafusion
