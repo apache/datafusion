@@ -167,7 +167,6 @@ async fn test_files() -> Vec<TestDataSet> {
     (*files).clone()
 }
 
-
 struct RunResult {
     results: Vec<RecordBatch>,
     explain_plan: String,
@@ -198,11 +197,14 @@ async fn run_query_with_config(
     ctx.register_table("test_table", table).unwrap();
 
     let results = ctx.sql(query).await.unwrap().collect().await.unwrap();
-    let explain_batches = ctx.sql(&format!("EXPLAIN ANALYZE {query}")).await.unwrap().
-        collect().await.unwrap();
-    let explain_plan = pretty_format_batches(&explain_batches)
+    let explain_batches = ctx
+        .sql(&format!("EXPLAIN ANALYZE {query}"))
+        .await
         .unwrap()
-        .to_string();
+        .collect()
+        .await
+        .unwrap();
+    let explain_plan = pretty_format_batches(&explain_batches).unwrap().to_string();
     RunResult {
         results,
         explain_plan,
@@ -258,7 +260,10 @@ async fn run_query(
         run_query_with_config(&query, cfg_with_dynamic_filters, dataset.clone()).await;
     // Check that dynamic filters were actually pushed down
     if !has_dynamic_filter_expr_pushdown(&result.explain_plan) {
-        panic!("Dynamic filter was not pushed down in query: {query}\n\n{}", result.explain_plan);
+        panic!(
+            "Dynamic filter was not pushed down in query: {query}\n\n{}",
+            result.explain_plan
+        );
     }
 
     RunQueryResult {
