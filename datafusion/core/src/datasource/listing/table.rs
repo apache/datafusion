@@ -38,7 +38,7 @@ use datafusion_datasource::{
     compute_all_files_statistics,
     file_groups::FileGroup,
     file_scan_config::{FileScanConfig, FileScanConfigBuilder},
-    schema_adapter::DefaultSchemaAdapterFactory,
+    schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory},
 };
 use datafusion_execution::{
     cache::{cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache},
@@ -83,6 +83,8 @@ pub struct ListingTableConfig {
     pub options: Option<ListingOptions>,
     /// Tracks the source of the schema information
     schema_source: SchemaSource,
+    /// Optional [`SchemaAdapterFactory`] for creating schema adapters
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl ListingTableConfig {
@@ -94,6 +96,7 @@ impl ListingTableConfig {
             file_schema: None,
             options: None,
             schema_source: SchemaSource::None,
+            schema_adapter_factory: None,
         }
     }
 
@@ -106,6 +109,7 @@ impl ListingTableConfig {
             file_schema: None,
             options: None,
             schema_source: SchemaSource::None,
+            schema_adapter_factory: None,
         }
     }
 
@@ -113,6 +117,7 @@ impl ListingTableConfig {
     pub fn schema_source(&self) -> SchemaSource {
         self.schema_source
     }
+
     /// Set the `schema` for the overall [`ListingTable`]
     ///
     /// [`ListingTable`] will automatically coerce, when possible, the schema
@@ -129,6 +134,7 @@ impl ListingTableConfig {
             file_schema: Some(schema),
             options: self.options,
             schema_source: SchemaSource::Specified,
+            schema_adapter_factory: self.schema_adapter_factory,
         }
     }
 
@@ -142,6 +148,7 @@ impl ListingTableConfig {
             file_schema: self.file_schema,
             options: Some(listing_options),
             schema_source: self.schema_source,
+            schema_adapter_factory: self.schema_adapter_factory,
         }
     }
 
@@ -222,6 +229,7 @@ impl ListingTableConfig {
             file_schema: self.file_schema,
             options: Some(listing_options),
             schema_source: self.schema_source,
+            schema_adapter_factory: self.schema_adapter_factory,
         })
     }
 
@@ -240,6 +248,7 @@ impl ListingTableConfig {
                     file_schema,
                     options: _,
                     schema_source,
+                    schema_adapter_factory,
                 } = self;
 
                 let (schema, new_schema_source) = match file_schema {
@@ -261,6 +270,7 @@ impl ListingTableConfig {
                     file_schema: Some(schema),
                     options: Some(options),
                     schema_source: new_schema_source,
+                    schema_adapter_factory,
                 })
             }
             None => internal_err!("No `ListingOptions` set for inferring schema"),
@@ -302,10 +312,36 @@ impl ListingTableConfig {
                     file_schema: self.file_schema,
                     options: Some(options),
                     schema_source: self.schema_source,
+                    schema_adapter_factory: self.schema_adapter_factory,
                 })
             }
             None => config_err!("No `ListingOptions` set for inferring schema"),
         }
+    }
+
+    /// Set the [`SchemaAdapterFactory`] for the [`ListingTable`]
+    ///
+    /// The schema adapter factory is used to create schema adapters that can
+    /// handle schema evolution and type conversions when reading files with
+    /// different schemas than the table schema.
+    ///
+    /// If not provided, a default schema adapter factory will be used.
+    pub fn with_schema_adapter_factory(
+        self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        Self {
+            table_paths: self.table_paths,
+            file_schema: self.file_schema,
+            options: self.options,
+            schema_source: self.schema_source,
+            schema_adapter_factory: Some(schema_adapter_factory),
+        }
+    }
+
+    /// Get the [`SchemaAdapterFactory`] for this configuration
+    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.as_ref()
     }
 }
 
