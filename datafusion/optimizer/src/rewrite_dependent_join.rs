@@ -1005,16 +1005,16 @@ mod tests {
     macro_rules! assert_dependent_join_rewrite_err {
         (
             $plan:expr,
-            @ $expected:literal $(,)?
+            $expected:literal $(,)?
         ) => {{
             let mut index = DependentJoinRewriter::new(Arc::new(AliasGenerator::new()));
-            let transformed = index.rewrite_subqueries_into_dependent_joins($plan.clone());
-            if let Err(err) = transformed{
-                assert_eq!(err, @ $expected);
-            } else{
-                panic!("rewriting {} was not returning error",$plan)
+            let transformed =
+                index.rewrite_subqueries_into_dependent_joins($plan.clone());
+            if let Err(err) = transformed {
+                assert_eq!(format!("{err}"), $expected);
+            } else {
+                panic!("rewriting {} was not returning error", $plan)
             }
-
         }};
     }
 
@@ -2205,7 +2205,7 @@ mod tests {
         //   TableScan: t2
         assert_dependent_join_rewrite_err!(
             plan,
-            @"This feature is not implemented: subquery inside lateral join condition is not supported"
+            "This feature is not implemented: subquery inside lateral join condition is not supported"
         );
 
         Ok(())
