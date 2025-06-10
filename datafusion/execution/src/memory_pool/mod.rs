@@ -359,7 +359,7 @@ impl MemoryReservation {
         if size != 0 {
             self.shrink(size)
         }
-       
+
         self.registration
             .pool
             .shrink_with_arrays(self, &self.arrays);
