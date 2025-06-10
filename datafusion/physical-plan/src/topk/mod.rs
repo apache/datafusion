@@ -243,11 +243,12 @@ impl TopK {
         // update memory reservation
         self.reservation.try_resize(self.size())?;
 
+        // flag the topK as finished if we know that all
+        // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
+        // which means the top K won't change and the computation can be finished early.
+        self.attempt_early_completion(&batch)?;
+
         if updated {
-            // flag the topK as finished if we know that all
-            // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
-            // which means the top K won't change and the computation can be finished early.
-            self.attempt_early_completion(&batch)?;
             // update the filter representation of our TopK heap
             self.update_filter()?;
         }

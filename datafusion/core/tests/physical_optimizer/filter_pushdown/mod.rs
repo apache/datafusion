@@ -20,6 +20,7 @@ use std::sync::{Arc, LazyLock};
 use arrow::{
     array::record_batch,
     datatypes::{DataType, Field, Schema, SchemaRef},
+    util::pretty::pretty_format_batches,
 };
 use arrow_schema::SortOptions;
 use datafusion::{
@@ -28,7 +29,7 @@ use datafusion::{
         expressions::{BinaryExpr, Column, Literal},
         PhysicalExpr,
     },
-    prelude::{SessionConfig, SessionContext},
+    prelude::{ParquetReadOptions, SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
 use datafusion_common::config::ConfigOptions;
@@ -36,7 +37,9 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::{aggregate::AggregateExprBuilder, Partitioning};
 use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_optimizer::{
+    filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
+};
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
@@ -47,7 +50,7 @@ use datafusion_physical_plan::{
 };
 
 use futures::StreamExt;
-use object_store::memory::InMemory;
+use object_store::{memory::InMemory, ObjectStore};
 use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
 
 mod util;
@@ -406,9 +409,10 @@ async fn test_topk_dynamic_filter_pushdown() {
     "
     );
 
-    // Actually apply the optimization to the plan
+    // Actually apply the optimization to the plan and put some data through it to check that the filter is updated to reflect the TopK state
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
+    let plan = FilterPushdown::new().optimize(plan, &config).unwrap();
     let config = SessionConfig::new().with_batch_size(2);
     let session_ctx = SessionContext::new_with_config(config);
     session_ctx.register_object_store(
@@ -428,6 +432,62 @@ async fn test_topk_dynamic_filter_pushdown() {
     -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ b@1 > bd ]
     "
     );
+}
+
+/// Integration test for dynamic filter pushdown with TopK.
+/// We use an integration test because there are complex interactions in the optimizer rules
+/// that the unit tests applying a single optimizer rule do not cover.
+#[tokio::test]
+async fn test_topk_dynamic_filter_pushdown_integration() {
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let mut cfg = SessionConfig::new();
+    cfg.options_mut().execution.parquet.pushdown_filters = true;
+    cfg.options_mut().execution.parquet.max_row_group_size = 128;
+    let ctx = SessionContext::new_with_config(cfg);
+    ctx.register_object_store(
+        ObjectStoreUrl::parse("memory://").unwrap().as_ref(),
+        Arc::clone(&store),
+    );
+    ctx.sql(
+        r"
+COPY  (
+  SELECT 1372708800 + value AS t 
+  FROM generate_series(0, 99999)
+  ORDER BY t
+ ) TO 'memory:///1.parquet'
+STORED AS PARQUET;
+  ",
+    )
+    .await
+    .unwrap()
+    .collect()
+    .await
+    .unwrap();
+
+    // Register the file with the context
+    ctx.register_parquet(
+        "topk_pushdown",
+        "memory:///1.parquet",
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    // Create a TopK query that will use dynamic filter pushdown
+    let df = ctx
+        .sql(r"EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t LIMIT 10;")
+        .await
+        .unwrap();
+    let batches = df.collect().await.unwrap();
+    let explain = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    assert!(explain.contains("output_rows=128")); // Read 1 row group
+    assert!(explain.contains("t@0 < 1372708809")); // Dynamic filter was applied
+    assert!(
+        explain.contains("pushdown_rows_matched=128, pushdown_rows_pruned=99872"),
+        "{explain}"
+    );
+    // Pushdown pruned most rows
 }
 
 /// Schema:
