@@ -182,13 +182,12 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
             for buffer in array_data.buffers() {
                 // We need to track the memory usage of the buffers
                 let addr = buffer.data_ptr().as_ptr().addr();
-                let ref_count = self
+                let ref_count = *self
                     .references
                     .lock()
                     .entry(addr)
                     .and_modify(|ref_count| *ref_count -= buffer.len())
-                    .or_insert(1)
-                    .clone();
+                    .or_insert(1);
 
                 // If this is the last reference to this buffer, we need to shrink the pool
                 if ref_count == 0 {
@@ -221,6 +220,8 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
         arrays: &[Arc<dyn arrow::array::Array>],
     ) -> Result<()> {
         for array in arrays.iter() {
+            // also take into account overhead
+            self.try_grow(reservation, array.get_array_memory_size() - array.get_buffer_memory_size())?;
             let array_data = array.to_data();
             let buffers = array_data.buffers();
             for buffer in buffers {
