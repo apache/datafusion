@@ -151,7 +151,7 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
         for array in arrays {
             let array_data = array.to_data();
             for buffer in array_data.buffers() {
-                let addr = buffer.data_ptr().as_ptr().addr();
+                let addr = buffer.data_ptr().as_ptr() as usize;
                 let ref_count = *self
                     .references
                     .lock()
@@ -181,7 +181,7 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
             let array_data = array.to_data();
             for buffer in array_data.buffers() {
                 // We need to track the memory usage of the buffers
-                let addr = buffer.data_ptr().as_ptr().addr();
+                let addr = buffer.data_ptr().as_ptr() as usize;
                 let ref_count = *self
                     .references
                     .lock()
@@ -225,7 +225,7 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
             let array_data = array.to_data();
             let buffers = array_data.buffers();
             for buffer in buffers {
-                let addr = buffer.data_ptr().as_ptr().addr();
+                let addr = buffer.data_ptr().as_ptr() as usize;
                 let ref_count = *self
                     .references
                     .lock()
