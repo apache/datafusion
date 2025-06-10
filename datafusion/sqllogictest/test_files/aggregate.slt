@@ -5029,6 +5029,20 @@ select count(distinct column1), count(distinct column2) from dict_test group by 
 statement ok
 drop table dict_test;
 
+## count distinct dictionary with null values
+statement ok
+create table dict_null_test as
+    select arrow_cast(NULL, 'Dictionary(Int32, Utf8)') as d
+    from (values (1), (2), (3), (4), (5));
+
+query I
+select count(distinct d) from dict_null_test;
+----
+0
+
+statement ok
+drop table dict_null_test;
+
 # avg_duration
 
 statement ok
