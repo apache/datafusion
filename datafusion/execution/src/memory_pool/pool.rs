@@ -182,7 +182,7 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
             let array_data = array.to_data();
             for buffer in array_data.buffers() {
                 // We need to track the memory usage of the buffers
-                let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
+                let addr = buffer.as_ptr().addr();
                 let ref_count = self
                     .references
                     .lock()
