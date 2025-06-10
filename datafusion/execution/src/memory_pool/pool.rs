@@ -149,19 +149,22 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
         arrays: &[Arc<dyn arrow::array::Array>],
     ) {
         for array in arrays {
-            let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
-            let ref_count = self
-                .references
-                .lock()
-                .entry(addr)
-                .and_modify(|ref_count| *ref_count += array.get_array_memory_size())
-                .or_insert(1)
-                .clone();
+            let array_data = array.to_data();
+            for buffer in array_data.buffers() {
+                let addr = buffer.as_ptr().addr();
+                let ref_count = self
+                    .references
+                    .lock()
+                    .entry(addr)
+                    .and_modify(|ref_count| *ref_count += array.get_array_memory_size())
+                    .or_insert(1)
+                    .clone();
 
-            // If this is the first time we see this array, we need to grow the pool
-            if ref_count == 1 {
-                let additional = array.get_array_memory_size();
-                self.grow(reservation, additional);
+                // If this is the first time we see this array, we need to grow the pool
+                if ref_count == 1 {
+                    let additional = array.get_array_memory_size();
+                    self.grow(reservation, additional);
+                }
             }
         }
     }
@@ -176,19 +179,23 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
         arrays: &[Arc<dyn arrow::array::Array>],
     ) {
         for array in arrays {
-            let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
-            let ref_count = self
-                .references
-                .lock()
-                .entry(addr)
-                .and_modify(|ref_count| *ref_count -= array.get_array_memory_size())
-                .or_insert(1)
-                .clone();
+            let array_data = array.to_data();
+            for buffer in array_data.buffers() {
+                // We need to track the memory usage of the buffers
+                let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
+                let ref_count = self
+                    .references
+                    .lock()
+                    .entry(addr)
+                    .and_modify(|ref_count| *ref_count -= buffer.len())
+                    .or_insert(1)
+                    .clone();
 
-            // If this is the last reference to this array, we need to shrink the pool
-            if ref_count == 0 {
-                let additional = array.get_array_memory_size();
-                self.shrink(reservation, additional);
+                // If this is the last reference to this buffer, we need to shrink the pool
+                if ref_count == 0 {
+                    let additional = array.get_array_memory_size();
+                    self.shrink(reservation, additional);
+                }
             }
         }
     }
@@ -214,20 +221,24 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
         reservation: &MemoryReservation,
         arrays: &[Arc<dyn arrow::array::Array>],
     ) -> Result<()> {
-        for array in arrays {
-            let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
-            let ref_count = self
-                .references
-                .lock()
-                .entry(addr)
-                .and_modify(|ref_count| *ref_count += array.get_array_memory_size())
-                .or_insert(1)
-                .clone();
+        for array in arrays.iter() {
+            let array_data = array.to_data();
+            let buffers = array_data.buffers();
+            for buffer in buffers {
+                let addr = buffer.as_ptr().addr();
+                let ref_count = self
+                    .references
+                    .lock()
+                    .entry(addr)
+                    .and_modify(|ref_count| *ref_count += 1)
+                    .or_insert(1)
+                    .clone();
 
-            // If this is the first time we see this array, we need to grow the pool
-            if ref_count == 1 {
-                let additional = array.get_array_memory_size();
-                self.try_grow(reservation, additional)?;
+                // If this is the first time we see this array, we need to grow the pool
+                if ref_count == 1 {
+                    let additional = array.get_array_memory_size();
+                    self.try_grow(reservation, additional)?;
+                }
             }
         }
         Ok(())
