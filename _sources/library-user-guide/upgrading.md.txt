@@ -194,6 +194,14 @@ working but no one knows due to lack of test coverage).
 
 [api deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines
 
+### `PartitionedFile` added as an arguement to the `FileOpener` trait
+
+This is necessary to properly fix filter pushdown for filters that combine partition
+columns and file columns (e.g. `day = username['dob']`).
+
+If you implemented a custom `FileOpener` you will need to add the `PartitionedFile` argument
+but are not required to use it in any way.
+
 ## DataFusion `47.0.0`
 
 This section calls out some of the major changes in the `47.0.0` release of DataFusion.

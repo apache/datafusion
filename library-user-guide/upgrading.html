@@ -667,6 +667,22 @@
      Removed
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#partitionedfile-added-as-an-arguement-to-the-fileopener-trait">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       PartitionedFile
+      </span>
+     </code>
+     added as an arguement to the
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       FileOpener
+      </span>
+     </code>
+     trait
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1031,6 +1047,13 @@ process described in the <a class="reference external" href="https://datafusion.
 cover the new <code class="docutils literal notranslate"><span class="pre">DataSourceExec</span></code> rather than the older structures. As we evolve
 <code class="docutils literal notranslate"><span class="pre">DataSource</span></code>, the old structures began to show signs of “bit rotting” (not
 working but no one knows due to lack of test coverage).</p>
+</section>
+<section id="partitionedfile-added-as-an-arguement-to-the-fileopener-trait">
+<h3><code class="docutils literal notranslate"><span class="pre">PartitionedFile</span></code> added as an arguement to the <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> trait<a class="headerlink" href="#partitionedfile-added-as-an-arguement-to-the-fileopener-trait" title="Link to this heading">¶</a></h3>
+<p>This is necessary to properly fix filter pushdown for filters that combine partition
+columns and file columns (e.g. <code class="docutils literal notranslate"><span class="pre">day</span> <span class="pre">=</span> <span class="pre">username['dob']</span></code>).</p>
+<p>If you implemented a custom <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> you will need to add the <code class="docutils literal notranslate"><span class="pre">PartitionedFile</span></code> argument
+but are not required to use it in any way.</p>
 </section>
 </section>
 <section id="datafusion-47-0-0">
