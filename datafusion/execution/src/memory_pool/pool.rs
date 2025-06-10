@@ -157,7 +157,7 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
                     .lock()
                     .entry(addr)
                     .and_modify(|ref_count| *ref_count += array.get_array_memory_size())
-                    .or_insert(1)
+                    .or_insert(1);
 
                 // If this is the first time we see this array, we need to grow the pool
                 if ref_count == 1 {
