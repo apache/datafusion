@@ -17,17 +17,14 @@
 
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
-use arrow::array::{
-    as_fixed_size_list_array, Array, ArrayRef, BooleanArray, Datum, OffsetSizeTrait,
-    Scalar,
-};
+use arrow::array::{Array, ArrayRef, BooleanArray, Datum, Scalar};
 use arrow::buffer::BooleanBuffer;
-use arrow::datatypes::{ArrowNativeType, DataType};
+use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::cast::as_generic_list_array;
+use datafusion_common::cast::{as_fixed_size_list_array, as_generic_list_array};
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{InList, ScalarFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
@@ -219,118 +216,140 @@ fn array_has_inner_for_scalar(
     haystack: &ArrayRef,
     needle: &dyn Datum,
 ) -> Result<ArrayRef> {
-    match haystack.data_type() {
-        DataType::List(_) => array_has_dispatch_for_scalar::<i32>(haystack, needle),
-        DataType::LargeList(_) => array_has_dispatch_for_scalar::<i64>(haystack, needle),
-        DataType::FixedSizeList(_, _) => {
-            array_has_dispatch_for_fixed_size_list_scalar(haystack, needle)
-        }
-        _ => exec_err!(
-            "array_has does not support type '{:?}'.",
-            haystack.data_type()
-        ),
-    }
+    let haystack = haystack.as_ref().try_into()?;
+    array_has_dispatch_for_scalar(haystack, needle)
 }
 
 fn array_has_inner_for_array(haystack: &ArrayRef, needle: &ArrayRef) -> Result<ArrayRef> {
-    match haystack.data_type() {
-        DataType::List(_) => array_has_dispatch_for_array::<i32>(haystack, needle),
-        DataType::LargeList(_) => array_has_dispatch_for_array::<i64>(haystack, needle),
-        DataType::FixedSizeList(_, _) => {
-            array_has_dispatch_for_fixed_size_list_array(haystack, needle)
+    let haystack = haystack.as_ref().try_into()?;
+    array_has_dispatch_for_array(haystack, needle)
+}
+
+enum ArrayWrapper<'a> {
+    FixedSizeList(&'a arrow::array::FixedSizeListArray),
+    List(&'a arrow::array::GenericListArray<i32>),
+    LargeList(&'a arrow::array::GenericListArray<i64>),
+}
+
+impl<'a> TryFrom<&'a dyn Array> for ArrayWrapper<'a> {
+    type Error = DataFusionError;
+
+    fn try_from(
+        value: &'a dyn Array,
+    ) -> std::result::Result<ArrayWrapper<'a>, Self::Error> {
+        match value.data_type() {
+            DataType::List(_) => {
+                Ok(ArrayWrapper::List(as_generic_list_array::<i32>(value)?))
+            }
+            DataType::LargeList(_) => Ok(ArrayWrapper::LargeList(
+                as_generic_list_array::<i64>(value)?,
+            )),
+            DataType::FixedSizeList(_, _) => Ok(ArrayWrapper::FixedSizeList(
+                as_fixed_size_list_array(value)?,
+            )),
+            _ => exec_err!("array_has does not support type '{:?}'.", value.data_type()),
         }
-        _ => exec_err!(
-            "array_has does not support type '{:?}'.",
-            haystack.data_type()
-        ),
     }
 }
 
-macro_rules! array_has_dispatch_for_array {
-    ($haystack:expr, $needle:expr) => {{
-        let mut boolean_builder = BooleanArray::builder($haystack.len());
-
-        for (i, arr) in $haystack.iter().enumerate() {
-            if arr.is_none() || $needle.is_null(i) {
-                boolean_builder.append_null();
-                continue;
-            }
-            let arr = arr.unwrap();
-            let is_nested = arr.data_type().is_nested();
-            let needle_row = Scalar::new($needle.slice(i, 1));
-            let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
-            boolean_builder.append_value(eq_array.true_count() > 0);
+impl<'a> ArrayWrapper<'a> {
+    fn len(&self) -> usize {
+        match self {
+            ArrayWrapper::FixedSizeList(arr) => arr.len(),
+            ArrayWrapper::List(arr) => arr.len(),
+            ArrayWrapper::LargeList(arr) => arr.len(),
         }
+    }
 
-        Ok(Arc::new(boolean_builder.finish()))
-    }};
+    fn iter(&self) -> Box<dyn Iterator<Item = Option<ArrayRef>> + 'a> {
+        match self {
+            ArrayWrapper::FixedSizeList(arr) => Box::new(arr.iter()),
+            ArrayWrapper::List(arr) => Box::new(arr.iter()),
+            ArrayWrapper::LargeList(arr) => Box::new(arr.iter()),
+        }
+    }
+
+    fn values(&self) -> &ArrayRef {
+        match self {
+            ArrayWrapper::FixedSizeList(arr) => arr.values(),
+            ArrayWrapper::List(arr) => arr.values(),
+            ArrayWrapper::LargeList(arr) => arr.values(),
+        }
+    }
+
+    fn value_type(&self) -> DataType {
+        match self {
+            ArrayWrapper::FixedSizeList(arr) => arr.value_type(),
+            ArrayWrapper::List(arr) => arr.value_type(),
+            ArrayWrapper::LargeList(arr) => arr.value_type(),
+        }
+    }
+
+    fn offsets(&self) -> Box<dyn Iterator<Item = usize> + 'a> {
+        match self {
+            ArrayWrapper::FixedSizeList(arr) => {
+                let offsets = (0..arr.len())
+                    .step_by(arr.value_length() as usize)
+                    .collect::<Vec<_>>();
+                Box::new(offsets.into_iter())
+            }
+            ArrayWrapper::List(arr) => {
+                Box::new(arr.offsets().iter().map(|o| (*o) as usize))
+            }
+            ArrayWrapper::LargeList(arr) => {
+                Box::new(arr.offsets().iter().map(|o| (*o) as usize))
+            }
+        }
+    }
 }
 
-fn array_has_dispatch_for_fixed_size_list_array(
-    haystack: &ArrayRef,
+fn array_has_dispatch_for_array(
+    haystack: ArrayWrapper<'_>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
-    let haystack = as_fixed_size_list_array(haystack);
-    array_has_dispatch_for_array!(haystack, needle)
-}
-
-fn array_has_dispatch_for_array<O: OffsetSizeTrait>(
-    haystack: &ArrayRef,
-    needle: &ArrayRef,
-) -> Result<ArrayRef> {
-    let haystack = as_generic_list_array::<O>(haystack)?;
-    array_has_dispatch_for_array!(haystack, needle)
-}
-
-macro_rules! array_has_dispatch_for_scalar {
-    ($haystack:expr, $offsets:expr, $needle:expr) => {{
-        let values = $haystack.values();
-        let is_nested = values.data_type().is_nested();
-        // If first argument is empty list (second argument is non-null), return false
-        // i.e. array_has([], non-null element) -> false
-        if values.is_empty() {
-            return Ok(Arc::new(BooleanArray::new(
-                BooleanBuffer::new_unset($haystack.len()),
-                None,
-            )));
+    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    for (i, arr) in haystack.iter().enumerate() {
+        if arr.is_none() || needle.is_null(i) {
+            boolean_builder.append_null();
+            continue;
         }
-        let eq_array = compare_with_eq(values, $needle, is_nested)?;
-        let mut final_contained = vec![None; $haystack.len()];
-        for (i, offset) in $offsets.windows(2).enumerate() {
-            let start = offset[0].to_usize().unwrap();
-            let end = offset[1].to_usize().unwrap();
-            let length = end - start;
-            // For non-nested list, length is 0 for null
-            if length == 0 {
-                continue;
-            }
-            let sliced_array = eq_array.slice(start, length);
-            final_contained[i] = Some(sliced_array.true_count() > 0);
-        }
+        let arr = arr.unwrap();
+        let is_nested = arr.data_type().is_nested();
+        let needle_row = Scalar::new(needle.slice(i, 1));
+        let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
+        boolean_builder.append_value(eq_array.true_count() > 0);
+    }
 
-        Ok(Arc::new(BooleanArray::from(final_contained)))
-    }};
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
-fn array_has_dispatch_for_fixed_size_list_scalar(
-    haystack: &ArrayRef,
+fn array_has_dispatch_for_scalar(
+    haystack: ArrayWrapper<'_>,
     needle: &dyn Datum,
 ) -> Result<ArrayRef> {
-    let haystack = as_fixed_size_list_array(haystack);
-    let value_length = haystack.value_length() as usize;
-    let offsets = (0_i32..haystack.len() as i32)
-        .step_by(value_length)
-        .collect::<Vec<_>>();
-    array_has_dispatch_for_scalar!(haystack, offsets, needle)
-}
+    let values = haystack.values();
+    let is_nested = values.data_type().is_nested();
+    // If first argument is empty list (second argument is non-null), return false
+    // i.e. array_has([], non-null element) -> false
+    if values.is_empty() {
+        return Ok(Arc::new(BooleanArray::new(
+            BooleanBuffer::new_unset(haystack.len()),
+            None,
+        )));
+    }
+    let eq_array = compare_with_eq(values, needle, is_nested)?;
+    let mut final_contained = vec![None; haystack.len()];
+    for (i, (start, end)) in haystack.offsets().tuple_windows().enumerate() {
+        let length = end - start;
+        // For non-nested list, length is 0 for null
+        if length == 0 {
+            continue;
+        }
+        let sliced_array = eq_array.slice(start, length);
+        final_contained[i] = Some(sliced_array.true_count() > 0);
+    }
 
-fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
-    haystack: &ArrayRef,
-    needle: &dyn Datum,
-) -> Result<ArrayRef> {
-    let haystack = as_generic_list_array::<O>(haystack)?;
-    let offsets = haystack.value_offsets();
-    array_has_dispatch_for_scalar!(haystack, offsets, needle)
+    Ok(Arc::new(BooleanArray::from(final_contained)))
 }
 
 fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -338,136 +357,86 @@ fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 // General row comparison for array_has_all and array_has_any
-macro_rules! general_array_has_for_all_and_any {
-    ($haystack:expr, $needle:expr, $comparison_type:expr) => {{
-        let mut boolean_builder = BooleanArray::builder($haystack.len());
-        let converter = RowConverter::new(vec![SortField::new($haystack.value_type())])?;
+fn general_array_has_for_all_and_any<'a>(
+    haystack: &ArrayWrapper<'a>,
+    needle: &ArrayWrapper<'a>,
+    comparison_type: ComparisonType,
+) -> Result<ArrayRef> {
+    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    let converter = RowConverter::new(vec![SortField::new(haystack.value_type())])?;
 
-        for (arr, sub_arr) in $haystack.iter().zip($needle.iter()) {
-            if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-                let arr_values = converter.convert_columns(&[arr])?;
-                let sub_arr_values = converter.convert_columns(&[sub_arr])?;
-                boolean_builder.append_value(general_array_has_all_and_any_kernel(
-                    arr_values,
-                    sub_arr_values,
-                    $comparison_type,
-                ));
-            } else {
-                boolean_builder.append_null();
-            }
+    for (arr, sub_arr) in haystack.iter().zip(needle.iter()) {
+        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
+            let arr_values = converter.convert_columns(&[arr])?;
+            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
+            boolean_builder.append_value(general_array_has_all_and_any_kernel(
+                arr_values,
+                sub_arr_values,
+                comparison_type,
+            ));
+        } else {
+            boolean_builder.append_null();
         }
+    }
 
-        Ok(Arc::new(boolean_builder.finish()))
-    }};
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
 // String comparison for array_has_all and array_has_any
-macro_rules! array_has_all_and_any_string_internal {
-    ($haystack:expr, $needle:expr, $comparison_type:expr) => {{
-        let mut boolean_builder = BooleanArray::builder($haystack.len());
-        for (arr, sub_arr) in $haystack.iter().zip($needle.iter()) {
-            match (arr, sub_arr) {
-                (Some(arr), Some(sub_arr)) => {
-                    let haystack_array = string_array_to_vec(&arr);
-                    let needle_array = string_array_to_vec(&sub_arr);
-                    boolean_builder.append_value(array_has_string_kernel(
-                        haystack_array,
-                        needle_array,
-                        $comparison_type,
-                    ));
-                }
-                (_, _) => {
-                    boolean_builder.append_null();
-                }
+fn array_has_all_and_any_string_internal<'a>(
+    haystack: &ArrayWrapper<'a>,
+    needle: &ArrayWrapper<'a>,
+    comparison_type: ComparisonType,
+) -> Result<ArrayRef> {
+    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    for (arr, sub_arr) in haystack.iter().zip(needle.iter()) {
+        match (arr, sub_arr) {
+            (Some(arr), Some(sub_arr)) => {
+                let haystack_array = string_array_to_vec(&arr);
+                let needle_array = string_array_to_vec(&sub_arr);
+                boolean_builder.append_value(array_has_string_kernel(
+                    haystack_array,
+                    needle_array,
+                    comparison_type,
+                ));
+            }
+            (_, _) => {
+                boolean_builder.append_null();
             }
         }
+    }
 
-        Ok(Arc::new(boolean_builder.finish()))
-    }};
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
-macro_rules! array_has_all_and_any_dispatch {
-    ($haystack:expr, $needle:expr, $comparison_type:expr) => {
-        if $needle.values().is_empty() {
-            let buffer = match $comparison_type {
-                ComparisonType::All => BooleanBuffer::new_set($haystack.len()),
-                ComparisonType::Any => BooleanBuffer::new_unset($haystack.len()),
-            };
-            Ok(Arc::new(BooleanArray::from(buffer)))
-        } else {
-            match $needle.data_type() {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                    array_has_all_and_any_string_internal!(
-                        $haystack,
-                        $needle,
-                        $comparison_type
-                    )
-                }
-                _ => general_array_has_for_all_and_any!(
-                    $haystack,
-                    $needle,
-                    $comparison_type
-                ),
+fn array_has_all_and_any_dispatch<'a>(
+    haystack: &ArrayWrapper<'a>,
+    needle: &ArrayWrapper<'a>,
+    comparison_type: ComparisonType,
+) -> Result<ArrayRef> {
+    if needle.values().is_empty() {
+        let buffer = match comparison_type {
+            ComparisonType::All => BooleanBuffer::new_set(haystack.len()),
+            ComparisonType::Any => BooleanBuffer::new_unset(haystack.len()),
+        };
+        Ok(Arc::new(BooleanArray::from(buffer)))
+    } else {
+        match needle.value_type() {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                array_has_all_and_any_string_internal(haystack, needle, comparison_type)
             }
+            _ => general_array_has_for_all_and_any(haystack, needle, comparison_type),
         }
-    };
+    }
 }
 
 fn array_has_all_and_any_inner(
     args: &[ArrayRef],
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
-    match (args[0].data_type(), args[1].data_type()) {
-        (DataType::List(_), DataType::List(_)) => {
-            let haystack = as_generic_list_array::<i32>(&args[0])?;
-            let needle = as_generic_list_array::<i32>(&args[1])?;
-            array_has_all_and_any_dispatch!(haystack, needle, comparison_type)
-        }
-        (DataType::List(_), DataType::LargeList(_)) => {
-            let haystack = as_generic_list_array::<i32>(&args[0])?;
-            let needle = as_generic_list_array::<i64>(&args[1])?;
-            array_has_all_and_any_dispatch!(haystack, needle, comparison_type)
-        }
-        (DataType::List(_), DataType::FixedSizeList(_, _)) => {
-            let haystack = as_generic_list_array::<i32>(&args[0])?;
-            let needle = as_fixed_size_list_array(&args[1]);
-            array_has_all_and_any_dispatch!(haystack, needle, comparison_type)
-        }
-        (DataType::LargeList(_), DataType::List(_)) => {
-            let haystack = as_generic_list_array::<i64>(&args[0])?;
-            let needle = as_generic_list_array::<i32>(&args[1])?;
-            array_has_all_and_any_dispatch!(haystack, needle, comparison_type)
-        }
-        (DataType::LargeList(_), DataType::LargeList(_)) => {
-            let haystack = as_generic_list_array::<i64>(&args[0])?;
-            let needle = as_generic_list_array::<i64>(&args[1])?;
-            array_has_all_and_any_dispatch!(haystack, needle, comparison_type)
-        }
-        (DataType::LargeList(_), DataType::FixedSizeList(_, _)) => {
-            let haystack = as_generic_list_array::<i64>(&args[0])?;
-            let needle = as_fixed_size_list_array(&args[1]);
-            array_has_all_and_any_dispatch!(haystack, needle, comparison_type)
-        }
-        (DataType::FixedSizeList(_, _), DataType::FixedSizeList(_, _)) => {
-            let haystack = as_fixed_size_list_array(&args[0]);
-            let needle = as_fixed_size_list_array(&args[1]);
-            array_has_all_and_any_dispatch!(haystack, needle, comparison_type)
-        }
-        (DataType::FixedSizeList(_, _), DataType::List(_)) => {
-            let haystack = as_fixed_size_list_array(&args[0]);
-            let needle = as_generic_list_array::<i32>(&args[1])?;
-            array_has_all_and_any_dispatch!(haystack, needle, comparison_type)
-        }
-        (DataType::FixedSizeList(_, _), DataType::LargeList(_)) => {
-            let haystack = as_fixed_size_list_array(&args[0]);
-            let needle = as_generic_list_array::<i64>(&args[1])?;
-            array_has_all_and_any_dispatch!(haystack, needle, comparison_type)
-        }
-        _ => exec_err!(
-            "array_has does not support type '{:?}'.",
-            (args[0].data_type(), args[1].data_type())
-        ),
-    }
+    let haystack: ArrayWrapper = args[0].as_ref().try_into()?;
+    let needle: ArrayWrapper = args[1].as_ref().try_into()?;
+    array_has_all_and_any_dispatch(&haystack, &needle, comparison_type)
 }
 
 fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
