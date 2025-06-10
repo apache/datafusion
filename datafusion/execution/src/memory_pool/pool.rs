@@ -114,6 +114,7 @@ impl MemoryPool for GreedyMemoryPool {
 }
 
 // A [`MemoryPool`] that implements a greedy first-come first-serve limit.
+/// and tracks the memory usage based on the references to the arrays.
 ///
 /// This pool works well for queries that do not need to spill or have
 /// a single spillable operator. See [`FairSpillPool`] if there are
