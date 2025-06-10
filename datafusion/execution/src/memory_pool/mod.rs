@@ -359,11 +359,11 @@ impl MemoryReservation {
         if size != 0 {
             self.shrink(size)
         }
-        for array in &self.arrays {
-            self.registration
-                .pool
-                .shrink_with_arrays(self, &[Arc::clone(array)]);
-        }
+       
+        self.registration
+            .pool
+            .shrink_with_arrays(self, &self.arrays);
+        self.arrays.clear();
         size
     }
 
