@@ -152,13 +152,12 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
             let array_data = array.to_data();
             for buffer in array_data.buffers() {
                 let addr = buffer.data_ptr().as_ptr().addr();
-                let ref_count = self
+                let ref_count = *self
                     .references
                     .lock()
                     .entry(addr)
                     .and_modify(|ref_count| *ref_count += array.get_array_memory_size())
                     .or_insert(1)
-                    .clone();
 
                 // If this is the first time we see this array, we need to grow the pool
                 if ref_count == 1 {
@@ -226,13 +225,12 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
             let buffers = array_data.buffers();
             for buffer in buffers {
                 let addr = buffer.data_ptr().as_ptr().addr();
-                let ref_count = self
+                let ref_count = *self
                     .references
                     .lock()
                     .entry(addr)
                     .and_modify(|ref_count| *ref_count += 1)
                     .or_insert(1)
-                    .clone();
 
                 // If this is the first time we see this array, we need to grow the pool
                 if ref_count == 1 {
