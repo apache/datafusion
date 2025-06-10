@@ -913,12 +913,15 @@ impl SortExec {
             cache = cache.with_boundedness(Boundedness::Bounded);
         }
         let filter = fetch.is_some().then(|| {
-            let children = self
-                .expr
-                .iter()
-                .map(|sort_expr| Arc::clone(&sort_expr.expr))
-                .collect::<Vec<_>>();
-            Arc::new(DynamicFilterPhysicalExpr::new(children, lit(true)))
+            // If we already have a filter, keep it. Otherwise, create a new one.
+            self.filter.clone().unwrap_or_else(|| {
+                let children = self
+                    .expr
+                    .iter()
+                    .map(|sort_expr| Arc::clone(&sort_expr.expr))
+                    .collect::<Vec<_>>();
+                Arc::new(DynamicFilterPhysicalExpr::new(children, lit(true)))
+            })
         });
         SortExec {
             input: Arc::clone(&self.input),
@@ -930,6 +933,11 @@ impl SortExec {
             cache,
             filter,
         }
+    }
+
+    pub fn with_filter(mut self, filter: Arc<DynamicFilterPhysicalExpr>) -> Self {
+        self.filter = Some(filter);
+        self
     }
 
     /// Input schema
@@ -945,6 +953,11 @@ impl SortExec {
     /// If `Some(fetch)`, limits output to only the first "fetch" items
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    /// If `Some(filter)`, returns the filter expression that matches the state of the sort.
+    pub fn filter(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
+        self.filter.clone()
     }
 
     fn output_partitioning_helper(
