@@ -18,7 +18,7 @@
 query T
 SELECT hex('Spark SQL');
 ----
-537061726B2053514C
+537061726b2053514c
 
 query T
 SELECT hex(1234::INT);
@@ -35,6 +35,6 @@ NULL
 query T
 SELECT hex(a) from VALUES ('foo'), (NULL), ('foobarbaz') AS t(a);
 ----
-666F6F
+666f6f
 NULL
-666F6F62617262617A
+666f6f62617262617a
