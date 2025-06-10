@@ -16,54 +16,49 @@
 // under the License.
 
 use ahash::RandomState;
-use datafusion_common::stats::Precision;
-use datafusion_expr::expr::WindowFunction;
-use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
-use datafusion_macros::user_doc;
-use datafusion_physical_expr::expressions;
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::mem::{size_of, size_of_val};
-use std::ops::BitAnd;
-use std::sync::Arc;
-
 use arrow::{
-    array::{ArrayRef, AsArray},
+    array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
+    buffer::BooleanBuffer,
     compute,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-        Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+        FieldRef, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+        Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
         Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
-
-use arrow::datatypes::FieldRef;
-use arrow::{
-    array::{Array, BooleanArray, Int64Array, PrimitiveArray},
-    buffer::BooleanBuffer,
-};
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, Result, ScalarValue,
-};
-use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::{
-    function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
+    downcast_value, internal_err, not_impl_err, stats::Precision,
+    utils::expr::COUNT_STAR_EXPANSION, Result, ScalarValue,
 };
 use datafusion_expr::{
-    Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition,
+    expr::WindowFunction,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    utils::format_state_name,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
+    ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
+    WindowFunctionDefinition,
 };
-use datafusion_functions_aggregate_common::aggregate::count_distinct::{
-    BytesDistinctCountAccumulator, DictionaryCountAccumulator,
-    FloatDistinctCountAccumulator, PrimitiveDistinctCountAccumulator,
+use datafusion_functions_aggregate_common::aggregate::{
+    count_distinct::BytesDistinctCountAccumulator,
+    count_distinct::BytesViewDistinctCountAccumulator,
+    count_distinct::DictionaryCountAccumulator,
+    count_distinct::FloatDistinctCountAccumulator,
+    count_distinct::PrimitiveDistinctCountAccumulator,
+    groups_accumulator::accumulate::accumulate_indices,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
+use datafusion_macros::user_doc;
+use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::binary_map::OutputType;
-
-use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+use std::{
+    collections::HashSet,
+    fmt::Debug,
+    mem::{size_of, size_of_val},
+    ops::BitAnd,
+    sync::Arc,
+};
 make_udaf_expr_and_func!(
     Count,
     count,
@@ -712,8 +707,8 @@ impl Accumulator for DistinctCountAccumulator {
         }
 
         (0..arr.len()).try_for_each(|index| {
-            if !arr.is_null(index) {
-                let scalar = ScalarValue::try_from_array(arr, index)?;
+            let scalar = ScalarValue::try_from_array(arr, index)?;
+            if !scalar.is_null() {
                 self.values.insert(scalar);
             }
             Ok(())
@@ -758,14 +753,28 @@ impl Accumulator for DistinctCountAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
-
-    use arrow::array::{Int32Array, NullArray};
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::{
+        array::{DictionaryArray, Int32Array, NullArray, StringArray},
+        datatypes::{DataType, Field, Int32Type, Schema},
+    };
     use datafusion_expr::function::AccumulatorArgs;
     use datafusion_physical_expr::expressions::Column;
+    use std::sync::Arc;
+    /// Helper function to create a dictionary array with non-null keys but some null values
+    /// Returns a dictionary array where:
+    /// - keys are [0, 1, 2, 0, 1] (all non-null)
+    /// - values are ["a", null, "c"]
+    /// - so the keys reference: "a", null, "c", "a", null
+    fn create_dictionary_with_null_values() -> Result<DictionaryArray<Int32Type>> {
+        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 1]); // references "a", null, "c", "a", null
+        Ok(DictionaryArray::<Int32Type>::try_new(
+            keys,
+            Arc::new(values),
+        )?)
+    }
 
     #[test]
     fn count_accumulator_nulls() -> Result<()> {
@@ -803,20 +812,70 @@ mod tests {
             order_bys: &[],
         };
 
-        let inner_dict = arrow::array::DictionaryArray::<Int32Type>::from_iter([
-            "a", "b", "c", "d", "a", "b",
-        ]);
+        let inner_dict =
+            DictionaryArray::<Int32Type>::from_iter(["a", "b", "c", "d", "a", "b"]);
 
         let keys = Int32Array::from(vec![0, 1, 2, 0, 3, 1]);
-        let dict_of_dict = arrow::array::DictionaryArray::<Int32Type>::try_new(
-            keys,
-            Arc::new(inner_dict),
-        )?;
+        let dict_of_dict =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(inner_dict))?;
 
         let mut acc = count.accumulator(args)?;
         acc.update_batch(&[Arc::new(dict_of_dict)])?;
         assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(4)));
 
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_accumulator_dictionary_with_null_values() -> Result<()> {
+        let dict_array = create_dictionary_with_null_values()?;
+
+        // The expected behavior is that count_distinct should count only non-null values
+        // which in this case are "a" and "c" (appearing as 0 and 2 in keys)
+        let mut accumulator = DistinctCountAccumulator {
+            values: HashSet::default(),
+            state_data_type: dict_array.data_type().clone(),
+        };
+
+        accumulator.update_batch(&[Arc::new(dict_array)])?;
+
+        // Should have 2 distinct non-null values ("a" and "c")
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(2)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_accumulator_dictionary_with_null_values() -> Result<()> {
+        let dict_array = create_dictionary_with_null_values()?;
+
+        // The expected behavior is that count should only count non-null values
+        let mut accumulator = CountAccumulator::new();
+
+        accumulator.update_batch(&[Arc::new(dict_array)])?;
+
+        // 5 elements in the array, of which 2 reference null values (the two 1s in the keys)
+        // So we should count 3 non-null values
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_accumulator_dictionary_all_null_values() -> Result<()> {
+        // Create a dictionary array that only contains null values
+        let dict_values = StringArray::from(vec![None, Some("abc")]);
+        let dict_indices = Int32Array::from(vec![0; 5]);
+        let dict_array =
+            DictionaryArray::<Int32Type>::try_new(dict_indices, Arc::new(dict_values))?;
+
+        let mut accumulator = DistinctCountAccumulator {
+            values: HashSet::default(),
+            state_data_type: dict_array.data_type().clone(),
+        };
+
+        accumulator.update_batch(&[Arc::new(dict_array)])?;
+
+        // All referenced values are null so count(distinct) should be 0
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
         Ok(())
     }
 }
