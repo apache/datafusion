@@ -288,7 +288,7 @@ impl<'a> ArrayWrapper<'a> {
     fn offsets(&self) -> Box<dyn Iterator<Item = usize> + 'a> {
         match self {
             ArrayWrapper::FixedSizeList(arr) => {
-                let offsets = (0..arr.len())
+                let offsets = (0..=arr.len())
                     .step_by(arr.value_length() as usize)
                     .collect::<Vec<_>>();
                 Box::new(offsets.into_iter())
