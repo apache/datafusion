@@ -221,7 +221,6 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
     ) -> Result<()> {
         for array in arrays.iter() {
             // also take into account overhead
-            self.try_grow(reservation, array.get_array_memory_size() - array.get_buffer_memory_size())?;
             let array_data = array.to_data();
             let buffers = array_data.buffers();
             for buffer in buffers {
