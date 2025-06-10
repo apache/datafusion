@@ -142,10 +142,15 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
         self.used.fetch_add(additional, Ordering::Relaxed);
     }
 
-    fn grow_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn arrow::array::Array>]) {
+    fn grow_with_arrays(
+        &self,
+        reservation: &MemoryReservation,
+        arrays: &[Arc<dyn arrow::array::Array>],
+    ) {
         for array in arrays {
             let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
-            let ref_count = self.references
+            let ref_count = self
+                .references
                 .lock()
                 .entry(addr)
                 .and_modify(|ref_count| *ref_count += array.get_array_memory_size())
@@ -164,10 +169,15 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
         self.used.fetch_sub(shrink, Ordering::Relaxed);
     }
 
-    fn shrink_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn arrow::array::Array>]) {
+    fn shrink_with_arrays(
+        &self,
+        reservation: &MemoryReservation,
+        arrays: &[Arc<dyn arrow::array::Array>],
+    ) {
         for array in arrays {
             let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
-            let ref_count = self.references
+            let ref_count = self
+                .references
                 .lock()
                 .entry(addr)
                 .and_modify(|ref_count| *ref_count -= array.get_array_memory_size())
@@ -198,10 +208,15 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
         Ok(())
     }
 
-    fn try_grow_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn arrow::array::Array>]) -> Result<()> {
+    fn try_grow_with_arrays(
+        &self,
+        reservation: &MemoryReservation,
+        arrays: &[Arc<dyn arrow::array::Array>],
+    ) -> Result<()> {
         for array in arrays {
             let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
-            let ref_count = self.references
+            let ref_count = self
+                .references
                 .lock()
                 .entry(addr)
                 .and_modify(|ref_count| *ref_count += array.get_array_memory_size())

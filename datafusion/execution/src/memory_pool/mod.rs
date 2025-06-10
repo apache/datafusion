@@ -137,7 +137,11 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     ///
     /// This defaults to summing the memory size of all arrays, but can be
     /// overridden by implementations that track the memory size of Array usages
-    fn grow_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn Array>]) {
+    fn grow_with_arrays(
+        &self,
+        reservation: &MemoryReservation,
+        arrays: &[Arc<dyn Array>],
+    ) {
         let additional = arrays
             .iter()
             .map(|array| array.get_array_memory_size())
@@ -148,7 +152,11 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Infallibly shrink the provided `reservation` by `shrink` bytes
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize);
 
-    fn shrink_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn Array>]) {
+    fn shrink_with_arrays(
+        &self,
+        reservation: &MemoryReservation,
+        arrays: &[Arc<dyn Array>],
+    ) {
         let shrink = arrays
             .iter()
             .map(|array| array.get_array_memory_size())
@@ -165,7 +173,11 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     ///
     /// This defaults to summing the memory size of all arrays, but can be
     /// overridden by implementations that track the memory size of Array usages
-    fn try_grow_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn Array>]) -> Result<()> {
+    fn try_grow_with_arrays(
+        &self,
+        reservation: &MemoryReservation,
+        arrays: &[Arc<dyn Array>],
+    ) -> Result<()> {
         let additional = arrays
             .iter()
             .map(|array| array.get_array_memory_size())
@@ -348,7 +360,9 @@ impl MemoryReservation {
             self.shrink(size)
         }
         for array in &self.arrays {
-            self.registration.pool.shrink_with_arrays(self, &[Arc::clone(array)]);
+            self.registration
+                .pool
+                .shrink_with_arrays(self, &[Arc::clone(array)]);
         }
         size
     }
