@@ -167,11 +167,17 @@ async fn test_files() -> Vec<TestDataSet> {
     (*files).clone()
 }
 
+
+struct RunResult {
+    results: Vec<RecordBatch>,
+    explain_plan: String,
+}
+
 async fn run_query_with_config(
     query: &str,
     config: SessionConfig,
     dataset: TestDataSet,
-) -> Vec<RecordBatch> {
+) -> RunResult {
     let store = dataset.store;
     let schema = dataset.schema;
     let ctx = SessionContext::new_with_config(config);
@@ -191,7 +197,16 @@ async fn run_query_with_config(
 
     ctx.register_table("test_table", table).unwrap();
 
-    ctx.sql(query).await.unwrap().collect().await.unwrap()
+    let results = ctx.sql(query).await.unwrap().collect().await.unwrap();
+    let explain_batches = ctx.sql(&format!("EXPLAIN ANALYZE {query}")).await.unwrap().
+        collect().await.unwrap();
+    let explain_plan = pretty_format_batches(&explain_batches)
+        .unwrap()
+        .to_string();
+    RunResult {
+        results,
+        explain_plan,
+    }
 }
 
 #[derive(Debug)]
@@ -215,6 +230,16 @@ impl RunQueryResult {
     }
 }
 
+/// Iterate over each line in the plan and check that one of them has `DataSourceExec` and `DynamicFilterPhysicalExpr` in the same line.
+fn has_dynamic_filter_expr_pushdown(plan: &str) -> bool {
+    for line in plan.lines() {
+        if line.contains("DataSourceExec") && line.contains("DynamicFilterPhysicalExpr") {
+            return true;
+        }
+    }
+    false
+}
+
 async fn run_query(
     query: String,
     cfg: SessionConfig,
@@ -231,11 +256,15 @@ async fn run_query(
         run_query_with_config(&query, cfg_without_dynamic_filters, dataset.clone()).await;
     let result =
         run_query_with_config(&query, cfg_with_dynamic_filters, dataset.clone()).await;
+    // Check that dynamic filters were actually pushed down
+    if !has_dynamic_filter_expr_pushdown(&result.explain_plan) {
+        panic!("Dynamic filter was not pushed down in query: {query}\n\n{}", result.explain_plan);
+    }
 
     RunQueryResult {
         query: query.to_string(),
-        result,
-        expected: expected_result,
+        result: result.results,
+        expected: expected_result.results,
     }
 }
 
