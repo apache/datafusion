@@ -42,6 +42,7 @@ pub use datafusion_catalog::default_table_source;
 pub use datafusion_catalog::memory;
 pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
+pub use datafusion_datasource::nested_schema_adapter;
 pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::sink;
 pub use datafusion_datasource::source;
@@ -51,11 +52,8 @@ pub use datafusion_physical_expr::create_ordering;
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
 
-    use datafusion_datasource::schema_adapter::{
-        DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
-    };
-
     use crate::prelude::SessionContext;
+    use ::object_store::{path::Path, ObjectMeta};
     use arrow::{
         array::{Int32Array, StringArray},
         datatypes::{DataType, Field, Schema, SchemaRef},
@@ -63,13 +61,17 @@ mod tests {
     };
     use datafusion_common::{record_batch, test_util::batches_to_sort_string};
     use datafusion_datasource::{
-        file::FileSource, file_scan_config::FileScanConfigBuilder,
-        source::DataSourceExec, PartitionedFile,
+        file::FileSource,
+        file_scan_config::FileScanConfigBuilder,
+        schema_adapter::{
+            DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
+            SchemaMapper,
+        },
+        source::DataSourceExec,
+        PartitionedFile,
     };
     use datafusion_datasource_parquet::source::ParquetSource;
-    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::collect;
-    use object_store::{path::Path, ObjectMeta};
     use std::{fs, sync::Arc};
     use tempfile::TempDir;
 
@@ -79,6 +81,7 @@ mod tests {
         // record batches returned from parquet.  This can be useful for schema evolution
         // where older files may not have all columns.
 
+        use datafusion_execution::object_store::ObjectStoreUrl;
         let tmp_dir = TempDir::new().unwrap();
         let table_dir = tmp_dir.path().join("parquet_test");
         fs::DirBuilder::new().create(table_dir.as_path()).unwrap();
@@ -122,8 +125,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
         let source = ParquetSource::default()
-            .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}))
-            .unwrap();
+            .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}));
         let base_conf = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             schema,
