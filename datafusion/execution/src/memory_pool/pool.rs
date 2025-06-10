@@ -161,7 +161,7 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
 
                 // If this is the first time we see this array, we need to grow the pool
                 if ref_count == 1 {
-                    let additional = array.get_array_memory_size();
+                    let additional = buffer.capacity();
                     self.grow(reservation, additional);
                 }
             }
@@ -191,7 +191,7 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
 
                 // If this is the last reference to this buffer, we need to shrink the pool
                 if ref_count == 0 {
-                    let additional = array.get_array_memory_size();
+                    let additional = buffer.capacity();
                     self.shrink(reservation, additional);
                 }
             }
@@ -234,7 +234,7 @@ impl MemoryPool for GreedyMemoryPoolWithTracking {
 
                 // If this is the first time we see this array, we need to grow the pool
                 if ref_count == 1 {
-                    let additional = array.get_array_memory_size();
+                    let additional = buffer.capacity();
                     self.try_grow(reservation, additional)?;
                 }
             }
