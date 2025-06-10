@@ -563,12 +563,12 @@ where
     Box::pin(RecordBatchStreamAdapter::new(schema, emit_stream))
 }
 
-pub(crate) fn spawn_deferred<F, R>(task: F) -> impl Future<Output = Result<R>>
+pub(crate) async fn spawn_deferred<F, R>(task: F) -> Result<R>
 where
     F: Future<Output = Result<R>> + Send + 'static,
     R: Send + 'static,
 {
-    async move { SpawnedTask::spawn(task).await? }
+    SpawnedTask::spawn(task).await?
 }
 
 #[cfg(test)]
