@@ -189,6 +189,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             make_view(value, buffer_index as u32, offset as u32)
         };
 
+        // Append view
         self.views.push(view);
     }
 
