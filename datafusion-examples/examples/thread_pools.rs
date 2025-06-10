@@ -240,7 +240,6 @@ async fn different_runtime_advanced() -> Result<()> {
         Ok(()) as Result<()>
     };
 
-    // Run driver on the CPU runtime as before, but this time we
     let mut join_set = JoinSet::new();
     join_set.spawn_on(driver_task, cpu_runtime.handle());
     while let Some(batch) = rx.recv().await {
