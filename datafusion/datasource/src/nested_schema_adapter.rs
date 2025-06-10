@@ -21,18 +21,18 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
-use arrow::datatypes::{DataType::Struct, Field, Schema, SchemaRef};
-use datafusion_common::{ColumnStatistics, Result};
-use std::sync::Arc;
-
 use crate::schema_adapter::{
     create_field_mapping, DefaultSchemaAdapterFactory, SchemaAdapter,
     SchemaAdapterFactory, SchemaMapper,
 };
-use arrow::array::{Array, ArrayRef, StructArray};
-use arrow::compute::cast;
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::arrow::array::new_null_array;
+use arrow::{
+    array::{Array, ArrayRef, StructArray},
+    compute::cast,
+    datatypes::{DataType::Struct, Field, Schema, SchemaRef},
+    record_batch::{RecordBatch, RecordBatchOptions},
+};
+use datafusion_common::{arrow::array::new_null_array, ColumnStatistics, Result};
+use std::sync::Arc;
 
 /// Factory for creating [`NestedStructSchemaAdapter`]
 ///
@@ -312,10 +312,10 @@ fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, StringBuilder, StructArray, TimestampMillisecondArray};
-    use arrow::datatypes::{
-        DataType::{Float64, Int16, Int32, Timestamp, Utf8},
-        TimeUnit::Millisecond,
+    use arrow::{
+        array::{Array, StringBuilder, StructArray, TimestampMillisecondArray},
+        datatypes::DataType::{Float64, Int16, Int32, Timestamp, Utf8},
+        datatypes::TimeUnit::Millisecond,
     };
     use datafusion_common::ScalarValue;
 
