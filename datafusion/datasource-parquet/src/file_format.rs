@@ -1309,6 +1309,7 @@ impl FileSink for ParquetSink {
 
         if parquet_opts.global.file_encryption_properties.is_some() {
             // For now, arrow-rs does not support parallel writes with encryption
+            // See https://github.com/apache/arrow-rs/issues/7359
             allow_single_file_parallelism = false;
         }
 
