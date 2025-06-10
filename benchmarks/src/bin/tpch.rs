@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
     env_logger::init();
     match TpchOpt::from_args() {
         TpchOpt::Benchmark(BenchmarkSubCommandOpt::DataFusionBenchmark(opt)) => {
-            opt.run().await
+            Box::pin(opt.run()).await
         }
         TpchOpt::Convert(opt) => opt.run().await,
     }

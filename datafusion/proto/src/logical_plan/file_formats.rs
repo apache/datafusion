@@ -513,6 +513,8 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
                 parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
             }),
+            file_decryption_properties: None,
+            file_encryption_properties: None,
         }
     }
 }

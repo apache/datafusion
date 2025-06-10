@@ -43,6 +43,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod custom_reader;
+mod encryption;
 mod external_access_plan;
 mod file_statistics;
 mod filter_pushdown;
