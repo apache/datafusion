@@ -67,6 +67,10 @@ impl MaybeNullBufferBuilder {
         self.nulls.allocated_size() / 8
     }
 
+    pub fn append_buffer(&mut self, buffer: &NullBuffer) {
+        self.nulls.append_buffer(buffer);
+    }
+
     /// Return a NullBuffer representing the accumulated nulls so far
     pub fn build(mut self) -> Option<NullBuffer> {
         self.nulls.finish()

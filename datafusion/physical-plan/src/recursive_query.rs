@@ -303,7 +303,7 @@ impl RecursiveQueryStream {
         mut self: std::pin::Pin<&mut Self>,
         batch: RecordBatch,
     ) -> Poll<Option<Result<RecordBatch>>> {
-        if let Err(e) = self.reservation.try_grow(batch.get_array_memory_size()) {
+        if let Err(e) = self.reservation.try_grow_with_arrays(batch.columns()) {
             return Poll::Ready(Some(Err(e)));
         }
 

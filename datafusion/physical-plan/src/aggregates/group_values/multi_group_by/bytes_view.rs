@@ -17,7 +17,7 @@
 
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{make_view, Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
+use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
@@ -106,7 +106,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // Not null row case
         self.nulls.append(false);
-        self.do_append_val_inner(arr, row);
+        let view = arr.views()[row];
+        self.do_append_val_inner(arr, view);
     }
 
     fn vectorized_equal_to_inner(
@@ -138,59 +139,63 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         let arr = array.as_byte_view::<B>();
         let null_count = array.null_count();
         let num_rows = array.len();
-        let all_null_or_non_null = if null_count == 0 {
-            Some(true)
-        } else if null_count == num_rows {
-            Some(false)
-        } else {
-            None
-        };
+        let all_null = null_count == num_rows;
 
-        match all_null_or_non_null {
-            None => {
-                for &row in rows {
-                    self.append_val_inner(array, row);
-                }
+        if all_null {
+            self.nulls.append_n(rows.len(), true);
+            let new_len = self.views.len() + rows.len();
+            self.views.resize(new_len, 0);
+            return;
+        }
+
+        match arr.nulls() {
+            Some(nulls) if null_count > 0 => {
+                // If the input array is all nulls, we can skip checking nulls
+                self.nulls.append_buffer(nulls);
             }
-
-            Some(true) => {
+            _ => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
-                }
             }
+        }
+        let views = arr.views();
 
-            Some(false) => {
-                self.nulls.append_n(rows.len(), true);
-                let new_len = self.views.len() + rows.len();
-                self.views.resize(new_len, 0);
+        if arr.data_buffers().is_empty() {
+            self.views.extend(rows.iter().map(|row| views[*row]));
+        } else {
+            for &row in rows {
+                let view = views[row];
+                self.do_append_val_inner(arr, view);
             }
         }
     }
 
-    fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
+    fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, view: u128)
     where
         B: ByteViewType,
     {
-        let value: &[u8] = array.value(row).as_ref();
-
-        let value_len = value.len();
-        let view = if value_len <= 12 {
-            make_view(value, 0, 0)
-        } else {
+        let mut byte_view = ByteView::from(view);
+        let value_len = byte_view.length;
+        if value_len > 12 {
             // Ensure big enough block to hold the value firstly
-            self.ensure_in_progress_big_enough(value_len);
+            self.ensure_in_progress_big_enough(value_len as usize);
 
             // Append value
             let buffer_index = self.completed.len();
             let offset = self.in_progress.len();
-            self.in_progress.extend_from_slice(value);
-
-            make_view(value, buffer_index as u32, offset as u32)
+            self.in_progress.extend_from_slice(
+                array.data_buffers()[byte_view.buffer_index as usize]
+                    .get(
+                        byte_view.offset as usize
+                            ..byte_view.offset as usize + value_len as usize,
+                    )
+                    .unwrap(),
+            );
+            byte_view.buffer_index = buffer_index as u32;
+            byte_view.offset = offset as u32;
         };
 
         // Append view
-        self.views.push(view);
+        self.views.push(byte_view.as_u128());
     }
 
     fn ensure_in_progress_big_enough(&mut self, value_len: usize) {

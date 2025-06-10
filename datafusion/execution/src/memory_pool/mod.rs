@@ -18,8 +18,10 @@
 //! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
 
+use arrow::array::Array;
 use datafusion_common::{internal_err, Result};
 use std::hash::{Hash, Hasher};
+use std::vec;
 use std::{cmp::Ordering, sync::atomic, sync::Arc};
 
 mod pool;
@@ -131,13 +133,45 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// This must always succeed
     fn grow(&self, reservation: &MemoryReservation, additional: usize);
 
+    /// Infallibly grow the provided `reservation` by bytes in held in &[Arc<dyn Array>]
+    ///
+    /// This defaults to summing the memory size of all arrays, but can be
+    /// overridden by implementations that track the memory size of Array usages
+    fn grow_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn Array>]) {
+        let additional = arrays
+            .iter()
+            .map(|array| array.get_array_memory_size())
+            .sum();
+        self.grow(reservation, additional);
+    }
+
     /// Infallibly shrink the provided `reservation` by `shrink` bytes
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize);
+
+    fn shrink_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn Array>]) {
+        let shrink = arrays
+            .iter()
+            .map(|array| array.get_array_memory_size())
+            .sum();
+        self.shrink(reservation, shrink);
+    }
 
     /// Attempt to grow the provided `reservation` by `additional` bytes
     ///
     /// On error the `allocation` will not be increased in size
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()>;
+
+    /// Infallibly grow the provided `reservation` by bytes held in &[Arc<dyn Array>]
+    ///
+    /// This defaults to summing the memory size of all arrays, but can be
+    /// overridden by implementations that track the memory size of Array usages
+    fn try_grow_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn Array>]) -> Result<()> {
+        let additional = arrays
+            .iter()
+            .map(|array| array.get_array_memory_size())
+            .sum();
+        self.try_grow(reservation, additional)
+    }
 
     /// Return the total amount of memory reserved
     fn reserved(&self) -> usize;
@@ -261,6 +295,7 @@ impl MemoryConsumer {
                 consumer: self,
             }),
             size: 0,
+            arrays: Vec::new(),
         }
     }
 }
@@ -290,6 +325,8 @@ impl Drop for SharedRegistration {
 pub struct MemoryReservation {
     registration: Arc<SharedRegistration>,
     size: usize,
+    // arrays tracked by this reservation
+    arrays: Vec<Arc<dyn Array>>,
 }
 
 impl MemoryReservation {
@@ -309,6 +346,9 @@ impl MemoryReservation {
         let size = self.size;
         if size != 0 {
             self.shrink(size)
+        }
+        for array in &self.arrays {
+            self.registration.pool.shrink_with_arrays(self, &[Arc::clone(array)]);
         }
         size
     }
@@ -375,6 +415,18 @@ impl MemoryReservation {
         Ok(())
     }
 
+    /// Increase the size of this reservation by bytes held in
+    /// the provided `arrays`.
+    pub fn try_grow_with_arrays(&mut self, arrays: &[Arc<dyn Array>]) -> Result<()> {
+        self.registration.pool.try_grow_with_arrays(self, arrays)?;
+        // don't increase size of this pool
+        arrays
+            .iter()
+            .for_each(|array| self.arrays.push(Arc::clone(array)));
+
+        Ok(())
+    }
+
     /// Splits off `capacity` bytes from this [`MemoryReservation`]
     /// into a new [`MemoryReservation`] with the same
     /// [`MemoryConsumer`].
@@ -390,6 +442,7 @@ impl MemoryReservation {
         Self {
             size: capacity,
             registration: Arc::clone(&self.registration),
+            arrays: vec![],
         }
     }
 
@@ -398,6 +451,7 @@ impl MemoryReservation {
         Self {
             size: 0,
             registration: Arc::clone(&self.registration),
+            arrays: vec![],
         }
     }
 

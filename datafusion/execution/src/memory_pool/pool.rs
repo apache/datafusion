@@ -22,6 +22,7 @@ use datafusion_common::HashMap;
 use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
 use log::debug;
 use parking_lot::Mutex;
+use std::sync::Arc;
 use std::{
     num::NonZeroUsize,
     sync::atomic::{AtomicUsize, Ordering},
@@ -100,6 +101,119 @@ impl MemoryPool for GreedyMemoryPool {
                     self.pool_size.saturating_sub(used),
                 )
             })?;
+        Ok(())
+    }
+
+    fn reserved(&self) -> usize {
+        self.used.load(Ordering::Relaxed)
+    }
+
+    fn memory_limit(&self) -> MemoryLimit {
+        MemoryLimit::Finite(self.pool_size)
+    }
+}
+
+// A [`MemoryPool`] that implements a greedy first-come first-serve limit.
+///
+/// This pool works well for queries that do not need to spill or have
+/// a single spillable operator. See [`FairSpillPool`] if there are
+/// multiple spillable operators that all will spill.
+#[derive(Debug)]
+pub struct GreedyMemoryPoolWithTracking {
+    pool_size: usize,
+    used: AtomicUsize,
+    references: Mutex<HashMap<usize, usize>>,
+}
+
+impl GreedyMemoryPoolWithTracking {
+    /// Create a new pool that can allocate up to `pool_size` bytes
+    pub fn new(pool_size: usize) -> Self {
+        debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
+        Self {
+            pool_size,
+            used: AtomicUsize::new(0),
+            references: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl MemoryPool for GreedyMemoryPoolWithTracking {
+    fn grow(&self, _reservation: &MemoryReservation, additional: usize) {
+        self.used.fetch_add(additional, Ordering::Relaxed);
+    }
+
+    fn grow_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn arrow::array::Array>]) {
+        for array in arrays {
+            let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
+            let ref_count = self.references
+                .lock()
+                .entry(addr)
+                .and_modify(|ref_count| *ref_count += array.get_array_memory_size())
+                .or_insert(1)
+                .clone();
+
+            // If this is the first time we see this array, we need to grow the pool
+            if ref_count == 1 {
+                let additional = array.get_array_memory_size();
+                self.grow(reservation, additional);
+            }
+        }
+    }
+
+    fn shrink(&self, _reservation: &MemoryReservation, shrink: usize) {
+        self.used.fetch_sub(shrink, Ordering::Relaxed);
+    }
+
+    fn shrink_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn arrow::array::Array>]) {
+        for array in arrays {
+            let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
+            let ref_count = self.references
+                .lock()
+                .entry(addr)
+                .and_modify(|ref_count| *ref_count -= array.get_array_memory_size())
+                .or_insert(1)
+                .clone();
+
+            // If this is the last reference to this array, we need to shrink the pool
+            if ref_count == 0 {
+                let additional = array.get_array_memory_size();
+                self.shrink(reservation, additional);
+            }
+        }
+    }
+
+    fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
+        self.used
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                let new_used = used + additional;
+                (new_used <= self.pool_size).then_some(new_used)
+            })
+            .map_err(|used| {
+                insufficient_capacity_err(
+                    reservation,
+                    additional,
+                    self.pool_size.saturating_sub(used),
+                )
+            })?;
+        Ok(())
+    }
+
+    fn try_grow_with_arrays(&self, reservation: &MemoryReservation, arrays: &[Arc<dyn arrow::array::Array>]) -> Result<()> {
+        for array in arrays {
+            let addr = Arc::<dyn arrow::array::Array>::as_ptr(&array).addr();
+            let ref_count = self.references
+                .lock()
+                .entry(addr)
+                .and_modify(|ref_count| *ref_count += array.get_array_memory_size())
+                .or_insert(1)
+                .clone();
+
+            // If this is the first time we see this array, we need to grow the pool
+            if ref_count == 1 {
+                let additional = array.get_array_memory_size();
+                self.try_grow(reservation, additional)?;
+            }
+        }
         Ok(())
     }
 
