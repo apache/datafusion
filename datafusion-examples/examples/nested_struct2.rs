@@ -29,6 +29,7 @@ use datafusion::{
         listing::ListingTable,
         listing::ListingTableConfig,
         listing::ListingTableUrl,
+        nested_schema_adapter::NestedStructSchemaAdapterFactory,
         // schema_adapter::SchemaAdapterFactory,
     },
 };
@@ -57,6 +58,70 @@ async fn create_and_write_parquet_file(
     .await?;
 
     Ok(())
+}
+
+/// Custom DataSource that uses NestedStructSchemaAdapterFactory
+use datafusion::{
+    datasource::{
+        source::{DataSource, DefaultTableSource},
+        DataSourceExec,
+    },
+    physical_plan::ExecutionPlan,
+};
+use datafusion_physical_plan::file_scan_config::FileScanConfig;
+
+/// Custom DataSource implementation that configures ParquetExec with NestedStructSchemaAdapterFactory
+#[derive(Debug)]
+struct CustomParquetDataSource {
+    table_schema: Arc<Schema>,
+    file_paths: Vec<String>,
+}
+
+impl CustomParquetDataSource {
+    fn new(table_schema: Arc<Schema>, file_paths: Vec<String>) -> Self {
+        Self {
+            table_schema,
+            file_paths,
+        }
+    }
+}
+
+impl DataSource for CustomParquetDataSource {
+    fn create_physical_plan(
+        &self,
+        ctx: &datafusion::execution::context::TaskContext,
+        projection: Option<&Vec<usize>>,
+        filters: &[datafusion_expr::Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>, datafusion_common::DataFusionError> {
+        // Convert file paths to PartitionedFile objects
+        let partitioned_files: Vec<PartitionedFile> = self
+            .file_paths
+            .iter()
+            .map(|path| {
+                let metadata = std::fs::metadata(path).unwrap();
+                PartitionedFile::new(path.clone(), metadata.len() as usize)
+            })
+            .collect();
+
+        // Create FileScanConfig
+        let object_store_url = datafusion_execution::object_store::ObjectStoreUrl::local_filesystem();
+        let file_scan_config = FileScanConfig::new(object_store_url, Arc::clone(&self.table_schema))
+            .with_file_group(partitioned_files)
+            .with_projection(projection.cloned())
+            .with_limit(limit);
+
+        // Create ParquetExec with NestedStructSchemaAdapterFactory
+        let parquet_exec = datafusion::datasource::physical_plan::ParquetExec::builder(file_scan_config)
+            .with_schema_adapter_factory(Arc::new(NestedStructSchemaAdapterFactory))
+            .build();
+
+        Ok(Arc::new(parquet_exec))
+    }
+
+    fn schema(&self) -> datafusion_common::SchemaRef {
+        Arc::clone(&self.table_schema)
+    }
 }
 
 /// Helper function to create a ListingTableConfig for given paths and schema
