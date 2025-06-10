@@ -136,7 +136,7 @@ fn aggregations_not_combined() -> datafusion_common::Result<()> {
 
     let plan = final_aggregate_exec(
         repartition_exec(partial_aggregate_exec(
-            parquet_exec(&schema),
+            parquet_exec(schema.clone()),
             PhysicalGroupBy::default(),
             aggr_expr.clone(),
         )),
@@ -157,7 +157,7 @@ fn aggregations_not_combined() -> datafusion_common::Result<()> {
 
     let plan = final_aggregate_exec(
         partial_aggregate_exec(
-            parquet_exec(&schema),
+            parquet_exec(schema),
             PhysicalGroupBy::default(),
             aggr_expr1,
         ),
@@ -183,7 +183,7 @@ fn aggregations_combined() -> datafusion_common::Result<()> {
 
     let plan = final_aggregate_exec(
         partial_aggregate_exec(
-            parquet_exec(&schema),
+            parquet_exec(schema),
             PhysicalGroupBy::default(),
             aggr_expr.clone(),
         ),
@@ -215,11 +215,8 @@ fn aggregations_with_group_combined() -> datafusion_common::Result<()> {
         vec![(col("c", &schema)?, "c".to_string())];
 
     let partial_group_by = PhysicalGroupBy::new_single(groups);
-    let partial_agg = partial_aggregate_exec(
-        parquet_exec(&schema),
-        partial_group_by,
-        aggr_expr.clone(),
-    );
+    let partial_agg =
+        partial_aggregate_exec(parquet_exec(schema), partial_group_by, aggr_expr.clone());
 
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("c", &partial_agg.schema())?, "c".to_string())];
@@ -245,11 +242,8 @@ fn aggregations_with_limit_combined() -> datafusion_common::Result<()> {
         vec![(col("c", &schema)?, "c".to_string())];
 
     let partial_group_by = PhysicalGroupBy::new_single(groups);
-    let partial_agg = partial_aggregate_exec(
-        parquet_exec(&schema),
-        partial_group_by,
-        aggr_expr.clone(),
-    );
+    let partial_agg =
+        partial_aggregate_exec(parquet_exec(schema), partial_group_by, aggr_expr.clone());
 
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("c", &partial_agg.schema())?, "c".to_string())];

@@ -188,12 +188,12 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let proto_output_ordering =
             PhysicalSortExprNodeCollection::decode(df_result!(ffi_orderings)?.as_ref())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let orderings = Some(parse_physical_sort_exprs(
+        let sort_exprs = parse_physical_sort_exprs(
             &proto_output_ordering.physical_sort_expr_nodes,
             &default_ctx,
             &schema,
             &codex,
-        )?);
+        )?;
 
         let partitioning_vec =
             unsafe { df_result!((ffi_props.output_partitioning)(&ffi_props))? };
@@ -211,11 +211,10 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .to_string(),
         ))?;
 
-        let eq_properties = match orderings {
-            Some(ordering) => {
-                EquivalenceProperties::new_with_orderings(Arc::new(schema), &[ordering])
-            }
-            None => EquivalenceProperties::new(Arc::new(schema)),
+        let eq_properties = if sort_exprs.is_empty() {
+            EquivalenceProperties::new(Arc::new(schema))
+        } else {
+            EquivalenceProperties::new_with_orderings(Arc::new(schema), [sort_exprs])
         };
 
         let emission_type: EmissionType =
@@ -300,7 +299,7 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::physical_plan::Partitioning;
+    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
 
     use super::*;
 
@@ -310,9 +309,13 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
+        let mut eqp = EquivalenceProperties::new(Arc::clone(&schema));
+        let _ = eqp.reorder([PhysicalSortExpr::new_default(
+            datafusion::physical_plan::expressions::col("a", &schema)?,
+        )]);
         let original_props = PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(3),
+            eqp,
+            Partitioning::RoundRobinBatch(3),
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
