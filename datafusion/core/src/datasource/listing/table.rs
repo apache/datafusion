@@ -837,6 +837,8 @@ pub struct ListingTable {
     collected_statistics: FileStatisticsCache,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
+    /// Optional [`SchemaAdapterFactory`] for creating schema adapters
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl ListingTable {
@@ -877,6 +879,7 @@ impl ListingTable {
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
+            schema_adapter_factory: config.schema_adapter_factory,
         };
 
         Ok(table)
@@ -928,6 +931,24 @@ impl ListingTable {
     /// Get the schema source
     pub fn schema_source(&self) -> SchemaSource {
         self.schema_source
+    }
+
+    /// Set the [`SchemaAdapterFactory`] for this [`ListingTable`]
+    ///
+    /// The schema adapter factory is used to create schema adapters that can
+    /// handle schema evolution and type conversions when reading files with
+    /// different schemas than the table schema.
+    pub fn with_schema_adapter_factory(
+        mut self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        self.schema_adapter_factory = Some(schema_adapter_factory);
+        self
+    }
+
+    /// Get the [`SchemaAdapterFactory`] for this table
+    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.as_ref()
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
@@ -1038,6 +1059,12 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
+        let mut source = self.options.format.file_source();
+        // Apply schema adapter to source if available
+        if let Some(factory) = &self.schema_adapter_factory {
+            source = source.with_schema_adapter_factory(Arc::clone(factory))?;
+        }
+
         // create the execution plan
         self.options
             .format
@@ -1046,7 +1073,7 @@ impl TableProvider for ListingTable {
                 FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
-                    self.options.format.file_source(),
+                    source,
                 )
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
