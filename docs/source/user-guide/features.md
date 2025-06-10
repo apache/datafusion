@@ -93,7 +93,8 @@
 - [x] Memory limits enforced
 - [x] Spilling (to disk) Sort
 - [x] Spilling (to disk) Grouping
-- [ ] Spilling (to disk) Joins
+- [x] Spilling (to disk) Sort Merge Join
+- [ ] Spilling (to disk) Hash Join
 
 ## Data Sources
 
