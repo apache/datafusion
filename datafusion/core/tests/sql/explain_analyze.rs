@@ -66,6 +66,7 @@ async fn explain_analyze_baseline_metrics() {
         .join("\n");
     insta::with_settings!({filters => vec![
     (r"\d+\.?\d*[µmn]?s", "[TIME]"),
+    (r"\[\[[^\]]*?/(testing/data/csv/[^/]+\.csv)\]\]", "[[$1]]"),
     ]}, {
         insta::assert_snapshot!(actual,@r#"
         plan
@@ -83,7 +84,7 @@ async fn explain_analyze_baseline_metrics() {
                               CoalesceBatchesExec: target_batch_size=4096, metrics=[output_rows=99, elapsed_compute=[TIME]]
                                 FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0], metrics=[output_rows=99, elapsed_compute=[TIME]]
                                   RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1, metrics=[fetch_time=[TIME], repartition_time=[TIME], send_time=[TIME]]
-                                    DataSourceExec: file_groups={1 group: [[home/ian/open_source/datafusion/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true, metrics=[output_rows=100, elapsed_compute=[TIME], file_open_errors=0, file_scan_errors=0, time_elapsed_opening=[TIME], time_elapsed_processing=[TIME], time_elapsed_scanning_total=[TIME], time_elapsed_scanning_until_data=[TIME]]
+                                    DataSourceExec: file_groups={1 group: [[testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true, metrics=[output_rows=100, elapsed_compute=[TIME], file_open_errors=0, file_scan_errors=0, time_elapsed_opening=[TIME], time_elapsed_processing=[TIME], time_elapsed_scanning_total=[TIME], time_elapsed_scanning_until_data=[TIME]]
             ProjectionExec: expr=[1 as cnt], metrics=[output_rows=1, elapsed_compute=[TIME]]
               PlaceholderRowExec, metrics=[]
             ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt], metrics=[output_rows=1, elapsed_compute=[TIME]]
