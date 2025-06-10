@@ -42,7 +42,7 @@ use crate::projection::{
     ProjectionExec,
 };
 use crate::{
-    handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    handle_state, stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
 };
@@ -61,7 +61,6 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
-use datafusion_common_runtime::SpawnedTask;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -507,12 +506,10 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 need_produce_result_in_final(self.join_type),
                 self.right().output_partitioning().partition_count(),
             );
-            Ok(async move {
-                // Spawn a task the first time the stream is polled for the build phase.
-                // This ensures the consumer of the join does not poll unnecessarily
-                // while the build is ongoing
-                SpawnedTask::spawn(task).await?
-            })
+            // Spawn a task the first time the stream is polled for the build phase.
+            // This ensures the consumer of the join does not poll unnecessarily
+            // while the build is ongoing
+            Ok(stream::spawn_deferred(task))
         })?;
 
         let batch_size = context.session_config().batch_size();

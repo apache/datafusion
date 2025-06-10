@@ -39,7 +39,6 @@ use crate::projection::{
     ProjectionExec,
 };
 use crate::spill::get_record_batch_memory_size;
-use crate::ExecutionPlanProperties;
 use crate::{
     common::can_project,
     handle_state,
@@ -56,6 +55,7 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::{stream, ExecutionPlanProperties};
 
 use arrow::array::{
     cast::downcast_array, Array, ArrayRef, BooleanArray, BooleanBufferBuilder,
@@ -821,12 +821,10 @@ impl ExecutionPlan for HashJoinExec {
                     self.right().output_partitioning().partition_count(),
                 );
 
-                Ok(async move {
-                    // Spawn a task the first time the stream is polled for the build phase.
-                    // This ensures the consumer of the join does not poll unnecessarily
-                    // while the build is ongoing
-                    SpawnedTask::spawn(task).await?
-                })
+                // Spawn a task the first time the stream is polled for the build phase.
+                // This ensures the consumer of the join does not poll unnecessarily
+                // while the build is ongoing
+                Ok(stream::spawn_deferred(task))
             })?,
             PartitionMode::Partitioned => {
                 let left_stream = self.left.execute(partition, Arc::clone(&context))?;

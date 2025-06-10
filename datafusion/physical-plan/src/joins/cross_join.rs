@@ -32,7 +32,7 @@ use crate::projection::{
     physical_to_column_exprs, ProjectionExec,
 };
 use crate::{
-    handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    handle_state, stream, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
@@ -47,7 +47,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
-use datafusion_common_runtime::SpawnedTask;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// Data of the left side that is buffered into memory
@@ -305,12 +304,7 @@ impl ExecutionPlan for CrossJoinExec {
         let left_fut = self.left_fut.try_once(|| {
             let left_stream = self.left.execute(0, context)?;
             let task = load_left_input(left_stream, join_metrics.clone(), reservation);
-            Ok(async move {
-                // Spawn a task the first time the stream is polled for the build phase.
-                // This ensures the consumer of the join does not poll unnecessarily
-                // while the build is ongoing
-                SpawnedTask::spawn(task).await?
-            })
+            Ok(stream::spawn_deferred(task))
         })?;
 
         if enforce_batch_size_in_joins {

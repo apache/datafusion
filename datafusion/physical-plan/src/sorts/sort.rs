@@ -39,9 +39,9 @@ use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    stream, DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream,
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
@@ -1124,26 +1124,17 @@ impl ExecutionPlan for SortExec {
                     context.runtime_env(),
                     &self.metrics_set,
                 )?;
-                Ok(Box::pin(RecordBatchStreamAdapter::new(
-                    self.schema(),
-                    futures::stream::once(async move {
-                        // Spawn a task the first time the stream is polled for the sort phase.
-                        // This ensures the consumer of the sort does not poll unnecessarily
-                        // while the sort is ongoing
-                        SpawnedTask::spawn(async move {
-                            while let Some(batch) = input.next().await {
-                                let batch = batch?;
-                                topk.insert_batch(batch)?;
-                                if topk.finished {
-                                    break;
-                                }
-                            }
-                            topk.emit()
-                        })
-                        .await?
-                    })
-                    .try_flatten(),
-                )))
+
+                Ok(stream::create_async_then_emit(self.schema(), async move {
+                    while let Some(batch) = input.next().await {
+                        let batch = batch?;
+                        topk.insert_batch(batch)?;
+                        if topk.finished {
+                            break;
+                        }
+                    }
+                    topk.emit()
+                }))
             }
             (false, None) => {
                 let mut sorter = ExternalSorter::new(
