@@ -78,6 +78,7 @@ async fn create_listing_table_config(
         file_sort_order: vec![vec![col("timestamp_utc").sort(true, true)]],
         ..config
             .options
+            .clone()
             .unwrap_or_else(|| ListingOptions::new(Arc::new(ParquetFormat::default())))
     };
 
