@@ -41,7 +41,7 @@ use datafusion_expr::{
 
 use crate::optimizer::ApplyOrder;
 use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
-use crate::{OptimizerConfig, OptimizerRule};
+use crate::{simplify_predicates::simplify_predicates, OptimizerConfig, OptimizerRule};
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
 /// they are applied as early as possible.
@@ -777,6 +777,16 @@ impl OptimizerRule for PushDownFilter {
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
         };
+
+        let predicate = split_conjunction_owned(filter.predicate.clone());
+        let old_predicate_len = predicate.len();
+        let new_predicates = simplify_predicates(predicate)?;
+        if old_predicate_len != new_predicates.len() {
+            let Some(new_predicate) = conjunction(new_predicates) else {
+                return plan_err!("at least one expression exists");
+            };
+            filter.predicate = new_predicate;
+        }
 
         match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(child_filter) => {

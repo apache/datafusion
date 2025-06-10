@@ -169,7 +169,7 @@ async fn run_tests() -> Result<()> {
             .join()
         })
         // run up to num_cpus streams in parallel
-        .buffer_unordered(num_cpus::get())
+        .buffer_unordered(get_available_parallelism())
         .flat_map(|result| {
             // Filter out any Ok() leaving only the DataFusionErrors
             futures::stream::iter(match result {
