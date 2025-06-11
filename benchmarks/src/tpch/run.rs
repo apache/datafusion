@@ -147,10 +147,11 @@ impl RunOpt {
         let mut millis = vec![];
         // run benchmark
         let mut query_results = vec![];
+
+        let sql = &get_query_sql(query_id)?;
+
         for i in 0..self.iterations() {
             let start = Instant::now();
-
-            let sql = &get_query_sql(query_id)?;
 
             // query 15 is special, with 3 statements. the second statement is the one from which we
             // want to capture the results

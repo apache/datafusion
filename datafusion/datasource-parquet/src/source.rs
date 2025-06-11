@@ -491,6 +491,7 @@ impl FileSource for ParquetSource {
             limit: base_config.limit,
             predicate: self.predicate.clone(),
             logical_file_schema: Arc::clone(&base_config.file_schema),
+            partition_fields: base_config.table_partition_cols.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
