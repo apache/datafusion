@@ -169,6 +169,17 @@ fn hex_bytes<T: AsRef<[u8]>>(
 
 /// Spark-compatible `hex` function
 pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
+    compute_hex(args, false)
+}
+
+pub fn spark_sha2_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
+    compute_hex(args, true)
+}
+
+pub fn compute_hex(
+    args: &[ColumnarValue],
+    lowercase: bool,
+) -> Result<ColumnarValue, DataFusionError> {
     if args.len() != 1 {
         return Err(DataFusionError::Internal(
             "hex expects exactly one argument".to_string(),
@@ -195,7 +206,7 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
 
                 let hexed: StringArray = array
                     .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, true)).transpose())
+                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                     .collect::<Result<_, _>>()?;
 
                 Ok(ColumnarValue::Array(Arc::new(hexed)))
@@ -205,7 +216,7 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
 
                 let hexed: StringArray = array
                     .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, true)).transpose())
+                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                     .collect::<Result<_, _>>()?;
 
                 Ok(ColumnarValue::Array(Arc::new(hexed)))
@@ -215,7 +226,7 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
 
                 let hexed: StringArray = array
                     .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, true)).transpose())
+                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                     .collect::<Result<_, _>>()?;
 
                 Ok(ColumnarValue::Array(Arc::new(hexed)))
@@ -225,7 +236,7 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
 
                 let hexed: StringArray = array
                     .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, true)).transpose())
+                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                     .collect::<Result<_, _>>()?;
 
                 Ok(ColumnarValue::Array(Arc::new(hexed)))
@@ -240,11 +251,11 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                         .collect::<Vec<_>>(),
                     DataType::Utf8 => as_string_array(dict.values())
                         .iter()
-                        .map(|v| v.map(|b| hex_bytes(b, true)).transpose())
+                        .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                         .collect::<Result<_, _>>()?,
                     DataType::Binary => as_binary_array(dict.values())?
                         .iter()
-                        .map(|v| v.map(|b| hex_bytes(b, true)).transpose())
+                        .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                         .collect::<Result<_, _>>()?,
                     _ => exec_err!(
                         "hex got an unexpected argument type: {:?}",
