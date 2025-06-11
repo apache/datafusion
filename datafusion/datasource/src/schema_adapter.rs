@@ -282,7 +282,9 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
-                Arc::new(|array: &ArrayRef, field: &Field| Ok(cast(array, field.data_type())?)),
+                Arc::new(|array: &ArrayRef, field: &Field| {
+                    Ok(cast(array, field.data_type())?)
+                }),
             )),
             projection,
         ))
@@ -349,6 +351,7 @@ impl Debug for SchemaMapping {
         f.debug_struct("SchemaMapping")
             .field("projected_table_schema", &self.projected_table_schema)
             .field("field_mappings", &self.field_mappings)
+            .field("adapt_column", &"<fn>")
             .finish()
     }
 }
@@ -621,7 +624,9 @@ mod tests {
         let mapping = SchemaMapping::new(
             Arc::clone(&projected_schema),
             field_mappings.clone(),
-            Arc::new(|array: &ArrayRef, field: &Field| Ok(cast(array, field.data_type())?)),
+            Arc::new(|array: &ArrayRef, field: &Field| {
+                Ok(cast(array, field.data_type())?)
+            }),
         );
 
         // Check that fields were set correctly
