@@ -305,7 +305,6 @@ impl IPCStreamWriter {
             exec_datafusion_err!("Failed to create partition file at {path:?}: {e:?}")
         })?;
 
-        // TODO what should be default metadata version & alignment?
         let metadata_version = MetadataVersion::V5;
         let alignment = 8;
         let mut write_options =
@@ -349,8 +348,7 @@ mod tests {
     use crate::metrics::SpillMetrics;
     use crate::spill::spill_manager::SpillManager;
     use crate::test::build_table_i32;
-    use arrow::array::ArrayRef;
-    use arrow::array::{Float64Array, Int32Array, ListArray, StringArray};
+    use arrow::array::{ArrayRef, Float64Array, Int32Array, ListArray, StringArray};
     use arrow::compute::cast;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
@@ -510,9 +508,9 @@ mod tests {
             Field::new("c", DataType::Int32, true),
         ]));
 
-        let a: ArrayRef = Arc::new(StringArray::from_iter_values(
-            std::iter::repeat("repeated").take(100),
-        ));
+        let a: ArrayRef = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+            "repeated", 100,
+        )));
         let b: ArrayRef = Arc::new(Int32Array::from(vec![1; 100]));
         let c: ArrayRef = Arc::new(Int32Array::from(vec![2; 100]));
 
@@ -552,13 +550,13 @@ mod tests {
         let lz4_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let zstd_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let uncompressed_spill_manager = SpillManager::new(
-            env.clone(),
+            Arc::clone(&env),
             uncompressed_metrics,
             Arc::clone(&schema),
             SpillCompression::Uncompressed,
         );
         let lz4_spill_manager = SpillManager::new(
-            env.clone(),
+            Arc::clone(&env),
             lz4_metrics,
             Arc::clone(&schema),
             SpillCompression::Lz4Frame,
@@ -590,12 +588,11 @@ mod tests {
         assert!(uncompressed_spill_size > lz4_spill_size);
         assert!(uncompressed_spill_size > zstd_spill_size);
 
-        // TODO validate with function
         validate(
             &lz4_spill_manager,
             lz4_spill_file,
             num_rows,
-            schema.clone(),
+            Arc::clone(&schema),
             batch_count,
         )
         .await?;
@@ -603,7 +600,7 @@ mod tests {
             &zstd_spill_manager,
             zstd_spill_file,
             num_rows,
-            schema.clone(),
+            Arc::clone(&schema),
             batch_count,
         )
         .await?;
