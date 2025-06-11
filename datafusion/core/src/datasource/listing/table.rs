@@ -930,11 +930,13 @@ impl ListingTable {
     /// handle schema evolution and type conversions when reading files with
     /// different schemas than the table schema.
     pub fn with_schema_adapter_factory(
-        mut self,
+        self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Self {
-        self.schema_adapter_factory = Some(schema_adapter_factory);
-        self
+        Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self
+        }
     }
 
     /// Get the [`SchemaAdapterFactory`] for this table
