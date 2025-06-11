@@ -97,7 +97,8 @@ arrow-flight = { version = "55.1.0", features = [
     "flight-sql-experimental",
 ] }
 arrow-ipc = { version = "55.0.0", default-features = false, features = [
-    "lz4", "zstd",
+    "lz4",
+    "zstd",
 ] }
 arrow-ord = { version = "55.0.0", default-features = false }
 arrow-schema = { version = "55.0.0", default-features = false }

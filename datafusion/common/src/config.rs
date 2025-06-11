@@ -276,7 +276,6 @@ config_namespace! {
     }
 }
 
-// TODO where should we parse?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpillCompression {
     Zstd,
@@ -387,9 +386,11 @@ config_namespace! {
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
 
-        /// TODO do we may need to support compression level setting Then we may change where parsing config happens
-        /// Sets default compression codec for spill file.
-        /// Valid values are: uncompressed, zstd, lz4_frame
+        /// Sets the compression codec used when spilling data to disk.
+        ///
+        /// Since datafusion writes spill files using the Arrow IPC Stream format,
+        /// only codecs supported by the Arrow IPC Stream Writer are allowed.
+        /// Valid values are: uncompressed, lz4_frame, zstd
         pub spill_compression: SpillCompression, default = SpillCompression::Uncompressed
 
         /// Specifies the reserved memory for each spillable sort operation to
