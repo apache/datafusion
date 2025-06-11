@@ -423,12 +423,7 @@ impl ExprSchemable for Expr {
             Expr::Literal(l, metadata) => {
                 let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
                 if let Some(metadata) = metadata {
-                    field = field.with_metadata(
-                        metadata
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect(),
-                    );
+                    field = metadata.add_to_field(field);
                 }
                 Ok(Arc::new(field))
             }
