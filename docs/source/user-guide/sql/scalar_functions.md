@@ -1834,7 +1834,7 @@ regexp_count(str, regexp[, start, flags])
 Returns the position in a string where the specified occurrence of a POSIX regular expression is located.
 
 ```sql
-regexp_instr(str, regexp[, start, N, endoption, flags])
+regexp_instr(str, regexp[, start[, N[, flags]]])
 ```
 
 #### Arguments
@@ -1843,7 +1843,6 @@ regexp_instr(str, regexp[, start, N, endoption, flags])
 - **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **start**: - **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1
 - **N**: - **N**: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function.
-- **endoption**: - **endoption**: Optional. If 0, returns the starting position of the match (default). If 1, returns the ending position of the match. Can be a constant, column, or function.
 - **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case
   - **m**: multi-line mode: ^ and $ match begin/end of line
@@ -1855,11 +1854,11 @@ regexp_instr(str, regexp[, start, N, endoption, flags])
 #### Example
 
 ```sql
-> SELECT regexp_instr('ABCDEF', 'c(.)(..)', 1, 1, 0, 'i', 2);
+> SELECT regexp_instr('ABCDEF', 'c(.)(..)');
 +---------------------------------------------------------------+
-| regexp_instr()                                                |
+| regexp_instr(Utf8("ABCDEF"),Utf8("c(.)(..)"))                 |
 +---------------------------------------------------------------+
-| 5                                                             |
+| 2                                                             |
 +---------------------------------------------------------------+
 ```
 

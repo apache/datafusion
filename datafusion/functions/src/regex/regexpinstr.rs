@@ -15,25 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::regexpcount::compile_and_cache_regex;
+
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
-use arrow::datatypes::{DataType, Int64Type, Field};
+use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
-use arrow::ipc::Null;
-use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
-use datafusion_expr::Values;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
     TypeSignature::Uniform, Volatility,
 };
-use super::regexpcount::{compile_and_cache_regex, compile_regex};
 use datafusion_macros::user_doc;
 use itertools::izip;
 use regex::Regex;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -42,11 +39,11 @@ use std::sync::Arc;
     description = "Returns the position in a string where the specified occurrence of a POSIX regular expression is located.",
     syntax_example = "regexp_instr(str, regexp[, start[, N[, flags]]])",
     sql_example = r#"```sql
-> SELECT regexp_instr('ABCDEF', 'c(.)(..)', 1, 1, 0, 'i', 2);
+> SELECT regexp_instr('ABCDEF', 'c(.)(..)');
 +---------------------------------------------------------------+
-| regexp_instr()                                                |
+| regexp_instr(Utf8("ABCDEF"),Utf8("c(.)(..)"))                 |
 +---------------------------------------------------------------+
-| 5                                                             |
+| 2                                                             |
 +---------------------------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
@@ -347,7 +344,7 @@ where
     S: StringArrayType<'a>,
 {
     let len = values.len();
-    
+
     let regex_input = if is_regex_scalar || regex_array.len() == 1 {
         ScalarOrArray::Scalar(Some(regex_array.value(0)))
     } else {
@@ -387,7 +384,6 @@ where
     else {
         ScalarOrArray::Array(vec![1; len])
     };
-
 
     let flags_input = if let Some(ref flags) = flags_array {
         if is_flags_scalar || flags.len() == 1 {
@@ -438,21 +434,26 @@ where
         subexp_input.iter(len)
     )
     .map(|(value, regex, start, nth, flags, subexp)| {
-        // let regex = match regex {
-        //     "" => return Ok(Some(0)),
-        //     regex => regex,
-        // };
         match regex {
             None => return Ok(None),
             Some("") => return Ok(None),
-            Some(regex) => return get_index(value, regex, start, nth, subexp, Some(flags), &mut regex_cache),
+            Some(regex) => {
+                return get_index(
+                    value,
+                    regex,
+                    start,
+                    nth,
+                    subexp,
+                    Some(flags),
+                    &mut regex_cache,
+                )
+            }
         };
-
-}).collect();
+    })
+    .collect();
 
     Ok(Arc::new(Int64Array::from(result?)))
 }
-
 
 fn get_index<'strings, 'cache>(
     value: Option<&str>,
@@ -461,22 +462,16 @@ fn get_index<'strings, 'cache>(
     n: i64,
     subexpr: i64,
     flags: Option<&'strings str>,
-    regex_cache: &'cache mut HashMap<(&'strings str, Option<&'strings str>), Regex>
-) -> Result<Option<i64>, ArrowError> where
-'strings: 'cache,
+    regex_cache: &'cache mut HashMap<(&'strings str, Option<&'strings str>), Regex>,
+) -> Result<Option<i64>, ArrowError>
+where
+    'strings: 'cache,
 {
-
     let value = match value {
         None => return Ok(None),
         Some("") => return Ok(Some(0)),
         Some(value) => value,
     };
-
-    // let pattern = match pattern {
-    //     None => return Ok(None),
-    //     Some("") => return Ok(Some(0)),
-    //     Some(pattern) => pattern,
-    // };
 
     let pattern = compile_and_cache_regex(pattern, flags, regex_cache)?;
     if start < 1 {
@@ -515,10 +510,9 @@ fn get_index<'strings, 'cache>(
             if let Some(matched) = captures.get(subexpr as usize) {
                 // Convert byte offset relative to search_slice back to 1-based character offset
                 // relative to the original `value` string.
-                let start_char_offset = value[..byte_start_offset + matched.start()]
-                    .chars()
-                    .count() as i64
-                    + 1;
+                let start_char_offset =
+                    value[..byte_start_offset + matched.start()].chars().count() as i64
+                        + 1;
                 return Ok(Some(start_char_offset));
             }
         }
@@ -530,7 +524,8 @@ fn get_index<'strings, 'cache>(
         // Convert byte offset relative to search_slice back to 1-based character offset
         // relative to the original `value` string.
         let match_start_byte_offset = byte_start_offset + mat.start();
-        let match_start_char_offset = value[..match_start_byte_offset].chars().count() as i64 + 1;
+        let match_start_char_offset =
+            value[..match_start_byte_offset].chars().count() as i64 + 1;
         Ok(Some(match_start_char_offset))
     } else {
         Ok(Some(0)) // Return 0 if the N-th match was not found
