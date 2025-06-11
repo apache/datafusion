@@ -27,7 +27,13 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::catalog::{Session, TableFunctionImpl};
-use datafusion::common::{plan_err, Column};
+use datafusion::common::{plan_datafusion_err, plan_err, Column};
+use datafusion::datasource::file_format::{
+    csv::CsvFormat, json::JsonFormat as NdJsonFormat, parquet::ParquetFormat, FileFormat,
+};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
@@ -41,6 +47,13 @@ use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics;
+
+use datafusion::prelude::SessionContext;
+
+use futures::executor::block_on;
+
+use glob::Pattern;
+use url::Url;
 
 #[derive(Debug)]
 pub enum Function {
@@ -458,5 +471,94 @@ impl TableFunctionImpl for ParquetMetadataFunc {
 
         let parquet_metadata = ParquetMetadataTable { schema, batch: rb };
         Ok(Arc::new(parquet_metadata))
+    }
+}
+
+/// A table function that allows users to query files using glob patterns
+/// for example: SELECT * FROM glob('path/to/*/file.parquet')
+pub struct GlobFunc {
+    // we need the ctx here to get the schema from the listing table later
+    ctx: SessionContext,
+}
+
+impl std::fmt::Debug for GlobFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GlobFunc")
+            .field("ctx", &"<SessionContext>")
+            .finish()
+    }
+}
+
+impl GlobFunc {
+    /// Create a new GlobFunc
+    pub fn new(ctx: SessionContext) -> Self {
+        Self { ctx }
+    }
+}
+
+fn as_utf8_literal<'a>(expr: &'a Expr, arg_name: &str) -> Result<&'a str> {
+    match expr {
+        Expr::Literal(ScalarValue::Utf8(Some(s)), _) => Ok(s),
+        Expr::Column(Column { name, .. }) => Ok(name),
+        _ => plan_err!("glob() requires a string literal for the '{arg_name}' argument"),
+    }
+}
+
+impl TableFunctionImpl for GlobFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        // Parse arguments
+        if exprs.is_empty() {
+            return plan_err!("glob() requires a glob pattern");
+        }
+        let pattern = as_utf8_literal(&exprs[0], "pattern")?;
+        let format = if exprs.len() > 1 {
+            Some(as_utf8_literal(&exprs[1], "format")?)
+        } else {
+            None
+        };
+
+        // Create ListingTableUrl - distinguish between URLs with schemes and local paths
+        let url = if pattern.contains("://") && pattern.contains(['*', '?', '[']) {
+            // URL with scheme and glob - split manually to avoid URL encoding of glob chars
+            let glob_pos = pattern.find(['*', '?', '[']).unwrap(); // we already checked it exists
+            let split_pos = pattern[..glob_pos].rfind('/').unwrap() + 1; // find last '/' before glob
+            let (base_path, glob_part) = pattern.split_at(split_pos);
+
+            let base_url =
+                Url::parse(&format!("{}/", base_path.trim_end_matches('/')))
+                    .map_err(|e| plan_datafusion_err!("Invalid base URL: {}", e))?;
+            let glob = Pattern::new(glob_part)
+                .map_err(|e| plan_datafusion_err!("Invalid glob pattern: {}", e))?;
+            ListingTableUrl::try_new(base_url, Some(glob))?
+        } else {
+            // Local path or URL without globs - parse() handles this correctly
+            ListingTableUrl::parse(pattern)?
+        };
+
+        // Determine file format for the table configuration
+        let file_extension = format
+            .or_else(|| {
+                // Extract extension from original pattern (before any URL manipulation)
+                pattern.split('/').next_back()?.split('.').next_back()
+            })
+            .unwrap_or("parquet");
+
+        let file_format: Arc<dyn FileFormat> = match file_extension {
+            "parquet" => Arc::new(ParquetFormat::default()),
+            "csv" => Arc::new(CsvFormat::default().with_has_header(true)),
+            "json" => Arc::new(NdJsonFormat::default()),
+            other => return plan_err!("glob(): unsupported format '{other}'"),
+        };
+
+        // Create the listing table - block is needed in order to infer schema which is an async io operation within a sync function.
+        let listing_opts =
+            ListingOptions::new(file_format).with_file_extension(file_extension);
+        let schema = block_on(listing_opts.infer_schema(&self.ctx.state(), &url))?;
+        let config = ListingTableConfig::new(url)
+            .with_listing_options(listing_opts)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config)?;
+
+        Ok(Arc::new(table))
     }
 }

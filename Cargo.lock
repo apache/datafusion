@@ -1960,6 +1960,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "futures",
+ "glob",
  "insta",
  "insta-cmd",
  "mimalloc",

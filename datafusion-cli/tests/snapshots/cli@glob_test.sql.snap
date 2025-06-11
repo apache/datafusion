@@ -1,0 +1,57 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+assertion_line: 173
+info:
+  program: datafusion-cli
+  args: []
+  stdin: "-- Test glob function with files available in CI\n-- Test 1: Single CSV file - verify basic functionality\nSELECT COUNT(*) AS cars_count FROM glob('../datafusion/core/tests/data/cars.csv');\n\n-- Test 2: Data aggregation from CSV file - verify actual data reading\nSELECT car, COUNT(*) as count FROM glob('../datafusion/core/tests/data/cars.csv') GROUP BY car ORDER BY car;\n\n-- Test 3: JSON file with explicit format parameter - verify format specification\nSELECT COUNT(*) AS json_count FROM glob('../datafusion/core/tests/data/1.json', 'json');\n\n-- Test 4: Single specific CSV file - verify another CSV works\nSELECT COUNT(*) AS example_count FROM glob('../datafusion/core/tests/data/example.csv');\n\n-- Test 5: Glob pattern with wildcard - test actual glob functionality\nSELECT COUNT(*) AS glob_pattern_count FROM glob('../datafusion/core/tests/data/exa*.csv'); "
+input_file: datafusion-cli/tests/sql/integration/glob_test.sql
+---
+success: true
+exit_code: 0
+----- stdout -----
+[CLI_VERSION]
++------------+
+| cars_count |
++------------+
+| 25         |
++------------+
+1 row(s) fetched. 
+[ELAPSED]
+
++-------+-------+
+| car   | count |
++-------+-------+
+| green | 12    |
+| red   | 13    |
++-------+-------+
+2 row(s) fetched. 
+[ELAPSED]
+
++------------+
+| json_count |
++------------+
+| 4          |
++------------+
+1 row(s) fetched. 
+[ELAPSED]
+
++---------------+
+| example_count |
++---------------+
+| 1             |
++---------------+
+1 row(s) fetched. 
+[ELAPSED]
+
++--------------------+
+| glob_pattern_count |
++--------------------+
+| 4                  |
++--------------------+
+1 row(s) fetched. 
+[ELAPSED]
+
+\q
+
+----- stderr -----
