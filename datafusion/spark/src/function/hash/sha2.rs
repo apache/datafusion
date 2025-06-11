@@ -144,12 +144,12 @@ pub fn sha2(args: [ColumnarValue; 2]) -> Result<ColumnarValue> {
                 &[ColumnarValue::from(ScalarValue::Utf8(expr_arg))],
             )
         }
-        [ColumnarValue::Array(expr_arr_arg), ColumnarValue::Scalar(ScalarValue::Int32(Some(bit_length_arg)))] => {
-            compute_sha2(bit_length_arg, &[ColumnarValue::from(expr_arr_arg)])
+        [ColumnarValue::Array(expr_arg), ColumnarValue::Scalar(ScalarValue::Int32(Some(bit_length_arg)))] => {
+            compute_sha2(bit_length_arg, &[ColumnarValue::from(expr_arg)])
         }
-        [ColumnarValue::Scalar(ScalarValue::Utf8(expr_arg)), ColumnarValue::Array(bit_length_arr_arg)] =>
+        [ColumnarValue::Scalar(ScalarValue::Utf8(expr_arg)), ColumnarValue::Array(bit_length_arg)] =>
         {
-            let arr: StringArray = bit_length_arr_arg
+            let arr: StringArray = bit_length_arg
                 .as_primitive::<Int32Type>()
                 .iter()
                 .map(|bit_length| {
@@ -171,9 +171,9 @@ pub fn sha2(args: [ColumnarValue; 2]) -> Result<ColumnarValue> {
                 .collect();
             Ok(ColumnarValue::Array(Arc::new(arr) as ArrayRef))
         }
-        [ColumnarValue::Array(expr_arr_arg), ColumnarValue::Array(bit_length_arr_arg)] => {
-            let expr_iter = expr_arr_arg.as_string::<i32>().iter();
-            let bit_length_iter = bit_length_arr_arg.as_primitive::<Int32Type>().iter();
+        [ColumnarValue::Array(expr_arg), ColumnarValue::Array(bit_length_arg)] => {
+            let expr_iter = expr_arg.as_string::<i32>().iter();
+            let bit_length_iter = bit_length_arg.as_primitive::<Int32Type>().iter();
             let arr: StringArray = expr_iter
                 .zip(bit_length_iter)
                 .map(|(expr, bit_length)| {
@@ -211,7 +211,8 @@ fn compute_sha2(
         384 => sha384(expr_arg),
         512 => sha512(expr_arg),
         _ => {
-            // Return null for unsupported bit lengths instead of error.
+            // Return null for unsupported bit lengths instead of error, because spark sha2 does not
+            // error out for this.
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
         }
     }

@@ -172,6 +172,7 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
     compute_hex(args, false)
 }
 
+/// Spark-compatible `sha2` function
 pub fn spark_sha2_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
     compute_hex(args, true)
 }
