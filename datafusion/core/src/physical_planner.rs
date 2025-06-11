@@ -45,6 +45,7 @@ use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::match_recognize::MatchRecognizePatternExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -79,7 +80,7 @@ use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
+    Filter, JoinType, RecursiveQuery, SkipType, SortExpr, StringifiedPlan, WindowFrame,
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -662,10 +663,30 @@ impl DefaultPhysicalPlanner {
                     )?)
                 }
             }
-            LogicalPlan::MatchRecognizePattern(_) => {
-                return exec_err!(
-                    "MatchRecognizePattern is not yet supported in physical planner"
-                );
+            LogicalPlan::MatchRecognizePattern(match_recognize) => {
+                let input_exec = children.one()?;
+
+                // Create partition by and order by expressions
+                let (partition_by, order_by) = self
+                    .create_match_recognize_partitioning_expr(
+                        &match_recognize.partition_by,
+                        &match_recognize.order_by,
+                        &match_recognize.input.schema(),
+                        session_state,
+                    )?;
+
+                // Create the pattern matching execution plan
+                let pattern_exec = MatchRecognizePatternExec::try_new(
+                    input_exec,
+                    partition_by,
+                    order_by,
+                    match_recognize.pattern.clone(),
+                    match_recognize.symbols.clone(),
+                    match_recognize.after_skip.clone(),
+                    match_recognize.rows_per_match.clone(),
+                )?;
+
+                Arc::new(pattern_exec)
             }
             LogicalPlan::Aggregate(Aggregate {
                 input,
@@ -1376,6 +1397,38 @@ impl DefaultPhysicalPlanner {
                     .collect::<Result<Vec<_>>>()?,
             ))
         }
+    }
+
+    fn create_match_recognize_partitioning_expr(
+        &self,
+        partition_by: &[Expr],
+        order_by: &[SortExpr],
+        input_schema: &DFSchema,
+        session_state: &SessionState,
+    ) -> Result<(Vec<Arc<dyn PhysicalExpr>>, Option<LexOrdering>)> {
+        // Create partition by expressions
+        let partition_by = partition_by
+            .iter()
+            .map(|expr| self.create_physical_expr(expr, input_schema, session_state))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Create order by expressions
+        let order_by = order_by
+            .iter()
+            .map(|sort_expr| {
+                let physical_expr = self.create_physical_expr(
+                    &sort_expr.expr,
+                    input_schema,
+                    session_state,
+                )?;
+                let options = SortOptions::new(!sort_expr.asc, sort_expr.nulls_first);
+                Ok(PhysicalSortExpr::new(physical_expr, options))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let order_by = LexOrdering::new(order_by);
+
+        Ok((partition_by, order_by))
     }
 }
 
