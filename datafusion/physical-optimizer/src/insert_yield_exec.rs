@@ -101,14 +101,16 @@ impl PhysicalOptimizerRule for InsertYieldExec {
 mod tests {
     use super::*;
     use datafusion_common::assert_contains;
-    use datafusion_physical_plan::{displayable, test::scan_partitioned};
     use datafusion_common::config::ConfigOptions;
+    use datafusion_physical_plan::{displayable, test::scan_partitioned};
 
     #[tokio::test]
     async fn test_yield_stream_exec_for_custom_exec() {
         let test_custom_exec = scan_partitioned(1);
         let config = ConfigOptions::new();
-        let optimized = InsertYieldExec::new().optimize(test_custom_exec, &config).unwrap();
+        let optimized = InsertYieldExec::new()
+            .optimize(test_custom_exec, &config)
+            .unwrap();
 
         let display = displayable(optimized.as_ref()).indent(true).to_string();
         assert_contains!(display, "YieldStreamExec");
