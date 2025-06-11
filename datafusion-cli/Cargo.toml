@@ -55,6 +55,7 @@ datafusion = { workspace = true, features = [
 dirs = "6.0.0"
 env_logger = { workspace = true }
 futures = { workspace = true }
+log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "gcp", "http"] }
 parking_lot = { workspace = true }
