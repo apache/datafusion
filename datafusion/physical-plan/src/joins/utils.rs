@@ -1115,7 +1115,7 @@ pub(crate) fn get_mark_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let mut bitmap = build_range_bitmap(&range, input_indices);
+    let mut bitmap = build_range_bitmap(range, input_indices);
     PrimitiveArray::new(
         vec![0; range.len()].into(),
         Some(NullBuffer::new(bitmap.finish())),
