@@ -365,7 +365,7 @@ mod test {
 
         let mut expected_builder = StringBuilder::new();
         expected_builder.append_value("31");
-        expected_builder.append_value("6a");
+        expected_builder.append_value("6A");
         expected_builder.append_null();
         expected_builder.append_value("33");
         let expected = expected_builder.finish();
