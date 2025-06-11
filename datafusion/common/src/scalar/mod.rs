@@ -3554,7 +3554,7 @@ impl ScalarValue {
 ///
 /// See also [`ScalarValue::compact`] which applies to `ScalarValue` instances
 /// as necessary.
-pub fn copy_array_data(data: &ArrayData) -> ArrayData {
+pub fn copy_array_data(src_data: &ArrayData) -> ArrayData {
     let mut copy = MutableArrayData::new(vec![&data], true, data.len());
     copy.extend(0, 0, data.len());
     copy.freeze()
