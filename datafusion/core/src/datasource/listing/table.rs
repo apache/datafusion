@@ -1385,12 +1385,11 @@ mod tests {
         },
     };
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
-    use datafusion_common::ColumnStatistics;
     use datafusion_common::{
         assert_contains,
         stats::Precision,
         test_util::{batches_to_string, datafusion_test_data},
-        ScalarValue,
+        ColumnStatistics, ScalarValue,
     };
     use datafusion_datasource::schema_adapter::{
         SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
@@ -1401,7 +1400,6 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
-
     /// Creates a test schema with standard field types used in tests
     fn create_test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
