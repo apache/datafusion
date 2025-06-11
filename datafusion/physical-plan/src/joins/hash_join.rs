@@ -34,6 +34,7 @@ use super::{
 };
 use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::joins::utils::apply_join_filter_to_hash_indices;
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
@@ -62,7 +63,7 @@ use arrow::array::{
     UInt32Array, UInt64Array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
-use arrow::compute::{and, concat_batches, take, FilterBuilder};
+use arrow::compute::{and, concat_batches, interleave, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -95,9 +96,11 @@ struct JoinLeftData {
     /// The hash table with indices into `batch`
     hash_map: JoinHashMap,
     /// The input rows for the build side
-    batch: RecordBatch,
-    /// The build side on expressions values
-    values: Vec<ArrayRef>,
+    batch: Vec<RecordBatch>,
+    /// batch id and row id for each index
+    batch_indices: Vec<(usize, usize)>,
+    /// The build side 'on' expressions values
+    values: Vec<Vec<ArrayRef>>,
     /// Shared bitmap builder for visited left indices
     visited_indices_bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially
@@ -114,8 +117,9 @@ impl JoinLeftData {
     /// Create a new `JoinLeftData` from its parts
     fn new(
         hash_map: JoinHashMap,
-        batch: RecordBatch,
-        values: Vec<ArrayRef>,
+        batch: Vec<RecordBatch>,
+        batch_indices: Vec<(usize, usize)>,
+        values: Vec<Vec<ArrayRef>>,
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
@@ -123,6 +127,7 @@ impl JoinLeftData {
         Self {
             hash_map,
             batch,
+            batch_indices,
             values,
             visited_indices_bitmap,
             probe_threads_counter,
@@ -136,12 +141,16 @@ impl JoinLeftData {
     }
 
     /// returns a reference to the build side batch
-    fn batch(&self) -> &RecordBatch {
+    fn batch(&self) -> &[RecordBatch] {
         &self.batch
     }
 
+    fn batch_indices(&self) -> &Vec<(usize, usize)> {
+        &self.batch_indices
+    }
+
     /// returns a reference to the build side expressions values
-    fn values(&self) -> &[ArrayRef] {
+    fn values(&self) -> &Vec<Vec<ArrayRef>> {
         &self.values
     }
 
@@ -957,8 +966,6 @@ async fn collect_left_input(
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
 ) -> Result<JoinLeftData> {
-    let schema = left_stream.schema();
-
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
     // 2. stores the batches in a vector.
@@ -991,52 +998,72 @@ async fn collect_left_input(
 
     let mut hashmap = JoinHashMap::with_capacity(num_rows);
     let mut hashes_buffer = Vec::new();
-    let mut offset = 0;
 
     // Updating hashmap starting from the last batch
     let batches_iter = batches.iter().rev();
-    for batch in batches_iter.clone() {
+    let mut batch_indices: Vec<(usize, usize)> = Vec::new();
+    let mut batch_row_total = usize::default();
+
+    for (batch_id, batch) in batches_iter.enumerate().clone() {
+        let batch_num_rows = batch.num_rows();
+
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
         update_hash(
             &on_left,
             batch,
             &mut hashmap,
-            offset,
+            batch_row_total, // this is our offset
             &random_state,
             &mut hashes_buffer,
             0,
             true,
         )?;
-        offset += batch.num_rows();
+
+        for row_id in 0..batch_num_rows {
+            batch_indices.push((batch_id, row_id));
+        }
+        batch_row_total += batch_num_rows;
     }
-    // Merge all batches into a single batch, so we can directly index into the arrays
-    let single_batch = concat_batches(&schema, batches_iter)?;
 
     // Reserve additional memory for visited indices bitmap and create shared builder
     let visited_indices_bitmap = if with_visited_indices_bitmap {
-        let bitmap_size = bit_util::ceil(single_batch.num_rows(), 8);
+        let bitmap_size = bit_util::ceil(batch_row_total, 8);
         reservation.try_grow(bitmap_size)?;
         metrics.build_mem_used.add(bitmap_size);
 
-        let mut bitmap_buffer = BooleanBufferBuilder::new(single_batch.num_rows());
+        let mut bitmap_buffer = BooleanBufferBuilder::new(batch_row_total);
         bitmap_buffer.append_n(num_rows, false);
         bitmap_buffer
     } else {
         BooleanBufferBuilder::new(0)
     };
 
-    let left_values = on_left
+    let left_values: Vec<Vec<ArrayRef>> = batches
         .iter()
-        .map(|c| {
-            c.evaluate(&single_batch)?
-                .into_array(single_batch.num_rows())
+        .map(|batch| {
+            on_left
+                .iter()
+                .map(|expr| {
+                    expr.evaluate(batch)?
+                        .into_array(batch.num_rows())
+                })
+                .collect::<Result<_>>()
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<_>>()?; 
+
+    // let left_values = on_left
+    //     .iter()
+    //     .map(|c| {
+    //         c.evaluate(&single_batch)?
+    //             .into_array(single_batch.num_rows())
+    //     })
+    //     .collect::<Result<Vec<_>>>()?;
 
     let data = JoinLeftData::new(
         hashmap,
-        single_batch,
+        batches,
+        batch_indices,
         left_values,
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
@@ -1300,21 +1327,26 @@ impl RecordBatchStream for HashJoinStream {
 #[allow(clippy::too_many_arguments)]
 fn lookup_join_hashmap(
     build_hashmap: &JoinHashMap,
-    build_side_values: &[ArrayRef],
+    build_side_values: &Vec<Vec<ArrayRef>>,
+    build_side_indices: &Vec<(usize, usize)>,
     probe_side_values: &[ArrayRef],
     null_equals_null: bool,
     hashes_buffer: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
-) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
+) -> Result<(Vec<(usize, usize)>, UInt32Array, Option<JoinHashMapOffset>)> {
     let (probe_indices, build_indices, next_offset) =
         build_hashmap.get_matched_indices_with_limit_offset(hashes_buffer, limit, offset);
+    
+    let mut batch_row_indices: Vec<(usize, usize)> = Vec::with_capacity(build_indices.len());
+    for indice in build_indices.iter().map(|&x| x as usize) {
+        batch_row_indices.push(build_side_indices[indice]);
+    }
 
-    let build_indices: UInt64Array = build_indices.into();
     let probe_indices: UInt32Array = probe_indices.into();
 
     let (build_indices, probe_indices) = equal_rows_arr(
-        &build_indices,
+        &batch_row_indices,
         &probe_indices,
         build_side_values,
         probe_side_values,
@@ -1348,9 +1380,9 @@ fn eq_dyn_null(
 }
 
 pub fn equal_rows_arr(
-    indices_left: &UInt64Array,
+    indices_left: &Vec<(usize, usize)>,
     indices_right: &UInt32Array,
-    left_arrays: &[ArrayRef],
+    left_arrays: &[Vec<ArrayRef>],
     right_arrays: &[ArrayRef],
     null_equals_null: bool,
 ) -> Result<(UInt64Array, UInt32Array)> {
@@ -1362,7 +1394,10 @@ pub fn equal_rows_arr(
         )
     })?;
 
-    let arr_left = take(first_left.as_ref(), indices_left, None)?;
+    let left: Vec<&dyn Array> =
+        first_left.iter().map(Arc::as_ref).collect();
+
+    let arr_left = interleave(&left, indices_left)?;
     let arr_right = take(first_right.as_ref(), indices_right, None)?;
 
     let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
@@ -1372,7 +1407,8 @@ pub fn equal_rows_arr(
     // The results are then folded (combined) using the and function to get a final equality result.
     equal = iter
         .map(|(left, right)| {
-            let arr_left = take(left.as_ref(), indices_left, None)?;
+            let left_refs: Vec<&dyn Array> = left.iter().map(Arc::as_ref).collect();
+            let arr_left = interleave(&left_refs, indices_left)?;
             let arr_right = take(right.as_ref(), indices_right, None)?;
             eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)
         })
@@ -1493,6 +1529,7 @@ impl HashJoinStream {
         let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
             build_side.left_data.hash_map(),
             build_side.left_data.values(),
+            build_side.left_data.batch_indices(),
             &state.values,
             self.null_equals_null,
             &self.hashes_buffer,
@@ -1502,7 +1539,7 @@ impl HashJoinStream {
 
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
-            apply_join_filter_to_indices(
+            apply_join_filter_to_hash_indices(
                 build_side.left_data.batch(),
                 &state.batch,
                 left_indices,
@@ -1561,9 +1598,10 @@ impl HashJoinStream {
             self.right_side_ordered,
         )?;
 
-        let result = build_batch_from_indices(
+        let result = build_batch_from_hash_indices(
             &self.schema,
             build_side.left_data.batch(),
+            build_side.left_data.batch_indices(),
             &state.batch,
             &left_indices,
             &right_indices,
