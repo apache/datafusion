@@ -28,6 +28,7 @@ use datafusion::execution::context::SessionState;
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
+use aws_credential_types::provider::error::CredentialsError;
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use log::debug;
 use object_store::aws::{AmazonS3Builder, AwsCredential};
@@ -140,9 +141,18 @@ impl CredentialsFromConfig {
         // we can call `provide_credentials` here.
         let credentials = match credentials.provide_credentials().await {
             Ok(_) => Some(credentials),
-            Err(e) => {
-                debug!("Could not use AWS SDK to get credentials: {e}");
+            Err(CredentialsError::CredentialsNotLoaded(_)) => {
+                debug!("Could not use AWS SDK to get credentials");
                 None
+            }
+            // other errors like `CredentialsError::InvalidConfiguration`
+            // should be returned to the user so they can be fixed
+            Err(e) => {
+                return Err(DataFusionError::ObjectStore(object_store::Error::Generic {
+                    store: "S3",
+                    source: format!("Error getting credentials from provider: {e}")
+                        .into(),
+                }));
             }
         };
         Ok(Self {
