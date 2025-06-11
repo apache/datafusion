@@ -100,7 +100,10 @@ jobs:
           df -h
       - name: Run tests (excluding doctests)
         env:
-          RUST_BACKTRACE: 1
+          # Disable AWS EC2 metadata service which does not work in
+          # GitHub Actions container environment.
+          # See https://github.com/apache/datafusion/issues/16378
+          AWS_EC2_METADATA_DISABLED: 1
         run: |
           cargo test \
             --profile ci \
@@ -134,6 +137,8 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests
+        env:
+          RUST_BACKTRACE: 1
         run: |
           cd datafusion
           cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --features=force_hash_collisions,avro
@@ -195,7 +200,6 @@ jobs:
               },
               details_url: workflowRunUrl
             });
-
 
 
 
