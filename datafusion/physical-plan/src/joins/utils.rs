@@ -901,7 +901,7 @@ pub(crate) fn build_batch_from_indices(
 
     for column_index in column_indices {
         let array = if column_index.side == JoinSide::None {
-            // For marks joins, the mark column is a true if the indices is not null, otherwise it will be false
+            // For mark joins, the mark column is a true if the indices is not null, otherwise it will be false
             Arc::new(compute::is_not_null(probe_indices)?)
         } else if column_index.side == build_side {
             let array = build_input_buffer.column(column_index.index);
