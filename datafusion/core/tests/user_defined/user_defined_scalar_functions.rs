@@ -40,6 +40,7 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
     plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     lit_with_metadata, Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody,
@@ -1535,7 +1536,7 @@ async fn test_metadata_based_udf_with_literal() -> Result<()> {
     let df = ctx.sql("select 0;").await?.select(vec![
         lit(5u64).alias_with_metadata("lit_with_doubling", Some(input_metadata.clone())),
         lit(5u64).alias("lit_no_doubling"),
-        lit_with_metadata(5u64, Some(input_metadata))
+        lit_with_metadata(5u64, Some(FieldMetadata::from(input_metadata)))
             .alias("lit_with_double_no_alias_metadata"),
     ])?;
 
