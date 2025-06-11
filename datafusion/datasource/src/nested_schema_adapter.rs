@@ -22,18 +22,22 @@
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
 use crate::schema_adapter::{
-    create_field_mapping, DefaultSchemaAdapterFactory, SchemaAdapter,
-    SchemaAdapterFactory, SchemaMapper, SchemaMapping,
+    create_field_mapping, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+    SchemaMapping,
 };
-#[cfg(test)]
 use arrow::{
     array::{Array, ArrayRef, StructArray},
     compute::cast,
     datatypes::{DataType::Struct, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
 };
-use datafusion_common::{arrow::array::new_null_array, ColumnStatistics, Result};
+use datafusion_common::{arrow::array::new_null_array, Result};
 use std::sync::Arc;
+
+#[cfg(test)]
+use {
+    crate::schema_adapter::DefaultSchemaAdapterFactory, arrow::record_batch::RecordBatch,
+    datafusion_common::ColumnStatistics,
+};
 /// Factory for creating [`NestedStructSchemaAdapter`]
 ///
 /// This factory creates schema adapters that properly handle schema evolution
@@ -136,9 +140,7 @@ impl SchemaAdapter for NestedStructSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
-                Arc::new(|array: &ArrayRef, field: &Field| {
-                    Ok(adapt_column(array, field)?)
-                }),
+                Arc::new(|array: &ArrayRef, field: &Field| adapt_column(array, field)),
             )),
             projection,
         ))
