@@ -36,10 +36,10 @@ use datafusion_common::{
 };
 use datafusion_datasource::{
     compute_all_files_statistics,
+    file::FileSource,
     file_groups::FileGroup,
     file_scan_config::{FileScanConfig, FileScanConfigBuilder},
     schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory},
-    FileSource,
 };
 use datafusion_execution::{
     cache::{cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache},
@@ -2654,6 +2654,193 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schema_adapter_map_schema_error_type_incompatible() -> Result<()> {
+        let ctx = SessionContext::new();
+        let path = "table/file.json";
+        register_test_store(&ctx, &[(path, 10)]);
+
+        let format = JsonFormat::default();
+        let opt = ListingOptions::new(Arc::new(format));
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema))
+            .with_schema_adapter_factory(Arc::new(FailingMapSchemaAdapterFactory {
+                error_type: MapSchemaError::TypeIncompatible,
+            }));
+        let table = ListingTable::try_new(config)?;
+
+        // The error should bubble up from the scan operation when schema mapping fails
+        let scan_result = table.scan(&ctx.state(), None, &[], None).await;
+
+        assert!(scan_result.is_err());
+        let error_msg = scan_result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Cannot map incompatible types"),
+            "Expected type incompatibility error, got: {error_msg}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schema_adapter_map_schema_error_general_failure() -> Result<()> {
+        let ctx = SessionContext::new();
+        let path = "table/file.json";
+        register_test_store(&ctx, &[(path, 10)]);
+
+        let format = JsonFormat::default();
+        let opt = ListingOptions::new(Arc::new(format));
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema))
+            .with_schema_adapter_factory(Arc::new(FailingMapSchemaAdapterFactory {
+                error_type: MapSchemaError::GeneralFailure,
+            }));
+        let table = ListingTable::try_new(config)?;
+
+        // The error should bubble up from the scan operation when schema mapping fails
+        let scan_result = table.scan(&ctx.state(), None, &[], None).await;
+
+        assert!(scan_result.is_err());
+        let error_msg = scan_result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Schema adapter mapping failed"),
+            "Expected general failure error, got: {error_msg}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schema_adapter_map_schema_error_invalid_projection() -> Result<()> {
+        let ctx = SessionContext::new();
+        let path = "table/file.json";
+        register_test_store(&ctx, &[(path, 10)]);
+
+        let format = JsonFormat::default();
+        let opt = ListingOptions::new(Arc::new(format));
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema))
+            .with_schema_adapter_factory(Arc::new(FailingMapSchemaAdapterFactory {
+                error_type: MapSchemaError::InvalidProjection,
+            }));
+        let table = ListingTable::try_new(config)?;
+
+        // The error should bubble up from the scan operation when schema mapping fails
+        let scan_result = table.scan(&ctx.state(), None, &[], None).await;
+
+        assert!(scan_result.is_err());
+        let error_msg = scan_result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Invalid projection in schema mapping"),
+            "Expected invalid projection error, got: {error_msg}"
+        );
+
+        Ok(())
+    }
+
+    // Test that errors during file listing also bubble up correctly
+    #[tokio::test]
+    async fn test_schema_adapter_error_during_file_listing() -> Result<()> {
+        let ctx = SessionContext::new();
+        let path = "table/file.json";
+        register_test_store(&ctx, &[(path, 10)]);
+
+        let format = JsonFormat::default();
+        let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(true);
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema))
+            .with_schema_adapter_factory(Arc::new(FailingMapSchemaAdapterFactory {
+                error_type: MapSchemaError::TypeIncompatible,
+            }));
+        let table = ListingTable::try_new(config)?;
+
+        // The error should bubble up from list_files_for_scan when collecting statistics
+        let list_result = table.list_files_for_scan(&ctx.state(), &[], None).await;
+
+        assert!(list_result.is_err());
+        let error_msg = list_result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Cannot map incompatible types"),
+            "Expected type incompatibility error during file listing, got: {error_msg}"
+        );
+
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    enum MapSchemaError {
+        TypeIncompatible,
+        GeneralFailure,
+        InvalidProjection,
+    }
+
+    #[derive(Debug)]
+    struct FailingMapSchemaAdapterFactory {
+        error_type: MapSchemaError,
+    }
+
+    impl SchemaAdapterFactory for FailingMapSchemaAdapterFactory {
+        fn create(
+            &self,
+            projected_table_schema: SchemaRef,
+            _table_schema: SchemaRef,
+        ) -> Box<dyn SchemaAdapter> {
+            Box::new(FailingMapSchemaAdapter {
+                schema: projected_table_schema,
+                error_type: self.error_type,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingMapSchemaAdapter {
+        schema: SchemaRef,
+        error_type: MapSchemaError,
+    }
+
+    impl SchemaAdapter for FailingMapSchemaAdapter {
+        fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
+            let field = self.schema.field(index);
+            file_schema.fields.find(field.name()).map(|(i, _)| i)
+        }
+
+        fn map_schema(
+            &self,
+            _file_schema: &Schema,
+        ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+            // Always fail with different error types based on the configured error_type
+            match self.error_type {
+                MapSchemaError::TypeIncompatible => {
+                    plan_err!(
+                        "Cannot map incompatible types: Boolean cannot be cast to Utf8"
+                    )
+                }
+                MapSchemaError::GeneralFailure => {
+                    plan_err!("Schema adapter mapping failed due to internal error")
+                }
+                MapSchemaError::InvalidProjection => {
+                    plan_err!("Invalid projection in schema mapping: column index out of bounds")
+                }
+            }
+        }
     }
 
     #[derive(Debug)]
