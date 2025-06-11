@@ -1882,6 +1882,11 @@ impl Expr {
             _ => None,
         }
     }
+
+    /// Check if the Expr is literal
+    pub fn is_literal(&self) -> bool {
+        matches!(self, Expr::Literal(_, _))
+    }
 }
 
 impl Normalizeable for Expr {
