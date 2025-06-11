@@ -22,10 +22,13 @@ use std::sync::Arc;
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
-use arrow::array::{ArrayRef, NullArray};
-use arrow::array::{RecordBatch, RecordBatchOptions};
+use crate::yield_stream::wrap_yield_stream;
+use crate::{
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
+};
+
+use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
@@ -41,6 +44,8 @@ pub struct PlaceholderRowExec {
     /// Number of partitions
     partitions: usize,
     cache: PlanProperties,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl PlaceholderRowExec {
@@ -52,6 +57,7 @@ impl PlaceholderRowExec {
             schema,
             partitions,
             cache,
+            cooperative: true,
         }
     }
 
@@ -158,11 +164,8 @@ impl ExecutionPlan for PlaceholderRowExec {
             );
         }
 
-        Ok(Box::pin(MemoryStream::try_new(
-            self.data()?,
-            Arc::clone(&self.schema),
-            None,
-        )?))
+        MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)
+            .map(|ms| wrap_yield_stream(Box::pin(ms), &context, self.cooperative))
     }
 
     fn statistics(&self) -> Result<Statistics> {
@@ -181,6 +184,10 @@ impl ExecutionPlan for PlaceholderRowExec {
             &self.schema,
             None,
         ))
+    }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        self.cooperative.then_some(self)
     }
 }
 

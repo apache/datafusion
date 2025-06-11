@@ -469,7 +469,10 @@ impl PruningPredicate {
     /// simplified version `b`. See [`ExprSimplifier`] to simplify expressions.
     ///
     /// [`ExprSimplifier`]: https://docs.rs/datafusion/latest/datafusion/optimizer/simplify_expressions/struct.ExprSimplifier.html
-    pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
+    pub fn prune<S: PruningStatistics + ?Sized>(
+        &self,
+        statistics: &S,
+    ) -> Result<Vec<bool>> {
         let mut builder = BoolVecBuilder::new(statistics.num_containers());
 
         // Try to prove the predicate can't be true for the containers based on
@@ -851,7 +854,7 @@ impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredColumns {
 /// -------+--------
 ///   5    | 1000
 /// ```
-fn build_statistics_record_batch<S: PruningStatistics>(
+fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     statistics: &S,
     required_columns: &RequiredColumns,
 ) -> Result<RecordBatch> {
