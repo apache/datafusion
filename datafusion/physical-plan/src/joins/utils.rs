@@ -1079,17 +1079,7 @@ pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let mut bitmap = BooleanBufferBuilder::new(range.len());
-    bitmap.append_n(range.len(), false);
-    input_indices
-        .iter()
-        .flatten()
-        .map(|v| v.as_usize())
-        .filter(|v| range.contains(v))
-        .for_each(|v| {
-            bitmap.set_bit(v - range.start, true);
-        });
-
+    let bitmap = build_range_bitmap(&range, input_indices);
     let offset = range.start;
 
     // get the anti index
@@ -1108,19 +1098,8 @@ pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let mut bitmap = BooleanBufferBuilder::new(range.len());
-    bitmap.append_n(range.len(), false);
-    input_indices
-        .iter()
-        .flatten()
-        .map(|v| v.as_usize())
-        .filter(|v| range.contains(v))
-        .for_each(|v| {
-            bitmap.set_bit(v - range.start, true);
-        });
-
+    let bitmap = build_range_bitmap(&range, input_indices);
     let offset = range.start;
-
     // get the semi index
     (range)
         .filter_map(|idx| {
@@ -1136,21 +1115,30 @@ pub(crate) fn get_mark_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let mut bitmap = BooleanBufferBuilder::new(range.len());
-    bitmap.append_n(range.len(), false);
-    input_indices
-        .iter()
-        .flatten()
-        .map(|v| v.as_usize())
-        .filter(|v| range.contains(v))
-        .for_each(|v| {
-            bitmap.set_bit(v - range.start, true);
-        });
-
+    let mut bitmap = build_range_bitmap(&range, input_indices);
     PrimitiveArray::new(
         vec![0; range.len()].into(),
         Some(NullBuffer::new(bitmap.finish())),
     )
+}
+
+fn build_range_bitmap<T: ArrowPrimitiveType>(
+    range: &Range<usize>,
+    input: &PrimitiveArray<T>,
+) -> BooleanBufferBuilder {
+    let mut builder = BooleanBufferBuilder::new(range.len());
+    builder.append_n(range.len(), false);
+
+    input
+        .iter()
+        .flatten()
+        .map(|v| v.as_usize())
+        .filter(|&idx| range.contains(&idx))
+        .for_each(|idx| {
+            builder.set_bit(idx - range.start, true);
+        });
+
+    builder
 }
 
 /// Appends probe indices in order by considering the given build indices.

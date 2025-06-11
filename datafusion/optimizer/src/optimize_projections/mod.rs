@@ -672,10 +672,10 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// Depending on the join type, it divides the requirement indices into those
 /// that apply to the left child and those that apply to the right child.
 ///
-/// - For `INNER`, `LEFT`, `RIGHT` and `FULL` joins, the requirements are split
-///   between left and right children. The right child indices are adjusted to
-///   point to valid positions within the right child by subtracting the length
-///   of the left child.
+/// - For `INNER`, `LEFT`, `RIGHT`, `FULL`, `LEFTMARK`, and `RIGHTMARK` joins,
+///   the requirements are split between left and right children. The right
+///   child indices are adjusted to point to valid positions within the right
+///   child by subtracting the length of the left child.
 ///
 /// - For `LEFT ANTI`, `LEFT SEMI`, `RIGHT SEMI` and `RIGHT ANTI` joins, all
 ///   requirements are re-routed to either the left child or the right child
