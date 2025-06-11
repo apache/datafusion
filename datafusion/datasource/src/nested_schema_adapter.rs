@@ -25,6 +25,7 @@ use crate::schema_adapter::{
     create_field_mapping, DefaultSchemaAdapterFactory, SchemaAdapter,
     SchemaAdapterFactory, SchemaMapper, SchemaMapping,
 };
+#[cfg(test)]
 use arrow::{
     array::{Array, ArrayRef, StructArray},
     compute::cast,
@@ -33,7 +34,6 @@ use arrow::{
 };
 use datafusion_common::{arrow::array::new_null_array, ColumnStatistics, Result};
 use std::sync::Arc;
-
 /// Factory for creating [`NestedStructSchemaAdapter`]
 ///
 /// This factory creates schema adapters that properly handle schema evolution
@@ -71,22 +71,6 @@ impl NestedStructSchemaAdapterFactory {
             .fields()
             .iter()
             .any(|field| matches!(field.data_type(), Struct(_)))
-    }
-
-    /// Create an appropriate schema adapter based on schema characteristics.
-    /// Returns a NestedStructSchemaAdapter if the projected schema contains nested structs,
-    /// otherwise returns a DefaultSchemaAdapter.
-    pub fn create_adapter(
-        projected_table_schema: SchemaRef,
-        table_schema: SchemaRef,
-    ) -> Box<dyn SchemaAdapter> {
-        // Use nested adapter if target has nested structs
-        if Self::has_nested_structs(table_schema.as_ref()) {
-            NestedStructSchemaAdapterFactory.create(projected_table_schema, table_schema)
-        } else {
-            // Default case for simple schemas
-            DefaultSchemaAdapterFactory.create(projected_table_schema, table_schema)
-        }
     }
 }
 
@@ -152,7 +136,9 @@ impl SchemaAdapter for NestedStructSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
-                Arc::new(|array: &ArrayRef, field: &Field| Ok(adapt_column(array, field)?)),
+                Arc::new(|array: &ArrayRef, field: &Field| {
+                    Ok(adapt_column(array, field)?)
+                }),
             )),
             projection,
         ))
@@ -347,10 +333,14 @@ mod tests {
         );
 
         // Test factory selection logic
-        let adapter = NestedStructSchemaAdapterFactory::create_adapter(
-            nested_schema.clone(),
-            nested_schema.clone(),
-        );
+        let adapter: Box<dyn SchemaAdapter> =
+            if NestedStructSchemaAdapterFactory::has_nested_structs(&nested_schema) {
+                NestedStructSchemaAdapterFactory
+                    .create(nested_schema.clone(), nested_schema.clone())
+            } else {
+                DefaultSchemaAdapterFactory
+                    .create(nested_schema.clone(), nested_schema.clone())
+            };
 
         assert!(
             adapter.map_schema(&source_schema).is_ok(),
