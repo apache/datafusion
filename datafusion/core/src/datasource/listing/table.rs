@@ -39,6 +39,7 @@ use datafusion_datasource::{
     file_groups::FileGroup,
     file_scan_config::{FileScanConfig, FileScanConfigBuilder},
     schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory},
+    FileSource,
 };
 use datafusion_execution::{
     cache::{cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache},
@@ -944,6 +945,16 @@ impl ListingTable {
         self.schema_adapter_factory.as_ref()
     }
 
+    /// Creates a file source and applies schema adapter factory if available
+    fn create_file_source_with_schema_adapter(&self) -> Result<Arc<dyn FileSource>> {
+        let mut source = self.options.format.file_source();
+        // Apply schema adapter to source if available
+        if let Some(factory) = &self.schema_adapter_factory {
+            source = source.with_schema_adapter_factory(Arc::clone(factory))?;
+        }
+        Ok(source)
+    }
+
     /// If file_sort_order is specified, creates the appropriate physical expressions
     fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
         create_ordering(&self.table_schema, &self.options.file_sort_order)
@@ -1052,11 +1063,7 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
-        let mut source = self.options.format.file_source();
-        // Apply schema adapter to source if available
-        if let Some(factory) = &self.schema_adapter_factory {
-            source = source.with_schema_adapter_factory(Arc::clone(factory))?;
-        }
+        let source = self.create_file_source_with_schema_adapter()?;
 
         // create the execution plan
         self.options
