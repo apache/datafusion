@@ -557,6 +557,7 @@ mod test {
         // Test all should fail
         let expr = col("timestamp_col").lt(Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
+            None,
         ));
         let expr = logical2physical(&expr, &table_schema);
         let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
@@ -597,6 +598,7 @@ mod test {
         // Test all should pass
         let expr = col("timestamp_col").gt(Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
+            None,
         ));
         let expr = logical2physical(&expr, &table_schema);
         let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
@@ -660,7 +662,7 @@ mod test {
 
         let expr = col("string_col")
             .is_not_null()
-            .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)))));
+            .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)), None)));
         let expr = logical2physical(&expr, &table_schema);
 
         assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));

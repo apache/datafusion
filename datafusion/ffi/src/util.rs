@@ -22,7 +22,7 @@ use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
 use std::sync::Arc;
 
-/// This macro is a helpful conversion utility to conver from an abi_stable::RResult to a
+/// This macro is a helpful conversion utility to convert from an abi_stable::RResult to a
 /// DataFusion result.
 #[macro_export]
 macro_rules! df_result {

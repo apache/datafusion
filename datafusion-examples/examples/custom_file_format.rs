@@ -21,27 +21,24 @@ use arrow::{
     array::{AsArray, RecordBatch, StringArray, UInt8Array},
     datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type},
 };
-use datafusion::physical_expr::LexRequirement;
 use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
-};
-use datafusion::{
-    datasource::physical_plan::FileSource, execution::session_state::SessionStateBuilder,
-};
-use datafusion::{
     datasource::{
         file_format::{
             csv::CsvFormatFactory, file_compression_type::FileCompressionType,
             FileFormat, FileFormatFactory,
         },
-        physical_plan::{FileScanConfig, FileSinkConfig},
+        physical_plan::{FileScanConfig, FileSinkConfig, FileSource},
         MemTable,
     },
     error::Result,
+    execution::session_state::SessionStateBuilder,
+    physical_expr_common::sort_expr::LexRequirement,
     physical_plan::ExecutionPlan,
     prelude::SessionContext,
 };
+
 use object_store::{ObjectMeta, ObjectStore};
 use tempfile::tempdir;
 

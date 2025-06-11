@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use crate::datasource::physical_plan::{FileMeta, FileOpenFuture, FileOpener};
 use crate::error::Result;
+use datafusion_datasource::as_file_source;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::{as_file_source, impl_schema_adapter_methods};
 
 use arrow::buffer::Buffer;
 use arrow::datatypes::SchemaRef;
@@ -29,6 +29,7 @@ use arrow_ipc::reader::FileDecoder;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::PartitionedFile;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use futures::StreamExt;
@@ -99,7 +100,19 @@ impl FileSource for ArrowSource {
         "arrow"
     }
 
-    impl_schema_adapter_methods!();
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
 
 /// The struct arrow that implements `[FileOpener]` trait
@@ -109,7 +122,11 @@ pub struct ArrowOpener {
 }
 
 impl FileOpener for ArrowOpener {
-    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(
+        &self,
+        file_meta: FileMeta,
+        _file: PartitionedFile,
+    ) -> Result<FileOpenFuture> {
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
         Ok(Box::pin(async move {

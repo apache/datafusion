@@ -17,20 +17,20 @@
 
 //! Value representation of metrics
 
+use super::CustomMetricValue;
+use chrono::{DateTime, Utc};
+use datafusion_common::instant::Instant;
+use datafusion_execution::memory_pool::human_readable_size;
+use parking_lot::Mutex;
 use std::{
     borrow::{Borrow, Cow},
-    fmt::Display,
+    fmt::{Debug, Display},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
 };
-
-use chrono::{DateTime, Utc};
-use datafusion_common::instant::Instant;
-use datafusion_execution::memory_pool::human_readable_size;
-use parking_lot::Mutex;
 
 /// A counter to record things such as number of input or output rows
 ///
@@ -344,7 +344,7 @@ impl Drop for ScopedTimerGuard<'_> {
 /// Among other differences, the metric types have different ways to
 /// logically interpret their underlying values and some metrics are
 /// so common they are given special treatment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum MetricValue {
     /// Number of output rows produced: "output_rows" metric
     OutputRows(Count),
@@ -401,6 +401,78 @@ pub enum MetricValue {
     StartTimestamp(Timestamp),
     /// The time at which execution ended
     EndTimestamp(Timestamp),
+    Custom {
+        /// The provided name of this metric
+        name: Cow<'static, str>,
+        /// A custom implementation of the metric value.
+        value: Arc<dyn CustomMetricValue>,
+    },
+}
+
+// Manually implement PartialEq for `MetricValue` because it contains CustomMetricValue in its
+// definition which is a dyn trait. This wouldn't allow us to just derive PartialEq.
+impl PartialEq for MetricValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MetricValue::OutputRows(count), MetricValue::OutputRows(other)) => {
+                count == other
+            }
+            (MetricValue::ElapsedCompute(time), MetricValue::ElapsedCompute(other)) => {
+                time == other
+            }
+            (MetricValue::SpillCount(count), MetricValue::SpillCount(other)) => {
+                count == other
+            }
+            (MetricValue::SpilledBytes(count), MetricValue::SpilledBytes(other)) => {
+                count == other
+            }
+            (MetricValue::SpilledRows(count), MetricValue::SpilledRows(other)) => {
+                count == other
+            }
+            (
+                MetricValue::CurrentMemoryUsage(gauge),
+                MetricValue::CurrentMemoryUsage(other),
+            ) => gauge == other,
+            (
+                MetricValue::Count { name, count },
+                MetricValue::Count {
+                    name: other_name,
+                    count: other_count,
+                },
+            ) => name == other_name && count == other_count,
+            (
+                MetricValue::Gauge { name, gauge },
+                MetricValue::Gauge {
+                    name: other_name,
+                    gauge: other_gauge,
+                },
+            ) => name == other_name && gauge == other_gauge,
+            (
+                MetricValue::Time { name, time },
+                MetricValue::Time {
+                    name: other_name,
+                    time: other_time,
+                },
+            ) => name == other_name && time == other_time,
+
+            (
+                MetricValue::StartTimestamp(timestamp),
+                MetricValue::StartTimestamp(other),
+            ) => timestamp == other,
+            (MetricValue::EndTimestamp(timestamp), MetricValue::EndTimestamp(other)) => {
+                timestamp == other
+            }
+            (
+                MetricValue::Custom { name, value },
+                MetricValue::Custom {
+                    name: other_name,
+                    value: other_value,
+                },
+            ) => name == other_name && value.is_eq(other_value),
+            // Default case when the two sides do not have the same type.
+            _ => false,
+        }
+    }
 }
 
 impl MetricValue {
@@ -418,6 +490,7 @@ impl MetricValue {
             Self::Time { name, .. } => name.borrow(),
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
+            Self::Custom { name, .. } => name.borrow(),
         }
     }
 
@@ -443,6 +516,7 @@ impl MetricValue {
                 .and_then(|ts| ts.timestamp_nanos_opt())
                 .map(|nanos| nanos as usize)
                 .unwrap_or(0),
+            Self::Custom { value, .. } => value.as_usize(),
         }
     }
 
@@ -470,6 +544,10 @@ impl MetricValue {
             },
             Self::StartTimestamp(_) => Self::StartTimestamp(Timestamp::new()),
             Self::EndTimestamp(_) => Self::EndTimestamp(Timestamp::new()),
+            Self::Custom { name, value } => Self::Custom {
+                name: name.clone(),
+                value: value.new_empty(),
+            },
         }
     }
 
@@ -516,6 +594,14 @@ impl MetricValue {
             (Self::EndTimestamp(timestamp), Self::EndTimestamp(other_timestamp)) => {
                 timestamp.update_to_max(other_timestamp);
             }
+            (
+                Self::Custom { value, .. },
+                Self::Custom {
+                    value: other_value, ..
+                },
+            ) => {
+                value.aggregate(Arc::clone(other_value));
+            }
             m @ (_, _) => {
                 panic!(
                     "Mismatched metric types. Can not aggregate {:?} with value {:?}",
@@ -540,6 +626,7 @@ impl MetricValue {
             Self::Time { .. } => 8,
             Self::StartTimestamp(_) => 9, // show timestamps last
             Self::EndTimestamp(_) => 10,
+            Self::Custom { .. } => 11,
         }
     }
 
@@ -578,16 +665,102 @@ impl Display for MetricValue {
             Self::StartTimestamp(timestamp) | Self::EndTimestamp(timestamp) => {
                 write!(f, "{timestamp}")
             }
+            Self::Custom { name, value } => {
+                write!(f, "name:{name} {value}")
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use chrono::TimeZone;
     use datafusion_execution::memory_pool::units::MB;
 
     use super::*;
+
+    #[derive(Debug, Default)]
+    pub struct CustomCounter {
+        count: AtomicUsize,
+    }
+
+    impl Display for CustomCounter {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "count: {}", self.count.load(Ordering::Relaxed))
+        }
+    }
+
+    impl CustomMetricValue for CustomCounter {
+        fn new_empty(&self) -> Arc<dyn CustomMetricValue> {
+            Arc::new(CustomCounter::default())
+        }
+
+        fn aggregate(&self, other: Arc<dyn CustomMetricValue + 'static>) {
+            let other = other.as_any().downcast_ref::<Self>().unwrap();
+            self.count
+                .fetch_add(other.count.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn is_eq(&self, other: &Arc<dyn CustomMetricValue>) -> bool {
+            let Some(other) = other.as_any().downcast_ref::<Self>() else {
+                return false;
+            };
+
+            self.count.load(Ordering::Relaxed) == other.count.load(Ordering::Relaxed)
+        }
+    }
+
+    fn new_custom_counter(name: &'static str, value: usize) -> MetricValue {
+        let custom_counter = CustomCounter::default();
+        custom_counter.count.fetch_add(value, Ordering::Relaxed);
+        let custom_val = MetricValue::Custom {
+            name: Cow::Borrowed(name),
+            value: Arc::new(custom_counter),
+        };
+
+        custom_val
+    }
+
+    #[test]
+    fn test_custom_metric_with_mismatching_names() {
+        let mut custom_val = new_custom_counter("Hi", 1);
+        let other_custom_val = new_custom_counter("Hello", 1);
+
+        // Not equal since the name differs.
+        assert!(other_custom_val != custom_val);
+
+        // Should work even though the name differs
+        custom_val.aggregate(&other_custom_val);
+
+        let expected_val = new_custom_counter("Hi", 2);
+        assert!(expected_val == custom_val);
+    }
+
+    #[test]
+    fn test_custom_metric() {
+        let mut custom_val = new_custom_counter("hi", 11);
+        let other_custom_val = new_custom_counter("hi", 20);
+
+        custom_val.aggregate(&other_custom_val);
+
+        assert!(custom_val != other_custom_val);
+
+        if let MetricValue::Custom { value, .. } = custom_val {
+            let counter = value
+                .as_any()
+                .downcast_ref::<CustomCounter>()
+                .expect("Expected CustomCounter");
+            assert_eq!(counter.count.load(Ordering::Relaxed), 31);
+        } else {
+            panic!("Unexpected value");
+        }
+    }
 
     #[test]
     fn test_display_output_rows() {

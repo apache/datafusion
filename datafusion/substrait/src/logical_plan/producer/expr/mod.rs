@@ -109,7 +109,7 @@ pub fn to_substrait_rex(
         Expr::ScalarVariable(_, _) => {
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
-        Expr::Literal(expr) => producer.handle_literal(expr),
+        Expr::Literal(expr, _) => producer.handle_literal(expr),
         Expr::BinaryExpr(expr) => producer.handle_binary_expr(expr, schema),
         Expr::Like(expr) => producer.handle_like(expr, schema),
         Expr::SimilarTo(_) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
@@ -172,7 +172,7 @@ mod tests {
         let state = SessionStateBuilder::default().build();
 
         // One expression, empty input schema
-        let expr = Expr::Literal(ScalarValue::Int32(Some(42)));
+        let expr = Expr::Literal(ScalarValue::Int32(Some(42)), None);
         let field = Field::new("out", DataType::Int32, false);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
         let substrait =

@@ -677,15 +677,13 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::collect;
-    use crate::test;
-    use crate::test::TestMemoryExec;
+    use crate::test::{self, TestMemoryExec};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::equivalence::convert_to_orderings;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -699,19 +697,6 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f, g]));
 
         Ok(schema)
-    }
-
-    // Convert each tuple to PhysicalSortExpr
-    fn convert_to_sort_exprs(
-        in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> LexOrdering {
-        in_data
-            .iter()
-            .map(|(expr, options)| PhysicalSortExpr {
-                expr: Arc::clone(*expr),
-                options: *options,
-            })
-            .collect::<LexOrdering>()
     }
 
     #[tokio::test]
@@ -889,18 +874,9 @@ mod tests {
             (first_child_orderings, second_child_orderings, union_orderings),
         ) in test_cases.iter().enumerate()
         {
-            let first_orderings = first_child_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let second_orderings = second_child_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let union_expected_orderings = union_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
+            let first_orderings = convert_to_orderings(first_child_orderings);
+            let second_orderings = convert_to_orderings(second_child_orderings);
+            let union_expected_orderings = convert_to_orderings(union_orderings);
             let child1 = Arc::new(TestMemoryExec::update_cache(Arc::new(
                 TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(first_orderings)?,
@@ -911,7 +887,7 @@ mod tests {
             )));
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
-            union_expected_eq.add_new_orderings(union_expected_orderings);
+            union_expected_eq.add_orderings(union_expected_orderings);
 
             let union = UnionExec::new(vec![child1, child2]);
             let union_eq_properties = union.properties().equivalence_properties();
