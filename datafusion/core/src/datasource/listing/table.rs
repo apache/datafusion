@@ -38,7 +38,7 @@ use datafusion_datasource::{
     compute_all_files_statistics,
     file_groups::FileGroup,
     file_scan_config::{FileScanConfig, FileScanConfigBuilder},
-    schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory},
+    schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory},
 };
 use datafusion_execution::{
     cache::{cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache},
@@ -1232,8 +1232,14 @@ impl ListingTable {
             self.options.collect_stat,
             inexact_stats,
         )?;
-        let (schema_mapper, _) = DefaultSchemaAdapterFactory::from_schema(self.schema())
-            .map_schema(self.file_schema.as_ref())?;
+        let table_schema = self.schema();
+        let schema_adapter: Box<dyn SchemaAdapter> = match &self.schema_adapter_factory {
+            Some(factory) => {
+                factory.create(Arc::clone(&table_schema), Arc::clone(&table_schema))
+            }
+            None => DefaultSchemaAdapterFactory::from_schema(Arc::clone(&table_schema)),
+        };
+        let (schema_mapper, _) = schema_adapter.map_schema(self.file_schema.as_ref())?;
         stats.column_statistics =
             schema_mapper.map_column_statistics(&stats.column_statistics)?;
         file_groups.iter_mut().try_for_each(|file_group| {
@@ -1379,11 +1385,15 @@ mod tests {
         },
     };
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
+    use datafusion_common::ColumnStatistics;
     use datafusion_common::{
         assert_contains,
         stats::Precision,
         test_util::{batches_to_string, datafusion_test_data},
         ScalarValue,
+    };
+    use datafusion_datasource::schema_adapter::{
+        SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -2615,5 +2625,92 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_mapping_with_custom_factory() -> Result<()> {
+        let ctx = SessionContext::new();
+        let path = "table/file.json";
+        register_test_store(&ctx, &[(path, 10)]);
+
+        let format = JsonFormat::default();
+        let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(false);
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema))
+            .with_schema_adapter_factory(Arc::new(NullStatsAdapterFactory {}));
+        let table = ListingTable::try_new(config)?;
+
+        let (groups, stats) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+
+        assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(42));
+        for g in groups {
+            if let Some(s) = g.file_statistics(None) {
+                assert_eq!(s.column_statistics[0].null_count, Precision::Exact(42));
+            }
+        }
+
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct NullStatsAdapterFactory;
+
+    impl SchemaAdapterFactory for NullStatsAdapterFactory {
+        fn create(
+            &self,
+            projected_table_schema: SchemaRef,
+            _table_schema: SchemaRef,
+        ) -> Box<dyn SchemaAdapter> {
+            Box::new(NullStatsAdapter {
+                schema: projected_table_schema,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct NullStatsAdapter {
+        schema: SchemaRef,
+    }
+
+    impl SchemaAdapter for NullStatsAdapter {
+        fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
+            let field = self.schema.field(index);
+            file_schema.fields.find(field.name()).map(|(i, _)| i)
+        }
+
+        fn map_schema(
+            &self,
+            file_schema: &Schema,
+        ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+            let projection = (0..file_schema.fields().len()).collect();
+            Ok((Arc::new(NullStatsMapper {}), projection))
+        }
+    }
+
+    #[derive(Debug)]
+    struct NullStatsMapper;
+
+    impl SchemaMapper for NullStatsMapper {
+        fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
+            Ok(batch)
+        }
+
+        fn map_column_statistics(
+            &self,
+            stats: &[ColumnStatistics],
+        ) -> Result<Vec<ColumnStatistics>> {
+            Ok(stats
+                .iter()
+                .map(|s| {
+                    let mut s = s.clone();
+                    s.null_count = Precision::Exact(42);
+                    s
+                })
+                .collect())
+        }
     }
 }
