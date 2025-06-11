@@ -22,9 +22,10 @@
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
 use crate::schema_adapter::{
-    create_field_mapping, DefaultSchemaAdapterFactory, SchemaAdapter,
-    SchemaAdapterFactory, SchemaMapper,
+    create_field_mapping, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
+#[cfg(test)]
+use crate::schema_adapter::DefaultSchemaAdapterFactory;
 use arrow::{
     array::{Array, ArrayRef, StructArray},
     compute::cast,
@@ -73,21 +74,6 @@ impl NestedStructSchemaAdapterFactory {
             .any(|field| matches!(field.data_type(), Struct(_)))
     }
 
-    /// Create an appropriate schema adapter based on schema characteristics.
-    /// Returns a NestedStructSchemaAdapter if the projected schema contains nested structs,
-    /// otherwise returns a DefaultSchemaAdapter.
-    pub fn create_adapter(
-        projected_table_schema: SchemaRef,
-        table_schema: SchemaRef,
-    ) -> Box<dyn SchemaAdapter> {
-        // Use nested adapter if target has nested structs
-        if Self::has_nested_structs(table_schema.as_ref()) {
-            NestedStructSchemaAdapterFactory.create(projected_table_schema, table_schema)
-        } else {
-            // Default case for simple schemas
-            DefaultSchemaAdapterFactory.create(projected_table_schema, table_schema)
-        }
-    }
 }
 
 /// A SchemaAdapter that handles schema evolution for nested struct types
@@ -449,10 +435,15 @@ mod tests {
         );
 
         // Test factory selection logic
-        let adapter = NestedStructSchemaAdapterFactory::create_adapter(
-            nested_schema.clone(),
-            nested_schema.clone(),
-        );
+        let adapter: Box<dyn SchemaAdapter> = if
+            NestedStructSchemaAdapterFactory::has_nested_structs(&nested_schema)
+        {
+            NestedStructSchemaAdapterFactory
+                .create(nested_schema.clone(), nested_schema.clone())
+        } else {
+            DefaultSchemaAdapterFactory
+                .create(nested_schema.clone(), nested_schema.clone())
+        };
 
         assert!(
             adapter.map_schema(&source_schema).is_ok(),
