@@ -17,7 +17,7 @@
 
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_expr::{BinaryExpr, Cast, Expr, Operator};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 pub(crate) fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     // Early return for simple cases
@@ -26,8 +26,7 @@ pub(crate) fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     }
 
     // Group predicates by their column reference
-    let mut column_predicates: HashMap<Column, Vec<Expr>> =
-        HashMap::with_capacity(predicates.len());
+    let mut column_predicates: BTreeMap<Column, Vec<Expr>> = BTreeMap::new();
     let mut other_predicates = Vec::new();
 
     for pred in predicates {
