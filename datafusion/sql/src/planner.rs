@@ -54,6 +54,8 @@ pub struct ParserOptions {
     pub collect_spans: bool,
     /// Whether `VARCHAR` is mapped to `Utf8View` during SQL planning.
     pub map_varchar_to_utf8view: bool,
+    /// Whether `CHAR` and `Text` and `String` are mapped to `Utf8View` during SQL planning.
+    pub map_char_to_utf8view: bool,
 }
 
 impl ParserOptions {
@@ -73,6 +75,7 @@ impl ParserOptions {
             enable_ident_normalization: true,
             support_varchar_with_length: true,
             map_varchar_to_utf8view: true,
+            map_char_to_utf8view: true,
             enable_options_value_normalization: false,
             collect_spans: false,
         }
@@ -144,6 +147,7 @@ impl From<&SqlParserOptions> for ParserOptions {
             enable_ident_normalization: options.enable_ident_normalization,
             support_varchar_with_length: options.support_varchar_with_length,
             map_varchar_to_utf8view: options.map_varchar_to_utf8view,
+            map_char_to_utf8view: options.map_char_to_utf8view,
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
@@ -601,7 +605,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )
             }
             SQLDataType::Char(_) | SQLDataType::Text | SQLDataType::String(_) => {
-                Ok(DataType::Utf8View)
+                if self.options.map_char_to_utf8view {
+                    Ok(DataType::Utf8View)
+                } else {
+                    Ok(DataType::Utf8)
+                }
             }
             SQLDataType::Timestamp(precision, tz_info)
                 if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
