@@ -23,9 +23,8 @@ use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics}
 use datafusion_datasource::{
     file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
-    file_stream::FileOpener, impl_schema_adapter_methods,
-    schema_adapter::DefaultSchemaAdapterFactory, schema_adapter::SchemaAdapterFactory,
-    source::DataSourceExec, PartitionedFile,
+    file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
+    schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -58,7 +57,11 @@ pub struct TestOpener {
 }
 
 impl FileOpener for TestOpener {
-    fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(
+        &self,
+        _file_meta: FileMeta,
+        _file: PartitionedFile,
+    ) -> Result<FileOpenFuture> {
         let mut batches = self.batches.clone();
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -232,7 +235,19 @@ impl FileSource for TestSource {
         }
     }
 
-    impl_schema_adapter_methods!();
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
 
 #[derive(Debug, Clone)]

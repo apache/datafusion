@@ -28,7 +28,6 @@ use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
-use datafusion_datasource::impl_schema_adapter_methods;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -127,14 +126,28 @@ impl FileSource for AvroSource {
         Ok(None)
     }
 
-    impl_schema_adapter_methods!();
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
 
 mod private {
     use super::*;
 
     use bytes::Buf;
-    use datafusion_datasource::{file_meta::FileMeta, file_stream::FileOpenFuture};
+    use datafusion_datasource::{
+        file_meta::FileMeta, file_stream::FileOpenFuture, PartitionedFile,
+    };
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};
 
@@ -144,7 +157,11 @@ mod private {
     }
 
     impl FileOpener for AvroOpener {
-        fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+        fn open(
+            &self,
+            file_meta: FileMeta,
+            _file: PartitionedFile,
+        ) -> Result<FileOpenFuture> {
             let config = Arc::clone(&self.config);
             let object_store = Arc::clone(&self.object_store);
             Ok(Box::pin(async move {

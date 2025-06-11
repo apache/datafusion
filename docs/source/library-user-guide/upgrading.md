@@ -21,6 +21,109 @@
 
 ## DataFusion `48.0.0`
 
+### `Expr::WindowFunction` is now `Box`ed
+
+`Expr::WindowFunction` is now a `Box<WindowFunction>` instead of a `WindowFunction` directly.
+This change was made to reduce the size of `Expr` and improve performance when
+planning queries (see [details on #16207]).
+
+This is a breaking change, so you will need to update your code if you match
+on `Expr::WindowFunction` directly. For example, if you have code like this:
+
+```rust
+# /* comment to avoid running
+match expr {
+  Expr::WindowFunction(WindowFunction {
+    params:
+      WindowFunctionParams {
+       partition_by,
+       order_by,
+      ..
+    }
+  }) => {
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+# */
+```
+
+You will need to change it to:
+
+```rust
+# /* comment to avoid running
+match expr {
+  Expr::WindowFunction(window_fun) => {
+    let WindowFunction {
+      fun,
+      params: WindowFunctionParams {
+        args,
+        partition_by,
+        ..
+        },
+    } = window_fun.as_ref();
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+#  */
+```
+
+[details on #16207]: https://github.com/apache/datafusion/pull/16207#issuecomment-2922659103
+
+### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow.
+
+The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`
+which improves performance for many string operations. You can read more about
+`Utf8View` in the [DataFusion blog post on German-style strings]
+
+[datafusion blog post on german-style strings]: https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/
+
+This means that when you create a table with a `VARCHAR` column, it will now use
+`Utf8View` as the underlying data type. For example:
+
+```sql
+> CREATE TABLE my_table (my_column VARCHAR);
+0 row(s) fetched.
+Elapsed 0.001 seconds.
+
+> DESCRIBE my_table;
++-------------+-----------+-------------+
+| column_name | data_type | is_nullable |
++-------------+-----------+-------------+
+| my_column   | Utf8View  | YES         |
++-------------+-----------+-------------+
+1 row(s) fetched.
+Elapsed 0.000 seconds.
+```
+
+You can restore the old behavior of using `Utf8` by changing the
+`datafusion.sql_parser.map_varchar_to_utf8view` configuration setting. For
+example
+
+```sql
+> set datafusion.sql_parser.map_varchar_to_utf8view = false;
+0 row(s) fetched.
+Elapsed 0.001 seconds.
+
+> CREATE TABLE my_table (my_column VARCHAR);
+0 row(s) fetched.
+Elapsed 0.014 seconds.
+
+> DESCRIBE my_table;
++-------------+-----------+-------------+
+| column_name | data_type | is_nullable |
++-------------+-----------+-------------+
+| my_column   | Utf8      | YES         |
++-------------+-----------+-------------+
+1 row(s) fetched.
+Elapsed 0.004 seconds.
+```
+
 ### `ListingOptions` default for `collect_stat` changed from `true` to `false`
 
 This makes it agree with the default for `SessionConfig`.
@@ -96,6 +199,14 @@ cover the new `DataSourceExec` rather than the older structures. As we evolve
 working but no one knows due to lack of test coverage).
 
 [api deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines
+
+### `PartitionedFile` added as an arguement to the `FileOpener` trait
+
+This is necessary to properly fix filter pushdown for filters that combine partition
+columns and file columns (e.g. `day = username['dob']`).
+
+If you implemented a custom `FileOpener` you will need to add the `PartitionedFile` argument
+but are not required to use it in any way.
 
 ## DataFusion `47.0.0`
 

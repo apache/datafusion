@@ -38,6 +38,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPropagation,
 };
+use datafusion_physical_plan::yield_stream::wrap_yield_stream;
 
 /// A source of data, typically a list of files or memory
 ///
@@ -185,6 +186,8 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: PlanProperties,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -256,7 +259,13 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source.open(partition, context)
+        self.data_source
+            .open(partition, Arc::clone(&context))
+            .map(|stream| wrap_yield_stream(stream, &context, self.cooperative))
+    }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        self.cooperative.then_some(self)
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -289,7 +298,11 @@ impl ExecutionPlan for DataSourceExec {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = self.cache.clone();
 
-        Some(Arc::new(Self { data_source, cache }))
+        Some(Arc::new(Self {
+            data_source,
+            cache,
+            cooperative: self.cooperative,
+        }))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -337,9 +350,14 @@ impl DataSourceExec {
         Arc::new(Self::new(Arc::new(data_source)))
     }
 
+    // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(Arc::clone(&data_source));
-        Self { data_source, cache }
+        Self {
+            data_source,
+            cache,
+            cooperative: true,
+        }
     }
 
     /// Return the source object
@@ -362,6 +380,12 @@ impl DataSourceExec {
     /// Assign output partitioning
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.cache = self.cache.with_partitioning(partitioning);
+        self
+    }
+
+    /// Assign yielding mode
+    pub fn with_cooperative(mut self, cooperative: bool) -> Self {
+        self.cooperative = cooperative;
         self
     }
 
