@@ -23,13 +23,13 @@
 
 use crate::schema_adapter::{
     create_field_mapping, DefaultSchemaAdapterFactory, SchemaAdapter,
-    SchemaAdapterFactory, SchemaMapper,
+    SchemaAdapterFactory, SchemaMapper, SchemaMapping,
 };
 use arrow::{
     array::{Array, ArrayRef, StructArray},
     compute::cast,
     datatypes::{DataType::Struct, Field, Schema, SchemaRef},
-    record_batch::{RecordBatch, RecordBatchOptions},
+    record_batch::RecordBatch,
 };
 use datafusion_common::{arrow::array::new_null_array, ColumnStatistics, Result};
 use std::sync::Arc;
@@ -149,119 +149,17 @@ impl SchemaAdapter for NestedStructSchemaAdapter {
         )?;
 
         Ok((
-            Arc::new(NestedStructSchemaMapping::new(
+            Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
+                Arc::new(|array: &ArrayRef, field: &Field| Ok(adapt_column(array, field)?)),
             )),
             projection,
         ))
     }
 }
 
-/// A SchemaMapping implementation specifically for nested structs
-#[derive(Debug)]
-struct NestedStructSchemaMapping {
-    /// The schema for the table, projected to include only the fields being output
-    projected_table_schema: SchemaRef,
-    /// Field mappings from projected table to file schema
-    field_mappings: Vec<Option<usize>>,
-}
-
-impl NestedStructSchemaMapping {
-    /// Create a new nested struct schema mapping
-    pub fn new(
-        projected_table_schema: SchemaRef,
-        field_mappings: Vec<Option<usize>>,
-    ) -> Self {
-        Self {
-            projected_table_schema,
-            field_mappings,
-        }
-    }
-}
-
-/// Maps a `RecordBatch` to a new `RecordBatch` according to the schema mapping defined in `NestedStructSchemaMapping`.
-///
-/// # Arguments
-///
-/// * `batch` - The input `RecordBatch` to be mapped.
-///
-/// # Returns
-///
-/// A `Result` containing the new `RecordBatch` with columns adapted according to the schema mapping, or an error if the mapping fails.
-///
-/// # Behavior
-///
-/// - For each field in the projected table schema, the corresponding column in the input batch is adapted.
-/// - If a field does not exist in the input batch, a null array of the appropriate data type and length is created and used in the output batch.
-/// - If a field exists in the input batch, the column is adapted to handle potential nested struct adaptation.
-///
-/// # Errors
-///
-/// Returns an error if the column adaptation fails or if the new `RecordBatch` cannot be created.
-impl SchemaMapper for NestedStructSchemaMapping {
-    fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let batch_rows = batch.num_rows();
-        let batch_cols = batch.columns().to_vec();
-
-        let cols = self
-            .projected_table_schema
-            .fields()
-            .iter()
-            .zip(&self.field_mappings)
-            .map(|(field, file_idx)| {
-                file_idx.map_or_else(
-                    // If field doesn't exist in file, return null array
-                    || Ok(new_null_array(field.data_type(), batch_rows)),
-                    // If field exists, handle potential nested struct adaptation
-                    |batch_idx| adapt_column(&batch_cols[batch_idx], field),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        // Create record batch with adapted columns
-        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-        let schema = Arc::clone(&self.projected_table_schema);
-        let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
-        Ok(record_batch)
-    }
-
-    /// Adapts file-level column `Statistics` to match the `table_schema`
-    ///
-    /// Maps statistics from the file schema to the projected table schema using field mappings.
-    /// For fields not present in the file schema, uses unknown statistics.
-    fn map_column_statistics(
-        &self,
-        file_col_statistics: &[ColumnStatistics],
-    ) -> Result<Vec<ColumnStatistics>> {
-        let mut table_col_statistics = vec![];
-
-        // Map statistics for each field based on field_mappings
-        for (_, file_col_idx) in self
-            .projected_table_schema
-            .fields()
-            .iter()
-            .zip(&self.field_mappings)
-        {
-            if let Some(file_col_idx) = file_col_idx {
-                // Use statistics from file if available, otherwise default
-                table_col_statistics.push(
-                    file_col_statistics
-                        .get(*file_col_idx)
-                        .cloned()
-                        .unwrap_or_default(),
-                );
-            } else {
-                // Field doesn't exist in file schema, use unknown statistics
-                table_col_statistics.push(ColumnStatistics::new_unknown());
-            }
-        }
-
-        Ok(table_col_statistics)
-    }
-}
-
-// Helper methods for the NestedStructSchemaMapping
+// Helper methods for nested struct adaptation
 /// Adapt a column to match the target field type, handling nested structs specially
 fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {

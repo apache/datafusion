@@ -21,12 +21,17 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
-use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
+use arrow::array::{new_null_array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, ColumnStatistics};
 use std::fmt::Debug;
 use std::sync::Arc;
+
+/// Function used by [`SchemaMapping`] to adapt a column from the file schema to
+/// the table schema.
+pub type AdaptColumnFn =
+    dyn Fn(&ArrayRef, &Field) -> datafusion_common::Result<ArrayRef> + Send + Sync;
 
 /// Factory for creating [`SchemaAdapter`]
 ///
@@ -277,6 +282,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
+                Arc::new(|array: &ArrayRef, field: &Field| Ok(cast(array, field.data_type())?)),
             )),
             projection,
         ))
@@ -323,7 +329,6 @@ where
 /// `projected_table_schema` as it can only operate on the projected fields.
 ///
 /// [`map_batch`]: Self::map_batch
-#[derive(Debug)]
 pub struct SchemaMapping {
     /// The schema of the table. This is the expected schema after conversion
     /// and it should match the schema of the query result.
@@ -334,6 +339,18 @@ pub struct SchemaMapping {
     /// They are Options instead of just plain `usize`s because the table could
     /// have fields that don't exist in the file.
     field_mappings: Vec<Option<usize>>,
+    /// Function used to adapt a column from the file schema to the table schema
+    /// when it exists in both schemas
+    adapt_column: Arc<AdaptColumnFn>,
+}
+
+impl Debug for SchemaMapping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SchemaMapping")
+            .field("projected_table_schema", &self.projected_table_schema)
+            .field("field_mappings", &self.field_mappings)
+            .finish()
+    }
 }
 
 impl SchemaMapping {
@@ -343,10 +360,12 @@ impl SchemaMapping {
     pub fn new(
         projected_table_schema: SchemaRef,
         field_mappings: Vec<Option<usize>>,
+        adapt_column: Arc<AdaptColumnFn>,
     ) -> Self {
         Self {
             projected_table_schema,
             field_mappings,
+            adapt_column,
         }
     }
 }
@@ -373,9 +392,9 @@ impl SchemaMapper for SchemaMapping {
                     // If this field only exists in the table, and not in the file, then we know
                     // that it's null, so just return that.
                     || Ok(new_null_array(field.data_type(), batch_rows)),
-                    // However, if it does exist in both, then try to cast it to the correct output
-                    // type
-                    |batch_idx| cast(&batch_cols[batch_idx], field.data_type()),
+                    // However, if it does exist in both, use the adapt_column function
+                    // to perform any necessary conversions
+                    |batch_idx| (self.adapt_column)(&batch_cols[batch_idx], field),
                 )
             })
             .collect::<datafusion_common::Result<Vec<_>, _>>()?;
@@ -421,7 +440,11 @@ impl SchemaMapper for SchemaMapping {
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field};
+    use arrow::{
+        array::ArrayRef,
+        compute::cast,
+        datatypes::{DataType, Field},
+    };
     use datafusion_common::{stats::Precision, Statistics};
 
     use super::*;
@@ -595,8 +618,11 @@ mod tests {
         let field_mappings = vec![Some(1), Some(0)];
 
         // Create SchemaMapping manually
-        let mapping =
-            SchemaMapping::new(Arc::clone(&projected_schema), field_mappings.clone());
+        let mapping = SchemaMapping::new(
+            Arc::clone(&projected_schema),
+            field_mappings.clone(),
+            Arc::new(|array: &ArrayRef, field: &Field| Ok(cast(array, field.data_type())?)),
+        );
 
         // Check that fields were set correctly
         assert_eq!(*mapping.projected_table_schema, *projected_schema);
