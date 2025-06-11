@@ -19,11 +19,7 @@
 
 use datafusion_common::Result;
 use datafusion_expr::{
-    expr::{AggregateFunction, AggregateFunctionParams},
-    expr_rewriter::NamePreserver,
-    planner::{ExprPlanner, PlannerResult, RawAggregateExpr},
-    utils::COUNT_STAR_EXPANSION,
-    Expr,
+    expr::{AggregateFunction, AggregateFunctionParams}, expr_rewriter::NamePreserver, planner::{ExprPlanner, PlannerResult, RawAggregateExpr}, utils::COUNT_STAR_EXPANSION, Expr
 };
 
 #[derive(Debug)]
@@ -79,9 +75,10 @@ impl ExprPlanner for AggregateFunctionPlanner {
             null_treatment,
         };
 
-        // handle count() and count(*) case
+        // handle count(), count(*) and count(symbol.*) case
         // convert to count(1) as "count()"
         // or         count(1) as "count(*)"
+        // or         count(1) filter (__mr_classifier = <symbol>) as "count(symbol.*)" (for MATCH_RECOGNIZE context exclusively)
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         if raw_expr.func.name() == "count"

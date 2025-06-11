@@ -34,7 +34,9 @@ use super::{
 };
 use crate::execution_plan::CardinalityEffect;
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
-use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
+use crate::{
+    ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
