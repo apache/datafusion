@@ -1,0 +1,21 @@
+---
+source: datafusion/physical-plan/src/match_recognize/pattern_matcher.rs
+expression: "^ S1 S2* ({- S3 -} S4)+|PERMUTE(S1,S2){1,2} $"
+---
+0: ε->1,9
+1: ^->2
+2: S1->3
+3: ε->4,5
+4: S2->5
+5: ε->4,6
+6: S3->7
+7: S4->8
+8: ε->6,16
+9: S1->10 | S2->11
+10: S2->12
+11: S1->12
+12: S1->13 | S2->14
+13: S2->15
+14: S1->15
+15: $->16
+16*:

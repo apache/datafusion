@@ -171,6 +171,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
         let (expr, _) = expr.infer_placeholder_types(schema)?;
+
         Ok(expr)
     }
 

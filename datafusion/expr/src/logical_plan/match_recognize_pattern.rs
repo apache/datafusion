@@ -17,7 +17,7 @@
 
 use crate::match_recognize::Pattern;
 use crate::{Expr, SortExpr};
-use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::Hash;
@@ -116,7 +116,7 @@ impl MatchRecognizePattern {
         pattern: Pattern,
         symbols: Vec<String>,
     ) -> Result<Self> {
-        let schema = Arc::new(DFSchema::empty());
+        let schema = pattern_schema(input.schema());
 
         Ok(Self {
             input,
@@ -129,4 +129,62 @@ impl MatchRecognizePattern {
             symbols,
         })
     }
+}
+
+/// Create a DFSchema with match metadata columns for MATCH operations
+fn pattern_schema(table_schema: &DFSchema) -> DFSchemaRef {
+    let mut fields: Vec<(Option<TableReference>, Arc<arrow::datatypes::Field>)> =
+        table_schema
+            .iter()
+            .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+            .collect();
+
+    // Add match metadata columns
+    fields.push((
+        None,
+        Arc::new(arrow::datatypes::Field::new(
+            "__mr_classifier",
+            arrow::datatypes::DataType::Utf8,
+            false,
+        )),
+    ));
+    fields.push((
+        None,
+        Arc::new(arrow::datatypes::Field::new(
+            "__mr_match_number",
+            arrow::datatypes::DataType::UInt64,
+            false,
+        )),
+    ));
+    fields.push((
+        None,
+        Arc::new(arrow::datatypes::Field::new(
+            "__mr_match_sequence_number",
+            arrow::datatypes::DataType::UInt64,
+            false,
+        )),
+    ));
+
+    fields.push((
+        None,
+        Arc::new(arrow::datatypes::Field::new(
+            "__mr_is_last_match_row",
+            arrow::datatypes::DataType::Boolean,
+            false,
+        )),
+    ));
+
+    fields.push((
+        None,
+        Arc::new(arrow::datatypes::Field::new(
+            "__mr_is_included_row",
+            arrow::datatypes::DataType::Boolean,
+            false,
+        )),
+    ));
+
+    Arc::new(
+        DFSchema::new_with_metadata(fields, table_schema.metadata().clone())
+            .expect("Failed to create match schema"),
+    )
 }

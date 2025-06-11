@@ -167,7 +167,7 @@ impl Display for Pattern {
                     .iter()
                     .map(|s| s.to_string())
                     .collect::<Vec<_>>()
-                    .join(" ");
+                    .join(",");
                 write!(f, "PERMUTE({symbols_str})")
             }
             Pattern::Concat(patterns) => {

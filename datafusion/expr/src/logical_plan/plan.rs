@@ -38,6 +38,7 @@ use crate::expr_rewriter::{
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
+use crate::match_recognize::AfterMatchSkip;
 use crate::utils::{
     enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
@@ -1397,8 +1398,25 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::Extension(_)
-            | LogicalPlan::MatchRecognizePattern(_) => None,
+            | LogicalPlan::Extension(_) => None,
+            LogicalPlan::MatchRecognizePattern(MatchRecognizePattern {
+                input,
+                after_skip,
+                ..
+            }) => {
+                if let Some(max_rows) = input.max_rows() {
+                    match after_skip {
+                        // No overlap possible: at most one match can start on each input row
+                        None | Some(AfterMatchSkip::PastLastRow) => Some(max_rows),
+
+                        // Overlap allowed: each row can be the start of a match that can extend
+                        // to the end of the stream.  This gives 1 + 2 + … + n matches.
+                        _ => Some(max_rows * (max_rows + 1) / 2),
+                    }
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -3700,7 +3718,11 @@ fn calc_func_dependencies_for_project(
         .iter()
         .map(|expr| match expr {
             #[expect(deprecated)]
-            Expr::Wildcard { symbol, qualifier, options } => {
+            Expr::Wildcard {
+                symbol,
+                qualifier,
+                options,
+            } => {
                 let wildcard_fields = exprlist_to_fields(
                     vec![&Expr::Wildcard {
                         symbol: symbol.clone(),

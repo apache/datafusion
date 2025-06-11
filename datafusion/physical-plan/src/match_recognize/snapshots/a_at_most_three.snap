@@ -1,0 +1,9 @@
+---
+source: datafusion/physical-plan/src/match_recognize/pattern_matcher.rs
+expression: "A{,3}"
+---
+0: ε->1,4
+1: A->2
+2: A->3
+3: A->4
+4*:

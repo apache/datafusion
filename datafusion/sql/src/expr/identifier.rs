@@ -127,6 +127,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|id| self.ident_normalizer.normalize(id))
                 .collect::<Vec<_>>();
 
+            // In a MATCH_RECOGNIZE clause the identifier must be of the form
+            // `symbol.column` (exactly two parts). The first part is the pattern
+            // variable (symbol) and the second part is the column name. If the
+            // column name itself contains dots it must be quoted, for example
+            // `A."price.usd"`.
+            if planner_context.match_recognize_context().is_some() {
+                if ids.len() != 2 {
+                    return plan_err!(
+                        "MATCH_RECOGNIZE identifiers must be of the form <symbol>.<column>. \
+To reference a column that contains dots, quote it, for example `A.\"price.usd\"`. Got: {ids:?}"
+                    );
+                }
+
+                let symbol = ids[0].clone();
+                let column_name = ids[1].clone();
+
+                let mut column = Column::new_with_symbol(symbol, column_name);
+                if self.options.collect_spans {
+                    if let Some(span) = ids_span {
+                        column.spans_mut().add_span(span);
+                    }
+                }
+
+                return Ok(Expr::Column(column));
+            }
+
             let search_result = search_dfschema(&ids, schema);
             match search_result {
                 // Found matching field with spare identifier(s) for nested field(s) in structure

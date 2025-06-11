@@ -1,0 +1,10 @@
+---
+source: datafusion/physical-plan/src/match_recognize/pattern_matcher.rs
+expression: "PERMUTE(A,A,C)"
+---
+0: A->1 | C->2
+1: A->3 | C->4
+2: A->4
+3: C->5
+4: A->5
+5*:

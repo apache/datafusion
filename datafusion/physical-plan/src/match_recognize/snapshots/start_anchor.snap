@@ -1,0 +1,6 @@
+---
+source: datafusion/physical-plan/src/match_recognize/pattern_matcher.rs
+expression: ^
+---
+0: ^->1
+1*:

@@ -1,0 +1,8 @@
+---
+source: datafusion/physical-plan/src/match_recognize/pattern_matcher.rs
+expression: "{- A -} {- A -} A"
+---
+0: A->1
+1: A->2
+2: A->3
+3*:

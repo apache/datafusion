@@ -2621,7 +2621,11 @@ impl HashNode for Expr {
                 subquery.hash(state);
             }
             #[expect(deprecated)]
-            Expr::Wildcard { symbol, qualifier, options } => {
+            Expr::Wildcard {
+                symbol,
+                qualifier,
+                options,
+            } => {
                 symbol.hash(state);
                 qualifier.hash(state);
                 options.hash(state);
@@ -3388,8 +3392,14 @@ impl Display for Expr {
                 }
             }
             #[expect(deprecated)]
-            Expr::Wildcard { symbol,qualifier, options } => match (symbol, qualifier) {
-                (Some(symbol), Some(qualifier)) => write!(f, "{symbol}.{qualifier}.*{options}"),
+            Expr::Wildcard {
+                symbol,
+                qualifier,
+                options,
+            } => match (symbol, qualifier) {
+                (Some(symbol), Some(qualifier)) => {
+                    write!(f, "{symbol}.{qualifier}.*{options}")
+                }
                 (Some(symbol), None) => write!(f, "{symbol}.*{options}"),
                 (None, Some(qualifier)) => write!(f, "{qualifier}.*{options}"),
                 (None, None) => write!(f, "*{options}"),
