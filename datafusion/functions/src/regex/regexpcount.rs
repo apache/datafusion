@@ -550,7 +550,7 @@ where
     }
 }
 
-fn compile_and_cache_regex<'strings, 'cache>(
+pub fn compile_and_cache_regex<'strings, 'cache>(
     regex: &'strings str,
     flags: Option<&'strings str>,
     regex_cache: &'cache mut HashMap<(&'strings str, Option<&'strings str>), Regex>,
@@ -568,7 +568,7 @@ where
     Ok(result)
 }
 
-fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
+pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
     let pattern = match flags {
         None | Some("") => regex.to_string(),
         Some(flags) => {
