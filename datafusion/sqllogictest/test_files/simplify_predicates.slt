@@ -84,7 +84,7 @@ query TT
 EXPLAIN SELECT * FROM test_data WHERE str_col > 'apple' AND str_col > 'banana';
 ----
 logical_plan
-01)Filter: test_data.str_col > Utf8("banana")
+01)Filter: test_data.str_col > Utf8View("banana")
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
 # date_col > '2023-01-01' AND date_col > '2023-02-01' should simplify to date_col > '2023-02-01'
@@ -120,7 +120,7 @@ WHERE int_col > 5
   AND float_col BETWEEN 1 AND 100;
 ----
 logical_plan
-01)Filter: test_data.str_col LIKE Utf8("A%") AND test_data.float_col >= Float32(1) AND test_data.float_col <= Float32(100) AND test_data.int_col > Int32(10)
+01)Filter: test_data.str_col LIKE Utf8View("A%") AND test_data.float_col >= Float32(1) AND test_data.float_col <= Float32(100) AND test_data.int_col > Int32(10)
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
 statement ok
