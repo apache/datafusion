@@ -3525,6 +3525,12 @@ impl ScalarValue {
             }
         }
     }
+
+    /// Compacts ([ScalarValue::compact]) the current [ScalarValue] and returns it.
+    pub fn compacted(mut self) -> Self {
+        self.compact();
+        self
+    }
 }
 
 /// Compacts the data of an `ArrayData` into a new `ArrayData`.
