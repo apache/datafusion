@@ -28,9 +28,9 @@ They are provided for informational purposes and can be used by custom
 `TableProvider` implementations or other parts of the system.
 
 - **Nullability**: The only property enforced by DataFusion is the
-  nullability of each [`Field`] in a schema. Columns marked as not
-  nullable should not produce null values during execution. DataFusion
-  does not check this when data is ingested.
+  nullability of each [`Field`] in a schema. Returning data with null values
+  for Columns marked as not nullable will result in runtime errors  during execution. DataFusion
+  does not check or enforce nullability when data is ingested.
 - **Primary and unique keys**: DataFusion does not verify that the data
   satisfies primary or unique key constraints. Table providers that
   require this behaviour must implement their own checks.
