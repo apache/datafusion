@@ -68,7 +68,7 @@ pub enum SchemaSource {
 /// Configuration for creating a [`ListingTable`]
 ///
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
     /// They should share the same schema and object store.
@@ -87,16 +87,18 @@ pub struct ListingTableConfig {
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
+impl Default for SchemaSource {
+    fn default() -> Self {
+        SchemaSource::None
+    }
+}
+
 impl ListingTableConfig {
     /// Creates new [`ListingTableConfig`] for reading the specified URL
     pub fn new(table_path: ListingTableUrl) -> Self {
-        let table_paths = vec![table_path];
         Self {
-            table_paths,
-            file_schema: None,
-            options: None,
-            schema_source: SchemaSource::None,
-            schema_adapter_factory: None,
+            table_paths: vec![table_path],
+            ..Default::default()
         }
     }
 
@@ -106,10 +108,7 @@ impl ListingTableConfig {
     pub fn new_with_multi_paths(table_paths: Vec<ListingTableUrl>) -> Self {
         Self {
             table_paths,
-            file_schema: None,
-            options: None,
-            schema_source: SchemaSource::None,
-            schema_adapter_factory: None,
+            ..Default::default()
         }
     }
 
@@ -130,11 +129,9 @@ impl ListingTableConfig {
     /// without the table partitioning columns.
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
-            table_paths: self.table_paths,
             file_schema: Some(schema),
-            options: self.options,
             schema_source: SchemaSource::Specified,
-            schema_adapter_factory: self.schema_adapter_factory,
+            ..self
         }
     }
 
@@ -144,11 +141,8 @@ impl ListingTableConfig {
     /// [`Self::infer_options`].
     pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
         Self {
-            table_paths: self.table_paths,
-            file_schema: self.file_schema,
             options: Some(listing_options),
-            schema_source: self.schema_source,
-            schema_adapter_factory: self.schema_adapter_factory,
+            ..self
         }
     }
 
@@ -331,11 +325,8 @@ impl ListingTableConfig {
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Self {
         Self {
-            table_paths: self.table_paths,
-            file_schema: self.file_schema,
-            options: self.options,
-            schema_source: self.schema_source,
             schema_adapter_factory: Some(schema_adapter_factory),
+            ..self
         }
     }
 
@@ -478,7 +469,7 @@ impl ListingOptions {
     /// the rows read from
     /// `/mnt/nyctaxi/year=2022/month=01/tripdata.parquet`
     ///
-    ///# Notes
+    /// # Notes
     ///
     /// - If only one level (e.g. `year` in the example above) is
     ///   specified, the other levels are ignored but the files are
