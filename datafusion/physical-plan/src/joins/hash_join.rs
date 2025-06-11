@@ -1416,7 +1416,7 @@ pub fn equal_rows_arr(
 
     let filter_builder = FilterBuilder::new(&equal).optimize().build();
 
-    let left_filtered = filter_builder.filter(indices_left)?;
+    let left_filtered = filter_builder.filter(indices_left)?; // annoying
     let right_filtered = filter_builder.filter(indices_right)?;
 
     Ok((
