@@ -703,25 +703,32 @@ For example, to read from a remote parquet file via HTTP(S) you can use the foll
 <p>To read from an AWS S3 or GCS, use <code class="docutils literal notranslate"><span class="pre">s3</span></code> or <code class="docutils literal notranslate"><span class="pre">gs</span></code> as a protocol prefix. For
 example, to read a file in an S3 bucket named <code class="docutils literal notranslate"><span class="pre">my-data-bucket</span></code> use the URL
 <code class="docutils literal notranslate"><span class="pre">s3://my-data-bucket</span></code>and set the relevant access credentials as environmental
-variables (e.g. for AWS S3 you need to at least <code class="docutils literal notranslate"><span class="pre">AWS_ACCESS_KEY_ID</span></code> and
+variables (e.g. for AWS S3 you can use <code class="docutils literal notranslate"><span class="pre">AWS_ACCESS_KEY_ID</span></code> and
 <code class="docutils literal notranslate"><span class="pre">AWS_SECRET_ACCESS_KEY</span></code>).</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="s1">&#39;s3://my-data-bucket/athena_partitioned/hits.parquet&#39;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="s1">&#39;s3://altinity-clickhouse-data/nyc_taxi_rides/data/tripdata_parquet/&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1310903963</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------+</span>
 </pre></div>
 </div>
-<p>See the <a class="reference internal" href="#create-external-table"><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code></a> section for
+<p>See the <a class="reference internal" href="#create-external-table"><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code></a> section below for
 additional configuration options.</p>
 </section>
 <section id="create-external-table">
 <h1><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code><a class="headerlink" href="#create-external-table" title="Link to this heading">¶</a></h1>
 <p>It is also possible to create a table backed by files or remote locations via
-<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> as shown below. Note that DataFusion does not support wildcards (e.g. <code class="docutils literal notranslate"><span class="pre">*</span></code>) in file paths; instead, specify the directory path directly to read all compatible files in that directory.</p>
-<p>For example, to create a table <code class="docutils literal notranslate"><span class="pre">hits</span></code> backed by a local parquet file, use:</p>
+<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> as shown below. Note that DataFusion does not support
+wildcards (e.g. <code class="docutils literal notranslate"><span class="pre">*</span></code>) in file paths; instead, specify the directory path directly
+to read all compatible files in that directory.</p>
+<p>For example, to create a table <code class="docutils literal notranslate"><span class="pre">hits</span></code> backed by a local parquet file named <code class="docutils literal notranslate"><span class="pre">hits.parquet</span></code>:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">hits</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;hits.parquet&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>To create a table <code class="docutils literal notranslate"><span class="pre">hits</span></code> backed by a remote parquet file via HTTP(S), use</p>
+<p>To create a table <code class="docutils literal notranslate"><span class="pre">hits</span></code> backed by a remote parquet file via HTTP(S):</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">hits</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet&#39;</span><span class="p">;</span>
@@ -738,7 +745,11 @@ additional configuration options.</p>
 </pre></div>
 </div>
 <p><strong>Why Wildcards Are Not Supported</strong></p>
-<p>Although wildcards (e.g., <em>.parquet or **/</em>.parquet) may work for local filesystems in some cases, they are not officially supported by DataFusion. This is because wildcards are not universally applicable across all storage backends (e.g., S3, GCS). Instead, DataFusion expects the user to specify the directory path, and it will automatically read all compatible files within that directory.</p>
+<p>Although wildcards (e.g., <em>.parquet or **/</em>.parquet) may work for local
+filesystems in some cases, they are not supported by DataFusion CLI. This
+is because wildcards are not universally applicable across all storage backends
+(e.g., S3, GCS). Instead, DataFusion expects the user to specify the directory
+path, and it will automatically read all compatible files within that directory.</p>
 <p>For example, the following usage is not supported:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span><span class="w"> </span><span class="p">(</span>
 <span class="w">    </span><span class="n">message</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">,</span>
@@ -754,7 +765,7 @@ additional configuration options.</p>
 <span class="w">    </span><span class="k">day</span><span class="w"> </span><span class="nb">DATE</span>
 <span class="p">)</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
-<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;gs://bucket/my_table&#39;</span><span class="p">;</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;gs://bucket/my_table/&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
@@ -771,6 +782,13 @@ additional configuration options.</p>
 </div>
 <p>Register a single folder parquet datasource. Note: All files inside must be valid
 parquet files and have compatible schemas</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<dl class="simple myst">
+<dt>Paths must end in Slash <code class="docutils literal notranslate"><span class="pre">/</span></code></dt><dd><p>The path must end in <code class="docutils literal notranslate"><span class="pre">/</span></code> otherwise DataFusion will treat the path as a file and not a directory</p>
+</dd>
+</dl>
+</div>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/&#39;</span><span class="p">;</span>
@@ -780,14 +798,14 @@ parquet files and have compatible schemas</p>
 <section id="csv">
 <h2>CSV<a class="headerlink" href="#csv" title="Link to this heading">¶</a></h2>
 <p>DataFusion will infer the CSV schema automatically or you can provide it explicitly.</p>
-<p>Register a single file csv datasource with a header row.</p>
+<p>Register a single file csv datasource with a header row:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_test_100.csv&#39;</span>
 <span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>Register a single file csv datasource with explicitly defined schema.</p>
+<p>Register a single file csv datasource with explicitly defined schema:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span><span class="w"> </span><span class="p">(</span>
 <span class="w">    </span><span class="n">c1</span><span class="w">  </span><span class="nb">VARCHAR</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 <span class="w">    </span><span class="n">c2</span><span class="w">  </span><span class="nb">INT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
@@ -813,7 +831,7 @@ parquet files and have compatible schemas</p>
 <h1>Locations<a class="headerlink" href="#locations" title="Link to this heading">¶</a></h1>
 <section id="http-s">
 <h2>HTTP(s)<a class="headerlink" href="#http-s" title="Link to this heading">¶</a></h2>
-<p>To read from a remote parquet file via HTTP(S) you can use the following:</p>
+<p>To read from a remote parquet file via HTTP(S):</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">hits</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet&#39;</span><span class="p">;</span>
@@ -822,8 +840,11 @@ parquet files and have compatible schemas</p>
 </section>
 <section id="s3">
 <h2>S3<a class="headerlink" href="#s3" title="Link to this heading">¶</a></h2>
-<p><a class="reference external" href="https://aws.amazon.com/s3/">AWS S3</a> data sources must have connection credentials configured.</p>
-<p>To create an external table from a file in an S3 bucket:</p>
+<p>DataFusion CLI supports configuring <a class="reference external" href="https://aws.amazon.com/s3/">AWS S3</a> via the
+<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> statement and standard AWS configuration methods (via the
+<a class="reference external" href="https://docs.rs/aws-config/latest/aws_config/"><code class="docutils literal notranslate"><span class="pre">aws-config</span></code></a> AWS SDK crate).</p>
+<p>To create an external table from a file in an S3 bucket with explicit
+credentials:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">OPTIONS</span><span class="p">(</span>
@@ -834,14 +855,14 @@ parquet files and have compatible schemas</p>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;s3://bucket/path/file.parquet&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>It is also possible to specify the access information using environment variables:</p>
+<p>To create an external table using environment variables:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_DEFAULT_REGION</span><span class="o">=</span>us-east-2
 $<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_SECRET_ACCESS_KEY</span><span class="o">=</span>******
 $<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_ACCESS_KEY_ID</span><span class="o">=</span>******
 
 $<span class="w"> </span>datafusion-cli
 <span class="sb">`</span>datafusion-cli<span class="w"> </span>v21.0.0
-&gt;<span class="w"> </span>create<span class="w"> </span>external<span class="w"> </span>table<span class="w"> </span><span class="nb">test</span><span class="w"> </span>stored<span class="w"> </span>as<span class="w"> </span>parquet<span class="w"> </span>location<span class="w"> </span><span class="s1">&#39;s3://bucket/path/file.parquet&#39;</span><span class="p">;</span>
+&gt;<span class="w"> </span>create<span class="w"> </span>CREATE<span class="w"> </span>TABLE<span class="w"> </span><span class="nb">test</span><span class="w"> </span>STORED<span class="w"> </span>AS<span class="w"> </span>PARQUET<span class="w"> </span>LOCATION<span class="w"> </span><span class="s1">&#39;s3://bucket/path/file.parquet&#39;</span><span class="p">;</span>
 <span class="m">0</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.374<span class="w"> </span>seconds.
 &gt;<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span>test<span class="p">;</span>
 +----------+----------+
@@ -852,6 +873,20 @@ $<span class="w"> </span>datafusion-cli
 <span class="m">1</span><span class="w"> </span>row<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.171<span class="w"> </span>seconds.
 </pre></div>
 </div>
+<p>To read from a public S3 bucket without signatures, use the
+<code class="docutils literal notranslate"><span class="pre">aws.SKIP_SIGNATURE</span></code> option:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">nyc_taxi_rides</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span><span class="w"> </span><span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;s3://altinity-clickhouse-data/nyc_taxi_rides/data/tripdata_parquet/&#39;</span>
+<span class="k">OPTIONS</span><span class="p">(</span><span class="n">aws</span><span class="p">.</span><span class="n">SKIP_SIGNATURE</span><span class="w"> </span><span class="k">true</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Credentials are taken in this order of precedence:</p>
+<ol class="arabic simple">
+<li><p>Explicitly specified in the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> clause of the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> statement.</p></li>
+<li><p>Determined by <a class="reference external" href="https://docs.rs/aws-config/latest/aws_config/"><code class="docutils literal notranslate"><span class="pre">aws-config</span></code></a> crate (standard environment variables such as <code class="docutils literal notranslate"><span class="pre">AWS_ACCESS_KEY_ID</span></code> and <code class="docutils literal notranslate"><span class="pre">AWS_SECRET_ACCESS_KEY</span></code> as well as other AWS specific features).</p></li>
+</ol>
+<p>If no credentials are specified, DataFusion CLI will use unsigned requests to S3,
+which allows reading from public buckets.</p>
 <p>Supported configuration options are:</p>
 <table class="table">
 <thead>
@@ -887,7 +922,15 @@ $<span class="w"> </span>datafusion-cli
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">AWS_ALLOW_HTTP</span></code></p></td>
 <td><p></p></td>
-<td><p>set to “true” to permit HTTP connections without TLS</p></td>
+<td><p>If “true”, permit HTTP connections without TLS</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">AWS_SKIP_SIGNATURE</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">aws.skip_signature</span></code></p></td>
+<td><p>If “true”, does not sign requests</p></td>
+</tr>
+<tr class="row-even"><td><p></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">aws.nosign</span></code></p></td>
+<td><p>Alias for <code class="docutils literal notranslate"><span class="pre">skip_signature</span></code></p></td>
 </tr>
 </tbody>
 </table>
