@@ -504,7 +504,7 @@ pub fn serialize_file_scan_config(
         .iter()
         .cloned()
         .collect::<Vec<_>>();
-    fields.extend(conf.table_partition_cols.iter().cloned().map(Arc::new));
+    fields.extend(conf.table_partition_cols.iter().cloned());
     let schema = Arc::new(arrow::datatypes::Schema::new(fields.clone()));
 
     Ok(protobuf::FileScanExecConf {
