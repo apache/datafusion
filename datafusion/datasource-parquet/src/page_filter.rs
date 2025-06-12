@@ -31,7 +31,7 @@ use arrow::{
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
-use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_physical_optimizer::pruning::{ColumnOrdering, PruningPredicate};
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -119,7 +119,11 @@ pub struct PagePruningAccessPlanFilter {
 impl PagePruningAccessPlanFilter {
     /// Create a new [`PagePruningAccessPlanFilter`] from a physical
     /// expression.
-    pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Self {
+    pub fn new(
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: SchemaRef,
+        column_orderings: Vec<ColumnOrdering>,
+    ) -> Self {
         // extract any single column predicates
         let predicates = split_conjunction(expr)
             .into_iter()
@@ -127,6 +131,7 @@ impl PagePruningAccessPlanFilter {
                 let pp = match PruningPredicate::try_new(
                     Arc::clone(predicate),
                     Arc::clone(&schema),
+                    column_orderings.clone(),
                 ) {
                     Ok(pp) => pp,
                     Err(e) => {
