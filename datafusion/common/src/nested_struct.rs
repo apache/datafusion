@@ -60,8 +60,6 @@ fn adapt_struct_column(
 }
 
 /// Adapt a column to match the target field type, handling nested structs specially
-///
-// This is tested in nested_schema_adapter/tests.rs
 pub fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {
         Struct(target_fields) => adapt_struct_column(source_col, target_fields),
@@ -74,6 +72,19 @@ mod tests {
     use super::*;
     use arrow::array::{Int32Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field};
+
+    /// Helper function to extract and downcast a column from a StructArray
+    fn get_column_as<T: 'static>(struct_array: &StructArray, column_name: &str) -> &T
+    where
+        T: Array,
+    {
+        struct_array
+            .column_by_name(column_name)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<T>()
+            .unwrap()
+    }
 
     #[test]
     fn test_adapt_simple_column() {
@@ -111,21 +122,11 @@ mod tests {
         let result = adapt_column(&source_col, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.fields().len(), 2);
-        let a_result = struct_array
-            .column_by_name("a")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
+        let a_result = get_column_as::<Int32Array>(&struct_array, "a");
         assert_eq!(a_result.value(0), 1);
         assert_eq!(a_result.value(1), 2);
 
-        let b_result = struct_array
-            .column_by_name("b")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let b_result = get_column_as::<StringArray>(&struct_array, "b");
         assert_eq!(b_result.len(), 2);
         assert!(b_result.is_null(0));
         assert!(b_result.is_null(1));
@@ -143,12 +144,7 @@ mod tests {
         let result = adapt_column(&source, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.len(), 2);
-        let a_result = struct_array
-            .column_by_name("a")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
+        let a_result = get_column_as::<Int32Array>(&struct_array, "a");
         assert_eq!(a_result.null_count(), 2);
     }
 }
