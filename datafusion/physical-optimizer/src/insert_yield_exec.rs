@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The `InsertYieldExec` optimizer rule inspects the physical plan to find all leaf
+//! The [`InsertYieldExec`] optimizer rule inspects the physical plan to find all leaf
 //! nodes corresponding to tight-looping operators. It first attempts to replace
 //! each leaf with a cooperative-yielding variant via `with_cooperative_yields`,
 //! and only if no built-in variant exists does it wrap the node in a
