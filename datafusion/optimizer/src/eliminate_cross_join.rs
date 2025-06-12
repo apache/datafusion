@@ -27,7 +27,7 @@ use datafusion_expr::logical_plan::{
     Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
-use datafusion_expr::{and, build_join_schema, ExprSchemable, Operator};
+use datafusion_expr::{and, build_join_schema, ExprSchemable, JoinKind, Operator};
 
 #[derive(Default, Debug)]
 pub struct EliminateCrossJoin;
@@ -329,6 +329,7 @@ fn find_inner_join(
                 filter: None,
                 schema: join_schema,
                 null_equals_null: false,
+                join_kind: JoinKind::ComparisonJoin,
             }));
         }
     }
@@ -351,6 +352,7 @@ fn find_inner_join(
         join_type: JoinType::Inner,
         join_constraint: JoinConstraint::On,
         null_equals_null: false,
+        join_kind: JoinKind::ComparisonJoin,
     }))
 }
 

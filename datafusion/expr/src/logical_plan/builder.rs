@@ -48,7 +48,7 @@ use crate::{
 };
 
 use super::dml::InsertOp;
-use super::plan::{ColumnUnnestList, ExplainFormat};
+use super::plan::{ColumnUnnestList, ExplainFormat, JoinKind};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -958,7 +958,31 @@ impl LogicalPlanBuilder {
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
     ) -> Result<Self> {
-        self.join_detailed(right, join_type, join_keys, filter, false)
+        self.join_detailed(
+            right,
+            join_type,
+            join_keys,
+            filter,
+            false,
+            JoinKind::ComparisonJoin,
+        )
+    }
+
+    pub fn delim_join(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
+        filter: Option<Expr>,
+    ) -> Result<Self> {
+        self.join_detailed(
+            right,
+            join_type,
+            join_keys,
+            filter,
+            false,
+            JoinKind::DelimJoin,
+        )
     }
 
     /// Apply a join using the specified expressions.
@@ -1015,6 +1039,7 @@ impl LogicalPlanBuilder {
             (Vec::<Column>::new(), Vec::<Column>::new()),
             filter,
             false,
+            JoinKind::ComparisonJoin,
         )
     }
 
@@ -1052,6 +1077,7 @@ impl LogicalPlanBuilder {
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
         null_equals_null: bool,
+        join_kind: JoinKind,
     ) -> Result<Self> {
         if join_keys.0.len() != join_keys.1.len() {
             return plan_err!("left_keys and right_keys were not the same length");
@@ -1169,6 +1195,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null,
+            join_kind,
         })))
     }
 
@@ -1395,12 +1422,26 @@ impl LogicalPlanBuilder {
             .unzip();
         if is_all {
             LogicalPlanBuilder::from(left_plan)
-                .join_detailed(right_plan, join_type, join_keys, None, true)?
+                .join_detailed(
+                    right_plan,
+                    join_type,
+                    join_keys,
+                    None,
+                    true,
+                    JoinKind::ComparisonJoin,
+                )?
                 .build()
         } else {
             LogicalPlanBuilder::from(left_plan)
                 .distinct()?
-                .join_detailed(right_plan, join_type, join_keys, None, true)?
+                .join_detailed(
+                    right_plan,
+                    join_type,
+                    join_keys,
+                    None,
+                    true,
+                    JoinKind::ComparisonJoin,
+                )?
                 .build()
         }
     }

@@ -65,6 +65,7 @@ pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
 pub mod utils;
+pub mod deliminator;
 
 #[cfg(test)]
 pub mod test;
