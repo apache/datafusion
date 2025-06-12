@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Governance &#8212; Apache DataFusion  documentation</title>
+    <title>Table Constraint Enforcement &#8212; Apache DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -33,8 +33,8 @@
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Inviting New Committers and PMC Members" href="inviting.html" />
-    <link rel="prev" title="Roadmap" href="roadmap.html" />
+    <link rel="next" title="Extending DataFusion’s operators: custom LogicalPlan and Execution Plans" href="extending-operators.html" />
+    <link rel="prev" title="Custom Table Provider" href="custom-table-providers.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -315,24 +315,24 @@
   Library User Guide
  </span>
 </p>
-<ul class="nav bd-sidenav">
+<ul class="current nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/index.html">
+  <a class="reference internal" href="index.html">
    Introduction
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/extensions.html">
+  <a class="reference internal" href="extensions.html">
    Extensions List
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/using-the-sql-api.html">
+  <a class="reference internal" href="using-the-sql-api.html">
    Using the SQL API
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/working-with-exprs.html">
+  <a class="reference internal" href="working-with-exprs.html">
    Working with
    <code class="docutils literal notranslate">
     <span class="pre">
@@ -343,52 +343,52 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">
+  <a class="reference internal" href="using-the-dataframe-api.html">
    Using the DataFrame API
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/building-logical-plans.html">
+  <a class="reference internal" href="building-logical-plans.html">
    Building Logical Plans
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/catalogs.html">
+  <a class="reference internal" href="catalogs.html">
    Catalogs, Schemas, and Tables
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/adding-udfs.html">
+  <a class="reference internal" href="adding-udfs.html">
    Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/custom-table-providers.html">
+  <a class="reference internal" href="custom-table-providers.html">
    Custom Table Provider
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/table-constraints.html">
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
    Table Constraint Enforcement
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/extending-operators.html">
+  <a class="reference internal" href="extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/profiling.html">
+  <a class="reference internal" href="profiling.html">
    Profiling Cookbook
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/query-optimizer.html">
+  <a class="reference internal" href="query-optimizer.html">
    DataFusion Query Optimizer
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/upgrading.html">
+  <a class="reference internal" href="upgrading.html">
    Upgrade Guides
   </a>
  </li>
@@ -398,59 +398,59 @@
   Contributor Guide
  </span>
 </p>
-<ul class="current nav bd-sidenav">
+<ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="index.html">
+  <a class="reference internal" href="../contributor-guide/index.html">
    Introduction
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="communication.html">
+  <a class="reference internal" href="../contributor-guide/communication.html">
    Communication
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="development_environment.html">
+  <a class="reference internal" href="../contributor-guide/development_environment.html">
    Development Environment
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="architecture.html">
+  <a class="reference internal" href="../contributor-guide/architecture.html">
    Architecture
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="testing.html">
+  <a class="reference internal" href="../contributor-guide/testing.html">
    Testing
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="api-health.html">
+  <a class="reference internal" href="../contributor-guide/api-health.html">
    API health policy
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="howtos.html">
+  <a class="reference internal" href="../contributor-guide/howtos.html">
    HOWTOs
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="roadmap.html">
+  <a class="reference internal" href="../contributor-guide/roadmap.html">
    Roadmap
   </a>
  </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/governance.html">
    Governance
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="inviting.html">
+  <a class="reference internal" href="../contributor-guide/inviting.html">
    Inviting New Committers and PMC Members
   </a>
  </li>
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="specification/index.html">
+  <a class="reference internal" href="../contributor-guide/specification/index.html">
    Specifications
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
@@ -460,24 +460,24 @@
   </label>
   <ul>
    <li class="toctree-l2">
-    <a class="reference internal" href="specification/invariants.html">
+    <a class="reference internal" href="../contributor-guide/specification/invariants.html">
      Invariants
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="specification/output-field-name-semantic.html">
+    <a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">
      Output field name semantics
     </a>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="gsoc_application_guidelines.html">
+  <a class="reference internal" href="../contributor-guide/gsoc_application_guidelines.html">
    GSoC Application Guidelines
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="gsoc_project_ideas.html">
+  <a class="reference internal" href="../contributor-guide/gsoc_project_ideas.html">
    GSoC Project Ideas
   </a>
  </li>
@@ -526,34 +526,9 @@
               
               <div class="toc-item">
                 
-<div class="tocsection onthispage pt-5 pb-3">
-    <i class="fas fa-list"></i> On this page
-</div>
 
 <nav id="bd-toc-nav">
-    <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#overview">
-   Overview
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#roles">
-   Roles
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#becoming-a-committer">
-   Becoming a Committer
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#becoming-a-pmc-member">
-   Becoming a PMC Member
-  </a>
- </li>
-</ul>
-
+    
 </nav>
               </div>
               
@@ -561,7 +536,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/governance.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/table-constraints.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -598,65 +573,25 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="governance">
-<h1>Governance<a class="headerlink" href="#governance" title="Link to this heading">¶</a></h1>
-<p>The current PMC and committers are listed in the <a class="reference external" href="https://projects.apache.org/committee.html?datafusion">Apache Phonebook</a>.</p>
-<section id="overview">
-<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading">¶</a></h2>
-<p>DataFusion is part of the <a class="reference external" href="https://www.apache.org/">Apache Software Foundation</a> and is governed following
-the <a class="reference external" href="https://www.apache.org/theapacheway/">Apache Way</a> and <a class="reference external" href="https://www.apache.org/foundation/how-it-works.html#management">project management guidelines</a>, <a class="reference external" href="https://community.apache.org/projectIndependence.html">independently of
-commercial interests</a>.</p>
-<p>As much as practicable, we strive to make decisions by consensus, and anyone in
-the community is encouraged to propose ideas, start discussions, and contribute
-to the project.</p>
-</section>
-<section id="roles">
-<h2>Roles<a class="headerlink" href="#roles" title="Link to this heading">¶</a></h2>
+<section id="table-constraint-enforcement">
+<h1>Table Constraint Enforcement<a class="headerlink" href="#table-constraint-enforcement" title="Link to this heading">¶</a></h1>
+<p>Table providers can describe table constraints using the
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/sql/planner/enum.TableConstraint.html"><code class="docutils literal notranslate"><span class="pre">TableConstraint</span></code></a> and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/functional_dependencies/struct.Constraints.html"><code class="docutils literal notranslate"><span class="pre">Constraints</span></code></a> APIs. These constraints include
+primary keys, unique keys, foreign keys and check constraints.</p>
+<p>DataFusion does <strong>not</strong> currently enforce these constraints at runtime.
+They are provided for informational purposes and can be used by custom
+<code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> implementations or other parts of the system.</p>
 <ul class="simple">
-<li><p><strong>Contributors</strong>: Anyone who contributes to the project, whether it be code,
-documentation, testing, issue reports, code, or some other forms.</p></li>
-<li><p><strong>Committers</strong>: Contributors who have been granted write access to the<br />
-project’s source code repository. Committers are responsible for reviewing and
-merging pull requests. Committers are chosen by the PMC.</p></li>
-<li><p><strong>Project Management Committee (PMC)</strong>: The PMC is responsible for the
-oversight of the project. The PMC is responsible for making decisions about the
-project, including the addition of new committers and PMC members. The PMC is
-also responsible for <a class="reference external" href="https://www.apache.org/foundation/voting.html">voting</a> on releases and ensuring that the project follows
-the <a class="reference external" href="https://www.apache.org/theapacheway/">Apache Way</a>.</p></li>
+<li><p><strong>Nullability</strong>: The only property enforced by DataFusion is the
+nullability of each <a class="reference external" href="https://docs.rs/arrow/latest/arrow/datatype/struct.Field.html"><code class="docutils literal notranslate"><span class="pre">Field</span></code></a> in a schema. Returning data with null values
+for Columns marked as not nullable will result in runtime errors during execution. DataFusion
+does not check or enforce nullability when data is ingested.</p></li>
+<li><p><strong>Primary and unique keys</strong>: DataFusion does not verify that the data
+satisfies primary or unique key constraints. Table providers that
+require this behaviour must implement their own checks.</p></li>
+<li><p><strong>Foreign keys and check constraints</strong>: These constraints are parsed
+but are not validated or used during query planning.</p></li>
 </ul>
-</section>
-<section id="becoming-a-committer">
-<h2>Becoming a Committer<a class="headerlink" href="#becoming-a-committer" title="Link to this heading">¶</a></h2>
-<p>Contributors with sustained, high-quality activity may be invited to become
-committers by the PMC as a recognition of their contribution to the project and
-their shared commitment. Committers have the significant responsibility of using
-their status and access to improve the project for the entire community.</p>
-<p>When considering inviting someone to be a committer, the PMC looks for
-contributors who are already doing the work and exercising the judgment expected
-of a committer. After all, any contributor can do all of the things a committer
-does except for merge a PR. While there is no set list of requirements, nor a
-checklist that entitles one to commit privileges, typical behaviors include:</p>
-<ul class="simple">
-<li><p>Contributions beyond pull requests, such as reviewing other pull requests,
-fixing bugs and documentation, triaging issues, answering community questions,
-improving usability, helping with CI, verifying releases, etc.</p></li>
-<li><p>Contributions that are consistent in quality and sustained
-over time, typically on the order of 6 months or more.</p></li>
-<li><p>Assistance growing the size and health of the community via constructive,
-respectful, and consensus driven interactions, as described in our <a class="reference external" href="https://www.apache.org/foundation/policies/conduct.html">Code of
-Conduct</a> and the <a class="reference external" href="https://www.apache.org/theapacheway/">Apache Way</a>.</p></li>
-</ul>
-<p>If you feel you should be offered committer privileges, but have not been, you
-can reach out to one of the PMC members or the private&#64;datafusion.apache.org mailing
-list.</p>
-</section>
-<section id="becoming-a-pmc-member">
-<h2>Becoming a PMC Member<a class="headerlink" href="#becoming-a-pmc-member" title="Link to this heading">¶</a></h2>
-<p>Committers with long term sustained contributions to the project may be invited
-to join the PMC. This is a recognition of a significant contribution to growing
-the community, improving the project, and helping to guide the project’s
-direction, typically over the course of a year or more.</p>
-</section>
 </section>
 
 
@@ -665,17 +600,17 @@ direction, typically over the course of a year or more.</p>
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="roadmap.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="custom-table-providers.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Roadmap</p>
+            <p class="prev-next-title">Custom Table Provider</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="inviting.html" title="next page">
+    <a class='right-next' id="next-link" href="extending-operators.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Inviting New Committers and PMC Members</p>
+        <p class="prev-next-title">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

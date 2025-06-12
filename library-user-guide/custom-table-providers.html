@@ -33,7 +33,7 @@
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Extending DataFusion’s operators: custom LogicalPlan and Execution Plans" href="extending-operators.html" />
+    <link rel="next" title="Table Constraint Enforcement" href="table-constraints.html" />
     <link rel="prev" title="Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions" href="adding-udfs.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
@@ -368,6 +368,11 @@
   </a>
  </li>
  <li class="toctree-l1">
+  <a class="reference internal" href="table-constraints.html">
+   Table Constraint Enforcement
+  </a>
+ </li>
+ <li class="toctree-l1">
   <a class="reference internal" href="extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
@@ -640,6 +645,8 @@
 <h1>Custom Table Provider<a class="headerlink" href="#custom-table-provider" title="Link to this heading">¶</a></h1>
 <p>Like other areas of DataFusion, you extend DataFusion’s functionality by implementing a trait. The <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html"><code class="docutils literal notranslate"><span class="pre">TableProvider</span></code></a> and associated traits allow you to implement a custom table provider, i.e. use DataFusion’s other functionality with your custom data source.</p>
 <p>This section describes how to create a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html"><code class="docutils literal notranslate"><span class="pre">TableProvider</span></code></a> and how to configure DataFusion to use it for reading.</p>
+<p>For details on how table constraints such as primary keys or unique
+constraints are handled, see <a class="reference internal" href="table-constraints.html"><span class="std std-doc">Table Constraint Enforcement</span></a>.</p>
 <section id="table-provider-and-scan">
 <h2>Table Provider and Scan<a class="headerlink" href="#table-provider-and-scan" title="Link to this heading">¶</a></h2>
 <p>The <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#tymethod.scan"><code class="docutils literal notranslate"><span class="pre">TableProvider::scan</span></code></a> method reads data from the table and is likely the most important. It returns an <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code></a> that DataFusion will use to read the actual data during execution of the query. The <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#tymethod.insert_into"><code class="docutils literal notranslate"><span class="pre">TableProvider::insert_into</span></code></a> method is used to <code class="docutils literal notranslate"><span class="pre">INSERT</span></code> data into the table.</p>
@@ -909,10 +916,10 @@
             <p class="prev-next-title">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="extending-operators.html" title="next page">
+    <a class='right-next' id="next-link" href="table-constraints.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</p>
+        <p class="prev-next-title">Table Constraint Enforcement</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
