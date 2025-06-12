@@ -483,82 +483,7 @@ fn create_test_column_statistics(
 }
 
 #[test]
-fn test_map_column_statistics_basic() -> Result<()> {
-    // Test statistics mapping with a simple schema
-    let file_schema = create_basic_nested_schema();
-    let table_schema = create_deep_nested_schema();
-
-    let adapter = NestedStructSchemaAdapter::new(
-        Arc::clone(&table_schema),
-        Arc::clone(&table_schema),
-    );
-
-    let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
-
-    // Create test statistics for additionalInfo column
-    let file_stats = vec![create_test_column_statistics(
-        5,
-        100,
-        Some(ScalarValue::Utf8(Some("min_value".to_string()))),
-        Some(ScalarValue::Utf8(Some("max_value".to_string()))),
-        Some(ScalarValue::Utf8(Some("sum_value".to_string()))),
-    )];
-
-    // Map statistics
-    let table_stats = mapper.map_column_statistics(&file_stats)?;
-
-    // Verify count and content
-    assert_eq!(
-        table_stats.len(),
-        1,
-        "Should have stats for one struct column"
-    );
-    verify_column_statistics(
-        &table_stats[0],
-        Some(5),
-        Some(100),
-        Some(ScalarValue::Utf8(Some("min_value".to_string()))),
-        Some(ScalarValue::Utf8(Some("max_value".to_string()))),
-        Some(ScalarValue::Utf8(Some("sum_value".to_string()))),
-    );
-
-    Ok(())
-}
-
-#[test]
-fn test_map_column_statistics_empty() -> Result<()> {
-    // Test statistics mapping with empty input
-    let file_schema = create_basic_nested_schema();
-    let table_schema = create_deep_nested_schema();
-
-    let adapter = NestedStructSchemaAdapter::new(
-        Arc::clone(&table_schema),
-        Arc::clone(&table_schema),
-    );
-
-    let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
-
-    // Test with missing statistics
-    let empty_stats = vec![];
-    let mapped_empty_stats = mapper.map_column_statistics(&empty_stats)?;
-
-    assert_eq!(
-        mapped_empty_stats.len(),
-        1,
-        "Should have stats for one column even with empty input"
-    );
-
-    assert_eq!(
-        mapped_empty_stats[0],
-        ColumnStatistics::new_unknown(),
-        "Empty input should result in unknown statistics"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn test_map_column_statistics_multiple_columns() -> Result<()> {
+fn test_map_column_statistics() -> Result<()> {
     // Create schemas with multiple columns
     let file_schema = Arc::new(Schema::new(vec![
         Field::new("id", Int32, false),
@@ -651,8 +576,17 @@ fn test_map_column_statistics_multiple_columns() -> Result<()> {
     assert_eq!(
         table_stats[2],
         ColumnStatistics::new_unknown(),
-        "Missing column should have unknown statistics"
+        "Missing column should have unknown statistics",
     );
+
+    // Verify behavior when no statistics are provided
+    let empty_stats = vec![];
+    let missing_stats = mapper.map_column_statistics(&empty_stats)?;
+
+    assert_eq!(missing_stats.len(), 3);
+    for stat in missing_stats {
+        assert_eq!(stat, ColumnStatistics::new_unknown());
+    }
 
     Ok(())
 }
