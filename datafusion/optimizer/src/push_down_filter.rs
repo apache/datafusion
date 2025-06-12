@@ -940,7 +940,11 @@ impl OptimizerRule for PushDownFilter {
                 let group_expr_columns = agg
                     .group_expr
                     .iter()
-                    .map(|e| Ok(Column::from_qualified_name(e.schema_name().to_string())))
+                    .map(|e| {
+                        Ok(Column::from_qualified_name_ignore_case(
+                            e.schema_name().to_string(),
+                        ))
+                    })
                     .collect::<Result<HashSet<_>>>()?;
 
                 let predicates = split_conjunction_owned(filter.predicate);
