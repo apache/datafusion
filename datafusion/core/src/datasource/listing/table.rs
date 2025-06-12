@@ -1063,7 +1063,7 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
-        let source = self.create_file_source_with_schema_adapter()?;
+        let file_source = self.create_file_source_with_schema_adapter()?;
 
         // create the execution plan
         self.options
@@ -1073,7 +1073,7 @@ impl TableProvider for ListingTable {
                 FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
-                    source,
+                    file_source,
                 )
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
