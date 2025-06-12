@@ -1550,7 +1550,7 @@ mod tests {
     fn push_agg_need_replace_expr() -> Result<()> {
         let plan = LogicalPlanBuilder::from(test_table_scan()?)
             .aggregate(vec![add(col("b"), col("a"))], vec![sum(col("a")), col("b")])?
-            .filter(col("test.b + test.a").gt(lit(10i64)))?
+            .filter(col("(test.b + test.a)").gt(lit(10i64)))?
             .build()?;
         assert_optimized_plan_equal!(
             plan,
