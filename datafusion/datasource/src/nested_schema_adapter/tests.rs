@@ -16,13 +16,24 @@
 // under the License.
 
 mod tests {
-    use super::*;
+    use crate::nested_schema_adapter::{
+        NestedStructSchemaAdapter, NestedStructSchemaAdapterFactory,
+    };
+    use crate::schema_adapter::{
+        DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
+    };
     use arrow::{
         array::{Array, StringBuilder, StructArray, TimestampMillisecondArray},
-        datatypes::DataType::{Float64, Int16, Int32, Timestamp, Utf8},
-        datatypes::TimeUnit::Millisecond,
+        compute::cast,
+        datatypes::{
+            DataType::{Float64, Int16, Int32, Struct, Timestamp, Utf8},
+            Field, Schema, SchemaRef,
+            TimeUnit::Millisecond,
+        },
+        record_batch::RecordBatch,
     };
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{ColumnStatistics, Result, ScalarValue};
+    use std::sync::Arc;
 
     // ================================
     // Schema Creation Helper Functions
