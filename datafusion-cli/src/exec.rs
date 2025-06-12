@@ -515,17 +515,14 @@ fn extract_base_path_for_object_store(location: &str) -> String {
     }
 }
 
-/// Create a ListingTable for glob patterns using the same approach as GlobFunc
+/// Create a ListingTable for glob patterns
 async fn create_glob_listing_table(
     ctx: &dyn CliSessionContext,
     cmd: &CreateExternalTable,
     format: Option<ConfigFileType>,
 ) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
     let location = &cmd.location;
-    
-    // Create ListingTableUrl using existing helper functions
     let url = create_listing_table_url(location)?;
-    
     // Determine file format for the table configuration
     let format = format.ok_or_else(|| plan_datafusion_err!("glob(): file format must be specified"))?;
     let (file_extension, file_format) = file_format_from_config_type(format);
@@ -544,7 +541,6 @@ async fn create_glob_listing_table(
 /// Create a ListingTableUrl from a location string, handling glob patterns properly
 fn create_listing_table_url(location: &str) -> Result<ListingTableUrl> {
     if location.contains("://") && location.contains(['*', '?', '[']) {
-        // URL with scheme and glob - use existing split_glob_base function
         if let Some((base_path, glob_part)) = split_glob_base(location) {
             let base_url = Url::parse(&format!("{}/", base_path.trim_end_matches('/')))
                 .map_err(|e| plan_datafusion_err!("Invalid base URL: {}", e))?;
