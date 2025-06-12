@@ -587,6 +587,26 @@
      CROSS JOIN
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#left-semi-join">
+     LEFT SEMI JOIN
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#right-semi-join">
+     RIGHT SEMI JOIN
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#left-anti-join">
+     LEFT ANTI JOIN
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#right-anti-join">
+     RIGHT ANTI JOIN
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -722,7 +742,7 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 </section>
 <section id="join-clause">
 <h2>JOIN clause<a class="headerlink" href="#join-clause" title="Link to this heading">¶</a></h2>
-<p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">NATURAL</span> <span class="pre">JOIN</span></code> and <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>.</p>
+<p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">NATURAL</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code>, and <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code>.</p>
 <p>The following examples are based on this table:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
@@ -735,7 +755,7 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 <section id="inner-join">
 <h3>INNER JOIN<a class="headerlink" href="#inner-join" title="Link to this heading">¶</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code> define a join that only shows rows where there is a match in both tables.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">inner</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
@@ -748,7 +768,7 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 <h3>LEFT OUTER JOIN<a class="headerlink" href="#left-outer-join" title="Link to this heading">¶</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> define a join that includes all rows from the left table even if there
 is not a match in the right table. When there is no match, null values are produced for the right side of the join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">left</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">LEFT</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
@@ -761,7 +781,7 @@ is not a match in the right table. When there is no match, null values are produ
 <h3>RIGHT OUTER JOIN<a class="headerlink" href="#right-outer-join" title="Link to this heading">¶</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> define a join that includes all rows from the right table even if there
 is not a match in the left table. When there is no match, null values are produced for the left side of the join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">right</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">RIGHT</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
@@ -775,7 +795,7 @@ is not a match in the left table. When there is no match, null values are produc
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> define a join that is effectively a union of a <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> and
 <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>. It will show all rows from the left and right side of the join and will produce null values on
 either side of the join where there is not a match.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">full</span><span class="w"> </span><span class="k">outer</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">FULL</span><span class="w"> </span><span class="k">OUTER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
@@ -787,9 +807,9 @@ either side of the join where there is not a match.</p>
 </section>
 <section id="natural-join">
 <h3>NATURAL JOIN<a class="headerlink" href="#natural-join" title="Link to this heading">¶</a></h3>
-<p>A natural join defines an inner join based on common column names found between the input tables. When no common
-column names are found, it behaves like a cross join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">natural</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
+<p>A <code class="docutils literal notranslate"><span class="pre">NATURAL</span> <span class="pre">JOIN</span></code> defines an inner join based on common column names found between the input tables. When no common
+column names are found, it behaves like a <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">NATURAL</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
@@ -800,14 +820,64 @@ column names are found, it behaves like a cross join.</p>
 </section>
 <section id="cross-join">
 <h3>CROSS JOIN<a class="headerlink" href="#cross-join" title="Link to this heading">¶</a></h3>
-<p>A cross join produces a cartesian product that matches every row in the left side of the join with every row in the
+<p>A <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code> produces a cartesian product that matches every row in the left side of the join with every row in the
 right side of the join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">cross</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">CROSS</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+</pre></div>
+</div>
+</section>
+<section id="left-semi-join">
+<h3>LEFT SEMI JOIN<a class="headerlink" href="#left-semi-join" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code> returns all rows from the left table that have at least one matching row in the right table, and
+projects only the columns from the left table.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">LEFT</span><span class="w"> </span><span class="n">SEMI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+</pre></div>
+</div>
+</section>
+<section id="right-semi-join">
+<h3>RIGHT SEMI JOIN<a class="headerlink" href="#right-semi-join" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code> returns all rows from the right table that have at least one matching row in the left table, and
+only projects the columns from the right table.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">RIGHT</span><span class="w"> </span><span class="n">SEMI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+</pre></div>
+</div>
+</section>
+<section id="left-anti-join">
+<h3>LEFT ANTI JOIN<a class="headerlink" href="#left-anti-join" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code> returns all rows from the left table that do not have any matching row in the right table, projecting
+only the left table’s columns.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">LEFT</span><span class="w"> </span><span class="n">ANTI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+</pre></div>
+</div>
+</section>
+<section id="right-anti-join">
+<h3>RIGHT ANTI JOIN<a class="headerlink" href="#right-anti-join" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code> returns all rows from the right table that do not have any matching row in the left table, projecting
+only the right table’s columns.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">RIGHT</span><span class="w"> </span><span class="n">ANTI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
 </pre></div>
 </div>
 </section>
