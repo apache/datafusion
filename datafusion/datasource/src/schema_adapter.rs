@@ -20,14 +20,13 @@
 //! Adapter provides a method of translating the RecordBatches that come out of the
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
-
-use arrow::array::{new_null_array, ArrayRef, RecordBatch, RecordBatchOptions};
-use arrow::compute::{can_cast_types, cast};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::{
+    array::{new_null_array, ArrayRef, RecordBatch, RecordBatchOptions},
+    compute::{can_cast_types, cast},
+    datatypes::{Field, Schema, SchemaRef},
+};
 use datafusion_common::{plan_err, ColumnStatistics};
-use std::fmt::Debug;
-use std::sync::Arc;
-
+use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
 /// the table schema.
 pub type AdaptColumnFn =
@@ -443,14 +442,13 @@ impl SchemaMapper for SchemaMapping {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::{
         array::ArrayRef,
         compute::cast,
         datatypes::{DataType, Field},
     };
     use datafusion_common::{stats::Precision, Statistics};
-
-    use super::*;
 
     #[test]
     fn test_schema_mapping_map_statistics_basic() {
