@@ -1,0 +1,149 @@
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+create table t(a int) as values (1), (2), (3), (1);
+
+statement ok
+create table t2(a int, b int) as values (1, 10), (2, 20), (3, 30), (4, 40);
+
+query II
+select *, count(*) over() as ta from t;
+----
+1 4
+2 4
+3 4
+1 4
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# tablesample value
+query TT
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE 42 WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+05)--------TableScan: t projection=[a]
+
+
+# tablesample value float
+query TT
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE 42.3 WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Filter: t.a < Int32(10) AND random() < Float64(0.423)
+05)--------TableScan: t projection=[a]
+
+
+# tablesample system(value)
+query TT
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE SYSTEM (42) WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+05)--------TableScan: t projection=[a]
+
+# tablesample system percent
+query TT
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE SYSTEM (42 PERCENT) WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+05)--------TableScan: t projection=[a]
+
+
+# sample random
+query TT
+EXPLAIN SELECT COUNT(*) from t SAMPLE 0.42 WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+05)--------TableScan: t projection=[a]
+
+
+query error DataFusion error: This feature is not implemented: Table sample with rows unit is not supported
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE (5 ROWS);
+
+
+query error DataFusion error: This feature is not implemented: Table sample bucket is not supported
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE (BUCKET 3 OUT OF 16 ON id)
+
+
+query error DataFusion error: This feature is not implemented: Table sample seed is not supported
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE SYSTEM (3) REPEATABLE (82)
+
+
+# smoke test
+query III
+SELECT t.a, t2.a, t2.b FROM t JOIN t2 on t.a = t2.a;
+----
+1 1 10
+1 1 10
+2 2 20
+3 3 30
+
+# multiple tables with join
+# sampling is applied only to the first table
+query TT
+EXPLAIN SELECT COUNT(*) from t SAMPLE 0.42 JOIN t2 TABLESAMPLE 10 PERCENT on t.a = t2.a;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Inner Join: t.a = t2.a
+05)--------Filter: random() < Float64(0.42)
+06)----------TableScan: t projection=[a]
+07)--------TableScan: t2 projection=[a]
+
+# multiple tables with subquery
+query TT
+EXPLAIN SELECT COUNT(*) from t SAMPLE 0.42 WHERE a IN (SELECT b from t2 TABLESAMPLE 10 PERCENT) and a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------LeftSemi Join: t.a = __correlated_sq_1.b
+05)--------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+06)----------TableScan: t projection=[a]
+07)--------SubqueryAlias: __correlated_sq_1
+08)----------Filter: random() < Float64(0.1)
+09)------------TableScan: t2 projection=[b]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement count 0
+drop table t;
