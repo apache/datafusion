@@ -2644,12 +2644,12 @@ mod tests {
         let table = create_test_listing_table_with_json_and_adapter(
             &ctx,
             false,
+            // NullStatsAdapterFactory sets column_statistics null_count to DUMMY_NULL_COUNT
             Arc::new(NullStatsAdapterFactory {}),
         )?;
 
         let (groups, stats) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
-        // NullStatsAdapterFactory sets column_statistics null_count to DUMMY_NULL_COUNT
         assert_eq!(stats.column_statistics[0].null_count, DUMMY_NULL_COUNT);
         for g in groups {
             if let Some(s) = g.file_statistics(None) {
