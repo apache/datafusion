@@ -75,7 +75,7 @@
 //! # }
 //! ```
 //!
-//! # example: calling a specific function in Rust
+//! # Example: calling a specific function in Rust
 //!
 //! Each package also exports an `expr_fn` submodule that create [`Expr`]s for
 //! invoking functions via rust using a fluent style. For example, to invoke the
