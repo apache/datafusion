@@ -433,22 +433,18 @@ where
         flags_input.iter(len),
         subexp_input.iter(len)
     )
-    .map(|(value, regex, start, nth, flags, subexp)| {
-        match regex {
-            None => Ok(None),
-            Some("") => Ok(None),
-            Some(regex) => {
-                get_index(
-                    value,
-                    regex,
-                    start,
-                    nth,
-                    subexp,
-                    Some(flags),
-                    &mut regex_cache,
-                )
-            }
-        }
+    .map(|(value, regex, start, nth, flags, subexp)| match regex {
+        None => Ok(None),
+        Some("") => Ok(None),
+        Some(regex) => get_index(
+            value,
+            regex,
+            start,
+            nth,
+            subexp,
+            Some(flags),
+            &mut regex_cache,
+        ),
     })
     .collect();
 
