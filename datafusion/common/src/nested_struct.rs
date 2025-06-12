@@ -70,9 +70,10 @@ pub fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<Array
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, Int64Array, StringArray};
-    use arrow::datatypes::{DataType, Field};
-
+    use arrow::{
+        array::{Int32Array, Int64Array, StringArray},
+        datatypes::{DataType, Field},
+    };
     /// Helper function to extract and downcast a column from a StructArray
     fn get_column_as<T: 'static>(struct_array: &StructArray, column_name: &str) -> &T
     where
