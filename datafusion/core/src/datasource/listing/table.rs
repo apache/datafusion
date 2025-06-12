@@ -945,6 +945,20 @@ impl ListingTable {
         self.schema_adapter_factory.as_ref()
     }
 
+    /// Creates a schema adapter for mapping between file and table schemas
+    ///
+    /// Uses the configured schema adapter factory if available, otherwise falls back
+    /// to the default implementation.
+    fn create_schema_adapter(&self) -> Box<dyn SchemaAdapter> {
+        let table_schema = self.schema();
+        match &self.schema_adapter_factory {
+            Some(factory) => {
+                factory.create(Arc::clone(&table_schema), Arc::clone(&table_schema))
+            }
+            None => DefaultSchemaAdapterFactory::from_schema(Arc::clone(&table_schema)),
+        }
+    }
+
     /// Creates a file source and applies schema adapter factory if available
     fn create_file_source_with_schema_adapter(&self) -> Result<Arc<dyn FileSource>> {
         let mut source = self.options.format.file_source();
@@ -1232,14 +1246,10 @@ impl ListingTable {
             self.options.collect_stat,
             inexact_stats,
         )?;
-        let table_schema = self.schema();
-        let schema_adapter: Box<dyn SchemaAdapter> = match &self.schema_adapter_factory {
-            Some(factory) => {
-                factory.create(Arc::clone(&table_schema), Arc::clone(&table_schema))
-            }
-            None => DefaultSchemaAdapterFactory::from_schema(Arc::clone(&table_schema)),
-        };
+
+        let schema_adapter = self.create_schema_adapter();
         let (schema_mapper, _) = schema_adapter.map_schema(self.file_schema.as_ref())?;
+
         stats.column_statistics =
             schema_mapper.map_column_statistics(&stats.column_statistics)?;
         file_groups.iter_mut().try_for_each(|file_group| {
