@@ -103,7 +103,7 @@ mod tests {
         let a_array = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
         let source_struct = StructArray::from(vec![(
             Arc::new(Field::new("a", DataType::Int32, true)),
-            a_array.clone(),
+            Arc::clone(&a_array),
         )]);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
