@@ -249,20 +249,18 @@ impl ListingTableUrl {
             prefix: &'b Path,
         ) -> Result<BoxStream<'b, Result<ObjectMeta>>> {
             match ctx.runtime_env().cache_manager.get_list_files_cache() {
-                None => Ok(
-                    store
-                        .list(Some(prefix))
-                        .map(|res| res.map_err(DataFusionError::ObjectStore))
-                        .boxed()
-                ),
+                None => Ok(store
+                    .list(Some(prefix))
+                    .map(|res| res.map_err(DataFusionError::ObjectStore))
+                    .boxed()),
                 Some(cache) => {
                     if let Some(res) = cache.get(prefix) {
                         debug!("Hit list all files cache");
-                        Ok(
-                            futures::stream::iter(res.as_ref().clone().into_iter().map(Ok))
-                                .map(|res| res.map_err(DataFusionError::ObjectStore))
-                                .boxed()
+                        Ok(futures::stream::iter(
+                            res.as_ref().clone().into_iter().map(Ok),
                         )
+                        .map(|res| res.map_err(DataFusionError::ObjectStore))
+                        .boxed())
                     } else {
                         let vec = store
                             .list(Some(prefix))
@@ -270,16 +268,14 @@ impl ListingTableUrl {
                             .try_collect::<Vec<ObjectMeta>>()
                             .await?;
                         cache.put(prefix, Arc::new(vec.clone()));
-                        Ok(
-                            futures::stream::iter(vec.into_iter().map(Ok))
-                                .map(|res| res.map_err(DataFusionError::ObjectStore))
-                                .boxed()
-                        )
+                        Ok(futures::stream::iter(vec.into_iter().map(Ok))
+                            .map(|res| res.map_err(DataFusionError::ObjectStore))
+                            .boxed())
                     }
                 }
             }
         }
-        
+
         let list: BoxStream<'a, Result<ObjectMeta>> = if self.is_collection() {
             list_with_cache(ctx, store, &self.prefix).await?
         } else {
@@ -290,7 +286,7 @@ impl ListingTableUrl {
                 Err(_) => list_with_cache(ctx, store, &self.prefix).await?,
             }
         };
-    
+
         Ok(list
             .try_filter(move |meta| {
                 let path = &meta.location;
