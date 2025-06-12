@@ -74,17 +74,16 @@ mod tests {
         array::{Int32Array, Int64Array, StringArray},
         datatypes::{DataType, Field},
     };
-    /// Helper function to extract and downcast a column from a StructArray
-    fn get_column_as<T: 'static>(struct_array: &StructArray, column_name: &str) -> &T
-    where
-        T: Array,
-    {
-        struct_array
-            .column_by_name(column_name)
-            .unwrap()
-            .as_any()
-            .downcast_ref::<T>()
-            .unwrap()
+    /// Macro to extract and downcast a column from a StructArray
+    macro_rules! get_column_as {
+        ($struct_array:expr, $column_name:expr, $array_type:ty) => {
+            $struct_array
+                .column_by_name($column_name)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<$array_type>()
+                .unwrap()
+        };
     }
 
     #[test]
@@ -123,11 +122,11 @@ mod tests {
         let result = adapt_column(&source_col, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.fields().len(), 2);
-        let a_result = get_column_as::<Int32Array>(&struct_array, "a");
+        let a_result = get_column_as!(&struct_array, "a", Int32Array);
         assert_eq!(a_result.value(0), 1);
         assert_eq!(a_result.value(1), 2);
 
-        let b_result = get_column_as::<StringArray>(&struct_array, "b");
+        let b_result = get_column_as!(&struct_array, "b", StringArray);
         assert_eq!(b_result.len(), 2);
         assert!(b_result.is_null(0));
         assert!(b_result.is_null(1));
@@ -145,7 +144,7 @@ mod tests {
         let result = adapt_column(&source, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.len(), 2);
-        let a_result = get_column_as::<Int32Array>(&struct_array, "a");
+        let a_result = get_column_as!(&struct_array, "a", Int32Array);
         assert_eq!(a_result.null_count(), 2);
     }
 }
