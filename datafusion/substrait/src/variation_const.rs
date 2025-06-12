@@ -55,6 +55,8 @@ pub const LARGE_CONTAINER_TYPE_VARIATION_REF: u32 = 1;
 pub const VIEW_CONTAINER_TYPE_VARIATION_REF: u32 = 2;
 pub const DECIMAL_128_TYPE_VARIATION_REF: u32 = 0;
 pub const DECIMAL_256_TYPE_VARIATION_REF: u32 = 1;
+pub const DEFAULT_INTERVAL_DAY_TYPE_VARIATION: u32 = 0;
+pub const DURATION_INTERVAL_DAY_TYPE_VARIATION: u32 = 1;
 
 // For [user-defined types](https://substrait.io/types/type_classes/#user-defined-types).
 /// For [`DataType::Interval`] with [`IntervalUnit::YearMonth`].

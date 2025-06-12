@@ -19,7 +19,8 @@ use crate::logical_plan::producer::utils::flatten_names;
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION,
+    DEFAULT_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION,
     LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
@@ -153,7 +154,7 @@ pub(crate) fn to_substrait_type(
                 }),
                 IntervalUnit::DayTime => Ok(substrait::proto::Type {
                     kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
-                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                        type_variation_reference: DEFAULT_INTERVAL_DAY_TYPE_VARIATION,
                         nullability,
                         precision: Some(3), // DayTime precision is always milliseconds
                     })),
@@ -170,6 +171,21 @@ pub(crate) fn to_substrait_type(
                     })
                 }
             }
+        }
+        DataType::Duration(duration_unit) => {
+            let precision = match duration_unit {
+                TimeUnit::Second => 0,
+                TimeUnit::Millisecond => 3,
+                TimeUnit::Microsecond => 6,
+                TimeUnit::Nanosecond => 9,
+            };
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
+                    type_variation_reference: DURATION_INTERVAL_DAY_TYPE_VARIATION,
+                    nullability,
+                    precision: Some(precision),
+                })),
+            })
         }
         DataType::Binary => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Binary(r#type::Binary {
@@ -387,6 +403,11 @@ mod tests {
         round_trip_type(DataType::Interval(IntervalUnit::YearMonth))?;
         round_trip_type(DataType::Interval(IntervalUnit::MonthDayNano))?;
         round_trip_type(DataType::Interval(IntervalUnit::DayTime))?;
+
+        round_trip_type(DataType::Duration(TimeUnit::Second))?;
+        round_trip_type(DataType::Duration(TimeUnit::Millisecond))?;
+        round_trip_type(DataType::Duration(TimeUnit::Microsecond))?;
+        round_trip_type(DataType::Duration(TimeUnit::Nanosecond))?;
 
         Ok(())
     }

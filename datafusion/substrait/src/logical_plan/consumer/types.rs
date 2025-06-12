@@ -21,7 +21,8 @@ use super::SubstraitConsumer;
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION,
+    DEFAULT_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
@@ -213,7 +214,28 @@ pub fn from_substrait_type(
             r#type::Kind::IntervalYear(_) => {
                 Ok(DataType::Interval(IntervalUnit::YearMonth))
             }
-            r#type::Kind::IntervalDay(_) => Ok(DataType::Interval(IntervalUnit::DayTime)),
+            r#type::Kind::IntervalDay(i) => match i.type_variation_reference {
+                DEFAULT_INTERVAL_DAY_TYPE_VARIATION => {
+                    Ok(DataType::Interval(IntervalUnit::DayTime))
+                }
+                DURATION_INTERVAL_DAY_TYPE_VARIATION => {
+                    let duration_unit = match i.precision {
+                        Some(0) => Ok(TimeUnit::Second),
+                        Some(3) => Ok(TimeUnit::Millisecond),
+                        Some(6) => Ok(TimeUnit::Microsecond),
+                        Some(9) => Ok(TimeUnit::Nanosecond),
+                        p => {
+                            not_impl_err!(
+                                "Unsupported Substrait precision {p:?} for Duration"
+                            )
+                        }
+                    }?;
+                    Ok(DataType::Duration(duration_unit))
+                }
+                v => not_impl_err!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ),
+            },
             r#type::Kind::IntervalCompound(_) => {
                 Ok(DataType::Interval(IntervalUnit::MonthDayNano))
             }
