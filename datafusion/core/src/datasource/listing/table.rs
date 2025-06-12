@@ -1411,7 +1411,7 @@ mod tests {
     use tempfile::TempDir;
     use url::Url;
 
-    const DUMMY_NULL_COUNT: Precision<u8> = Precision::Exact(42);
+    const DUMMY_NULL_COUNT: Precision<usize> = Precision::Exact(42);
 
     /// Creates a test schema with standard field types used in tests
     fn create_test_schema() -> SchemaRef {
