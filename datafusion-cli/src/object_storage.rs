@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::error::Error;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -148,10 +149,20 @@ impl CredentialsFromConfig {
             // other errors like `CredentialsError::InvalidConfiguration`
             // should be returned to the user so they can be fixed
             Err(e) => {
+                // Pass back underlying error to the user, including underlying source
+                let source_message = if let Some(source) = e.source() {
+                    format!(": {source}")
+                } else {
+                    String::new()
+                };
+
+                let message = format!(
+                    "Error getting credentials from provider: {e}{source_message}",
+                );
+
                 return Err(DataFusionError::ObjectStore(object_store::Error::Generic {
                     store: "S3",
-                    source: format!("Error getting credentials from provider: {e}")
-                        .into(),
+                    source: message.into(),
                 }));
             }
         };
