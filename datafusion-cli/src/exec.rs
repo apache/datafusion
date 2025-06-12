@@ -27,17 +27,22 @@ use crate::{
     print_options::{MaxRows, PrintOptions},
 };
 use futures::StreamExt;
+use glob::Pattern;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
+use std::sync::Arc;
+use url::Url;
 
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
-use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
+use datafusion::datasource::file_format::{csv::CsvFormat, json::JsonFormat as NdJsonFormat, parquet::ParquetFormat, FileFormat};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::{DdlStatement, LogicalPlan};
+use datafusion::logical_expr::{DdlStatement, LogicalPlan, EmptyRelation, CreateExternalTable};
+use datafusion::prelude::SessionContext;
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
@@ -345,6 +350,58 @@ fn config_file_type_from_str(ext: &str) -> Option<ConfigFileType> {
     }
 }
 
+fn file_format_from_config_type(config_type: ConfigFileType) -> (&'static str, Arc<dyn FileFormat>) {
+    match config_type {
+        ConfigFileType::PARQUET => (".parquet", Arc::new(ParquetFormat::default())),
+        ConfigFileType::CSV => (".csv", Arc::new(CsvFormat::default().with_has_header(true))),
+        ConfigFileType::JSON => (".json", Arc::new(NdJsonFormat::default())),
+    }
+}
+
+/// Detects if a location string contains both a URL scheme and glob patterns
+fn is_glob_pattern_with_scheme(location: &str) -> bool {
+    location.find("://").map_or(false, |pos| pos > 0 && location.contains(['*', '?', '[']))
+}
+
+/// Splits a location string containing a glob pattern into (base_path, glob_part)
+/// Returns None if no glob pattern is found.
+fn split_glob_base(location: &str) -> Option<(&str, &str)> {
+    let glob_pos = location.find(['*', '?', '['])?;
+    let split_pos = location[..glob_pos].rfind('/')? + 1;
+    Some(location.split_at(split_pos))
+}
+
+/// Handles CREATE EXTERNAL TABLE commands with glob patterns in URLs
+///
+/// Returns `Ok(Some(plan))` if glob pattern was handled, `Ok(None)` if not a glob pattern,
+/// or `Err` if glob pattern handling failed.
+async fn handle_glob_pattern_table_creation(
+    ctx: &dyn CliSessionContext,
+    cmd: &mut CreateExternalTable,
+    format: Option<ConfigFileType>,
+) -> Result<Option<LogicalPlan>, DataFusionError> {
+    if !is_glob_pattern_with_scheme(&cmd.location) {
+        return Ok(None);
+    }
+
+    // Register object store for the base path first
+    let base_path = extract_base_path_for_object_store(&cmd.location);
+    register_object_store_and_config_extensions(ctx, &base_path, &cmd.options, format.clone()).await?;
+    
+    // Create and register the table provider
+    let table_provider = create_glob_listing_table(ctx, cmd, format).await?;
+    let session_ctx = ctx.as_any().downcast_ref::<SessionContext>()
+        .ok_or_else(|| plan_datafusion_err!("Failed to downcast CliSessionContext to SessionContext"))?;
+    
+    session_ctx.register_table(&cmd.name.to_string(), table_provider)?;
+    
+    // Return empty plan since table is already registered
+    Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: false,
+        schema: Arc::new(datafusion::common::DFSchema::empty()),
+    })))
+}
+
 async fn create_plan(
     ctx: &dyn CliSessionContext,
     statement: Statement,
@@ -354,9 +411,15 @@ async fn create_plan(
     // Note that cmd is a mutable reference so that create_external_table function can remove all
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
     // will raise Configuration errors.
-    if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+    if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
         // To support custom formats, treat error as None
         let format = config_file_type_from_str(&cmd.file_type);
+
+        // Handle glob patterns by creating the table directly in CLI
+        if let Some(glob_plan) = handle_glob_pattern_table_creation(ctx, cmd, format.clone()).await? {
+            return Ok(glob_plan);
+        }
+
         register_object_store_and_config_extensions(
             ctx,
             &cmd.location,
@@ -413,8 +476,9 @@ pub(crate) async fn register_object_store_and_config_extensions(
     options: &HashMap<String, String>,
     format: Option<ConfigFileType>,
 ) -> Result<()> {
-    // Parse the location URL to extract the scheme and other components
-    let table_path = ListingTableUrl::parse(location)?;
+    // Parse the location - for glob patterns, we need to register the base path for object store
+    let base_path = extract_base_path_for_object_store(location);
+    let table_path = ListingTableUrl::parse(&base_path)?;
 
     // Extract the scheme (e.g., "s3", "gcs") from the parsed URL
     let scheme = table_path.scheme();
@@ -440,6 +504,60 @@ pub(crate) async fn register_object_store_and_config_extensions(
     ctx.register_object_store(url, store);
 
     Ok(())
+}
+
+/// Extract the base path from a location with glob patterns for object store registration
+fn extract_base_path_for_object_store(location: &str) -> String {
+    if let Some((base_path, _glob_part)) = split_glob_base(location) {
+        base_path.to_string()
+    } else {
+        location.to_string()
+    }
+}
+
+/// Create a ListingTable for glob patterns using the same approach as GlobFunc
+async fn create_glob_listing_table(
+    ctx: &dyn CliSessionContext,
+    cmd: &CreateExternalTable,
+    format: Option<ConfigFileType>,
+) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
+    let location = &cmd.location;
+    
+    // Create ListingTableUrl using existing helper functions
+    let url = create_listing_table_url(location)?;
+    
+    // Determine file format for the table configuration
+    let format = format.ok_or_else(|| plan_datafusion_err!("glob(): file format must be specified"))?;
+    let (file_extension, file_format) = file_format_from_config_type(format);
+
+    // Create the listing table
+    let listing_opts = ListingOptions::new(file_format).with_file_extension(file_extension);
+    let schema = listing_opts.infer_schema(&ctx.session_state(), &url).await?;
+    let config = ListingTableConfig::new(url)
+        .with_listing_options(listing_opts)
+        .with_schema(schema);
+    let table = ListingTable::try_new(config)?;
+
+    Ok(Arc::new(table))
+}
+
+/// Create a ListingTableUrl from a location string, handling glob patterns properly
+fn create_listing_table_url(location: &str) -> Result<ListingTableUrl> {
+    if location.contains("://") && location.contains(['*', '?', '[']) {
+        // URL with scheme and glob - use existing split_glob_base function
+        if let Some((base_path, glob_part)) = split_glob_base(location) {
+            let base_url = Url::parse(&format!("{}/", base_path.trim_end_matches('/')))
+                .map_err(|e| plan_datafusion_err!("Invalid base URL: {}", e))?;
+            let glob = Pattern::new(glob_part)
+                .map_err(|e| plan_datafusion_err!("Invalid glob pattern: {}", e))?;
+            ListingTableUrl::try_new(base_url, Some(glob))
+        } else {
+            plan_err!("Failed to split glob pattern from location: {}", location)
+        }
+    } else {
+        // Local path or URL without globs - parse() handles this correctly
+        ListingTableUrl::parse(location)
+    }
 }
 
 #[cfg(test)]
@@ -546,7 +664,217 @@ mod tests {
                 }
             }
         }
+        
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_glob_pattern_with_scheme() {
+        // Should detect glob patterns with schemes
+        assert!(is_glob_pattern_with_scheme("s3://bucket/file-*.csv"));
+        assert!(is_glob_pattern_with_scheme("https://example.com/file-?.json"));
+        assert!(is_glob_pattern_with_scheme("gcs://bucket/data-[abc].parquet"));
+        assert!(is_glob_pattern_with_scheme("file:///tmp/test-*.csv"));
+        
+        // Should NOT detect patterns without schemes
+        assert!(!is_glob_pattern_with_scheme("file-*.csv"));
+        assert!(!is_glob_pattern_with_scheme("/tmp/test-?.json"));
+        assert!(!is_glob_pattern_with_scheme("*.parquet"));
+        
+        // Should NOT detect regular files with schemes
+        assert!(!is_glob_pattern_with_scheme("s3://bucket/file.csv"));
+        assert!(!is_glob_pattern_with_scheme("https://example.com/data.json"));
+        assert!(!is_glob_pattern_with_scheme("gcs://bucket/data.parquet"));
+        
+        // Edge cases
+        assert!(!is_glob_pattern_with_scheme(""));
+        assert!(!is_glob_pattern_with_scheme("://"));
+        assert!(!is_glob_pattern_with_scheme("*"));
+        assert!(!is_glob_pattern_with_scheme("scheme://"));
+        assert!(!is_glob_pattern_with_scheme("://path/*"));
+    }
+
+    #[test]
+    fn test_split_glob_base() {
+        // Test glob pattern splitting
+        assert_eq!(
+            split_glob_base("s3://bucket/path/file-*.csv"),
+            Some(("s3://bucket/path/", "file-*.csv"))
+        );
+        
+        assert_eq!(
+            split_glob_base("s3://bucket/data/file-?.json"),
+            Some(("s3://bucket/data/", "file-?.json"))
+        );
+        
+        assert_eq!(
+            split_glob_base("s3://bucket/file-[abc].parquet"),
+            Some(("s3://bucket/", "file-[abc].parquet"))
+        );
+        
+        // No glob pattern
+        assert_eq!(split_glob_base("s3://bucket/file.csv"), None);
+        
+        // Local path with glob
+        assert_eq!(
+            split_glob_base("/tmp/test-*.csv"),
+            Some(("/tmp/", "test-*.csv"))
+        );
+
+        // Edge cases
+        assert_eq!(split_glob_base(""), None);
+        assert_eq!(split_glob_base("*"), None); // No slash before glob
+        assert_eq!(
+            split_glob_base("path/to/file-*.txt"),
+            Some(("path/to/", "file-*.txt"))
+        );
+    }
+
+    #[test]
+    fn test_extract_base_path_for_object_store() {
+        assert_eq!(
+            extract_base_path_for_object_store("s3://bucket/path/file-*.csv"),
+            "s3://bucket/path/"
+        );
+        
+        assert_eq!(
+            extract_base_path_for_object_store("s3://bucket/file.csv"),
+            "s3://bucket/file.csv"
+        );
+        
+        assert_eq!(
+            extract_base_path_for_object_store("/tmp/test-*.csv"),
+            "/tmp/"
+        );
+
+        // Additional test cases
+        assert_eq!(
+            extract_base_path_for_object_store("gcs://bucket/data/logs-?.json"),
+            "gcs://bucket/data/"
+        );
+        
+        assert_eq!(
+            extract_base_path_for_object_store("https://example.com/api/v1/data-[abc].parquet"),
+            "https://example.com/api/v1/"
+        );
+
+        // No glob pattern
+        assert_eq!(
+            extract_base_path_for_object_store("s3://bucket/single-file.csv"),
+            "s3://bucket/single-file.csv"
+        );
+    }
+
+    #[test]
+    fn test_scheme_extraction_from_various_urls() {
+        use datafusion::datasource::listing::ListingTableUrl;
+        
+        let test_cases = vec![
+            ("s3://bucket/data.csv", "s3"),
+            ("gcs://bucket/logs.json", "gcs"),
+            ("https://example.com/files.parquet", "https"),
+            ("file:///tmp/test.csv", "file"),
+        ];
+        
+        for (location, expected_scheme) in test_cases {
+            let url = ListingTableUrl::parse(location).unwrap();
+            assert_eq!(url.scheme(), expected_scheme, "Failed for location: {}", location);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_glob_pattern_table_creation_not_glob() {
+        use datafusion::common::{DFSchema, Constraints};
+        
+        let ctx = SessionContext::new();
+        let mut cmd = CreateExternalTable {
+            schema: Arc::new(DFSchema::empty()),
+            name: "test_table".into(),
+            location: "s3://bucket/data.csv".to_string(),
+            file_type: "csv".to_string(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        
+        let result = handle_glob_pattern_table_creation(&ctx, &mut cmd, Some(ConfigFileType::CSV)).await;
+        
+        // Should return None since it's not a glob pattern
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_glob_pattern_table_creation_local_glob() {
+        use datafusion::common::{DFSchema, Constraints};
+        
+        let ctx = SessionContext::new();
+        let mut cmd = CreateExternalTable {
+            schema: Arc::new(DFSchema::empty()),
+            name: "test_table".into(),
+            location: "/tmp/data-*.csv".to_string(), // Local path with glob - should not be handled
+            file_type: "csv".to_string(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        
+        let result = handle_glob_pattern_table_creation(&ctx, &mut cmd, Some(ConfigFileType::CSV)).await;
+        
+        // Should return None since it doesn't have a scheme
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_glob_pattern_combinations() {
+        // Test various glob pattern combinations
+        let test_cases = vec![
+            // Valid glob patterns with schemes
+            ("s3://bucket/data-*.csv", true),
+            ("s3://bucket/data-?.json", true),
+            ("s3://bucket/data-[abc].parquet", true),
+            ("gcs://bucket/logs-*.txt", true),
+            ("https://api.com/files-*.xml", true),
+            
+            // Invalid - no scheme
+            ("data-*.csv", false),
+            ("/tmp/files-?.json", false),
+            ("./data-[abc].parquet", false),
+            
+            // Invalid - no glob
+            ("s3://bucket/data.csv", false),
+            ("gcs://bucket/logs.json", false),
+            ("https://api.com/file.xml", false),
+            
+            // Edge cases
+            ("", false),
+            ("*", false),
+            ("://", false),
+            ("scheme://", false),
+            ("://path/*", false), // No valid scheme before ://, so it should be false
+        ];
+        
+        for (location, expected) in test_cases {
+            assert_eq!(
+                is_glob_pattern_with_scheme(location),
+                expected,
+                "Failed for location: '{}'",
+                location
+            );
+        }
     }
 
     #[tokio::test]
