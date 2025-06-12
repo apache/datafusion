@@ -1129,14 +1129,12 @@ fn build_range_bitmap<T: ArrowPrimitiveType>(
     let mut builder = BooleanBufferBuilder::new(range.len());
     builder.append_n(range.len(), false);
 
-    input
-        .iter()
-        .flatten()
-        .map(|v| v.as_usize())
-        .filter(|&idx| range.contains(&idx))
-        .for_each(|idx| {
+    input.iter().flatten().for_each(|v| {
+        let idx = v.as_usize();
+        if range.contains(&idx) {
             builder.set_bit(idx - range.start, true);
-        });
+        }
+    });
 
     builder
 }
