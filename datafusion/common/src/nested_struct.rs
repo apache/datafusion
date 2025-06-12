@@ -60,6 +60,8 @@ fn adapt_struct_column(
 }
 
 /// Adapt a column to match the target field type, handling nested structs specially
+///
+// This is tested in nested_schema_adapter/tests.rs
 pub fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {
         Struct(target_fields) => adapt_struct_column(source_col, target_fields),
