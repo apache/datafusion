@@ -19,7 +19,6 @@
 
 pub mod adapter;
 pub mod factory;
-mod mapping;
 #[cfg(test)]
 mod tests;
 

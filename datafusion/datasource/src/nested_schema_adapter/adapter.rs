@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::mapping::adapt_column;
+use datafusion_common::nested_struct::adapt_column;
 use crate::schema_adapter::{
     create_field_mapping, SchemaAdapter, SchemaMapper, SchemaMapping,
 };

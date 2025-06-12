@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Result;
+use arrow::array::new_null_array;
 use arrow::{
     array::{Array, ArrayRef, StructArray},
     compute::cast,
     datatypes::{DataType::Struct, Field},
 };
-use datafusion_common::{arrow::array::new_null_array, Result};
 use std::sync::Arc;
 
 /// Adapt a struct column to match the target field type, handling nested structs recursively
@@ -61,10 +62,7 @@ fn adapt_struct_column(
 }
 
 /// Adapt a column to match the target field type, handling nested structs specially
-pub(super) fn adapt_column(
-    source_col: &ArrayRef,
-    target_field: &Field,
-) -> Result<ArrayRef> {
+pub fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {
         Struct(target_fields) => adapt_struct_column(source_col, target_fields),
         _ => Ok(cast(source_col, target_field.data_type())?),

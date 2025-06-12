@@ -50,6 +50,7 @@ pub mod parsers;
 pub mod pruning;
 pub mod rounding;
 pub mod scalar;
+pub mod nested_struct;
 pub mod spans;
 pub mod stats;
 pub mod test_util;
