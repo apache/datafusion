@@ -68,3 +68,87 @@ pub fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<Array
         _ => Ok(cast(source_col, target_field.data_type())?),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Int32Array, Int64Array, StringArray};
+    use arrow::datatypes::{DataType, Field};
+
+    #[test]
+    fn test_adapt_simple_column() {
+        let source = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let target_field = Field::new("ints", DataType::Int64, true);
+        let result = adapt_column(&source, &target_field).unwrap();
+        let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.value(0), 1);
+        assert_eq!(result.value(1), 2);
+        assert_eq!(result.value(2), 3);
+    }
+
+    #[test]
+    fn test_adapt_struct_with_missing_field() {
+        let a_array = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
+        let source_struct = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            a_array.clone(),
+        )]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        let target_field = Field::new(
+            "s",
+            Struct(
+                vec![
+                    Arc::new(Field::new("a", DataType::Int32, true)),
+                    Arc::new(Field::new("b", DataType::Utf8, true)),
+                ]
+                .into(),
+            ),
+            true,
+        );
+
+        let result = adapt_column(&source_col, &target_field).unwrap();
+        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_array.fields().len(), 2);
+        let a_result = struct_array
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(a_result.value(0), 1);
+        assert_eq!(a_result.value(1), 2);
+
+        let b_result = struct_array
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(b_result.len(), 2);
+        assert!(b_result.is_null(0));
+        assert!(b_result.is_null(1));
+    }
+
+    #[test]
+    fn test_adapt_struct_source_not_struct() {
+        let source = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
+        let target_field = Field::new(
+            "s",
+            Struct(vec![Arc::new(Field::new("a", DataType::Int32, true))].into()),
+            true,
+        );
+
+        let result = adapt_column(&source, &target_field).unwrap();
+        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_array.len(), 2);
+        let a_result = struct_array
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(a_result.null_count(), 2);
+    }
+}
