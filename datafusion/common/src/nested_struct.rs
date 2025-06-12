@@ -16,14 +16,12 @@
 // under the License.
 
 use crate::error::Result;
-use arrow::array::new_null_array;
 use arrow::{
-    array::{Array, ArrayRef, StructArray},
+    array::{new_null_array, Array, ArrayRef, StructArray},
     compute::cast,
     datatypes::{DataType::Struct, Field},
 };
 use std::sync::Arc;
-
 /// Adapt a struct column to match the target field type, handling nested structs recursively
 fn adapt_struct_column(
     source_col: &ArrayRef,
