@@ -120,16 +120,17 @@ impl FileStream {
         let part_file = self.file_iter.pop_front()?;
 
         let file_meta = FileMeta {
-            object_meta: part_file.object_meta,
-            range: part_file.range,
-            extensions: part_file.extensions,
+            object_meta: part_file.object_meta.clone(),
+            range: part_file.range.clone(),
+            extensions: part_file.extensions.clone(),
             metadata_size_hint: part_file.metadata_size_hint,
         };
 
+        let partition_values = part_file.partition_values.clone();
         Some(
             self.file_opener
-                .open(file_meta)
-                .map(|future| (future, part_file.partition_values)),
+                .open(file_meta, part_file)
+                .map(|future| (future, partition_values)),
         )
     }
 
@@ -367,7 +368,7 @@ impl Default for OnError {
 pub trait FileOpener: Unpin + Send + Sync {
     /// Asynchronously open the specified file and return a stream
     /// of [`RecordBatch`]
-    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture>;
+    fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture>;
 }
 
 /// Represents the state of the next `FileOpenFuture`. Since we need to poll
@@ -555,7 +556,11 @@ mod tests {
     }
 
     impl FileOpener for TestOpener {
-        fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
+        fn open(
+            &self,
+            _file_meta: FileMeta,
+            _file: PartitionedFile,
+        ) -> Result<FileOpenFuture> {
             let idx = self.current_idx.fetch_add(1, Ordering::SeqCst);
 
             if self.error_opening_idx.contains(&idx) {

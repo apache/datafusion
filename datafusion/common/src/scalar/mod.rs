@@ -3525,11 +3525,44 @@ impl ScalarValue {
             }
         }
     }
+
+    /// Compacts ([ScalarValue::compact]) the current [ScalarValue] and returns it.
+    pub fn compacted(mut self) -> Self {
+        self.compact();
+        self
+    }
 }
 
-pub fn copy_array_data(data: &ArrayData) -> ArrayData {
-    let mut copy = MutableArrayData::new(vec![&data], true, data.len());
-    copy.extend(0, 0, data.len());
+/// Compacts the data of an `ArrayData` into a new `ArrayData`.
+///
+/// This is useful when you want to minimize the memory footprint of an
+/// `ArrayData`. For example, the value returned by [`Array::slice`] still
+/// points at the same underlying data buffers as the original array, which may
+/// hold many more values. Calling `copy_array_data` on the sliced array will
+/// create a new, smaller, `ArrayData` that only contains the data for the
+/// sliced array.
+///
+/// # Example
+/// ```
+/// # use arrow::array::{make_array, Array, Int32Array};
+/// use datafusion_common::scalar::copy_array_data;
+/// let array = Int32Array::from_iter_values(0..8192);
+/// // Take only the first 2 elements
+/// let sliced_array = array.slice(0, 2);
+/// // The memory footprint of `sliced_array` is close to 8192 * 4 bytes
+/// assert_eq!(32864, sliced_array.get_array_memory_size());
+/// // however, we can copy the data to a new `ArrayData`
+/// let new_array = make_array(copy_array_data(&sliced_array.into_data()));
+/// // The memory footprint of `new_array` is now only 2 * 4 bytes
+/// // and overhead:
+/// assert_eq!(160, new_array.get_array_memory_size());
+/// ```
+///
+/// See also [`ScalarValue::compact`] which applies to `ScalarValue` instances
+/// as necessary.
+pub fn copy_array_data(src_data: &ArrayData) -> ArrayData {
+    let mut copy = MutableArrayData::new(vec![&src_data], true, src_data.len());
+    copy.extend(0, 0, src_data.len());
     copy.freeze()
 }
 

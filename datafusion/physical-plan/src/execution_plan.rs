@@ -536,7 +536,20 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// The default implementation is a no-op that passes the result of pushdown from the children to its parent.
     ///
+    /// When returning filters via [`FilterPushdownPropagation`] the order of the filters need not match
+    /// the order they were passed in via `child_pushdown_result`, but preserving the order may be beneficial
+    /// for debugging and reasoning about the resulting plans so it is recommended to preserve the order.
+    ///
+    /// There are various helper methods to make implementing this method easier, see:
+    /// - [`FilterPushdownPropagation::unsupported`]: to indicate that the node does not support filter pushdown at all.
+    /// - [`FilterPushdownPropagation::transparent`]: to indicate that the node supports filter pushdown but does not involve itself in it,
+    ///   instead if simply transmits the result of pushdown into its children back up to its parent.
+    /// - [`PredicateSupports::new_with_supported_check`]: takes a callback that returns true / false for each filter to indicate pushdown support.
+    ///   This can be used alongside [`FilterPushdownPropagation::with_filters`] and [`FilterPushdownPropagation::with_updated_node`]
+    ///   to dynamically build a result with a mix of supported and unsupported filters.
+    ///
     /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
+    /// [`PredicateSupports::new_with_supported_check`]: crate::filter_pushdown::PredicateSupports::new_with_supported_check
     fn handle_child_pushdown_result(
         &self,
         child_pushdown_result: ChildPushdownResult,
@@ -545,6 +558,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(FilterPushdownPropagation::transparent(
             child_pushdown_result,
         ))
+    }
+
+    /// Returns a version of this plan that cooperates with the runtime via
+    /// built‐in yielding. If such a version doesn't exist, returns `None`.
+    /// You do not need to do provide such a version of a custom operator,
+    /// but DataFusion will utilize it while optimizing the plan if it exists.
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        // Conservative default implementation assumes that a leaf does not
+        // cooperate with yielding.
+        None
     }
 }
 

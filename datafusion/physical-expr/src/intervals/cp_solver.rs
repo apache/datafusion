@@ -42,7 +42,7 @@
 //!
 //! In order to use interval arithmetic to compute bounds for this expression,
 //! one would first determine intervals that represent the possible values of
-//! `x` and `y`` Let's say that the interval for `x` is `[1, 2]` and the interval
+//! `x` and `y` Let's say that the interval for `x` is `[1, 2]` and the interval
 //! for `y` is `[-3, 1]`. In the chart below, you can see how the computation
 //! takes place.
 //!

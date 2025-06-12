@@ -78,8 +78,10 @@ venv:            Creates new venv (unless already exists) and installs compare's
 **********
 all(default): Data/Run/Compare for all benchmarks
 tpch:                   TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, hash join
+tpch_csv:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single csv file per table, hash join
 tpch_mem:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
 tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table, hash join
+tpch_csv10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single csv file per table, hash join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 cancellation:           How long cancelling a query takes
 parquet:                Benchmark of parquet reader's filtering speed
@@ -266,9 +268,11 @@ main() {
             mkdir -p "${DATA_DIR}"
             case "$BENCHMARK" in
                 all)
-                    run_tpch "1"
+                    run_tpch "1" "parquet"
+                    run_tpch "1" "csv"
                     run_tpch_mem "1"
-                    run_tpch "10"
+                    run_tpch "10" "parquet"
+                    run_tpch "10" "csv"
                     run_tpch_mem "10"
                     run_cancellation
                     run_parquet
@@ -286,13 +290,19 @@ main() {
                     run_external_aggr
                     ;;
                 tpch)
-                    run_tpch "1"
+                    run_tpch "1" "parquet"
+                    ;;
+                tpch_csv)
+                    run_tpch "1" "csv"
                     ;;
                 tpch_mem)
                     run_tpch_mem "1"
                     ;;
                 tpch10)
-                    run_tpch "10"
+                    run_tpch "10" "parquet"
+                    ;;
+                tpch_csv10)
+                    run_tpch "10" "csv"
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
@@ -430,6 +440,17 @@ data_tpch() {
         $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}" --format parquet
         popd > /dev/null
     fi
+
+    # Create 'csv' files from tbl
+    FILE="${TPCH_DIR}/csv/supplier"
+    if test -d "${FILE}"; then
+        echo " csv files exist ($FILE exists)."
+    else
+        echo " creating csv files using benchmark binary ..."
+        pushd "${SCRIPT_DIR}" > /dev/null
+        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}/csv" --format csv
+        popd > /dev/null
+    fi
 }
 
 # Runs the tpch benchmark
@@ -446,7 +467,9 @@ run_tpch() {
     echo "Running tpch benchmark..."
     # Optional query filter to run specific query
     QUERY=$([ -n "$ARG3" ] && echo "--query $ARG3" || echo "")
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" $QUERY
+
+    FORMAT=$2
+    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" $QUERY
 }
 
 # Runs the tpch in memory
