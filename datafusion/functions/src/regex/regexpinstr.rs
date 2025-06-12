@@ -348,7 +348,7 @@ where
     let regex_input = if is_regex_scalar || regex_array.len() == 1 {
         ScalarOrArray::Scalar(Some(regex_array.value(0)))
     } else {
-        let regex_vec: Vec<Option<&str>> = regex_array.iter().map(|v| v).collect();
+        let regex_vec: Vec<Option<&str>> = regex_array.iter().collect();
         ScalarOrArray::Array(regex_vec)
     };
 
@@ -435,10 +435,10 @@ where
     )
     .map(|(value, regex, start, nth, flags, subexp)| {
         match regex {
-            None => return Ok(None),
-            Some("") => return Ok(None),
+            None => Ok(None),
+            Some("") => Ok(None),
             Some(regex) => {
-                return get_index(
+                get_index(
                     value,
                     regex,
                     start,
@@ -448,7 +448,7 @@ where
                     &mut regex_cache,
                 )
             }
-        };
+        }
     })
     .collect();
 
