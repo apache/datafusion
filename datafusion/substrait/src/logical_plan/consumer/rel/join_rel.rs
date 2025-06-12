@@ -20,7 +20,7 @@ use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{not_impl_err, plan_err, Column, JoinType};
 use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{
-    BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
+    BinaryExpr, Expr, JoinKind, LogicalPlan, LogicalPlanBuilder, Operator,
 };
 use substrait::proto::{join_rel, JoinRel};
 
@@ -65,13 +65,21 @@ pub async fn from_join_rel(
                 (left_cols, right_cols),
                 join_filter,
                 nulls_equal_nulls,
+                JoinKind::ComparisonJoin, // TODO
             )?
             .build()
         }
         None => {
             let on: Vec<String> = vec![];
-            left.join_detailed(right.build()?, join_type, (on.clone(), on), None, false)?
-                .build()
+            left.join_detailed(
+                right.build()?,
+                join_type,
+                (on.clone(), on),
+                None,
+                false,
+                JoinKind::ComparisonJoin,
+            )?
+            .build()
         }
     }
 }

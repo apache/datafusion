@@ -400,7 +400,7 @@ impl LogicalPlanBuilder {
 
     pub fn delim_get(
         table_index: usize,
-        delim_types: &Vec<DataType>,
+        delim_types: &[DataType],
         columns: Vec<Column>,
         schema: DFSchemaRef,
     ) -> Self {

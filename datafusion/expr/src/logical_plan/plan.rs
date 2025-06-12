@@ -293,7 +293,7 @@ pub enum LogicalPlan {
     DelimGet(DelimGet),
 }
 
-#[derive(Debug, Clone, Eq, Hash)]
+#[derive(Debug, Clone, Eq)]
 pub struct DelimGet {
     /// The schema description of the output
     pub projected_schema: DFSchemaRef,
@@ -306,14 +306,14 @@ impl DelimGet {
     pub fn try_new(
         table_index: usize,
         columns: Vec<Column>,
-        delim_types: &Vec<DataType>,
+        delim_types: &[DataType],
         projected_schema: DFSchemaRef,
     ) -> Self {
         Self {
             columns,
             projected_schema,
             table_index,
-            delim_types: delim_types.clone(),
+            delim_types: delim_types.to_owned(),
         }
     }
 }
@@ -321,6 +321,13 @@ impl DelimGet {
 impl PartialEq for DelimGet {
     fn eq(&self, other: &Self) -> bool {
         self.table_index == other.table_index && self.delim_types == other.delim_types
+    }
+}
+
+impl Hash for DelimGet {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.table_index.hash(state);
+        self.delim_types.hash(state);
     }
 }
 
