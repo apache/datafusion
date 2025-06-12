@@ -1410,6 +1410,7 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
+
     /// Creates a test schema with standard field types used in tests
     fn create_test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
@@ -2638,19 +2639,11 @@ mod tests {
     #[tokio::test]
     async fn test_statistics_mapping_with_custom_factory() -> Result<()> {
         let ctx = SessionContext::new();
-        let path = "table/file.json";
-        register_test_store(&ctx, &[(path, 10)]);
-
-        let format = JsonFormat::default();
-        let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(false);
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(opt)
-            .with_schema(Arc::new(schema))
-            .with_schema_adapter_factory(Arc::new(NullStatsAdapterFactory {}));
-        let table = ListingTable::try_new(config)?;
+        let table = create_test_listing_table_with_json_and_adapter(
+            &ctx,
+            false,
+            Arc::new(NullStatsAdapterFactory {}),
+        )?;
 
         let (groups, stats) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
@@ -2667,21 +2660,13 @@ mod tests {
     #[tokio::test]
     async fn test_schema_adapter_map_schema_error_type_incompatible() -> Result<()> {
         let ctx = SessionContext::new();
-        let path = "table/file.json";
-        register_test_store(&ctx, &[(path, 10)]);
-
-        let format = JsonFormat::default();
-        let opt = ListingOptions::new(Arc::new(format));
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(opt)
-            .with_schema(Arc::new(schema))
-            .with_schema_adapter_factory(Arc::new(FailingMapSchemaAdapterFactory {
+        let table = create_test_listing_table_with_json_and_adapter(
+            &ctx,
+            false,
+            Arc::new(FailingMapSchemaAdapterFactory {
                 error_type: MapSchemaError::TypeIncompatible,
-            }));
-        let table = ListingTable::try_new(config)?;
+            }),
+        )?;
 
         // The error should bubble up from the scan operation when schema mapping fails
         let scan_result = table.scan(&ctx.state(), None, &[], None).await;
@@ -2699,21 +2684,13 @@ mod tests {
     #[tokio::test]
     async fn test_schema_adapter_map_schema_error_general_failure() -> Result<()> {
         let ctx = SessionContext::new();
-        let path = "table/file.json";
-        register_test_store(&ctx, &[(path, 10)]);
-
-        let format = JsonFormat::default();
-        let opt = ListingOptions::new(Arc::new(format));
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(opt)
-            .with_schema(Arc::new(schema))
-            .with_schema_adapter_factory(Arc::new(FailingMapSchemaAdapterFactory {
+        let table = create_test_listing_table_with_json_and_adapter(
+            &ctx,
+            false,
+            Arc::new(FailingMapSchemaAdapterFactory {
                 error_type: MapSchemaError::GeneralFailure,
-            }));
-        let table = ListingTable::try_new(config)?;
+            }),
+        )?;
 
         // The error should bubble up from the scan operation when schema mapping fails
         let scan_result = table.scan(&ctx.state(), None, &[], None).await;
@@ -2731,21 +2708,13 @@ mod tests {
     #[tokio::test]
     async fn test_schema_adapter_map_schema_error_invalid_projection() -> Result<()> {
         let ctx = SessionContext::new();
-        let path = "table/file.json";
-        register_test_store(&ctx, &[(path, 10)]);
-
-        let format = JsonFormat::default();
-        let opt = ListingOptions::new(Arc::new(format));
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(opt)
-            .with_schema(Arc::new(schema))
-            .with_schema_adapter_factory(Arc::new(FailingMapSchemaAdapterFactory {
+        let table = create_test_listing_table_with_json_and_adapter(
+            &ctx,
+            false,
+            Arc::new(FailingMapSchemaAdapterFactory {
                 error_type: MapSchemaError::InvalidProjection,
-            }));
-        let table = ListingTable::try_new(config)?;
+            }),
+        )?;
 
         // The error should bubble up from the scan operation when schema mapping fails
         let scan_result = table.scan(&ctx.state(), None, &[], None).await;
@@ -2764,21 +2733,13 @@ mod tests {
     #[tokio::test]
     async fn test_schema_adapter_error_during_file_listing() -> Result<()> {
         let ctx = SessionContext::new();
-        let path = "table/file.json";
-        register_test_store(&ctx, &[(path, 10)]);
-
-        let format = JsonFormat::default();
-        let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(true);
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(opt)
-            .with_schema(Arc::new(schema))
-            .with_schema_adapter_factory(Arc::new(FailingMapSchemaAdapterFactory {
+        let table = create_test_listing_table_with_json_and_adapter(
+            &ctx,
+            true,
+            Arc::new(FailingMapSchemaAdapterFactory {
                 error_type: MapSchemaError::TypeIncompatible,
-            }));
-        let table = ListingTable::try_new(config)?;
+            }),
+        )?;
 
         // The error should bubble up from list_files_for_scan when collecting statistics
         let list_result = table.list_files_for_scan(&ctx.state(), &[], None).await;
@@ -2907,5 +2868,27 @@ mod tests {
                 })
                 .collect())
         }
+    }
+
+    /// Helper function to create a test ListingTable with JSON format and custom schema adapter factory
+    fn create_test_listing_table_with_json_and_adapter(
+        ctx: &SessionContext,
+        collect_stat: bool,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<ListingTable> {
+        let path = "table/file.json";
+        register_test_store(ctx, &[(path, 10)]);
+
+        let format = JsonFormat::default();
+        let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(collect_stat);
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema))
+            .with_schema_adapter_factory(schema_adapter_factory);
+
+        ListingTable::try_new(config)
     }
 }
