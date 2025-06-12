@@ -117,7 +117,6 @@ impl ListingTableConfig {
     pub fn schema_source(&self) -> SchemaSource {
         self.schema_source
     }
-
     /// Set the `schema` for the overall [`ListingTable`]
     ///
     /// [`ListingTable`] will automatically coerce, when possible, the schema
@@ -470,7 +469,7 @@ impl ListingOptions {
     /// the rows read from
     /// `/mnt/nyctaxi/year=2022/month=01/tripdata.parquet`
     ///
-    /// # Notes
+    ///# Notes
     ///
     /// - If only one level (e.g. `year` in the example above) is
     ///   specified, the other levels are ignored but the files are
@@ -1407,6 +1406,7 @@ mod tests {
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::{collect, ExecutionPlanProperties};
+    use rstest::rstest;
     use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
@@ -2649,7 +2649,7 @@ mod tests {
 
         let (groups, stats) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
-        // NullStatsAdapterFactory sets null_counts to DUMMY_NULL_COUNT
+        // NullStatsAdapterFactory sets column_statistics null_count to DUMMY_NULL_COUNT
         assert_eq!(stats.column_statistics[0].null_count, DUMMY_NULL_COUNT);
         for g in groups {
             if let Some(s) = g.file_statistics(None) {
@@ -2660,15 +2660,23 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
+    #[case(MapSchemaError::TypeIncompatible, "Cannot map incompatible types")]
+    #[case(MapSchemaError::GeneralFailure, "Schema adapter mapping failed")]
+    #[case(
+        MapSchemaError::InvalidProjection,
+        "Invalid projection in schema mapping"
+    )]
     #[tokio::test]
-    async fn test_schema_adapter_map_schema_error_type_incompatible() -> Result<()> {
+    async fn test_schema_adapter_map_schema_errors(
+        #[case] error_type: MapSchemaError,
+        #[case] expected_error_msg: &str,
+    ) -> Result<()> {
         let ctx = SessionContext::new();
         let table = create_test_listing_table_with_json_and_adapter(
             &ctx,
             false,
-            Arc::new(FailingMapSchemaAdapterFactory {
-                error_type: MapSchemaError::TypeIncompatible,
-            }),
+            Arc::new(FailingMapSchemaAdapterFactory { error_type }),
         )?;
 
         // The error should bubble up from the scan operation when schema mapping fails
@@ -2677,56 +2685,8 @@ mod tests {
         assert!(scan_result.is_err());
         let error_msg = scan_result.unwrap_err().to_string();
         assert!(
-            error_msg.contains("Cannot map incompatible types"),
-            "Expected type incompatibility error, got: {error_msg}"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_schema_adapter_map_schema_error_general_failure() -> Result<()> {
-        let ctx = SessionContext::new();
-        let table = create_test_listing_table_with_json_and_adapter(
-            &ctx,
-            false,
-            Arc::new(FailingMapSchemaAdapterFactory {
-                error_type: MapSchemaError::GeneralFailure,
-            }),
-        )?;
-
-        // The error should bubble up from the scan operation when schema mapping fails
-        let scan_result = table.scan(&ctx.state(), None, &[], None).await;
-
-        assert!(scan_result.is_err());
-        let error_msg = scan_result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("Schema adapter mapping failed"),
-            "Expected general failure error, got: {error_msg}"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_schema_adapter_map_schema_error_invalid_projection() -> Result<()> {
-        let ctx = SessionContext::new();
-        let table = create_test_listing_table_with_json_and_adapter(
-            &ctx,
-            false,
-            Arc::new(FailingMapSchemaAdapterFactory {
-                error_type: MapSchemaError::InvalidProjection,
-            }),
-        )?;
-
-        // The error should bubble up from the scan operation when schema mapping fails
-        let scan_result = table.scan(&ctx.state(), None, &[], None).await;
-
-        assert!(scan_result.is_err());
-        let error_msg = scan_result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("Invalid projection in schema mapping"),
-            "Expected invalid projection error, got: {error_msg}"
+            error_msg.contains(expected_error_msg),
+            "Expected error containing '{expected_error_msg}', got: {error_msg}"
         );
 
         Ok(())
