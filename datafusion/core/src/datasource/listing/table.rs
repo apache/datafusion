@@ -1411,6 +1411,8 @@ mod tests {
     use tempfile::TempDir;
     use url::Url;
 
+    const DUMMY_NULL_COUNT = Precision::Exact(42);
+
     /// Creates a test schema with standard field types used in tests
     fn create_test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
@@ -2647,10 +2649,10 @@ mod tests {
 
         let (groups, stats) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
-        assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(42));
+        assert_eq!(stats.column_statistics[0].null_count, DUMMY_NULL_COUNT);
         for g in groups {
             if let Some(s) = g.file_statistics(None) {
-                assert_eq!(s.column_statistics[0].null_count, Precision::Exact(42));
+                assert_eq!(s.column_statistics[0].null_count, DUMMY_NULL_COUNT);
             }
         }
 
@@ -2863,7 +2865,7 @@ mod tests {
                 .iter()
                 .map(|s| {
                     let mut s = s.clone();
-                    s.null_count = Precision::Exact(42);
+                    s.null_count = DUMMY_NULL_COUNT);
                     s
                 })
                 .collect())
