@@ -575,7 +575,7 @@ fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schem
         .map(|(field_name, data_type_possibilities)| {
             // ripped from arrow::csv::reader::infer_reader_schema_with_csv_options
             // determine data type based on possible types
-            // if there are incompatible types, use DataType::Utf8
+            // if there are incompatible types, use DataType::Utf8View
             match data_type_possibilities.len() {
                 1 => Field::new(
                     field_name,
@@ -590,10 +590,10 @@ fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schem
                         Field::new(field_name, DataType::Float64, true)
                     } else {
                         // default to Utf8 for conflicting datatypes (e.g bool and int)
-                        Field::new(field_name, DataType::Utf8, true)
+                        Field::new(field_name, DataType::Utf8View, true)
                     }
                 }
-                _ => Field::new(field_name, DataType::Utf8, true),
+                _ => Field::new(field_name, DataType::Utf8View, true),
             }
         })
         .collect::<Fields>();
