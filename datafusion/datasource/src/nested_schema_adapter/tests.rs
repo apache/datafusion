@@ -33,65 +33,6 @@ use arrow::{
 };
 use datafusion_common::{ColumnStatistics, Result, ScalarValue};
 use std::sync::Arc;
-// ================================
-// Schema Creation Helper Functions
-// ================================
-
-/// Helper function to create a basic nested schema with additionalInfo
-fn create_basic_nested_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        create_additional_info_field(false), // without reason field
-    ]))
-}
-
-/// Helper function to create a deeply nested schema with additionalInfo including reason field
-fn create_deep_nested_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        create_additional_info_field(true), // with reason field
-    ]))
-}
-
-/// Helper function to create the additionalInfo field with or without the reason subfield
-fn create_additional_info_field(with_reason: bool) -> Field {
-    let mut field_children = vec![
-        Field::new("location", Utf8, true),
-        Field::new("timestamp_utc", Timestamp(Millisecond, None), true),
-    ];
-
-    // Add the reason field if requested (for target schema)
-    if with_reason {
-        field_children.push(create_reason_field());
-    }
-
-    Field::new("additionalInfo", Struct(field_children.into()), true)
-}
-
-/// Helper function to create the reason nested field with its details subfield
-fn create_reason_field() -> Field {
-    Field::new(
-        "reason",
-        Struct(
-            vec![
-                Field::new("_level", Float64, true),
-                // Inline the details field creation
-                Field::new(
-                    "details",
-                    Struct(
-                        vec![
-                            Field::new("rurl", Utf8, true),
-                            Field::new("s", Float64, true),
-                            Field::new("t", Utf8, true),
-                        ]
-                        .into(),
-                    ),
-                    true,
-                ),
-            ]
-            .into(),
-        ),
-        true,
-    )
-}
 
 // ================================
 // Schema Evolution Tests
