@@ -56,9 +56,10 @@ use object_store::ObjectStore;
 use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
 /// Indicates the source of the schema for a [`ListingTable`]
 // PartialEq required for assert_eq! in tests
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SchemaSource {
     /// Schema is not yet set (initial state)
+    #[default]
     None,
     /// Schema was inferred from first table_path
     Inferred,
@@ -86,12 +87,6 @@ pub struct ListingTableConfig {
     schema_source: SchemaSource,
     /// Optional [`SchemaAdapterFactory`] for creating schema adapters
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-}
-
-impl Default for SchemaSource {
-    fn default() -> Self {
-        SchemaSource::None
-    }
 }
 
 impl ListingTableConfig {
