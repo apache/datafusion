@@ -36,7 +36,7 @@ use datafusion_physical_plan::ExecutionPlan;
 /// `InsertYieldExec` is a [`PhysicalOptimizerRule`] that finds every leaf node in
 /// the plan and replaces it with a variant that yields cooperatively if supported.
 /// If the node does not provide a built-in yielding variant via
-/// `with_cooperative_yields`, it is wrapped in a [`YieldStreamExec`] parent to
+/// [`ExecutionPlan::with_cooperative_yields`], it is wrapped in a [`YieldStreamExec`] parent to
 /// enforce a configured yield frequency.
 pub struct InsertYieldExec {}
 
@@ -100,9 +100,9 @@ impl PhysicalOptimizerRule for InsertYieldExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::assert_contains;
     use datafusion_common::config::ConfigOptions;
     use datafusion_physical_plan::{displayable, test::scan_partitioned};
+    use insta::assert_snapshot;
 
     #[tokio::test]
     async fn test_yield_stream_exec_for_custom_exec() {
@@ -113,6 +113,10 @@ mod tests {
             .unwrap();
 
         let display = displayable(optimized.as_ref()).indent(true).to_string();
-        assert_contains!(display, "YieldStreamExec");
+        // Use insta snapshot to ensure full plan structure
+        assert_snapshot!(display, @r###"
+            YieldStreamExec frequency=64
+              DataSourceExec: partitions=1, partition_sizes=[1]
+            "###);
     }
 }
