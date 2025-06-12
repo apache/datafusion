@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::nested_struct::adapt_column;
 use crate::schema_adapter::{
     create_field_mapping, SchemaAdapter, SchemaMapper, SchemaMapping,
 };
@@ -23,6 +22,7 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType::Struct, Field, Schema, SchemaRef},
 };
+use datafusion_common::nested_struct::adapt_column;
 use datafusion_common::Result;
 use std::sync::Arc;
 
