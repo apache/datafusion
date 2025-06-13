@@ -17,12 +17,12 @@
 
 //! Example: embedding a "distinct values" index in a Parquet file's metadata
 //!
-//! 1. Read an existing Parquet file
+//! 1. Read existing Parquet files
 //! 2. Compute distinct values for a target column using DataFusion
-//! 3. Serialize the distinct list to bytes and write a new Parquet file
-//!    with these bytes appended as a custom metadata entry
-//! 4. Read the new file, extract and deserialize the index from footer
-//! 5. Use the index to answer membership queries without scanning data pages
+//! 3. Serialize the distinct index to bytes and write to the new Parquet file
+//!    with these encoded bytes appended as a custom metadata entry
+//! 4. Read each new parquet file, extract and deserialize the index from footer
+//! 5. Use the distinct index to prune files when querying
 
 use arrow::array::{ArrayRef, StringArray};
 use arrow::record_batch::RecordBatch;
@@ -109,6 +109,7 @@ impl DistinctIndexTable {
                         .unwrap();
                     let s = String::from_utf8(raw).unwrap();
                     let set = s.lines().map(|l| l.to_string()).collect();
+                    println!("Inserting  File: {name}, Distinct Values: {set:?}");
                     index.insert(name, set);
                 }
             }
@@ -176,6 +177,7 @@ impl TableProvider for DistinctIndexTable {
                     ) = (&*expr.left, &*expr.right)
                     {
                         if c.name == "category" {
+                            println!("Filtering for category: {v}");
                             target = Some(v.clone());
                         }
                     }
@@ -200,7 +202,7 @@ impl TableProvider for DistinctIndexTable {
             let path = self.dir.join(&file);
             let len = std::fs::metadata(&path)?.len();
             builder = builder.with_file(PartitionedFile::new(
-                path.to_string_lossy().into_owned(),
+                path.to_str().unwrap().to_string(),
                 len,
             ));
         }
@@ -224,7 +226,7 @@ async fn main() -> Result<()> {
     create_dir_all(dir)?;
     write_file_with_index(&dir.join("a.parquet"), &["foo", "bar", "foo"])?;
     write_file_with_index(&dir.join("b.parquet"), &["baz", "qux"])?;
-    write_file_with_index(&dir.join("c.parquet"), &["foo", "quux"])?;
+    write_file_with_index(&dir.join("c.parquet"), &["foo", "quux", "quux"])?;
 
     // 2. Register our custom TableProvider
     let field = Field::new("category", DataType::Utf8, false);
