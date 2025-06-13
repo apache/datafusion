@@ -361,9 +361,6 @@ fn test_node_handles_child_pushdown_result() {
 
 #[tokio::test]
 async fn test_topk_dynamic_filter_pushdown() {
-    // This test is a bit of a hack, but it shows that we can push down dynamic filters
-    // into the DataSourceExec. The test is not perfect because we don't have a real
-    // implementation of the dynamic filter yet, so we just use a static filter.
     let batches = vec![
         record_batch!(
             ("a", Utf8, ["aa", "ab"]),
