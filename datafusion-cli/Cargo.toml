@@ -64,6 +64,7 @@ regex = { workspace = true }
 rustyline = "16.0"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = { workspace = true }
+glob = "0.3.2"
 
 [dev-dependencies]
 assert_cmd = "2.0"

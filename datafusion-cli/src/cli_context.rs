@@ -52,6 +52,9 @@ pub trait CliSessionContext {
         &self,
         plan: LogicalPlan,
     ) -> Result<DataFrame, DataFusionError>;
+
+    /// Get a reference to the underlying object as Any for downcasting
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[async_trait::async_trait]
@@ -94,5 +97,9 @@ impl CliSessionContext for SessionContext {
         plan: LogicalPlan,
     ) -> Result<DataFrame, DataFusionError> {
         self.execute_logical_plan(plan).await
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
