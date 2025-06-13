@@ -262,13 +262,15 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
         run: |
-          cargo test \
+          cargo llvm-cov test --lcov --output-path ./coverage.txt test \
             --profile ci \
             --exclude datafusion-examples \
             --exclude ffi_example_table_provider \
@@ -279,6 +281,14 @@ jobs:
             --tests \
             --bins \
             --features serde,avro,json,backtrace,integration-tests
+      - name: Upload coverage reports to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.txt
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: linux-test
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -294,6 +304,8 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Setup Minio - S3-compatible storage
         run: |
           docker run -d --name minio-container \
@@ -314,7 +326,15 @@ jobs:
           AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
           TEST_STORAGE_INTEGRATION: 1
           AWS_ALLOW_HTTP: true
-        run: cargo test --profile ci -p datafusion-cli  --lib --tests --bins
+        run: cargo llvm-cov test --lcov --output-path ./coverage.txt --profile ci -p datafusion-cli  --lib --tests --bins
+      - name: Upload coverage reports to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.txt
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: linux-test-datafusion-cli
       - name: Verify Working Directory Clean
         run: git diff --exit-code
       - name: Minio Output
@@ -467,14 +487,24 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run sqllogictest
         run: |
           cd datafusion/sqllogictest
-          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo test --features backtrace --profile ci --features=postgres --test sqllogictests
+          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo llvm-cov test --lcov --output-path ./coverage.txt --features backtrace --profile ci --features=postgres --test sqllogictests
         env:
           # use postgres for the host here because we have specified a container for the job
           POSTGRES_HOST: postgres
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
+      - name: Upload coverage reports to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./datafusion/sqllogictest/coverage.txt
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: sqllogictest-postgres
 
   sqllogictest-substrait:
     name: "Run sqllogictest in Substrait round-trip mode"
@@ -543,9 +573,19 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run tests (excluding doctests)
         shell: bash
-        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
+        run: cargo llvm-cov test --lcov --output-path ./coverage.txt --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
+      - name: Upload coverage reports to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.txt
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: macos-aarch64
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
@@ -568,8 +608,18 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run datafusion-common tests
-        run: cargo test --profile ci -p datafusion-common --features=pyarrow
+        run: cargo llvm-cov test --lcov --output-path ./coverage.txt --profile ci -p datafusion-common --features=pyarrow
+      - name: Upload coverage reports to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.txt
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: test-datafusion-pyarrow
 
   vendor:
     name: Verify Vendored Code
