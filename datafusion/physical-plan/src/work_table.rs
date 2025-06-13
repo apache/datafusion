@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use crate::coop::cooperative;
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
@@ -107,8 +107,6 @@ pub struct WorkTableExec {
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Indicates whether to enable cooperative yielding mode.
-    cooperative: bool,
 }
 
 impl WorkTableExec {
@@ -121,7 +119,6 @@ impl WorkTableExec {
             metrics: ExecutionPlanMetricsSet::new(),
             work_table: Arc::new(WorkTable::new()),
             cache,
-            cooperative: true,
         }
     }
 
@@ -142,7 +139,6 @@ impl WorkTableExec {
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
             cache: self.cache.clone(),
-            cooperative: self.cooperative,
         }
     }
 
@@ -154,6 +150,7 @@ impl WorkTableExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -236,10 +233,6 @@ impl ExecutionPlan for WorkTableExec {
 
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
-    }
-
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.cooperative.then_some(self)
     }
 }
 

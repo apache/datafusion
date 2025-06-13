@@ -30,6 +30,7 @@ use arrow_schema::Schema;
 use datafusion_common::{internal_err, Result, Statistics};
 use datafusion_execution::TaskContext;
 
+use crate::execution_plan::SchedulingType;
 use crate::stream::RecordBatchStreamAdapter;
 use futures::{FutureExt, Stream};
 use pin_project_lite::pin_project;
@@ -102,13 +103,19 @@ pub struct CooperativeExec {
     /// The child execution plan that this operator "wraps" to make it
     /// cooperate with the runtime.
     input: Arc<dyn ExecutionPlan>,
+    properties: PlanProperties,
 }
 
 impl CooperativeExec {
     /// Creates a new `CooperativeExec` operator that wraps the given child
     /// execution plan.
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        Self { input }
+        let properties = input
+            .properties()
+            .clone()
+            .with_scheduling_type(SchedulingType::Cooperative);
+
+        Self { input, properties }
     }
 
     /// Returns the child execution plan this operator "wraps" to make it
@@ -142,7 +149,7 @@ impl ExecutionPlan for CooperativeExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        self.input.properties()
+        &self.properties
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

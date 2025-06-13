@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::coop::cooperative;
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
 use crate::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
@@ -102,6 +102,7 @@ impl PlaceholderRowExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -181,10 +182,6 @@ impl ExecutionPlan for PlaceholderRowExec {
             &self.schema,
             None,
         ))
-    }
-
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(self)
     }
 }
 

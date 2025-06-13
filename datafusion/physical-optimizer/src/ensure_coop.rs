@@ -29,12 +29,14 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::Result;
 use datafusion_physical_plan::coop::CooperativeExec;
+use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
 use datafusion_physical_plan::ExecutionPlan;
 
-/// `EnsureCooperative` is a [`PhysicalOptimizerRule`] that finds every leaf node in
-/// the plan and replaces it with a variant that yields cooperatively if supported.
-/// If the node does not provide a built-in yielding variant via
-/// [`ExecutionPlan::with_cooperative_yields`], it is wrapped in a [`CooperativeExec`] parent.
+/// `EnsureCooperative` is a [`PhysicalOptimizerRule`] that inspects the physical plan for
+/// sub plans that do not participate in cooperative scheduling. The plan is subdivided into sub
+/// plans on eager evaluation boundaries. Leaf nodes and eager evaluation roots are checked
+/// to see if they participate in cooperative scheduling. Those that do no are wrapped in
+/// a [`CooperativeExec`] parent.
 pub struct EnsureCooperative {}
 
 impl EnsureCooperative {
@@ -65,20 +67,22 @@ impl PhysicalOptimizerRule for EnsureCooperative {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(|plan| {
-            if !plan.children().is_empty() {
-                // Not a leaf, keep recursing down.
-                return Ok(Transformed::no(plan));
+        plan.transform_up(|plan| {
+            let is_leaf = plan.children().is_empty();
+            let is_exchange = plan.properties().evaluation_type == EvaluationType::Eager;
+            if (is_leaf || is_exchange)
+                && plan.properties().scheduling_type != SchedulingType::Cooperative
+            {
+                // Wrap non-cooperative leaves or eager evaluation roots in a cooperative exec to
+                // ensure the plans they participate in are properly cooperative.
+                Ok(Transformed::new(
+                    Arc::new(CooperativeExec::new(Arc::clone(&plan))),
+                    true,
+                    TreeNodeRecursion::Continue,
+                ))
+            } else {
+                Ok(Transformed::no(plan))
             }
-            // For leaf nodes, try to get a built-in cooperative-yielding variant.
-            let new_plan =
-                Arc::clone(&plan)
-                    .with_cooperative_yields()
-                    .unwrap_or_else(|| {
-                        // Only if no built-in variant exists, insert a `CooperativeExec`.
-                        Arc::new(CooperativeExec::new(plan))
-                    });
-            Ok(Transformed::new(new_plan, true, TreeNodeRecursion::Jump))
         })
         .map(|t| t.data)
     }
@@ -107,7 +111,7 @@ mod tests {
         let display = displayable(optimized.as_ref()).indent(true).to_string();
         // Use insta snapshot to ensure full plan structure
         assert_snapshot!(display, @r###"
-            YieldStreamExec frequency=64
+            CooperativeExec
               DataSourceExec: partitions=1, partition_sizes=[1]
             "###);
     }

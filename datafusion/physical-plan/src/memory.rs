@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::coop::cooperative;
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
@@ -163,7 +163,9 @@ impl LazyMemoryExec {
             Partitioning::RoundRobinBatch(generators.len()),
             EmissionType::Incremental,
             Boundedness::Bounded,
-        );
+        )
+        .with_scheduling_type(SchedulingType::Cooperative);
+
         Ok(Self {
             schema,
             batch_generators: generators,
@@ -271,10 +273,6 @@ impl ExecutionPlan for LazyMemoryExec {
             baseline_metrics,
         };
         Ok(Box::pin(cooperative(stream)))
-    }
-
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(self)
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
