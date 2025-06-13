@@ -307,6 +307,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let mut intermediate_plan = input;
         let mut intermediate_select_exprs = select_exprs;
+        // Fast path: If there is are no unnests in the select_exprs, wrap the plan in a projection
+        if !intermediate_select_exprs
+            .iter()
+            .any(has_unnest_expr_recursively)
+        {
+            return LogicalPlanBuilder::from(intermediate_plan)
+                .project(intermediate_select_exprs)?
+                .build();
+        }
 
         // Each expr in select_exprs can contains multiple unnest stage
         // The transformation happen bottom up, one at a time for each iteration
@@ -374,6 +383,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {
         match input {
+            // Fast path if there are no unnest in group by
+            LogicalPlan::Aggregate(ref agg)
+                if !&agg.group_expr.iter().any(has_unnest_expr_recursively) =>
+            {
+                Ok(input)
+            }
             LogicalPlan::Aggregate(agg) => {
                 let agg_expr = agg.aggr_expr.clone();
                 let (new_input, new_group_by_exprs) =
@@ -938,4 +953,18 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Returns true if the expression recursively contains an `Expr::Unnest` expression
+fn has_unnest_expr_recursively(expr: &Expr) -> bool {
+    let mut has_unnest = false;
+    let _ = expr.apply(|e| {
+        if let Expr::Unnest(_) = e {
+            has_unnest = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    });
+    has_unnest
 }
