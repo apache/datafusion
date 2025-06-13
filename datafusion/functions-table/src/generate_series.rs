@@ -199,8 +199,8 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
         let mut normalize_args = Vec::new();
         for expr in exprs {
             match expr {
-                Expr::Literal(ScalarValue::Null) => {}
-                Expr::Literal(ScalarValue::Int64(Some(n))) => normalize_args.push(*n),
+                Expr::Literal(ScalarValue::Null, _) => {}
+                Expr::Literal(ScalarValue::Int64(Some(n)), _) => normalize_args.push(*n),
                 _ => return plan_err!("First argument must be an integer literal"),
             };
         }

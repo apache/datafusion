@@ -141,6 +141,7 @@ datafusion-proto-common = { path = "datafusion/proto-common", version = "48.0.0"
 datafusion-session = { path = "datafusion/session", version = "48.0.0" }
 datafusion-spark = { path = "datafusion/spark", version = "48.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "48.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "48.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
@@ -216,7 +217,7 @@ unnecessary_lazy_evaluations = "warn"
 uninlined_format_args = "warn"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)", "cfg(tarpaulin_include)"] }
 unused_qualifications = "deny"
 
 # pin to pre-release arrow
