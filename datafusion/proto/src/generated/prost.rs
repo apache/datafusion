@@ -1119,7 +1119,7 @@ pub mod physical_plan_node {
         #[prost(message, tag = "31")]
         JsonScan(super::JsonScanExecNode),
         #[prost(message, tag = "32")]
-        YieldStream(::prost::alloc::boxed::Box<super::YieldStreamExecNode>),
+        Cooperative(::prost::alloc::boxed::Box<super::CooperativeExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1574,11 +1574,9 @@ pub struct AvroScanExecNode {
     pub base_conf: ::core::option::Option<FileScanExecConf>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct YieldStreamExecNode {
+pub struct CooperativeExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
-    #[prost(uint32, tag = "2")]
-    pub frequency: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HashJoinExecNode {

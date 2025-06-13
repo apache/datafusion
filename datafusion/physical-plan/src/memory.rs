@@ -22,9 +22,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::yield_stream::wrap_yield_stream;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -148,8 +148,6 @@ pub struct LazyMemoryExec {
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
     cache: PlanProperties,
-    /// Indicates whether to enable cooperative yielding mode (defaults to `true`).
-    cooperative: bool,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -170,16 +168,8 @@ impl LazyMemoryExec {
             schema,
             batch_generators: generators,
             cache,
-            cooperative: true, // Cooperative yielding mode defaults to true
             metrics: ExecutionPlanMetricsSet::new(),
         })
-    }
-
-    /// Set the Yielding mode for the execution plan
-    /// It defaults to `true`, meaning it will yield back to the runtime for cooperative scheduling.
-    pub fn with_cooperative_yielding(mut self, cooperative: bool) -> Self {
-        self.cooperative = cooperative;
-        self
     }
 
     pub fn set_boundedness(&mut self, boundedness: Boundedness) {
@@ -263,7 +253,7 @@ impl ExecutionPlan for LazyMemoryExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition >= self.batch_generators.len() {
             return internal_err!(
@@ -275,16 +265,16 @@ impl ExecutionPlan for LazyMemoryExec {
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
-        let stream = Box::pin(LazyMemoryStream {
+        let stream = LazyMemoryStream {
             schema: Arc::clone(&self.schema),
             generator: Arc::clone(&self.batch_generators[partition]),
             baseline_metrics,
-        });
-        Ok(wrap_yield_stream(stream, &context, self.cooperative))
+        };
+        Ok(Box::pin(cooperative(stream)))
     }
 
     fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.cooperative.then_some(self)
+        Some(self)
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

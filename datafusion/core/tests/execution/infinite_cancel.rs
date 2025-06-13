@@ -38,7 +38,7 @@ use datafusion_expr_common::operator::Operator::Gt;
 use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_optimizer::insert_yield_exec::InsertYieldExec;
+use datafusion_physical_optimizer::ensure_coop::EnsureCooperative;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::filter::FilterExec;
@@ -146,7 +146,7 @@ async fn test_infinite_agg_cancel(
 
     // 3) optimize the plan with InsertYieldExec to auto-insert Yield
     let config = ConfigOptions::new();
-    let optimized = InsertYieldExec::new().optimize(aggr, &config)?;
+    let optimized = EnsureCooperative::new().optimize(aggr, &config)?;
 
     // 4) get the stream
     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
@@ -199,7 +199,7 @@ async fn test_infinite_sort_cancel(
 
     // 4) optimize the plan with InsertYieldExec to auto-insert Yield
     let config = ConfigOptions::new();
-    let optimized = InsertYieldExec::new().optimize(sort_exec, &config)?;
+    let optimized = EnsureCooperative::new().optimize(sort_exec, &config)?;
 
     // 5) get the stream
     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
@@ -284,7 +284,7 @@ async fn test_infinite_interleave_cancel(
     // 6) Apply InsertYieldExec to insert YieldStreamExec under every leaf.
     //    Each InfiniteExec → FilterExec → CoalesceBatchesExec chain will yield periodically.
     let config = ConfigOptions::new();
-    let optimized = InsertYieldExec::new().optimize(coalesced_top, &config)?;
+    let optimized = EnsureCooperative::new().optimize(coalesced_top, &config)?;
 
     // 7) Execute the optimized plan with a 1-second timeout.
     //    Because the top-level FilterExec always discards rows and the inputs are infinite,
@@ -385,7 +385,7 @@ async fn test_infinite_interleave_agg_cancel(
     //    That way, each InfiniteExec (through the FilterExec/CoalesceBatchesExec/RepartitionExec chain)
     //    yields to the runtime periodically instead of spinning CPU.
     let config = ConfigOptions::new();
-    let optimized = InsertYieldExec::new().optimize(aggr, &config)?;
+    let optimized = EnsureCooperative::new().optimize(aggr, &config)?;
 
     // 6) Execute the stream. Because AggregateExec(mode=Single) only emits a final batch
     //    after all inputs finish—and those inputs are infinite—we expect no output
@@ -472,7 +472,7 @@ async fn test_infinite_join_cancel(
 
     // 3) Wrap yields under each infinite leaf
     let config = ConfigOptions::new();
-    let optimized = InsertYieldExec::new().optimize(join, &config)?;
+    let optimized = EnsureCooperative::new().optimize(join, &config)?;
 
     // 4) Execute + 1 sec timeout
     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
@@ -590,7 +590,7 @@ async fn test_infinite_join_agg_cancel(
 
     // 5) Wrap yields under each infinite leaf
     let config = ConfigOptions::new();
-    let optimized = InsertYieldExec::new().optimize(aggr, &config)?;
+    let optimized = EnsureCooperative::new().optimize(aggr, &config)?;
 
     // 6) Execute + 1 sec timeout
     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
@@ -644,7 +644,7 @@ async fn test_filter_reject_all_batches_cancel(
 
     // 3) InsertYieldExec to insert YieldExec—so that the InfiniteExec yields control between batches
     let config = ConfigOptions::new();
-    let optimized = InsertYieldExec::new().optimize(coalesced, &config)?;
+    let optimized = EnsureCooperative::new().optimize(coalesced, &config)?;
 
     // 4) Execute with a 1-second timeout. Because Filter discards all 8192 rows each time
     //    without ever producing output, no batch will arrive within 1 second. And since
@@ -723,7 +723,7 @@ async fn test_infinite_hash_join_without_repartition_and_no_agg(
     //    because there is no aggregation so no wrapper is inserted. Here we simply do
     //    not call InsertYieldExec, ensuring the plan has neither aggregation nor repartition.
     let config = ConfigOptions::new();
-    let optimized = InsertYieldExec::new().optimize(join, &config)?;
+    let optimized = EnsureCooperative::new().optimize(join, &config)?;
 
     // 4) Execute with a 1 second timeout
     let mut stream = physical_plan::execute_stream(optimized, session_ctx.task_ctx())?;
@@ -801,7 +801,7 @@ async fn test_infinite_sort_merge_join_without_repartition_and_no_agg(
 
     // 3) Do not apply InsertYieldExec (no aggregation, no repartition → no built-in yields).
     let config = ConfigOptions::new();
-    let optimized = InsertYieldExec::new().optimize(join, &config)?;
+    let optimized = EnsureCooperative::new().optimize(join, &config)?;
 
     // 4) Execute with a 1-second timeout. Because both sides are infinite and never match,
     //    the SortMergeJoin will never produce output within 1s.

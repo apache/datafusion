@@ -22,6 +22,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType, PlanProperties};
+use crate::coop::make_cooperative;
 use crate::display::{display_orderings, ProjectSchemaDisplay};
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::limit::LimitStream;
@@ -30,7 +31,6 @@ use crate::projection::{
     all_alias_free_columns, new_projections_for_columns, update_ordering, ProjectionExec,
 };
 use crate::stream::RecordBatchStreamAdapter;
-use crate::yield_stream::wrap_yield_stream;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -69,8 +69,6 @@ pub struct StreamingTableExec {
     limit: Option<usize>,
     cache: PlanProperties,
     metrics: ExecutionPlanMetricsSet,
-    /// Indicates whether to enable cooperative yielding mode.
-    cooperative: bool,
 }
 
 impl StreamingTableExec {
@@ -115,7 +113,6 @@ impl StreamingTableExec {
             limit,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
-            cooperative: true,
         })
     }
 
@@ -276,7 +273,7 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         };
-        let stream = wrap_yield_stream(projected_stream, &ctx, self.cooperative);
+        let stream = make_cooperative(projected_stream);
 
         Ok(match self.limit {
             None => stream,
@@ -339,12 +336,11 @@ impl ExecutionPlan for StreamingTableExec {
             limit,
             cache: self.cache.clone(),
             metrics: self.metrics.clone(),
-            cooperative: self.cooperative,
         }))
     }
 
     fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.cooperative.then_some(self)
+        Some(self)
     }
 }
 
