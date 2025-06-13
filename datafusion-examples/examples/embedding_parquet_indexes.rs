@@ -24,34 +24,31 @@
 //! 4. Read the new file, extract and deserialize the index from footer
 //! 5. Use the index to answer membership queries without scanning data pages
 
-use arrow::array::{ArrayRef, StringArray, StringBuilder, StringViewArray};
+use arrow::array::{ArrayRef, StringArray};
 use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::pretty_format_batches;
-use datafusion::prelude::*;
-use datafusion::common::{DataFusionError, HashMap, HashSet, Result};
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::memory::MemTable;
-use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::parquet::arrow::ArrowWriter;
-use datafusion::parquet::file::properties::WriterProperties;
-use datafusion::parquet::file::metadata::KeyValue;
-use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
-use datafusion::parquet::file::writer;
-use std::fs::{File, read_dir, create_dir_all};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use tempfile::TempDir;
+use base64::engine::general_purpose;
+use base64::Engine;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
+use datafusion::common::{HashMap, HashSet, Result};
+use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::DataSourceExec;
+use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::TableType;
-use datafusion::logical_expr::{BinaryExpr, Operator, TableProviderFilterPushDown, UserDefinedLogicalNode};
-use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::{Operator, TableProviderFilterPushDown};
+use datafusion::parquet::arrow::ArrowWriter;
+use datafusion::parquet::file::metadata::KeyValue;
+use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
+use std::fs::{create_dir_all, read_dir, File};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tempfile::TempDir;
 
 /// Example creating parquet file that
 /// contains specialized indexes that
@@ -85,10 +82,7 @@ use datafusion::scalar::ScalarValue;
 ///
 ///               Parquet File
 /// ```
-
-
-
-/// TableProvider that prunes Parquet files by their embedded distinct‑values index
+/// DistinctIndexTable is a custom TableProvider that reads Parquet files
 #[derive(Debug)]
 struct DistinctIndexTable {
     schema: SchemaRef,
@@ -110,7 +104,9 @@ impl DistinctIndexTable {
             let reader = SerializedFileReader::new(File::open(&p)?)?;
             if let Some(kv) = reader.metadata().file_metadata().key_value_metadata() {
                 if let Some(e) = kv.iter().find(|kv| kv.key == "distinct_index_data") {
-                    let raw = base64::decode(e.value.as_deref().unwrap()).unwrap();
+                    let raw = general_purpose::STANDARD_NO_PAD
+                        .decode(e.value.as_deref().unwrap())
+                        .unwrap();
                     let s = String::from_utf8(raw).unwrap();
                     let set = s.lines().map(|l| l.to_string()).collect();
                     index.insert(name, set);
@@ -131,12 +127,13 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     // Compute distinct values, serialize & Base64‑encode
     let distinct: HashSet<_> = values.iter().copied().collect();
     let serialized = distinct.iter().cloned().collect::<Vec<_>>().join("\n");
-    let b64 = base64::encode(serialized.as_bytes());
+    let b64 = general_purpose::STANDARD_NO_PAD.encode(serialized.as_bytes());
 
     let props = WriterProperties::builder()
-        .set_key_value_metadata(Some(vec![
-            KeyValue::new("distinct_index_data".into(), b64),
-        ]))
+        .set_key_value_metadata(Some(vec![KeyValue::new(
+            "distinct_index_data".into(),
+            b64,
+        )]))
         .build();
 
     let file = File::create(path)?;
@@ -146,11 +143,18 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Implement TableProvider for DistinctIndexTable, using the distinct index to prune files
 #[async_trait]
 impl TableProvider for DistinctIndexTable {
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    fn schema(&self) -> SchemaRef { self.schema.clone() }
-    fn table_type(&self) -> TableType { TableType::Base }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
 
     /// Prune files before reading: only keep files whose distinct set contains the filter value
     async fn scan(
@@ -166,7 +170,11 @@ impl TableProvider for DistinctIndexTable {
         if filters.len() == 1 {
             if let Expr::BinaryExpr(expr) = &filters[0] {
                 if expr.op == Operator::Eq {
-                    if let (Expr::Column(c), Expr::Literal(ScalarValue::Utf8(Some(v)), _)) = (&*expr.left, &*expr.right) {
+                    if let (
+                        Expr::Column(c),
+                        Expr::Literal(ScalarValue::Utf8(Some(v)), _),
+                    ) = (&*expr.left, &*expr.right)
+                    {
                         if c.name == "category" {
                             target = Some(v.clone());
                         }
@@ -175,9 +183,11 @@ impl TableProvider for DistinctIndexTable {
             }
         }
         // Determine which files to scan
-        let keep: Vec<String> = self.index.iter()
-            .filter(|(_f,set)| target.as_ref().map_or(true, |v| set.contains(v)))
-            .map(|(f,_)| f.clone())
+        let keep: Vec<String> = self
+            .index
+            .iter()
+            .filter(|(_f, set)| target.as_ref().is_none_or(|v| set.contains(v)))
+            .map(|(f, _)| f.clone())
             .collect();
 
         println!("Pruned files: {:?}", keep.clone());
@@ -189,12 +199,18 @@ impl TableProvider for DistinctIndexTable {
         for file in keep {
             let path = self.dir.join(&file);
             let len = std::fs::metadata(&path)?.len();
-            builder = builder.with_file(PartitionedFile::new(path.to_string_lossy().into_owned(), len));
+            builder = builder.with_file(PartitionedFile::new(
+                path.to_string_lossy().into_owned(),
+                len,
+            ));
         }
         Ok(DataSourceExec::from_data_source(builder.build()))
     }
 
-    fn supports_filters_pushdown(&self, fs: &[&Expr]) -> Result<Vec<TableProviderFilterPushDown>> {
+    fn supports_filters_pushdown(
+        &self,
+        fs: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
         // Mark as inexact since pruning is file‑granular
         Ok(vec![TableProviderFilterPushDown::Inexact; fs.len()])
     }
@@ -202,14 +218,13 @@ impl TableProvider for DistinctIndexTable {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-
     // 1. Create temp dir and write 3 Parquet files with different category sets
     let tmp = TempDir::new()?;
     let dir = tmp.path();
-    create_dir_all(&dir)?;
-    write_file_with_index(&dir.join("a.parquet"), &["foo","bar","foo"])?;
-    write_file_with_index(&dir.join("b.parquet"), &["baz","qux"])?;
-    write_file_with_index(&dir.join("c.parquet"), &["foo","quux"])?;
+    create_dir_all(dir)?;
+    write_file_with_index(&dir.join("a.parquet"), &["foo", "bar", "foo"])?;
+    write_file_with_index(&dir.join("b.parquet"), &["baz", "qux"])?;
+    write_file_with_index(&dir.join("c.parquet"), &["foo", "quux"])?;
 
     // 2. Register our custom TableProvider
     let field = Field::new("category", DataType::Utf8, false);
@@ -224,4 +239,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
