@@ -718,6 +718,9 @@ struct NestedLoopJoinStream<T> {
     inner_table: OnceFut<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
+    // We do not need to pass in a variable for null aware joins because the join `on`
+    // condition can be passed into the join filter using `<=>`.
+    // null_equals_null
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Cache for join indices calculations
