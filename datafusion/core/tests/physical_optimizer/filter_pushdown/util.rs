@@ -278,7 +278,7 @@ impl TestScanBuilder {
             Arc::clone(&self.schema),
             source,
         )
-        .with_file(PartitionedFile::new("test.paqruet", 123))
+        .with_file(PartitionedFile::new("test.parquet", 123))
         .build();
         DataSourceExec::from_data_source(base_config)
     }
