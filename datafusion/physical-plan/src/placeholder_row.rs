@@ -20,9 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::yield_stream::wrap_yield_stream;
 use crate::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream, Statistics,
@@ -44,8 +44,6 @@ pub struct PlaceholderRowExec {
     /// Number of partitions
     partitions: usize,
     cache: PlanProperties,
-    /// Indicates whether to enable cooperative yielding mode.
-    cooperative: bool,
 }
 
 impl PlaceholderRowExec {
@@ -57,7 +55,6 @@ impl PlaceholderRowExec {
             schema,
             partitions,
             cache,
-            cooperative: true,
         }
     }
 
@@ -164,8 +161,8 @@ impl ExecutionPlan for PlaceholderRowExec {
             );
         }
 
-        MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)
-            .map(|ms| wrap_yield_stream(Box::pin(ms), &context, self.cooperative))
+        let ms = MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)?;
+        Ok(Box::pin(cooperative(ms)))
     }
 
     fn statistics(&self) -> Result<Statistics> {
@@ -187,7 +184,7 @@ impl ExecutionPlan for PlaceholderRowExec {
     }
 
     fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.cooperative.then_some(self)
+        Some(self)
     }
 }
 

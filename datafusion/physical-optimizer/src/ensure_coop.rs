@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The [`InsertYieldExec`] optimizer rule inspects the physical plan to find all leaf
-//! nodes corresponding to tight-looping operators. It first attempts to replace
-//! each leaf with a cooperative-yielding variant via `with_cooperative_yields`,
-//! and only if no built-in variant exists does it wrap the node in a
-//! [`YieldStreamExec`] operator to enforce periodic yielding, ensuring the plan
-//! remains cancellation-friendly.
+//! The [`EnsureCooperative`] optimizer rule inspects the physical plan to find all
+//! portions of the plan that will not yield cooperatively.
+//! It will insert `CooperativeExec` nodes where appropriate to ensure execution plans
+//! always yield cooperatively.
 
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -30,65 +28,59 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::Result;
-use datafusion_physical_plan::yield_stream::YieldStreamExec;
+use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::ExecutionPlan;
 
-/// `InsertYieldExec` is a [`PhysicalOptimizerRule`] that finds every leaf node in
+/// `EnsureCooperative` is a [`PhysicalOptimizerRule`] that finds every leaf node in
 /// the plan and replaces it with a variant that yields cooperatively if supported.
 /// If the node does not provide a built-in yielding variant via
-/// [`ExecutionPlan::with_cooperative_yields`], it is wrapped in a [`YieldStreamExec`] parent to
-/// enforce a configured yield frequency.
-pub struct InsertYieldExec {}
+/// [`ExecutionPlan::with_cooperative_yields`], it is wrapped in a [`CooperativeExec`] parent.
+pub struct EnsureCooperative {}
 
-impl InsertYieldExec {
+impl EnsureCooperative {
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl Default for InsertYieldExec {
+impl Default for EnsureCooperative {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Debug for InsertYieldExec {
+impl Debug for EnsureCooperative {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InsertYieldExec").finish()
+        f.debug_struct(self.name()).finish()
     }
 }
 
-impl PhysicalOptimizerRule for InsertYieldExec {
+impl PhysicalOptimizerRule for EnsureCooperative {
     fn name(&self) -> &str {
-        "insert_yield_exec"
+        "EnsureCooperative"
     }
 
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Only activate if user has configured a non-zero yield frequency.
-        let yield_period = config.optimizer.yield_period;
-        if yield_period != 0 {
-            plan.transform_down(|plan| {
-                if !plan.children().is_empty() {
-                    // Not a leaf, keep recursing down.
-                    return Ok(Transformed::no(plan));
-                }
-                // For leaf nodes, try to get a built-in cooperative-yielding variant.
-                let new_plan = Arc::clone(&plan)
+        plan.transform_down(|plan| {
+            if !plan.children().is_empty() {
+                // Not a leaf, keep recursing down.
+                return Ok(Transformed::no(plan));
+            }
+            // For leaf nodes, try to get a built-in cooperative-yielding variant.
+            let new_plan =
+                Arc::clone(&plan)
                     .with_cooperative_yields()
                     .unwrap_or_else(|| {
-                        // Only if no built-in variant exists, insert a `YieldStreamExec`.
-                        Arc::new(YieldStreamExec::new(plan, yield_period))
+                        // Only if no built-in variant exists, insert a `CooperativeExec`.
+                        Arc::new(CooperativeExec::new(plan))
                     });
-                Ok(Transformed::new(new_plan, true, TreeNodeRecursion::Jump))
-            })
-            .map(|t| t.data)
-        } else {
-            Ok(plan)
-        }
+            Ok(Transformed::new(new_plan, true, TreeNodeRecursion::Jump))
+        })
+        .map(|t| t.data)
     }
 
     fn schema_check(&self) -> bool {
@@ -105,10 +97,10 @@ mod tests {
     use insta::assert_snapshot;
 
     #[tokio::test]
-    async fn test_yield_stream_exec_for_custom_exec() {
+    async fn test_cooperative_exec_for_custom_exec() {
         let test_custom_exec = scan_partitioned(1);
         let config = ConfigOptions::new();
-        let optimized = InsertYieldExec::new()
+        let optimized = EnsureCooperative::new()
             .optimize(test_custom_exec, &config)
             .unwrap();
 
