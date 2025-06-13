@@ -1,3 +1,19 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
 
 //! Example: embedding a "distinct values" index in a Parquet file's metadata
 //!
@@ -30,6 +46,39 @@ use tempfile::TempDir;
 use datafusion::logical_expr::UserDefinedLogicalNode;
 use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
+
+/// Example creating parquet file that
+/// contains specialized indexes that
+/// are ignored by other readers
+///
+/// ```text
+///         ┌──────────────────────┐
+///         │┌───────────────────┐ │
+///         ││     DataPage      │ │      Standard Parquet
+///         │└───────────────────┘ │      Data / pages
+///         │┌───────────────────┐ │
+///         ││     DataPage      │ │
+///         │└───────────────────┘ │
+///         │        ...           │
+///         │                      │
+///         │┌───────────────────┐ │
+///         ││     DataPage      │ │
+///         │└───────────────────┘ │
+///         │┏━━━━━━━━━━━━━━━━━━━┓ │
+///         │┃                   ┃ │        key/value metadata
+///         │┃   Special Index   ┃◀┼────    that points at the
+///         │┃                   ┃ │     │  special index
+///         │┗━━━━━━━━━━━━━━━━━━━┛ │
+///         │╔═══════════════════╗ │     │
+///         │║                   ║ │
+///         │║  Parquet Footer   ║ │     │  Footer includes
+///         │║                   ║ ┼──────  thrift-encoded
+///         │║                   ║ │        ParquetMetadata
+///         │╚═══════════════════╝ │
+///         └──────────────────────┘
+///
+///               Parquet File
+/// ```
 #[tokio::main]
 async fn main() -> Result<()> {
 
