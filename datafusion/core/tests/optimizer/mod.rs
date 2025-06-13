@@ -59,7 +59,7 @@ fn select_arrow_cast() {
     let sql = "SELECT arrow_cast(1234, 'Float64') as f64, arrow_cast('foo', 'LargeUtf8') as large";
     let plan = test_sql(sql).unwrap();
     assert_snapshot!(
-        format!("{plan}"),
+        plan,
         @r#"
     Projection: Float64(1234) AS f64, LargeUtf8("foo") AS large
       EmptyRelation
@@ -76,7 +76,7 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     // pushed down / pruned
     let plan = test_sql(sql).unwrap();
     assert_snapshot!(
-        format!("{plan}"),
+        plan,
         @r"
     Projection: test.col_int32
       Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)
@@ -96,7 +96,7 @@ fn timestamp_nano_ts_utc_predicates() {
     // pushed down / pruned
     let plan = test_sql(sql).unwrap();
     assert_snapshot!(
-        format!("{plan}"),
+        plan,
         @r#"
     Projection: test.col_int32
       Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some("+00:00"))
@@ -112,7 +112,7 @@ fn concat_literals() -> Result<()> {
         FROM test";
     let plan = test_sql(sql).unwrap();
     assert_snapshot!(
-        format!("{plan}"),
+        plan,
         @r#"
     Projection: concat(Utf8("true"), CAST(test.col_int32 AS Utf8), Utf8("falsehello"), test.col_utf8, Utf8("123.4")) AS col
       TableScan: test projection=[col_int32, col_utf8]
@@ -128,7 +128,7 @@ fn concat_ws_literals() -> Result<()> {
         FROM test";
     let plan = test_sql(sql).unwrap();
     assert_snapshot!(
-        format!("{plan}"),
+        plan,
         @r#"
     Projection: concat_ws(Utf8("-"), Utf8("true"), CAST(test.col_int32 AS Utf8), Utf8("false-hello"), test.col_utf8, Utf8("12--3.4")) AS col
       TableScan: test projection=[col_int32, col_utf8]
