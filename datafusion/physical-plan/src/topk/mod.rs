@@ -261,7 +261,7 @@ impl TopK {
     /// and the current heap values `[(1, 5), (1, 4), (2, 3)]`,
     /// the filter will be updated to:
     ///
-    /// ```
+    /// ```sql
     /// (a > 1 OR (a = 1 AND b < 5)) AND
     /// (a > 1 OR (a = 1 AND b < 4)) AND
     /// (a > 2 OR (a = 2 AND b < 3))
