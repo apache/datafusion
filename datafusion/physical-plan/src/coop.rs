@@ -36,8 +36,9 @@ use futures::{FutureExt, Stream};
 use pin_project_lite::pin_project;
 
 pin_project! {
-    /// An identity stream that passes batches through as is, but consumes cooperative
-    /// scheduling budget per returned [`RecordBatch`](RecordBatch).
+    /// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
+    /// It consumes cooperative scheduling budget for each returned [`RecordBatch`](RecordBatch),
+    /// allowing other tasks to execute when the budget is exhausted.
     pub struct CooperativeStream<T>
     where
         T: RecordBatchStream,
@@ -51,6 +52,9 @@ impl<T> CooperativeStream<T>
 where
     T: RecordBatchStream,
 {
+    /// Creates a new `CooperativeStream` that wraps the provided stream.
+    /// The resulting stream will cooperate with the Tokio runtime by yielding
+    /// after processing each record batch.
     pub fn new(inner: T) -> Self {
         Self { inner }
     }
@@ -96,19 +100,17 @@ where
     }
 }
 
-/// This execution plan is a decorator for other execution plans that wraps the `Stream` created
-/// by an execution plan using the [`make_cooperative`] function.
+/// An execution plan decorator that enables cooperative multitasking.
+/// It wraps the streams produced by its input execution plan using the [`make_cooperative`] function,
+/// which makes the stream participate in Tokio cooperative scheduling.
 #[derive(Debug)]
 pub struct CooperativeExec {
-    /// The child execution plan that this operator "wraps" to make it
-    /// cooperate with the runtime.
     input: Arc<dyn ExecutionPlan>,
     properties: PlanProperties,
 }
 
 impl CooperativeExec {
-    /// Creates a new `CooperativeExec` operator that wraps the given child
-    /// execution plan.
+    /// Creates a new `CooperativeExec` operator that wraps the given input execution plan.
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         let properties = input
             .properties()
@@ -118,8 +120,7 @@ impl CooperativeExec {
         Self { input, properties }
     }
 
-    /// Returns the child execution plan this operator "wraps" to make it
-    /// cooperate with the runtime.
+    /// Returns a reference to the wrapped child execution plan.
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
@@ -192,8 +193,9 @@ impl ExecutionPlan for CooperativeExec {
     }
 }
 
-/// Create a cooperative wrapper around the given [`RecordBatchStream`].
-///
+/// Creates a cooperative wrapper around the given [`RecordBatchStream`].
+/// This wrapper collaborates with the Tokio cooperative scheduler by consuming a unit of
+/// budget for each returned record batch.
 pub fn cooperative<T>(stream: T) -> CooperativeStream<T>
 where
     T: RecordBatchStream + Send + 'static,
@@ -201,10 +203,9 @@ where
     CooperativeStream::new(stream)
 }
 
-/// Wraps a `SendableRecordBatchStream` inside a `CooperativeStream`.
-/// Since this function takes a dynamic `RecordBatchStream` the implementation
-/// can only delegate to the given stream using a virtual function call.
-/// You can use the generic function [`cooperative`] to avoid this.
+/// Wraps a `SendableRecordBatchStream` inside a `CooperativeStream` to enable cooperative multitasking.
+/// This function handles dynamic `RecordBatchStream` objects through virtual function calls.
+/// For better performance with statically-typed streams, use the generic [`cooperative`] function instead.
 pub fn make_cooperative(stream: SendableRecordBatchStream) -> SendableRecordBatchStream {
     // TODO is there a more elegant way to overload cooperative
     Box::pin(cooperative(RecordBatchStreamAdapter::new(
