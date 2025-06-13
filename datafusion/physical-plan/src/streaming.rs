@@ -24,7 +24,7 @@ use std::sync::Arc;
 use super::{DisplayAs, DisplayFormatType, PlanProperties};
 use crate::coop::make_cooperative;
 use crate::display::{display_orderings, ProjectSchemaDisplay};
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
@@ -169,6 +169,7 @@ impl StreamingTableExec {
             EmissionType::Incremental,
             boundedness,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -337,10 +338,6 @@ impl ExecutionPlan for StreamingTableExec {
             cache: self.cache.clone(),
             metrics: self.metrics.clone(),
         }))
-    }
-
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(self)
     }
 }
 

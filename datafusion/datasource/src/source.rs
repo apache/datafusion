@@ -22,7 +22,9 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, EmissionType, SchedulingType,
+};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
@@ -262,10 +264,6 @@ impl ExecutionPlan for DataSourceExec {
             .map(|stream| make_cooperative(stream))
     }
 
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(self)
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.data_source.metrics().clone_inner())
     }
@@ -381,6 +379,7 @@ impl DataSourceExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 
     /// Downcast the `DataSourceExec`'s `data_source` to a specific file source
