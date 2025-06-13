@@ -112,6 +112,8 @@ impl DistinctIndexTable {
 
             // 直接用工具函数读取该文件的 distinct index
             let distinct_set = read_distinct_index(&path)?;
+
+            println!("Read distinct index for {}: {:?}", file_name, distinct_set);
             index.insert(file_name, distinct_set);
         }
 
@@ -156,36 +158,39 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     let file = File::create(path)?;
 
     let mut writer = IndexedParquetWriter::try_new(file, schema.clone(), props)?;
-    {
-        // 1) next_row_group
-        let mut rg_writer = writer.writer.next_row_group()?;
-
-        // 2) 拿到 SerializedColumnWriter
-        let mut ser_col_writer: SerializedColumnWriter<'_> =
-            rg_writer
-                .next_column()?
-                .ok_or_else(|| ParquetError::General("No column writer".into()))?;
-
-        // 3) 通过 typed 拿到具体的 ByteArrayColumnWriter 引用
-        let col_writer = ser_col_writer.typed::<ByteArrayType>();
-
-        // 4) 写入数据
-        let values_bytes: Vec<ByteArray> = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .iter()
-            .map(|opt| ByteArray::from(opt.unwrap()))
-            .collect();
-        col_writer.write_batch(&values_bytes, None, None)?;
-
-        // 5) 关闭这个 column writer（.close(self) 会消费 ser_col_writer）
-        ser_col_writer.close()?;
-
-        // 6) 关闭 row‑group
-        rg_writer.close()?;
-    }
+    // {
+    //     // 1) next_row_group
+    //     let mut rg_writer = writer.writer.next_row_group()?;
+    //
+    //     // 2) 拿到 SerializedColumnWriter
+    //     let mut ser_col_writer: SerializedColumnWriter<'_> =
+    //         rg_writer
+    //             .next_column()?
+    //             .ok_or_else(|| ParquetError::General("No column writer".into()))?;
+    //
+    //     // 3) 通过 typed 拿到具体的 ByteArrayColumnWriter 引用
+    //     let col_writer = ser_col_writer.typed::<ByteArrayType>();
+    //
+    //     // 4) 写入数据
+    //     let values_bytes: Vec<ByteArray> = batch
+    //         .column(0)
+    //         .as_any()
+    //         .downcast_ref::<StringArray>()
+    //         .unwrap()
+    //         .iter()
+    //         .map(|opt| ByteArray::from(opt.unwrap()))
+    //         .collect();
+    //
+    //     println!("Writing values: {:?}", values_bytes);
+    //
+    //     col_writer.write_batch(&values_bytes, None, None)?;
+    //
+    //     // 5) 关闭这个 column writer（.close(self) 会消费 ser_col_writer）
+    //     ser_col_writer.close()?;
+    //
+    //     // 6) 关闭 row‑group
+    //     rg_writer.close()?;
+    // }
 
     let offset = writer.writer
         .inner()
@@ -195,21 +200,36 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
 
     writer.writer.inner().write_all(&index_bytes)?;
 
-    let final_props = WriterProperties::builder()
-        .set_key_value_metadata(Some(vec![
-            KeyValue::new("distinct_index_offset".into(), offset.to_string()),
-            KeyValue::new("distinct_index_length".into(), index_bytes.len().to_string()),
-        ]))
-        .build();
 
-    let mut footer_writer =
-        SerializedFileWriter::new(
-            writer.writer.inner(),
-            ArrowSchemaConverter::new().convert(schema.as_ref())?.root_schema_ptr(),
-            Arc::new(final_props),
-        )?;
+    writer.writer.append_key_value_metadata(
+        KeyValue::new(
+            "distinct_index_offset".into(),
+            offset.to_string(),
+        ),
+    );
 
-    footer_writer.close()?;
+    writer.writer.append_key_value_metadata(
+        KeyValue::new(
+            "distinct_index_length".into(),
+            index_bytes.len().to_string(),
+        ),
+    );
+
+    // let final_props = WriterProperties::builder()
+    //     .set_key_value_metadata(Some(vec![
+    //         KeyValue::new("distinct_index_offset".into(), offset.to_string()),
+    //         KeyValue::new("distinct_index_length".into(), index_bytes.len().to_string()),
+    //     ]))
+    //     .build();
+    //
+    // let mut footer_writer =
+    //     SerializedFileWriter::new(
+    //         writer.writer.inner(),
+    //         ArrowSchemaConverter::new().convert(schema.as_ref())?.root_schema_ptr(),
+    //         Arc::new(final_props),
+    //     )?;
+
+    writer.writer.close()?;
 
     println!("Finished writing file");
 
