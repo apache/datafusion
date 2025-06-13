@@ -256,7 +256,16 @@ impl TopK {
         Ok(())
     }
 
-    /// Update the filter representation of our TopK heap
+    /// Update the filter representation of our TopK heap.
+    /// For example, given the sort expression `ORDER BY a DESC, b ASC LIMIT 3`,
+    /// and the current heap values `[(1, 5), (1, 4), (2, 3)]`,
+    /// the filter will be updated to:
+    ///
+    /// ```
+    /// (a > 1 OR (a = 1 AND b < 5)) AND
+    /// (a > 1 OR (a = 1 AND b < 4)) AND
+    /// (a > 2 OR (a = 2 AND b < 3))
+    /// ```
     fn update_filter(&mut self) -> Result<()> {
         let Some(filter) = &self.filter else {
             return Ok(());
