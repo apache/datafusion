@@ -719,7 +719,7 @@ struct NestedLoopJoinStream<T> {
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     // TODO: support null aware equal
-    // null_equals_null: bool
+    // null_equality: NullEquality,
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Cache for join indices calculations

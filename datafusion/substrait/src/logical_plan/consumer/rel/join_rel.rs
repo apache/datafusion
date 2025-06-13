@@ -17,7 +17,7 @@
 
 use crate::logical_plan::consumer::utils::requalify_sides_if_needed;
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{not_impl_err, plan_err, Column, JoinType};
+use datafusion::common::{not_impl_err, plan_err, Column, JoinType, NullEquality};
 use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
@@ -59,19 +59,30 @@ pub async fn from_join_rel(
                 split_eq_and_noneq_join_predicate_with_nulls_equality(&on);
             let (left_cols, right_cols): (Vec<_>, Vec<_>) =
                 itertools::multiunzip(join_ons);
+            let null_equality = if nulls_equal_nulls {
+                NullEquality::NullEqualsNull
+            } else {
+                NullEquality::NullEqualsNothing
+            };
             left.join_detailed(
                 right.build()?,
                 join_type,
                 (left_cols, right_cols),
                 join_filter,
-                nulls_equal_nulls,
+                null_equality,
             )?
             .build()
         }
         None => {
             let on: Vec<String> = vec![];
-            left.join_detailed(right.build()?, join_type, (on.clone(), on), None, false)?
-                .build()
+            left.join_detailed(
+                right.build()?,
+                join_type,
+                (on.clone(), on),
+                None,
+                NullEquality::NullEqualsNothing,
+            )?
+            .build()
         }
     }
 }

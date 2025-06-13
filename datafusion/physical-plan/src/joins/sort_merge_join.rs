@@ -63,7 +63,7 @@ use arrow::error::ArrowError;
 use arrow::ipc::reader::StreamReader;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
-    JoinType, Result,
+    JoinType, NullEquality, Result,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -145,8 +145,8 @@ pub struct SortMergeJoinExec {
     right_sort_exprs: LexOrdering,
     /// Sort options of join columns used in sorting left and right execution plans
     pub sort_options: Vec<SortOptions>,
-    /// If null_equals_null is true, null == null else null != null
-    pub null_equals_null: bool,
+    /// Defines the null equality for the join.
+    pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
 }
@@ -163,7 +163,7 @@ impl SortMergeJoinExec {
         filter: Option<JoinFilter>,
         join_type: JoinType,
         sort_options: Vec<SortOptions>,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -218,7 +218,7 @@ impl SortMergeJoinExec {
             left_sort_exprs,
             right_sort_exprs,
             sort_options,
-            null_equals_null,
+            null_equality,
             cache,
         })
     }
@@ -286,9 +286,9 @@ impl SortMergeJoinExec {
         &self.sort_options
     }
 
-    /// Null equals null
-    pub fn null_equals_null(&self) -> bool {
-        self.null_equals_null
+    /// Null equality
+    pub fn null_equality(&self) -> NullEquality {
+        self.null_equality
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -334,7 +334,7 @@ impl SortMergeJoinExec {
             self.filter().as_ref().map(JoinFilter::swap),
             self.join_type().swap(),
             self.sort_options.clone(),
-            self.null_equals_null,
+            self.null_equality,
         )?;
 
         // TODO: OR this condition with having a built-in projection (like
@@ -445,7 +445,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 self.filter.clone(),
                 self.join_type,
                 self.sort_options.clone(),
-                self.null_equals_null,
+                self.null_equality,
             )?)),
             _ => internal_err!("SortMergeJoin wrong number of children"),
         }
@@ -497,7 +497,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         Ok(Box::pin(SortMergeJoinStream::try_new(
             Arc::clone(&self.schema),
             self.sort_options.clone(),
-            self.null_equals_null,
+            self.null_equality,
             streamed,
             buffered,
             on_streamed,
@@ -586,7 +586,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.filter.clone(),
             self.join_type,
             self.sort_options.clone(),
-            self.null_equals_null,
+            self.null_equality,
         )?)))
     }
 }
@@ -839,8 +839,8 @@ struct SortMergeJoinStream {
     // ========================================================================
     /// Output schema
     pub schema: SchemaRef,
-    /// null == null?
-    pub null_equals_null: bool,
+    /// Defines the null equality for the join.
+    pub null_equality: NullEquality,
     /// Sort options of join columns used to sort streamed and buffered data stream
     pub sort_options: Vec<SortOptions>,
     /// optional join filter
@@ -1321,7 +1321,7 @@ impl SortMergeJoinStream {
     pub fn try_new(
         schema: SchemaRef,
         sort_options: Vec<SortOptions>,
-        null_equals_null: bool,
+        null_equality: NullEquality,
         streamed: SendableRecordBatchStream,
         buffered: SendableRecordBatchStream,
         on_streamed: Vec<Arc<dyn PhysicalExpr>>,
@@ -1343,7 +1343,7 @@ impl SortMergeJoinStream {
         Ok(Self {
             state: SortMergeJoinState::Init,
             sort_options,
-            null_equals_null,
+            null_equality,
             schema: Arc::clone(&schema),
             streamed_schema: Arc::clone(&streamed_schema),
             buffered_schema,
@@ -1588,7 +1588,7 @@ impl SortMergeJoinStream {
             &self.buffered_data.head_batch().join_arrays,
             self.buffered_data.head_batch().range.start,
             &self.sort_options,
-            self.null_equals_null,
+            self.null_equality,
         )
     }
 
@@ -2429,7 +2429,7 @@ fn compare_join_arrays(
     right_arrays: &[ArrayRef],
     right: usize,
     sort_options: &[SortOptions],
-    null_equals_null: bool,
+    null_equality: NullEquality,
 ) -> Result<Ordering> {
     let mut res = Ordering::Equal;
     for ((left_array, right_array), sort_options) in
@@ -2463,10 +2463,9 @@ fn compare_join_arrays(
                         };
                     }
                     _ => {
-                        res = if null_equals_null {
-                            Ordering::Equal
-                        } else {
-                            Ordering::Less
+                        res = match null_equality {
+                            NullEquality::NullEqualsNothing => Ordering::Less,
+                            NullEquality::NullEqualsNull => Ordering::Equal,
                         };
                     }
                 }
@@ -2590,7 +2589,9 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use datafusion_common::JoinType::*;
-    use datafusion_common::{assert_batches_eq, assert_contains, JoinType, Result};
+    use datafusion_common::{
+        assert_batches_eq, assert_contains, JoinType, NullEquality, Result,
+    };
     use datafusion_common::{
         test_util::{batches_to_sort_string, batches_to_string},
         JoinSide,
@@ -2715,7 +2716,15 @@ mod tests {
         join_type: JoinType,
     ) -> Result<SortMergeJoinExec> {
         let sort_options = vec![SortOptions::default(); on.len()];
-        SortMergeJoinExec::try_new(left, right, on, None, join_type, sort_options, false)
+        SortMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            join_type,
+            sort_options,
+            NullEquality::NullEqualsNothing,
+        )
     }
 
     fn join_with_options(
@@ -2724,7 +2733,7 @@ mod tests {
         on: JoinOn,
         join_type: JoinType,
         sort_options: Vec<SortOptions>,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<SortMergeJoinExec> {
         SortMergeJoinExec::try_new(
             left,
@@ -2733,7 +2742,7 @@ mod tests {
             None,
             join_type,
             sort_options,
-            null_equals_null,
+            null_equality,
         )
     }
 
@@ -2744,7 +2753,7 @@ mod tests {
         filter: JoinFilter,
         join_type: JoinType,
         sort_options: Vec<SortOptions>,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<SortMergeJoinExec> {
         SortMergeJoinExec::try_new(
             left,
@@ -2753,7 +2762,7 @@ mod tests {
             Some(filter),
             join_type,
             sort_options,
-            null_equals_null,
+            null_equality,
         )
     }
 
@@ -2764,7 +2773,15 @@ mod tests {
         join_type: JoinType,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let sort_options = vec![SortOptions::default(); on.len()];
-        join_collect_with_options(left, right, on, join_type, sort_options, false).await
+        join_collect_with_options(
+            left,
+            right,
+            on,
+            join_type,
+            sort_options,
+            NullEquality::NullEqualsNothing,
+        )
+        .await
     }
 
     async fn join_collect_with_filter(
@@ -2777,8 +2794,15 @@ mod tests {
         let sort_options = vec![SortOptions::default(); on.len()];
 
         let task_ctx = Arc::new(TaskContext::default());
-        let join =
-            join_with_filter(left, right, on, filter, join_type, sort_options, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            sort_options,
+            NullEquality::NullEqualsNothing,
+        )?;
         let columns = columns(&join.schema());
 
         let stream = join.execute(0, task_ctx)?;
@@ -2792,17 +2816,11 @@ mod tests {
         on: JoinOn,
         join_type: JoinType,
         sort_options: Vec<SortOptions>,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let task_ctx = Arc::new(TaskContext::default());
-        let join = join_with_options(
-            left,
-            right,
-            on,
-            join_type,
-            sort_options,
-            null_equals_null,
-        )?;
+        let join =
+            join_with_options(left, right, on, join_type, sort_options, null_equality)?;
         let columns = columns(&join.schema());
 
         let stream = join.execute(0, task_ctx)?;
@@ -3008,7 +3026,7 @@ mod tests {
                 };
                 2
             ],
-            true,
+            NullEquality::NullEqualsNull,
         )
         .await?;
         // The output order is important as SMJ preserves sortedness
@@ -3431,7 +3449,7 @@ mod tests {
                 };
                 2
             ],
-            true,
+            NullEquality::NullEqualsNull,
         )
         .await?;
 
@@ -3708,7 +3726,7 @@ mod tests {
                 };
                 2
             ],
-            true,
+            NullEquality::NullEqualsNull,
         )
         .await?;
 
@@ -4152,7 +4170,7 @@ mod tests {
                 on.clone(),
                 join_type,
                 sort_options.clone(),
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let stream = join.execute(0, task_ctx)?;
@@ -4233,7 +4251,7 @@ mod tests {
                 on.clone(),
                 join_type,
                 sort_options.clone(),
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let stream = join.execute(0, task_ctx)?;
@@ -4296,7 +4314,7 @@ mod tests {
                     on.clone(),
                     *join_type,
                     sort_options.clone(),
-                    false,
+                    NullEquality::NullEqualsNothing,
                 )?;
 
                 let stream = join.execute(0, task_ctx)?;
@@ -4318,7 +4336,7 @@ mod tests {
                     on.clone(),
                     *join_type,
                     sort_options.clone(),
-                    false,
+                    NullEquality::NullEqualsNothing,
                 )?;
                 let stream = join.execute(0, task_ctx_no_spill)?;
                 let no_spilled_join_result = common::collect(stream).await.unwrap();
@@ -4400,7 +4418,7 @@ mod tests {
                     on.clone(),
                     *join_type,
                     sort_options.clone(),
-                    false,
+                    NullEquality::NullEqualsNothing,
                 )?;
 
                 let stream = join.execute(0, task_ctx)?;
@@ -4421,7 +4439,7 @@ mod tests {
                     on.clone(),
                     *join_type,
                     sort_options.clone(),
-                    false,
+                    NullEquality::NullEqualsNothing,
                 )?;
                 let stream = join.execute(0, task_ctx_no_spill)?;
                 let no_spilled_join_result = common::collect(stream).await.unwrap();
