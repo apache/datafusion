@@ -3070,6 +3070,42 @@ select array_concat([]);
 ----
 []
 
+# test with NULL array
+query ?
+select array_concat(NULL::integer[]);
+----
+NULL
+
+# test with multiple NULL arrays
+query ?
+select array_concat(NULL::integer[], NULL::integer[]);
+----
+NULL
+
+# test with NULL LargeList
+query ?
+select array_concat(arrow_cast(NULL::string[], 'LargeList(Utf8)'));
+----
+NULL
+
+# test with NULL FixedSizeList
+query ?
+select array_concat(arrow_cast(NULL::string[], 'FixedSizeList(2, Utf8)'));
+----
+NULL
+
+# test with mix of NULL and empty arrays
+query ?
+select array_concat(NULL::integer[], []);
+----
+[]
+
+# test with mix of NULL and non-empty arrays
+query ?
+select array_concat(NULL::integer[], [1, 2, 3]);
+----
+[1, 2, 3]
+
 # Concatenating strings arrays
 query ?
 select array_concat(
