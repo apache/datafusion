@@ -383,11 +383,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {
         match input {
+            // Fast path if there are no unnest in group by
             LogicalPlan::Aggregate(ref agg)
-                if {
-                    // Fast path if there are no unnest in group by
-                    !&agg.group_expr.iter().any(has_unnest_expr_recursively)
-                } =>
+                if !&agg.group_expr.iter().any(has_unnest_expr_recursively) =>
             {
                 Ok(input)
             }
