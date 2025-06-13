@@ -197,14 +197,15 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
         }
 
         let mut normalize_args = Vec::new();
-        for (expr_indice, expr) in exprs.iter().enumerate() {
+        for (expr_index, expr) in exprs.iter().enumerate() {
             match expr {
                 Expr::Literal(ScalarValue::Null, _) => {}
                 Expr::Literal(ScalarValue::Int64(Some(n)), _) => normalize_args.push(*n),
                 other => {
                     return plan_err!(
-                        "Argument #{} must be an integer literal or null value, got {:?}",
-                        expr_indice + 1,
+                        "Argument #{} must be an integer literal or null value, got {} ({:?})",
+                        expr_index + 1,
+                        other,
                         other
                     )
                 }
