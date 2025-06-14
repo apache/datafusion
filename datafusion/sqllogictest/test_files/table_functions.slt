@@ -220,6 +220,12 @@ SELECT * FROM range(3, 6)
 4
 5
 
+query I rowsort
+SELECT * FROM range(1, 1+2)
+----
+1
+2
+
 # #generated_data > batch_size
 query I
 SELECT count(v1) FROM range(-66666,66666) t1(v1)
