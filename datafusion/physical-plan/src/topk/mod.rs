@@ -18,8 +18,8 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    array::Array,
-    compute::interleave_record_batch,
+    array::{Array, AsArray},
+    compute::{interleave_record_batch, FilterBuilder},
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
@@ -203,7 +203,7 @@ impl TopK {
         let baseline = self.metrics.baseline.clone();
         let _timer = baseline.elapsed_compute().timer();
 
-        let sort_keys: Vec<ArrayRef> = self
+        let mut sort_keys: Vec<ArrayRef> = self
             .expr
             .iter()
             .map(|expr| {
@@ -212,48 +212,92 @@ impl TopK {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let mut selected_rows = None;
+
+        match self.filter.as_ref() {
+            // If a filter is provided, update it with the new rows
+            Some(filter) => {
+                let filter = filter.current()?;
+                let filtered = filter.evaluate(&batch)?;
+                let num_rows = batch.num_rows();
+                let array = filtered.into_array(num_rows)?;
+                let filter = array.as_boolean().clone();
+                if filter.true_count() == 0 {
+                    // nothing to filter, so no need to update
+                    return Ok(());
+                }
+                let filter_predicate = FilterBuilder::new(&filter);
+                let filter_predicate = if sort_keys.len() > 1 {
+                    // Optimize filter when it has multiple sort keys
+                    filter_predicate.optimize().build()
+                } else {
+                    filter_predicate.build()
+                };
+                selected_rows = Some(filter);
+                sort_keys = sort_keys
+                    .iter()
+                    .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
+                    .collect::<Result<Vec<_>>>()?;
+            }
+            None => {}
+        }
         // reuse existing `Rows` to avoid reallocations
         let rows = &mut self.scratch_rows;
         rows.clear();
         self.row_converter.append(rows, &sort_keys)?;
 
-        // TODO make this algorithmically better?:
-        // Idea: filter out rows >= self.heap.max() early (before passing to `RowConverter`)
-        //       this avoids some work and also might be better vectorizable.
         let mut batch_entry = self.heap.register_batch(batch.clone());
-        let mut updated = false;
-        for (index, row) in rows.iter().enumerate() {
+
+        let replacements = match selected_rows {
+            Some(filter) => {
+                self.find_new_topk_items(filter.values().set_indices(), &mut batch_entry)
+            }
+            None => self.find_new_topk_items(0..sort_keys[0].len(), &mut batch_entry),
+        };
+
+        if replacements > 0 {
+            self.metrics.row_replacements.add(replacements);
+
+            self.heap.insert_batch_entry(batch_entry);
+
+            // conserve memory
+            self.heap.maybe_compact()?;
+
+            // update memory reservation
+            self.reservation.try_resize(self.size())?;
+
+            // flag the topK as finished if we know that all
+            // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
+            // which means the top K won't change and the computation can be finished early.
+            self.attempt_early_completion(&batch)?;
+
+            // update the filter representation of our TopK heap
+            self.update_filter()?;
+        }
+
+        Ok(())
+    }
+
+    fn find_new_topk_items(
+        &mut self,
+        items: impl Iterator<Item = usize>,
+        batch_entry: &mut RecordBatchEntry,
+    ) -> usize {
+        let mut replacements = 0;
+        let rows = &mut self.scratch_rows;
+        for (index, row) in items.zip(rows.iter()) {
             match self.heap.max() {
                 // heap has k items, and the new row is greater than the
                 // current max in the heap ==> it is not a new topk
                 Some(max_row) if row.as_ref() >= max_row.row() => {}
                 // don't yet have k items or new item is lower than the currently k low values
                 None | Some(_) => {
-                    self.heap.add(&mut batch_entry, row, index);
-                    self.metrics.row_replacements.add(1);
-                    updated = true;
+                    self.heap.add(batch_entry, row, index);
+                    replacements += 1;
                 }
             }
         }
-        self.heap.insert_batch_entry(batch_entry);
-
-        // conserve memory
-        self.heap.maybe_compact()?;
-
-        // update memory reservation
-        self.reservation.try_resize(self.size())?;
-
-        // flag the topK as finished if we know that all
-        // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
-        // which means the top K won't change and the computation can be finished early.
-        self.attempt_early_completion(&batch)?;
-
-        if updated {
-            // update the filter representation of our TopK heap
-            self.update_filter()?;
-        }
-
-        Ok(())
+        replacements
     }
 
     /// Update the filter representation of our TopK heap.
