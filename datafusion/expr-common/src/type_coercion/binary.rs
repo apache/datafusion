@@ -462,7 +462,7 @@ pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
 
     // If all the data_types are null, return string
     if data_types.iter().all(|t| t == &DataType::Null) {
-        return Some(DataType::Utf8);
+        return Some(DataType::Utf8View);
     }
 
     // Ignore Nulls, if any data_type category is not the same, return None
@@ -1202,7 +1202,8 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Utf8 | LargeUtf8, other_type) | (other_type, Utf8 | LargeUtf8)
+        (Utf8 | LargeUtf8 | Utf8View, other_type)
+        | (other_type, Utf8 | LargeUtf8 | Utf8View)
             if other_type.is_numeric() =>
         {
             Some(other_type.clone())

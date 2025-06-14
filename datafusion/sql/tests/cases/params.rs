@@ -746,31 +746,31 @@ fn test_prepare_statement_to_plan_multi_params() {
     assert_snapshot!(
         plan,
         @r#"
-    Prepare: "my_plan" [Int32, Utf8, Float64, Int32, Float64, Utf8]
+    Prepare: "my_plan" [Int32, Utf8View, Float64, Int32, Float64, Utf8View]
       Projection: person.id, person.age, $6
         Filter: person.age IN ([$1, $4]) AND person.salary > $3 AND person.salary < $5 OR person.first_name < $2
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"[Int32, Utf8, Float64, Int32, Float64, Utf8]"#);
+    assert_snapshot!(dt, @r#"[Int32, Utf8View, Float64, Int32, Float64, Utf8View]"#);
 
     ///////////////////
     // replace params with values
     let param_values = vec![
         ScalarValue::Int32(Some(10)),
-        ScalarValue::from("abc"),
+        ScalarValue::Utf8View(Some("abc".into())),
         ScalarValue::Float64(Some(100.0)),
         ScalarValue::Int32(Some(20)),
         ScalarValue::Float64(Some(200.0)),
-        ScalarValue::from("xyz"),
+        ScalarValue::Utf8View(Some("xyz".into())),
     ];
 
     let plan_with_params = plan.with_param_values(param_values).unwrap();
     assert_snapshot!(
         plan_with_params,
         @r#"
-    Projection: person.id, person.age, Utf8("xyz") AS $6
-      Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8("abc")
+    Projection: person.id, person.age, Utf8View("xyz") AS $6
+      Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8View("abc")
         TableScan: person
     "#
     );

@@ -259,10 +259,10 @@ config_namespace! {
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
 
-       /// If true, `VARCHAR` is mapped to `Utf8View` during SQL planning.
-       /// If false, `VARCHAR` is mapped to `Utf8`  during SQL planning.
-       /// Default is false.
-        pub map_varchar_to_utf8view: bool, default = true
+        /// If true, string types (VARCHAR, CHAR, Text, and String) are mapped to `Utf8View` during SQL planning.
+        /// If false, they are mapped to `Utf8`.
+        /// Default is true.
+        pub map_string_types_to_utf8view: bool, default = true
 
         /// When set to true, the source locations relative to the original SQL
         /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
