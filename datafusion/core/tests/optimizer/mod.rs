@@ -18,6 +18,7 @@
 //! Tests for the DataFusion SQL query planner that require functions from the
 //! datafusion-functions crate.
 
+use insta::assert_snapshot;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,9 +57,14 @@ fn init() {
 #[test]
 fn select_arrow_cast() {
     let sql = "SELECT arrow_cast(1234, 'Float64') as f64, arrow_cast('foo', 'LargeUtf8') as large";
-    let expected = "Projection: Float64(1234) AS f64, LargeUtf8(\"foo\") AS large\
-        \n  EmptyRelation";
-    quick_test(sql, expected);
+    let plan = test_sql(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: Float64(1234) AS f64, LargeUtf8("foo") AS large
+      EmptyRelation
+    "#
+    );
 }
 #[test]
 fn timestamp_nano_ts_none_predicates() -> Result<()> {
@@ -68,11 +74,15 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\
-         \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
-         \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
-    quick_test(sql, expected);
+    let plan = test_sql(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: test.col_int32
+      Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)
+        TableScan: test projection=[col_int32, col_ts_nano_none]
+    "
+    );
     Ok(())
 }
 
@@ -84,10 +94,15 @@ fn timestamp_nano_ts_utc_predicates() {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
-         \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
-    quick_test(sql, expected);
+    let plan = test_sql(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: test.col_int32
+      Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some("+00:00"))
+        TableScan: test projection=[col_int32, col_ts_nano_utc]
+    "#
+    );
 }
 
 #[test]
@@ -95,10 +110,14 @@ fn concat_literals() -> Result<()> {
     let sql = "SELECT concat(true, col_int32, false, null, 'hello', col_utf8, 12, 3.4) \
         AS col
         FROM test";
-    let expected =
-        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    quick_test(sql, expected);
+    let plan = test_sql(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: concat(Utf8("true"), CAST(test.col_int32 AS Utf8), Utf8("falsehello"), test.col_utf8, Utf8("123.4")) AS col
+      TableScan: test projection=[col_int32, col_utf8]
+    "#
+    );
     Ok(())
 }
 
@@ -107,16 +126,15 @@ fn concat_ws_literals() -> Result<()> {
     let sql = "SELECT concat_ws('-', true, col_int32, false, null, 'hello', col_utf8, 12, '', 3.4) \
         AS col
         FROM test";
-    let expected =
-        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    quick_test(sql, expected);
-    Ok(())
-}
-
-fn quick_test(sql: &str, expected_plan: &str) {
     let plan = test_sql(sql).unwrap();
-    assert_eq!(expected_plan, format!("{plan}"));
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: concat_ws(Utf8("-"), Utf8("true"), CAST(test.col_int32 AS Utf8), Utf8("false-hello"), test.col_utf8, Utf8("12--3.4")) AS col
+      TableScan: test projection=[col_int32, col_utf8]
+    "#
+    );
+    Ok(())
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {

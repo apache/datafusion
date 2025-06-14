@@ -19,6 +19,7 @@ use super::*;
 use datafusion::common::test_util::batches_to_string;
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
+use insta::assert_snapshot;
 
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
