@@ -40,6 +40,23 @@ use std::io::Write;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+/// A macro to assert that some particular line contains two substrings
+///
+/// Usage: `assert_metrics!(actual, operator_name, metrics)`
+///
+macro_rules! assert_metrics {
+    ($ACTUAL: expr, $OPERATOR_NAME: expr, $METRICS: expr) => {
+        let found = $ACTUAL
+            .lines()
+            .any(|line| line.contains($OPERATOR_NAME) && line.contains($METRICS));
+        assert!(
+            found,
+            "Can not find a line with both '{}' and '{}' in\n\n{}",
+            $OPERATOR_NAME, $METRICS, $ACTUAL
+        );
+    };
+}
+
 pub mod aggregates;
 pub mod create_drop;
 pub mod explain_analyze;
