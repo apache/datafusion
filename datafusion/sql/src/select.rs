@@ -97,7 +97,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } = &from_first.relation
             {
                 // Rewrite SAMPLE / TABLESAMPLE clause to additional filters
-                // TODO: handle samples from different queries
+                // TODO: handle samples from joined tables
                 base_plan = self.sample_to_where_random_clause(
                     base_plan,
                     sample,
@@ -612,9 +612,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if let Some(table_sample_quantity) = &table_sample.quantity {
             match table_sample_quantity.unit {
                 Some(TableSampleUnit::Rows) => {
+                    // Fixed size row sampling is not supported
                     not_impl_err!("Table sample with rows unit is not supported")
                 }
                 Some(TableSampleUnit::Percent) | None => {
+                    // There are two flavors of sampling (`TableSampleMethod`):
+                    // - Block-level sampling (SYSTEM or BLOCK keywords)
+                    // - Row-level sampling (BERNOULLI or ROW keywords)
+                    // `random()` filter pushdown allows only block-level sampling,
+                    // not row-level. However, we do not forbid using BERNOULLI/ROW;
+
                     // Extract quantity from SQLExpr
                     let quantity_value: Expr = self
                         .sample_quanitity_value(table_sample_quantity, planner_context)?;
