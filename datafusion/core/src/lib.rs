@@ -510,17 +510,20 @@
 //! initial development and processing local files, but it can lead to problems
 //! under load and/or when reading from network sources such as AWS S3.
 //!
+//! ### Optimizing Latency: Throttled CPU / IO under Highly Concurrent Load
+//!
 //! If your system does not fully utilize either the CPU or network bandwidth
 //! during execution, or you see significantly higher tail (e.g. p99) latencies
 //! responding to network requests, **it is likely you need to use a different
-//! [`Runtime`] for CPU intensive DataFusion plans**. This effect can be especially
-//! pronounced when running several queries concurrently.
+//! [`Runtime`] for DataFusion plans**. The [thread_pools example]
+//! has  an example of how to do so.
 //!
-//! As shown in the following figure, using the same [`Runtime`] for both CPU
-//! intensive processing and network requests can introduce significant
-//! delays in responding to those network requests. Delays in processing network
-//! requests can and does lead network flow control to throttle the available
-//! bandwidth in response.
+//! As shown below, using the same [`Runtime`] for both CPU intensive processing
+//! and network requests can introduce significant delays in responding to
+//! those network requests. Delays in processing network requests can and does
+//! lead network flow control to throttle the available bandwidth in response.
+//! This effect can be especially pronounced when running multiple queries
+//! concurrently.
 //!
 //! ```text
 //!                                                                          Legend
@@ -602,6 +605,7 @@
 //!
 //! [Tokio]:  https://tokio.rs
 //! [`Runtime`]: tokio::runtime::Runtime
+//! [thread_pools example]: https://github.com/apache/datafusion/tree/main/datafusion-examples/examples/thread_pools.rs
 //! [`task`]: tokio::task
 //! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
 //! [`RepartitionExec`]: physical_plan::repartition::RepartitionExec
