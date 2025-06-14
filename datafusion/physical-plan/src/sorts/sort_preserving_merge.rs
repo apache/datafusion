@@ -378,10 +378,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::fmt::Formatter;
     use std::pin::Pin;
     use std::sync::Mutex;
-    use std::task::{Context, Poll};
+    use std::task::{ready, Context, Poll, Waker};
     use std::time::Duration;
 
     use super::*;
@@ -1285,13 +1286,50 @@ mod tests {
             "#);
     }
 
+    #[derive(Debug)]
+    struct CongestionState {
+        wakers: Vec<Waker>,
+        unpolled_partitions: HashSet<usize>,
+    }
+
+    #[derive(Debug)]
+    struct Congestion {
+        congestion_state: Mutex<CongestionState>,
+    }
+
+    impl Congestion {
+        fn new(partition_count: usize) -> Self {
+            Congestion {
+                congestion_state: Mutex::new(CongestionState {
+                    wakers: vec![],
+                    unpolled_partitions: (0usize..partition_count).collect(),
+                }),
+            }
+        }
+
+        fn check_congested(&self, partition: usize, cx: &mut Context<'_>) -> Poll<()> {
+            let mut state = self.congestion_state.lock().unwrap();
+
+            state.unpolled_partitions.remove(&partition);
+
+            if state.unpolled_partitions.is_empty() {
+                state.wakers.iter().for_each(|w| w.wake_by_ref());
+                state.wakers.clear();
+                Poll::Ready(())
+            } else {
+                state.wakers.push(cx.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
+
     /// It returns pending for the 2nd partition until the 3rd partition is polled. The 1st
     /// partition is exhausted from the start, and if it is polled more than one, it panics.
     #[derive(Debug, Clone)]
     struct CongestedExec {
         schema: Schema,
         cache: PlanProperties,
-        congestion_cleared: Arc<Mutex<bool>>,
+        congestion: Arc<Congestion>,
     }
 
     impl CongestedExec {
@@ -1346,7 +1384,7 @@ mod tests {
             Ok(Box::pin(CongestedStream {
                 schema: Arc::new(self.schema.clone()),
                 none_polled_once: false,
-                congestion_cleared: Arc::clone(&self.congestion_cleared),
+                congestion: Arc::clone(&self.congestion),
                 partition,
             }))
         }
@@ -1373,7 +1411,7 @@ mod tests {
     pub struct CongestedStream {
         schema: SchemaRef,
         none_polled_once: bool,
-        congestion_cleared: Arc<Mutex<bool>>,
+        congestion: Arc<Congestion>,
         partition: usize,
     }
 
@@ -1381,31 +1419,22 @@ mod tests {
         type Item = Result<RecordBatch>;
         fn poll_next(
             mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
+            cx: &mut Context<'_>,
         ) -> Poll<Option<Self::Item>> {
             match self.partition {
                 0 => {
+                    let _ = self.congestion.check_congested(self.partition, cx);
                     if self.none_polled_once {
-                        panic!("Exhausted stream is polled more than one")
+                        panic!("Exhausted stream is polled more than once")
                     } else {
                         self.none_polled_once = true;
                         Poll::Ready(None)
                     }
                 }
-                1 => {
-                    let cleared = self.congestion_cleared.lock().unwrap();
-                    if *cleared {
-                        Poll::Ready(None)
-                    } else {
-                        Poll::Pending
-                    }
-                }
-                2 => {
-                    let mut cleared = self.congestion_cleared.lock().unwrap();
-                    *cleared = true;
+                _ => {
+                    ready!(self.congestion.check_congested(self.partition, cx));
                     Poll::Ready(None)
                 }
-                _ => unreachable!(),
             }
         }
     }
@@ -1420,10 +1449,16 @@ mod tests {
     async fn test_spm_congestion() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt64, false)]);
+        let properties = CongestedExec::compute_properties(Arc::new(schema.clone()));
+        let &partition_count = match properties.output_partitioning() {
+            Partitioning::RoundRobinBatch(partitions) => partitions,
+            Partitioning::Hash(_, partitions) => partitions,
+            Partitioning::UnknownPartitioning(partitions) => partitions,
+        };
         let source = CongestedExec {
             schema: schema.clone(),
-            cache: CongestedExec::compute_properties(Arc::new(schema.clone())),
-            congestion_cleared: Arc::new(Mutex::new(false)),
+            cache: properties,
+            congestion: Arc::new(Congestion::new(partition_count)),
         };
         let spm = SortPreservingMergeExec::new(
             [PhysicalSortExpr::new_default(Arc::new(Column::new(
