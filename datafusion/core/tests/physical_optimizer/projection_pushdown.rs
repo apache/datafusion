@@ -1079,6 +1079,8 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
         )),
         &JoinType::Inner,
         None,
+        false,
+        None,
     )?) as _;
 
     let projection = Arc::new(ProjectionExec::try_new(
