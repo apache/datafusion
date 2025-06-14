@@ -1,0 +1,42 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## Original Query: SELECT try_to_number('$78.12', '$99.99');
+## PySpark 3.5.5 Result: {'typeof($78.12)': 'string', 'typeof($99.99)': 'string'}
+#query
+#SELECT try_to_number('$78.12'::string, '$99.99'::string);
+
+## Original Query: SELECT try_to_number('12,454', '99,999');
+## PySpark 3.5.5 Result: {'typeof(12,454)': 'string', 'typeof(99,999)': 'string'}
+#query
+#SELECT try_to_number('12,454'::string, '99,999'::string);
+
+## Original Query: SELECT try_to_number('12,454.8-', '99,999.9S');
+## PySpark 3.5.5 Result: {'typeof(12,454.8-)': 'string', 'typeof(99,999.9s)': 'string'}
+#query
+#SELECT try_to_number('12,454.8-'::string, '99,999.9s'::string);
+
+## Original Query: SELECT try_to_number('454', '999');
+## PySpark 3.5.5 Result: {'typeof(454)': 'string', 'typeof(999)': 'string'}
+#query
+#SELECT try_to_number('454'::string, '999'::string);
+
+## Original Query: SELECT try_to_number('454.00', '000.00');
+## PySpark 3.5.5 Result: {'typeof(454.00)': 'string', 'typeof(000.00)': 'string'}
+#query
+#SELECT try_to_number('454.00'::string, '000.00'::string);
+
