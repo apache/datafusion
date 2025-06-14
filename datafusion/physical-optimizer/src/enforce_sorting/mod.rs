@@ -57,6 +57,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -403,7 +404,7 @@ pub fn parallelize_sorts(
         && requirements.plan.output_partitioning().partition_count() <= 1
     {
         // Take the initial sort expressions and requirements
-        let (sort_exprs, fetch) = get_sort_exprs(&requirements.plan)?;
+        let (sort_exprs, fetch, filter) = get_sort_exprs(&requirements.plan)?;
         let sort_reqs = LexRequirement::from(sort_exprs.clone());
         let sort_exprs = sort_exprs.clone();
 
@@ -417,7 +418,7 @@ pub fn parallelize_sorts(
         // deals with the children and their children and so on.
         requirements = requirements.children.swap_remove(0);
 
-        requirements = add_sort_above_with_check(requirements, sort_reqs, fetch)?;
+        requirements = add_sort_above_with_check(requirements, sort_reqs, fetch, filter)?;
 
         let spm =
             SortPreservingMergeExec::new(sort_exprs, Arc::clone(&requirements.plan));
@@ -513,6 +514,7 @@ pub fn ensure_sorting(
                         .downcast_ref::<OutputRequirementExec>()
                         .map(|output| output.fetch())
                         .unwrap_or(None),
+                    None,
                 );
                 child = update_sort_ctx_children_data(child, true)?;
             }
@@ -644,7 +646,7 @@ fn adjust_window_sort_removal(
         // Satisfy the ordering requirement so that the window can run:
         let mut child_node = window_tree.children.swap_remove(0);
         if let Some(reqs) = reqs {
-            child_node = add_sort_above(child_node, reqs.into_single(), None);
+            child_node = add_sort_above(child_node, reqs.into_single(), None, None);
         }
         let child_plan = Arc::clone(&child_node.plan);
         window_tree.children.push(child_node);
@@ -803,15 +805,20 @@ fn remove_corresponding_sort_from_sub_plan(
     Ok(node)
 }
 
+/// Return type for get_sort_exprs function
+type SortExprsResult<'a> = (
+    &'a LexOrdering,
+    Option<usize>,
+    Option<Arc<DynamicFilterPhysicalExpr>>,
+);
+
 /// Converts an [ExecutionPlan] trait object to a [LexOrdering] reference when possible.
-fn get_sort_exprs(
-    sort_any: &Arc<dyn ExecutionPlan>,
-) -> Result<(&LexOrdering, Option<usize>)> {
+fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<SortExprsResult<'_>> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
-        Ok((sort_exec.expr(), sort_exec.fetch()))
+        Ok((sort_exec.expr(), sort_exec.fetch(), sort_exec.filter()))
     } else if let Some(spm) = sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
     {
-        Ok((spm.expr(), spm.fetch()))
+        Ok((spm.expr(), spm.fetch(), None))
     } else {
         plan_err!("Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec")
     }

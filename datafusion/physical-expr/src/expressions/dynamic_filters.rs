@@ -288,8 +288,9 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     }
 
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let inner = self.current()?;
         // Return the current expression as a snapshot.
-        Ok(Some(self.current()?))
+        Ok(Some(inner))
     }
 }
 
