@@ -15,14 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::hash_set;
-
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_expr::{interval_arithmetic, Join, JoinKind, JoinType, LogicalPlan};
-use itertools::join;
+use datafusion_expr::{Join, JoinKind, JoinType, LogicalPlan};
 
 use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
@@ -73,7 +70,7 @@ impl OptimizerRule for Deliminator {
         }
 
         for candidate in visitor.candidates.iter_mut() {
-            let delim_join = &candidate.delim_join;
+            let _delim_join = &candidate.delim_join;
             let plan = &candidate.plan;
 
             // Sort these so the deepest are first.
@@ -96,7 +93,7 @@ impl OptimizerRule for Deliminator {
                     }
 
                     Ok(TreeNodeRecursion::Continue)
-                });
+                })?;
 
                 if has_selection {
                     // Keey the deepest join with DelimScan in these cases,
@@ -106,8 +103,8 @@ impl OptimizerRule for Deliminator {
                     all_removed = false;
                 }
 
-                let mut all_equality_conditions = true;
-                for join in &candidate.joins {
+                let _all_equality_conditions = true;
+                for _join in &candidate.joins {
                     // TODO remove join with delim scan.
                 }
 
@@ -135,11 +132,13 @@ impl OptimizerRule for Deliminator {
     }
 }
 
+#[allow(unused_mut)]
+#[allow(dead_code)]
 fn remove_join_with_delim_scan(
-    delim_join: &Join,
-    delim_get_count: usize,
+    _delim_join: &Join,
+    _delim_get_count: usize,
     join: &LogicalPlan,
-    all_equality_conditions: &mut bool,
+    _all_equality_conditions: &mut bool,
 ) -> Result<bool> {
     if let LogicalPlan::Join(join) = join {
         if !child_join_type_can_be_deliminated(join.join_type) {
@@ -203,15 +202,18 @@ fn fetch_delim_scan(plan: &LogicalPlan) -> (Option<&LogicalPlan>, Option<&Logica
     todo!()
 }
 
+#[allow(dead_code)]
 fn remove_inequality_join_with_delim_scan(
     delim_join: &Join,
-    delim_get_count: usize,
+    _delim_get_count: usize,
     join: &LogicalPlan,
 ) -> Result<bool> {
-    if let LogicalPlan::Join(join) = join {
-        let delim_on = &delim_join.on;
+    if let LogicalPlan::Join(_) = join {
+        let _delim_on = &delim_join.on;
     } else {
-        return internal_err!("current plan must be join in remove_inequality_join_with_delim_scan");
+        return internal_err!(
+            "current plan must be join in remove_inequality_join_with_delim_scan"
+        );
     }
 
     todo!()
@@ -329,19 +331,14 @@ fn is_delim_scan(plan: &LogicalPlan) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
+    use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use crate::deliminator::Deliminator;
     use crate::test::test_table_scan_with_name;
-    use crate::Optimizer;
-    use crate::{
-        assert_optimized_plan_eq_display_indent_snapshot, OptimizerConfig,
-        OptimizerContext, OptimizerRule,
-    };
     use arrow::datatypes::DataType as ArrowDataType;
     use datafusion_common::Result;
     use datafusion_expr::{
-        exists, expr_fn::col, in_subquery, lit, out_ref_col, scalar_subquery, Expr,
-        LogicalPlan, LogicalPlanBuilder,
+        expr_fn::col, in_subquery, lit, out_ref_col, scalar_subquery, Expr,
+        LogicalPlanBuilder,
     };
     use datafusion_functions_aggregate::count::count;
     use std::sync::Arc;
