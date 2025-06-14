@@ -515,7 +515,7 @@ See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
 In addition, topk_tpch is available from the bench.sh script:
 
 ```bash
-./bench.sh run topk_
+./bench.sh run topk_tpch
 ```
 
 
