@@ -19,7 +19,7 @@
 
 use arrow::{
     array::{Array, AsArray},
-    compute::{interleave_record_batch, FilterBuilder},
+    compute::{interleave_record_batch, prep_null_mask_filter, FilterBuilder},
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
@@ -220,7 +220,7 @@ impl TopK {
             let filtered = filter.evaluate(&batch)?;
             let num_rows = batch.num_rows();
             let array = filtered.into_array(num_rows)?;
-            let filter = array.as_boolean().clone();
+            let mut filter = array.as_boolean().clone();
             let true_count = filter.true_count();
             if true_count == 0 {
                 // nothing to filter, so no need to update
@@ -228,6 +228,11 @@ impl TopK {
             }
             // only update the keys / rows if the filter does not match all rows
             if true_count < num_rows {
+                // Indices should be correct w.r.t. null indices
+                if filter.nulls().is_some() {
+                    filter = prep_null_mask_filter(&filter);
+                }
+
                 let filter_predicate = FilterBuilder::new(&filter);
                 let filter_predicate = if sort_keys.len() > 1 {
                     // Optimize filter when it has multiple sort keys
