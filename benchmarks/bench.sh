@@ -236,6 +236,10 @@ main() {
                     # same data as for tpch
                     data_tpch "1"
                     ;;
+                topk_tpch)
+                    # same data as for tpch
+                    data_tpch "1"
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -360,6 +364,9 @@ main() {
                     ;;
                 sort_tpch)
                     run_sort_tpch
+                    ;;
+                topk_tpch)
+                    run_topk_tpch
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -979,6 +986,16 @@ run_sort_tpch() {
     echo "Running sort tpch benchmark..."
 
     debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+}
+
+# Runs the sort tpch integration benchmark with limit 100 (topk)
+run_topk_tpch() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf1"
+    RESULTS_FILE="${RESULTS_DIR}/run_topk_tpch.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running topk tpch benchmark..."
+
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100
 }
 
 
