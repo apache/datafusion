@@ -1047,8 +1047,14 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/adding-udfs.md",
-    library_user_guide_adding_udfs
+    "../../../docs/source/library-user-guide/functions/adding-udfs.md",
+    library_user_guide_functions_adding_udfs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/functions/spark.md",
+    library_user_guide_functions_spark
 );
 
 #[cfg(doctest)]
