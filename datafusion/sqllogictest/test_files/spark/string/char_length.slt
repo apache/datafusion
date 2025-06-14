@@ -1,0 +1,15 @@
+## Original Query: SELECT CHAR_LENGTH('Spark SQL ');
+## PySpark 3.5.5 Result: {'typeof(spark sql )': 'string'}
+#query
+#SELECT CHAR_LENGTH('spark sql '::string);
+
+## Original Query: SELECT char_length('Spark SQL ');
+## PySpark 3.5.5 Result: {'typeof(spark sql )': 'string'}
+#query
+#SELECT char_length('spark sql '::string);
+
+## Original Query: SELECT char_length(x'537061726b2053514c');
+## PySpark 3.5.5 Result: {"typeof(x'537061726b2053514c')": 'binary'}
+#query
+#SELECT char_length(x'537061726b2053514c'::binary);
+

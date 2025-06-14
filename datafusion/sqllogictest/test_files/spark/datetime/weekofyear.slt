@@ -1,0 +1,5 @@
+## Original Query: SELECT weekofyear('2008-02-20');
+## PySpark 3.5.5 Result: {'typeof(2008-02-20)': 'string'}
+#query
+#SELECT weekofyear('2008-02-20'::string);
+

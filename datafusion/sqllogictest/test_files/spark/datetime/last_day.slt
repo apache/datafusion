@@ -1,0 +1,5 @@
+## Original Query: SELECT last_day('2009-01-12');
+## PySpark 3.5.5 Result: {'typeof(2009-01-12)': 'string'}
+#query
+#SELECT last_day('2009-01-12'::string);
+

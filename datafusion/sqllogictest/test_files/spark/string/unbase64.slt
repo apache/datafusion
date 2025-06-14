@@ -1,0 +1,5 @@
+## Original Query: SELECT unbase64('U3BhcmsgU1FM');
+## PySpark 3.5.5 Result: {'typeof(u3bhcmsgu1fm)': 'string'}
+#query
+#SELECT unbase64('u3bhcmsgu1fm'::string);
+

@@ -1,0 +1,5 @@
+## Original Query: SELECT soundex('Miller');
+## PySpark 3.5.5 Result: {'typeof(miller)': 'string'}
+#query
+#SELECT soundex('miller'::string);
+

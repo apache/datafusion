@@ -1,0 +1,5 @@
+## Original Query: SELECT asinh(0);
+## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+#query
+#SELECT asinh(0::int);
+

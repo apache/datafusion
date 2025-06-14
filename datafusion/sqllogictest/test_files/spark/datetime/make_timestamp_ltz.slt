@@ -1,0 +1,20 @@
+## Original Query: SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887);
+## PySpark 3.5.5 Result: {'typeof(2014)': 'int', 'typeof(12)': 'int', 'typeof(28)': 'int', 'typeof(6)': 'int', 'typeof(30)': 'int', 'typeof(45.887)': 'decimal(5,3)'}
+#query
+#SELECT make_timestamp_ltz(2014::int, 12::int, 28::int, 6::int, 30::int, 45.887::decimal(5,3));
+
+## Original Query: SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, 'CET');
+## PySpark 3.5.5 Result: {'typeof(2014)': 'int', 'typeof(12)': 'int', 'typeof(28)': 'int', 'typeof(6)': 'int', 'typeof(30)': 'int', 'typeof(45.887)': 'decimal(5,3)', 'typeof(cet)': 'string'}
+#query
+#SELECT make_timestamp_ltz(2014::int, 12::int, 28::int, 6::int, 30::int, 45.887::decimal(5,3), 'cet'::string);
+
+## Original Query: SELECT make_timestamp_ltz(2019, 6, 30, 23, 59, 60);
+## PySpark 3.5.5 Result: {'typeof(2019)': 'int', 'typeof(6)': 'int', 'typeof(30)': 'int', 'typeof(23)': 'int', 'typeof(59)': 'int', 'typeof(60)': 'int'}
+#query
+#SELECT make_timestamp_ltz(2019::int, 6::int, 30::int, 23::int, 59::int, 60::int);
+
+## Original Query: SELECT make_timestamp_ltz(null, 7, 22, 15, 30, 0);
+## PySpark 3.5.5 Result: {'typeof(null)': 'void', 'typeof(7)': 'int', 'typeof(22)': 'int', 'typeof(15)': 'int', 'typeof(30)': 'int', 'typeof(0)': 'int'}
+#query
+#SELECT make_timestamp_ltz(null::void, 7::int, 22::int, 15::int, 30::int, 0::int);
+

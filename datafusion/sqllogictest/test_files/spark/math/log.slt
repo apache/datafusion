@@ -1,0 +1,5 @@
+## Original Query: SELECT log(10, 100);
+## PySpark 3.5.5 Result: {'typeof(10)': 'int', 'typeof(100)': 'int'}
+#query
+#SELECT log(10::int, 100::int);
+

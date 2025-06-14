@@ -1,0 +1,10 @@
+## Original Query: SELECT asin(0);
+## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+#query
+#SELECT asin(0::int);
+
+## Original Query: SELECT asin(2);
+## PySpark 3.5.5 Result: {'typeof(2)': 'int'}
+#query
+#SELECT asin(2::int);
+

@@ -1,0 +1,5 @@
+## Original Query: SELECT sentences('Hi there! Good morning.');
+## PySpark 3.5.5 Result: {'typeof(hi there! good morning.)': 'string'}
+#query
+#SELECT sentences('hi there! good morning.'::string);
+

@@ -1,0 +1,5 @@
+## Original Query: SELECT shiftleft(2, 1);
+## PySpark 3.5.5 Result: {'typeof(2)': 'int', 'typeof(1)': 'int'}
+#query
+#SELECT shiftleft(2::int, 1::int);
+

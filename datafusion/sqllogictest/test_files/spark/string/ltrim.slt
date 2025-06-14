@@ -1,0 +1,5 @@
+## Original Query: SELECT ltrim('    SparkSQL   ');
+## PySpark 3.5.5 Result: {'typeof(    sparksql   )': 'string'}
+#query
+#SELECT ltrim('    sparksql   '::string);
+

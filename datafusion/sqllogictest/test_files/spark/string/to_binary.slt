@@ -1,0 +1,5 @@
+## Original Query: SELECT to_binary('abc', 'utf-8');
+## PySpark 3.5.5 Result: {'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
+#query
+#SELECT to_binary('abc'::string, 'utf-8'::string);
+

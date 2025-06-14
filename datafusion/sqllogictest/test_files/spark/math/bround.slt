@@ -1,0 +1,10 @@
+## Original Query: SELECT bround(2.5, 0);
+## PySpark 3.5.5 Result: {'typeof(2.5)': 'decimal(2,1)', 'typeof(0)': 'int'}
+#query
+#SELECT bround(2.5::decimal(2,1), 0::int);
+
+## Original Query: SELECT bround(25, -1);
+## PySpark 3.5.5 Result: {'typeof(25)': 'int', 'typeof(-1)': 'int'}
+#query
+#SELECT bround(25::int, -1::int);
+

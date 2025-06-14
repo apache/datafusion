@@ -1,0 +1,5 @@
+## Original Query: SELECT radians(180);
+## PySpark 3.5.5 Result: {'typeof(180)': 'int'}
+#query
+#SELECT radians(180::int);
+

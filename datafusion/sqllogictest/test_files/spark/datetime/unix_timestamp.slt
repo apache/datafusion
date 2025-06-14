@@ -1,0 +1,10 @@
+## Original Query: SELECT unix_timestamp('2016-04-08', 'yyyy-MM-dd');
+## PySpark 3.5.5 Result: {'typeof(2016-04-08)': 'string', 'typeof(yyyy-mm-dd)': 'string'}
+#query
+#SELECT unix_timestamp('2016-04-08'::string, 'yyyy-mm-dd'::string);
+
+#S
+#E
+#query
+#L
+

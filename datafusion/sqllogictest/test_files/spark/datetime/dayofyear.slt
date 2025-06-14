@@ -1,0 +1,5 @@
+## Original Query: SELECT dayofyear('2016-04-09');
+## PySpark 3.5.5 Result: {'typeof(2016-04-09)': 'string'}
+#query
+#SELECT dayofyear('2016-04-09'::string);
+

@@ -1,0 +1,5 @@
+## Original Query: SELECT assert_true(0 < 1);
+## PySpark 3.5.5 Result: {'typeof((0 < 1))': 'boolean'}
+#query
+#SELECT assert_true((0 < 1)::boolean);
+

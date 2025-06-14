@@ -1,0 +1,10 @@
+## Original Query: SELECT position('bar', 'foobarbar');
+## PySpark 3.5.5 Result: {'typeof(bar)': 'string', 'typeof(foobarbar)': 'string'}
+#query
+#SELECT position('bar'::string, 'foobarbar'::string);
+
+## Original Query: SELECT position('bar', 'foobarbar', 5);
+## PySpark 3.5.5 Result: {'typeof(bar)': 'string', 'typeof(foobarbar)': 'string', 'typeof(5)': 'int'}
+#query
+#SELECT position('bar'::string, 'foobarbar'::string, 5::int);
+

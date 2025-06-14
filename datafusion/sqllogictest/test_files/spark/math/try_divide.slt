@@ -1,0 +1,25 @@
+## Original Query: SELECT try_divide(1, 0);
+## PySpark 3.5.5 Result: {'typeof(1)': 'int', 'typeof(0)': 'int'}
+#query
+#SELECT try_divide(1::int, 0::int);
+
+## Original Query: SELECT try_divide(2L, 2L);
+## PySpark 3.5.5 Result: {'typeof(2)': 'bigint'}
+#query
+#SELECT try_divide(2::bigint);
+
+## Original Query: SELECT try_divide(3, 2);
+## PySpark 3.5.5 Result: {'typeof(3)': 'int', 'typeof(2)': 'int'}
+#query
+#SELECT try_divide(3::int, 2::int);
+
+## Original Query: SELECT try_divide(interval 2 month, 0);
+## PySpark 3.5.5 Result: {"typeof(interval '2' month)": 'interval month', 'typeof(0)': 'int'}
+#query
+#SELECT try_divide(interval '2' month::interval month, 0::int);
+
+## Original Query: SELECT try_divide(interval 2 month, 2);
+## PySpark 3.5.5 Result: {"typeof(interval '2' month)": 'interval month', 'typeof(2)': 'int'}
+#query
+#SELECT try_divide(interval '2' month::interval month, 2::int);
+

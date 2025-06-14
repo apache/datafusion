@@ -1,0 +1,15 @@
+## Original Query: SELECT try_to_binary('abc', 'utf-8');
+## PySpark 3.5.5 Result: {'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
+#query
+#SELECT try_to_binary('abc'::string, 'utf-8'::string);
+
+## Original Query: select try_to_binary('a!', 'base64');
+## PySpark 3.5.5 Result: {'typeof(a!)': 'string', 'typeof(base64)': 'string'}
+#query
+#SELECT try_to_binary('a!'::string, 'base64'::string);
+
+## Original Query: select try_to_binary('abc', 'invalidFormat');
+## PySpark 3.5.5 Result: {'typeof(abc)': 'string', 'typeof(invalidformat)': 'string'}
+#query
+#SELECT try_to_binary('abc'::string, 'invalidformat'::string);
+

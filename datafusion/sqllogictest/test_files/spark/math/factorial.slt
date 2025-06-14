@@ -1,0 +1,5 @@
+## Original Query: SELECT factorial(5);
+## PySpark 3.5.5 Result: {'typeof(5)': 'int'}
+#query
+#SELECT factorial(5::int);
+

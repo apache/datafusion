@@ -1,0 +1,5 @@
+## Original Query: SELECT next_day('2015-01-14', 'TU');
+## PySpark 3.5.5 Result: {'typeof(2015-01-14)': 'string', 'typeof(tu)': 'string'}
+#query
+#SELECT next_day('2015-01-14'::string, 'tu'::string);
+

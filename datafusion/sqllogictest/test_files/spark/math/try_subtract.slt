@@ -1,0 +1,30 @@
+## Original Query: SELECT try_subtract(-2147483648, 1);
+## PySpark 3.5.5 Result: {'typeof(-2147483648)': 'int', 'typeof(1)': 'int'}
+#query
+#SELECT try_subtract(-2147483648::int, 1::int);
+
+## Original Query: SELECT try_subtract(2, 1);
+## PySpark 3.5.5 Result: {'typeof(2)': 'int', 'typeof(1)': 'int'}
+#query
+#SELECT try_subtract(2::int, 1::int);
+
+## Original Query: SELECT try_subtract(date'2021-01-01', interval 1 year);
+## PySpark 3.5.5 Result: {"typeof(date '2021-01-01')": 'date', "typeof(interval '1' year)": 'interval year'}
+#query
+#SELECT try_subtract(date '2021-01-01'::date, interval '1' year::interval year);
+
+## Original Query: SELECT try_subtract(date'2021-01-02', 1);
+## PySpark 3.5.5 Result: {"typeof(date '2021-01-02')": 'date', 'typeof(1)': 'int'}
+#query
+#SELECT try_subtract(date '2021-01-02'::date, 1::int);
+
+## Original Query: SELECT try_subtract(interval 2 year, interval 1 year);
+## PySpark 3.5.5 Result: {"typeof(interval '2' year)": 'interval year', "typeof(interval '1' year)": 'interval year'}
+#query
+#SELECT try_subtract(interval '2' year::interval year, interval '1' year::interval year);
+
+## Original Query: SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day);
+## PySpark 3.5.5 Result: {"typeof(timestamp '2021-01-02 00:00:00')": 'timestamp', "typeof(interval '1' day)": 'interval day'}
+#query
+#SELECT try_subtract(timestamp '2021-01-02 00:00:00'::timestamp, interval '1' day::interval day);
+

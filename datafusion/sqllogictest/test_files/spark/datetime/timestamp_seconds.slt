@@ -1,0 +1,10 @@
+## Original Query: SELECT timestamp_seconds(1230219000);
+## PySpark 3.5.5 Result: {'typeof(1230219000)': 'int'}
+#query
+#SELECT timestamp_seconds(1230219000::int);
+
+## Original Query: SELECT timestamp_seconds(1230219000.123);
+## PySpark 3.5.5 Result: {'typeof(1230219000.123)': 'decimal(13,3)'}
+#query
+#SELECT timestamp_seconds(1230219000.123::decimal(13,3));
+

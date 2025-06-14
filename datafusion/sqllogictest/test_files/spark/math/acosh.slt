@@ -1,0 +1,10 @@
+## Original Query: SELECT acosh(0);
+## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+#query
+#SELECT acosh(0::int);
+
+## Original Query: SELECT acosh(1);
+## PySpark 3.5.5 Result: {'typeof(1)': 'int'}
+#query
+#SELECT acosh(1::int);
+

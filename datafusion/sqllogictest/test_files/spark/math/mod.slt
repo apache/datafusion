@@ -1,0 +1,5 @@
+## Original Query: SELECT MOD(2, 1.8);
+## PySpark 3.5.5 Result: {'typeof(2)': 'int', 'typeof(1.8)': 'decimal(2,1)'}
+#query
+#SELECT MOD(2::int, 1.8::decimal(2,1));
+

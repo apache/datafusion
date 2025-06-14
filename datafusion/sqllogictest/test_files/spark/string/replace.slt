@@ -1,0 +1,5 @@
+## Original Query: SELECT replace('ABCabc', 'abc', 'DEF');
+## PySpark 3.5.5 Result: {'typeof(abcabc)': 'string', 'typeof(abc)': 'string', 'typeof(def)': 'string'}
+#query
+#SELECT replace('abcabc'::string, 'abc'::string, 'def'::string);
+

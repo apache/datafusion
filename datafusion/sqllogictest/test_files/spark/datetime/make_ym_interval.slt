@@ -1,0 +1,20 @@
+## Original Query: SELECT make_ym_interval(-1, 1);
+## PySpark 3.5.5 Result: {'typeof(-1)': 'int', 'typeof(1)': 'int'}
+#query
+#SELECT make_ym_interval(-1::int, 1::int);
+
+## Original Query: SELECT make_ym_interval(1, 0);
+## PySpark 3.5.5 Result: {'typeof(1)': 'int', 'typeof(0)': 'int'}
+#query
+#SELECT make_ym_interval(1::int, 0::int);
+
+## Original Query: SELECT make_ym_interval(1, 2);
+## PySpark 3.5.5 Result: {'typeof(1)': 'int', 'typeof(2)': 'int'}
+#query
+#SELECT make_ym_interval(1::int, 2::int);
+
+## Original Query: SELECT make_ym_interval(2);
+## PySpark 3.5.5 Result: {'typeof(2)': 'int'}
+#query
+#SELECT make_ym_interval(2::int);
+

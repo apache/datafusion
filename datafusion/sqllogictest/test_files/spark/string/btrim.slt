@@ -1,0 +1,10 @@
+## Original Query: SELECT btrim('    SparkSQL   ');
+## PySpark 3.5.5 Result: {'typeof(    sparksql   )': 'string'}
+#query
+#SELECT btrim('    sparksql   '::string);
+
+## Original Query: SELECT btrim('SSparkSQLS', 'SL');
+## PySpark 3.5.5 Result: {'typeof(ssparksqls)': 'string', 'typeof(sl)': 'string'}
+#query
+#SELECT btrim('ssparksqls'::string, 'sl'::string);
+

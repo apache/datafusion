@@ -1,0 +1,25 @@
+## Original Query: SELECT to_number('$78.12', '$99.99');
+## PySpark 3.5.5 Result: {'typeof($78.12)': 'string', 'typeof($99.99)': 'string'}
+#query
+#SELECT to_number('$78.12'::string, '$99.99'::string);
+
+## Original Query: SELECT to_number('12,454', '99,999');
+## PySpark 3.5.5 Result: {'typeof(12,454)': 'string', 'typeof(99,999)': 'string'}
+#query
+#SELECT to_number('12,454'::string, '99,999'::string);
+
+## Original Query: SELECT to_number('12,454.8-', '99,999.9S');
+## PySpark 3.5.5 Result: {'typeof(12,454.8-)': 'string', 'typeof(99,999.9s)': 'string'}
+#query
+#SELECT to_number('12,454.8-'::string, '99,999.9s'::string);
+
+## Original Query: SELECT to_number('454', '999');
+## PySpark 3.5.5 Result: {'typeof(454)': 'string', 'typeof(999)': 'string'}
+#query
+#SELECT to_number('454'::string, '999'::string);
+
+## Original Query: SELECT to_number('454.00', '000.00');
+## PySpark 3.5.5 Result: {'typeof(454.00)': 'string', 'typeof(000.00)': 'string'}
+#query
+#SELECT to_number('454.00'::string, '000.00'::string);
+

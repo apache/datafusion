@@ -1,0 +1,10 @@
+## Original Query: SELECT to_timestamp_ltz('2016-12-31 00:12:00');
+## PySpark 3.5.5 Result: {'typeof(2016-12-31 00:12:00)': 'string'}
+#query
+#SELECT to_timestamp_ltz('2016-12-31 00:12:00'::string);
+
+## Original Query: SELECT to_timestamp_ltz('2016-12-31', 'yyyy-MM-dd');
+## PySpark 3.5.5 Result: {'typeof(2016-12-31)': 'string', 'typeof(yyyy-mm-dd)': 'string'}
+#query
+#SELECT to_timestamp_ltz('2016-12-31'::string, 'yyyy-mm-dd'::string);
+

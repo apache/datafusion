@@ -1,0 +1,5 @@
+## Original Query: SELECT hypot(3, 4);
+## PySpark 3.5.5 Result: {'typeof(3)': 'int', 'typeof(4)': 'int'}
+#query
+#SELECT hypot(3::int, 4::int);
+

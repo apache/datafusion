@@ -1,0 +1,5 @@
+## Original Query: SELECT chr(65);
+## PySpark 3.5.5 Result: {'typeof(65)': 'int'}
+#query
+#SELECT chr(65::int);
+

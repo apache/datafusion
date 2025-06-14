@@ -1,0 +1,5 @@
+## Original Query: SELECT java_method('java.util.UUID', 'randomUUID');
+## PySpark 3.5.5 Result: {'typeof(java.util.uuid)': 'string', 'typeof(randomuuid)': 'string'}
+#query
+#SELECT java_method('java.util.uuid'::string, 'randomuuid'::string);
+

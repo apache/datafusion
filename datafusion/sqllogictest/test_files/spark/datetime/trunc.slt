@@ -1,0 +1,20 @@
+## Original Query: SELECT trunc('2009-02-12', 'MM');
+## PySpark 3.5.5 Result: {'typeof(2009-02-12)': 'string', 'typeof(mm)': 'string'}
+#query
+#SELECT trunc('2009-02-12'::string, 'mm'::string);
+
+## Original Query: SELECT trunc('2015-10-27', 'YEAR');
+## PySpark 3.5.5 Result: {'typeof(2015-10-27)': 'string', 'typeof(year)': 'string'}
+#query
+#SELECT trunc('2015-10-27'::string, 'year'::string);
+
+## Original Query: SELECT trunc('2019-08-04', 'quarter');
+## PySpark 3.5.5 Result: {'typeof(2019-08-04)': 'string', 'typeof(quarter)': 'string'}
+#query
+#SELECT trunc('2019-08-04'::string, 'quarter'::string);
+
+## Original Query: SELECT trunc('2019-08-04', 'week');
+## PySpark 3.5.5 Result: {'typeof(2019-08-04)': 'string', 'typeof(week)': 'string'}
+#query
+#SELECT trunc('2019-08-04'::string, 'week'::string);
+

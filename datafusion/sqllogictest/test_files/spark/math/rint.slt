@@ -1,0 +1,5 @@
+## Original Query: SELECT rint(12.3456);
+## PySpark 3.5.5 Result: {'typeof(12.3456)': 'decimal(6,4)'}
+#query
+#SELECT rint(12.3456::decimal(6,4));
+

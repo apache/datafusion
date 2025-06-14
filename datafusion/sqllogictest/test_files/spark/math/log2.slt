@@ -1,0 +1,5 @@
+## Original Query: SELECT log2(2);
+## PySpark 3.5.5 Result: {'typeof(2)': 'int'}
+#query
+#SELECT log2(2::int);
+

@@ -1,0 +1,5 @@
+## Original Query: SELECT find_in_set('ab','abc,b,ab,c,def');
+## PySpark 3.5.5 Result: {'typeof(ab)': 'string', 'typeof(abc,b,ab,c,def)': 'string'}
+#query
+#SELECT find_in_set('ab'::string, 'abc,b,ab,c,def'::string);
+

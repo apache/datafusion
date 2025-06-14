@@ -1,0 +1,10 @@
+## Original Query: SELECT base64('Spark SQL');
+## PySpark 3.5.5 Result: {'typeof(spark sql)': 'string'}
+#query
+#SELECT base64('spark sql'::string);
+
+## Original Query: SELECT base64(x'537061726b2053514c');
+## PySpark 3.5.5 Result: {"typeof(x'537061726b2053514c')": 'binary'}
+#query
+#SELECT base64(x'537061726b2053514c'::binary);
+

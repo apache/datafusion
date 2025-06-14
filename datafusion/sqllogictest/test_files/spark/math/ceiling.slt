@@ -1,0 +1,20 @@
+## Original Query: SELECT ceiling(-0.1);
+## PySpark 3.5.5 Result: {'typeof(-0.1)': 'decimal(1,1)'}
+#query
+#SELECT ceiling(-0.1::decimal(1,1));
+
+## Original Query: SELECT ceiling(3.1411, -3);
+## PySpark 3.5.5 Result: {'typeof(3.1411)': 'decimal(5,4)', 'typeof(-3)': 'int'}
+#query
+#SELECT ceiling(3.1411::decimal(5,4), -3::int);
+
+## Original Query: SELECT ceiling(3.1411, 3);
+## PySpark 3.5.5 Result: {'typeof(3.1411)': 'decimal(5,4)', 'typeof(3)': 'int'}
+#query
+#SELECT ceiling(3.1411::decimal(5,4), 3::int);
+
+## Original Query: SELECT ceiling(5);
+## PySpark 3.5.5 Result: {'typeof(5)': 'int'}
+#query
+#SELECT ceiling(5::int);
+

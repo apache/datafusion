@@ -1,0 +1,5 @@
+## Original Query: SELECT upper('SparkSql');
+## PySpark 3.5.5 Result: {'typeof(sparksql)': 'string'}
+#query
+#SELECT upper('sparksql'::string);
+

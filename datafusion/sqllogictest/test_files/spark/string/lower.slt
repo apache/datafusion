@@ -1,0 +1,5 @@
+## Original Query: SELECT lower('SparkSql');
+## PySpark 3.5.5 Result: {'typeof(sparksql)': 'string'}
+#query
+#SELECT lower('sparksql'::string);
+

@@ -1,0 +1,5 @@
+## Original Query: SELECT encode('abc', 'utf-8');
+## PySpark 3.5.5 Result: {'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
+#query
+#SELECT encode('abc'::string, 'utf-8'::string);
+

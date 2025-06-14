@@ -1,0 +1,5 @@
+## Original Query: SELECT weekday('2009-07-30');
+## PySpark 3.5.5 Result: {'typeof(2009-07-30)': 'string'}
+#query
+#SELECT weekday('2009-07-30'::string);
+

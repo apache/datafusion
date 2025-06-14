@@ -1,0 +1,5 @@
+## Original Query: SELECT instr('SparkSQL', 'SQL');
+## PySpark 3.5.5 Result: {'typeof(sparksql)': 'string', 'typeof(sql)': 'string'}
+#query
+#SELECT instr('sparksql'::string, 'sql'::string);
+

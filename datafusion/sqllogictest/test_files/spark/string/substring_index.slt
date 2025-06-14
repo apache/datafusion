@@ -1,0 +1,5 @@
+## Original Query: SELECT substring_index('www.apache.org', '.', 2);
+## PySpark 3.5.5 Result: {'typeof(www.apache.org)': 'string', 'typeof(.)': 'string', 'typeof(2)': 'int'}
+#query
+#SELECT substring_index('www.apache.org'::string, '.'::string, 2::int);
+

@@ -1,0 +1,10 @@
+## Original Query: SELECT conv('100', 2, 10);
+## PySpark 3.5.5 Result: {'typeof(100)': 'string', 'typeof(2)': 'int', 'typeof(10)': 'int'}
+#query
+#SELECT conv('100'::string, 2::int, 10::int);
+
+## Original Query: SELECT conv(-10, 16, -10);
+## PySpark 3.5.5 Result: {'typeof(-10)': 'int', 'typeof(16)': 'int'}
+#query
+#SELECT conv(-10::int, 16::int);
+

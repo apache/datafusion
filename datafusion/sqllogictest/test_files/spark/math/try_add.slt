@@ -1,0 +1,30 @@
+## Original Query: SELECT try_add(1, 2);
+## PySpark 3.5.5 Result: {'typeof(1)': 'int', 'typeof(2)': 'int'}
+#query
+#SELECT try_add(1::int, 2::int);
+
+## Original Query: SELECT try_add(2147483647, 1);
+## PySpark 3.5.5 Result: {'typeof(2147483647)': 'int', 'typeof(1)': 'int'}
+#query
+#SELECT try_add(2147483647::int, 1::int);
+
+## Original Query: SELECT try_add(date'2021-01-01', 1);
+## PySpark 3.5.5 Result: {"typeof(date '2021-01-01')": 'date', 'typeof(1)': 'int'}
+#query
+#SELECT try_add(date '2021-01-01'::date, 1::int);
+
+## Original Query: SELECT try_add(date'2021-01-01', interval 1 year);
+## PySpark 3.5.5 Result: {"typeof(date '2021-01-01')": 'date', "typeof(interval '1' year)": 'interval year'}
+#query
+#SELECT try_add(date '2021-01-01'::date, interval '1' year::interval year);
+
+## Original Query: SELECT try_add(interval 1 year, interval 2 year);
+## PySpark 3.5.5 Result: {"typeof(interval '1' year)": 'interval year', "typeof(interval '2' year)": 'interval year'}
+#query
+#SELECT try_add(interval '1' year::interval year, interval '2' year::interval year);
+
+## Original Query: SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day);
+## PySpark 3.5.5 Result: {"typeof(timestamp '2021-01-01 00:00:00')": 'timestamp', "typeof(interval '1' day)": 'interval day'}
+#query
+#SELECT try_add(timestamp '2021-01-01 00:00:00'::timestamp, interval '1' day::interval day);
+

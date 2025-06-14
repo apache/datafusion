@@ -1,0 +1,15 @@
+## Original Query: SELECT rpad('hi', 1, '??');
+## PySpark 3.5.5 Result: {'typeof(hi)': 'string', 'typeof(1)': 'int', 'typeof(??)': 'string'}
+#query
+#SELECT rpad('hi'::string, 1::int, '??'::string);
+
+## Original Query: SELECT rpad('hi', 5);
+## PySpark 3.5.5 Result: {'typeof(hi)': 'string', 'typeof(5)': 'int'}
+#query
+#SELECT rpad('hi'::string, 5::int);
+
+## Original Query: SELECT rpad('hi', 5, '??');
+## PySpark 3.5.5 Result: {'typeof(hi)': 'string', 'typeof(5)': 'int', 'typeof(??)': 'string'}
+#query
+#SELECT rpad('hi'::string, 5::int, '??'::string);
+

@@ -1,0 +1,10 @@
+## Original Query: SELECT locate('bar', 'foobarbar');
+## PySpark 3.5.5 Result: {'typeof(bar)': 'string', 'typeof(foobarbar)': 'string'}
+#query
+#SELECT locate('bar'::string, 'foobarbar'::string);
+
+## Original Query: SELECT locate('bar', 'foobarbar', 5);
+## PySpark 3.5.5 Result: {'typeof(bar)': 'string', 'typeof(foobarbar)': 'string', 'typeof(5)': 'int'}
+#query
+#SELECT locate('bar'::string, 'foobarbar'::string, 5::int);
+

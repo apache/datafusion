@@ -1,0 +1,5 @@
+## Original Query: SELECT date_format('2016-04-08', 'y');
+## PySpark 3.5.5 Result: {'typeof(2016-04-08)': 'string', 'typeof(y)': 'string'}
+#query
+#SELECT date_format('2016-04-08'::string, 'y'::string);
+

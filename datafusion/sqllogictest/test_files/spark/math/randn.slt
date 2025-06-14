@@ -1,0 +1,15 @@
+#S
+#E
+#query
+#L
+
+## Original Query: SELECT randn(0);
+## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+#query
+#SELECT randn(0::int);
+
+## Original Query: SELECT randn(null);
+## PySpark 3.5.5 Result: {'typeof(null)': 'void'}
+#query
+#SELECT randn(null::void);
+

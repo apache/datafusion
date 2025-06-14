@@ -1,0 +1,10 @@
+## Original Query: SELECT bit_length('Spark SQL');
+## PySpark 3.5.5 Result: {'typeof(spark sql)': 'string'}
+#query
+#SELECT bit_length('spark sql'::string);
+
+## Original Query: SELECT bit_length(x'537061726b2053514c');
+## PySpark 3.5.5 Result: {"typeof(x'537061726b2053514c')": 'binary'}
+#query
+#SELECT bit_length(x'537061726b2053514c'::binary);
+

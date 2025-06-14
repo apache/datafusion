@@ -1,0 +1,5 @@
+## Original Query: SELECT minute('2009-07-30 12:58:59');
+## PySpark 3.5.5 Result: {'typeof(2009-07-30 12:58:59)': 'string'}
+#query
+#SELECT minute('2009-07-30 12:58:59'::string);
+

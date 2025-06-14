@@ -1,0 +1,5 @@
+## Original Query: SELECT month('2016-07-30');
+## PySpark 3.5.5 Result: {'typeof(2016-07-30)': 'string'}
+#query
+#SELECT month('2016-07-30'::string);
+

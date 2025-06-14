@@ -1,0 +1,10 @@
+## Original Query: SELECT format_number(12332.123456, '##################.###');
+## PySpark 3.5.5 Result: {'typeof(12332.123456)': 'decimal(11,6)', 'typeof(##################.###)': 'string'}
+#query
+#SELECT format_number(12332.123456::decimal(11,6), '##################.###'::string);
+
+## Original Query: SELECT format_number(12332.123456, 4);
+## PySpark 3.5.5 Result: {'typeof(12332.123456)': 'decimal(11,6)', 'typeof(4)': 'int'}
+#query
+#SELECT format_number(12332.123456::decimal(11,6), 4::int);
+

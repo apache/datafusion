@@ -1,0 +1,10 @@
+## Original Query: SELECT signum(40);
+## PySpark 3.5.5 Result: {'typeof(40)': 'int'}
+#query
+#SELECT signum(40::int);
+
+## Original Query: SELECT signum(INTERVAL -'100' YEAR);
+## PySpark 3.5.5 Result: {"typeof(interval '-100' year)": 'interval year'}
+#query
+#SELECT signum(interval '-100' year::interval year);
+

@@ -1,0 +1,15 @@
+## Original Query: SELECT luhn_check('79927398713');
+## PySpark 3.5.5 Result: {'typeof(79927398713)': 'string'}
+#query
+#SELECT luhn_check('79927398713'::string);
+
+## Original Query: SELECT luhn_check('79927398714');
+## PySpark 3.5.5 Result: {'typeof(79927398714)': 'string'}
+#query
+#SELECT luhn_check('79927398714'::string);
+
+## Original Query: SELECT luhn_check('8112189876');
+## PySpark 3.5.5 Result: {'typeof(8112189876)': 'string'}
+#query
+#SELECT luhn_check('8112189876'::string);
+
