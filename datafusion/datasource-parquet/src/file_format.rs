@@ -19,13 +19,13 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::{fmt, vec};
 
-use arrow::array::RecordBatch;
+use arrow::array::{ArrayRef, BooleanArray, RecordBatch};
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -36,14 +36,15 @@ use datafusion_datasource::write::{
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
-use arrow::compute::sum;
+use arrow::compute::kernels::cmp::eq;
+use arrow::compute::{and, sum};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, ColumnStatistics,
-    DataFusionError, GetExt, HashSet, Result, DEFAULT_PARQUET_EXTENSION,
+    DataFusionError, GetExt, HashSet, Result, ScalarValue, DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -995,7 +996,7 @@ pub async fn fetch_statistics(
 /// # When only some columns have statistics:
 ///
 /// For columns with statistics:
-/// - Min/max values are properly extracted and represented as Precision::Exact
+/// - Min/max values are properly extracted and represented as Precision::Exact or Precision::Inexact depending on the `is_max_value_exact` and `is_min_value_exact` flags.
 /// - Null counts are calculated by summing across row groups
 ///
 /// For columns without statistics,
@@ -1041,6 +1042,8 @@ pub fn statistics_from_parquet_meta_calc(
         let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);
         let mut null_counts_array =
             vec![Precision::Exact(0); table_schema.fields().len()];
+        let mut is_max_value_exact = vec![Some(true); table_schema.fields().len()];
+        let mut is_min_value_exact = vec![Some(true); table_schema.fields().len()];
 
         table_schema
             .fields()
@@ -1057,6 +1060,8 @@ pub fn statistics_from_parquet_meta_calc(
                             &mut min_accs,
                             &mut max_accs,
                             &mut null_counts_array,
+                            &mut is_min_value_exact,
+                            &mut is_max_value_exact,
                             idx,
                             num_rows,
                             &stats_converter,
@@ -1076,6 +1081,8 @@ pub fn statistics_from_parquet_meta_calc(
             null_counts_array,
             &mut max_accs,
             &mut min_accs,
+            &mut is_max_value_exact,
+            &mut is_min_value_exact,
         )
     } else {
         Statistics::unknown_column(&table_schema)
@@ -1089,21 +1096,39 @@ fn get_col_stats(
     null_counts: Vec<Precision<usize>>,
     max_values: &mut [Option<MaxAccumulator>],
     min_values: &mut [Option<MinAccumulator>],
+    is_max_value_exact: &mut [Option<bool>],
+    is_min_value_exact: &mut [Option<bool>],
 ) -> Vec<ColumnStatistics> {
     (0..schema.fields().len())
         .map(|i| {
-            let max_value = match max_values.get_mut(i).unwrap() {
-                Some(max_value) => max_value.evaluate().ok(),
-                None => None,
+            let max_value = match (
+                max_values.get_mut(i).unwrap(),
+                is_max_value_exact.get(i).unwrap(),
+            ) {
+                (Some(max_value), Some(true)) | (Some(max_value), None) => {
+                    max_value.evaluate().ok().map(Precision::Exact)
+                }
+                (Some(max_value), Some(false)) => {
+                    max_value.evaluate().ok().map(Precision::Inexact)
+                }
+                (None, _) => None,
             };
-            let min_value = match min_values.get_mut(i).unwrap() {
-                Some(min_value) => min_value.evaluate().ok(),
-                None => None,
+            let min_value = match (
+                min_values.get_mut(i).unwrap(),
+                is_min_value_exact.get(i).unwrap(),
+            ) {
+                (Some(min_value), Some(true)) | (Some(min_value), None) => {
+                    min_value.evaluate().ok().map(Precision::Exact)
+                }
+                (Some(min_value), Some(false)) => {
+                    min_value.evaluate().ok().map(Precision::Inexact)
+                }
+                (None, _) => None,
             };
             ColumnStatistics {
                 null_count: null_counts[i],
-                max_value: max_value.map(Precision::Exact).unwrap_or(Precision::Absent),
-                min_value: min_value.map(Precision::Exact).unwrap_or(Precision::Absent),
+                max_value: max_value.unwrap_or(Precision::Absent),
+                min_value: min_value.unwrap_or(Precision::Absent),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
             }
@@ -1115,6 +1140,8 @@ fn summarize_min_max_null_counts(
     min_accs: &mut [Option<MinAccumulator>],
     max_accs: &mut [Option<MaxAccumulator>],
     null_counts_array: &mut [Precision<usize>],
+    is_min_value_exact: &mut [Option<bool>],
+    is_max_value_exact: &mut [Option<bool>],
     arrow_schema_index: usize,
     num_rows: usize,
     stats_converter: &StatisticsConverter,
@@ -1123,13 +1150,29 @@ fn summarize_min_max_null_counts(
     let max_values = stats_converter.row_group_maxes(row_groups_metadata)?;
     let min_values = stats_converter.row_group_mins(row_groups_metadata)?;
     let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
+    let is_max_value_exact_stat =
+        stats_converter.row_group_is_max_value_exact(row_groups_metadata)?;
+    let is_min_value_exact_stat =
+        stats_converter.row_group_is_min_value_exact(row_groups_metadata)?;
 
     if let Some(max_acc) = &mut max_accs[arrow_schema_index] {
-        max_acc.update_batch(&[max_values])?;
+        max_acc.update_batch(&[Arc::clone(&max_values)])?;
+        is_max_value_exact[arrow_schema_index] = get_exactness(
+            // Safety: `MaxAccumulator::evaluate()` always returns an Ok.
+            max_acc.evaluate().unwrap(),
+            max_values,
+            is_max_value_exact_stat,
+        );
     }
 
     if let Some(min_acc) = &mut min_accs[arrow_schema_index] {
-        min_acc.update_batch(&[min_values])?;
+        min_acc.update_batch(&[Arc::clone(&min_values)])?;
+        is_min_value_exact[arrow_schema_index] = get_exactness(
+            // Safety: `MinAccumulator::evaluate()` always returns an Ok.
+            min_acc.evaluate().unwrap(),
+            min_values,
+            is_min_value_exact_stat,
+        );
     }
 
     null_counts_array[arrow_schema_index] = Precision::Exact(match sum(&null_counts) {
@@ -1727,6 +1770,19 @@ fn create_max_min_accs(
         })
         .collect();
     (max_values, min_values)
+}
+
+fn get_exactness(
+    value: ScalarValue,
+    values: ArrayRef,
+    exactness: BooleanArray,
+) -> Option<bool> {
+    value.to_scalar().ok().and_then(|value| {
+        eq(&value, &values)
+            .ok()
+            .and_then(|mask| and(&mask, &exactness).ok())
+            .map(|result| result.iter().filter(|&x| x == Some(true)).count() > 0)
+    })
 }
 
 #[cfg(test)]
