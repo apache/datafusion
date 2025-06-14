@@ -79,6 +79,28 @@ logical_plan
 04)------Filter: t.a < Int32(10) AND random() < Float64(0.42)
 05)--------TableScan: t projection=[a]
 
+# tablesample block(value)
+query TT
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE BLOCK (42) WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+05)--------TableScan: t projection=[a]
+
+# tablesample after alias
+query TT
+EXPLAIN SELECT COUNT(*) from t as talias TABLESAMPLE SYSTEM (42) WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: talias
+04)------Projection:
+05)--------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+06)----------TableScan: t projection=[a]
 
 # sample random
 query TT
@@ -91,20 +113,46 @@ logical_plan
 04)------Filter: t.a < Int32(10) AND random() < Float64(0.42)
 05)--------TableScan: t projection=[a]
 
+# tablesample system percent with BERNOULLI method
+query TT
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE BERNOULLI (42 PERCENT) WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+05)--------TableScan: t projection=[a]
 
+# tablesample system percent with ROW method (percentage), Snowflake syntax
+query TT
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE ROW (42 PERCENT) WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+05)--------TableScan: t projection=[a]
+
+# tablesample system percent with ROW method (rows), Snowflake syntax
+query error DataFusion error: This feature is not implemented: Table sample with rows unit is not supported
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE ROW (20 ROWS) WHERE a < 10;
+
+# unsupported: fixed row sampling
 query error DataFusion error: This feature is not implemented: Table sample with rows unit is not supported
 EXPLAIN SELECT COUNT(*) from t TABLESAMPLE (5 ROWS);
 
-
+# unsupported: buckets
 query error DataFusion error: This feature is not implemented: Table sample bucket is not supported
 EXPLAIN SELECT COUNT(*) from t TABLESAMPLE (BUCKET 3 OUT OF 16 ON id)
 
-
+# unsupported: seed
 query error DataFusion error: This feature is not implemented: Table sample seed is not supported
 EXPLAIN SELECT COUNT(*) from t TABLESAMPLE SYSTEM (3) REPEATABLE (82)
 
 
-# smoke test
+# smoke test for joining tables
 query III
 SELECT t.a, t2.a, t2.b FROM t JOIN t2 on t.a = t2.a;
 ----
@@ -141,6 +189,24 @@ logical_plan
 07)--------SubqueryAlias: __correlated_sq_1
 08)----------Filter: random() < Float64(0.1)
 09)------------TableScan: t2 projection=[b]
+
+statement ok
+set datafusion.sql_parser.dialect = 'Hive';
+
+# tablesample before alias, Hive syntax
+query TT
+EXPLAIN SELECT COUNT(*) from t TABLESAMPLE SYSTEM (42) as talias WHERE a < 10;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: talias
+04)------Projection:
+05)--------Filter: t.a < Int32(10) AND random() < Float64(0.42)
+06)----------TableScan: t projection=[a]
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
