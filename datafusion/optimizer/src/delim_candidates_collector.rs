@@ -133,12 +133,14 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
         // Calculate subplan size: 1 (current node) + sum of children's subplan sizes.
         let mut subplan_size = 1;
         let mut child_id = cur_id + 1;
-        for _ in plan.inputs() {
+        plan.apply_children(|_| {
             if let Some(child_node) = self.nodes.get(&child_id) {
                 subplan_size += child_node.sub_plan_size;
                 child_id = child_id + child_node.sub_plan_size;
             }
-        }
+
+            Ok(TreeNodeRecursion::Continue)
+        })?;
 
         // Store the subplan size for current node.
         self.nodes
