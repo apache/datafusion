@@ -88,6 +88,8 @@ pub trait FileSink: DataSink {
             )
             .await?;
         if num_rows == 0 {
+            // If no rows were written, then no files are output either.
+            // In this case, send an empty record batch through to ensure the output file is generated
             let schema = Arc::clone(&config.output_schema);
             let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
             let data = Box::pin(RecordBatchStreamAdapter::new(
