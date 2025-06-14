@@ -140,146 +140,135 @@ impl<W: Write + Seek + Send> IndexedParquetWriter<W> {
 }
 
 
-// Write a Parquet file and embed its distinct "category" values in footer metadata
+const PARQUET_MAGIC: &[u8] = b"PAR1";
+const INDEX_MAGIC: &[u8] = b"IDX1"; // 自定义索引魔术字
+
+// 修改 write_file_with_index 函数
 fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     let field = Field::new("category", DataType::Utf8, false);
     let schema = Arc::new(Schema::new(vec![field.clone()]));
     let arr: ArrayRef = Arc::new(StringArray::from(values.to_vec()));
     let batch = RecordBatch::try_new(schema.clone(), vec![arr])?;
 
-    // Compute distinct values, serialize & Base64‑encode
+    // 计算不同值索引
     let distinct: HashSet<_> = values.iter().copied().collect();
     let serialized = distinct.into_iter().collect::<Vec<_>>().join("\n");
     let index_bytes = serialized.into_bytes();
 
-    let props = WriterProperties::builder()
-        .build();
-
+    let props = WriterProperties::builder().build();
     let file = File::create(path)?;
 
     let mut writer = IndexedParquetWriter::try_new(file, schema.clone(), props)?;
-    // {
-    //     // 1) next_row_group
-    //     let mut rg_writer = writer.writer.next_row_group()?;
-    //
-    //     // 2) 拿到 SerializedColumnWriter
-    //     let mut ser_col_writer: SerializedColumnWriter<'_> =
-    //         rg_writer
-    //             .next_column()?
-    //             .ok_or_else(|| ParquetError::General("No column writer".into()))?;
-    //
-    //     // 3) 通过 typed 拿到具体的 ByteArrayColumnWriter 引用
-    //     let col_writer = ser_col_writer.typed::<ByteArrayType>();
-    //
-    //     // 4) 写入数据
-    //     let values_bytes: Vec<ByteArray> = batch
-    //         .column(0)
-    //         .as_any()
-    //         .downcast_ref::<StringArray>()
-    //         .unwrap()
-    //         .iter()
-    //         .map(|opt| ByteArray::from(opt.unwrap()))
-    //         .collect();
-    //
-    //     println!("Writing values: {:?}", values_bytes);
-    //
-    //     col_writer.write_batch(&values_bytes, None, None)?;
-    //
-    //     // 5) 关闭这个 column writer（.close(self) 会消费 ser_col_writer）
-    //     ser_col_writer.close()?;
-    //
-    //     // 6) 关闭 row‑group
-    //     rg_writer.close()?;
-    // }
 
-    let offset = writer.writer
-        .inner()
-        .seek(SeekFrom::Current(0))?;
+    // 写入数据
+    {
+        let mut rg_writer = writer.writer.next_row_group()?;
+        let mut ser_col_writer = rg_writer
+            .next_column()?
+            .ok_or_else(|| ParquetError::General("No column writer".into()))?;
 
-    println!("Writing distinct index at offset: {} path: {}", offset, path.display());
+        let col_writer = ser_col_writer.typed::<ByteArrayType>();
+        let values_bytes: Vec<ByteArray> = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .iter()
+            .map(|opt| ByteArray::from(opt.unwrap()))
+            .collect();
 
+        println!("Writing values: {:?}", values_bytes);
+        col_writer.write_batch(&values_bytes, None, None)?;
+        ser_col_writer.close()?;
+        rg_writer.close()?;
+    }
+
+    // 获取当前写入位置（索引开始位置）
+    let offset = writer.writer.inner().seek(SeekFrom::Current(0))?;
+
+    // 写入索引魔术字和长度
+    let index_len = index_bytes.len() as u64;
+    writer.writer.inner().write_all(b"IDX1")?; // 4字节魔术字
+    writer.writer.inner().write_all(&index_len.to_le_bytes())?; // 8字节长度
+
+    // 写入索引数据
     writer.writer.inner().write_all(&index_bytes)?;
 
+    // 记录索引元数据
+    writer.writer.append_key_value_metadata(KeyValue::new(
+        "distinct_index_offset".to_string(),
+        offset.to_string(),
+    ));
+    writer.writer.append_key_value_metadata(KeyValue::new(
+        "distinct_index_length".to_string(),
+        index_bytes.len().to_string(),
+    ));
 
-    writer.writer.append_key_value_metadata(
-        KeyValue::new(
-            "distinct_index_offset".into(),
-            offset.to_string(),
-        ),
-    );
-
-    writer.writer.append_key_value_metadata(
-        KeyValue::new(
-            "distinct_index_length".into(),
-            index_bytes.len().to_string(),
-        ),
-    );
-
-    // let final_props = WriterProperties::builder()
-    //     .set_key_value_metadata(Some(vec![
-    //         KeyValue::new("distinct_index_offset".into(), offset.to_string()),
-    //         KeyValue::new("distinct_index_length".into(), index_bytes.len().to_string()),
-    //     ]))
-    //     .build();
-    //
-    // let mut footer_writer =
-    //     SerializedFileWriter::new(
-    //         writer.writer.inner(),
-    //         ArrowSchemaConverter::new().convert(schema.as_ref())?.root_schema_ptr(),
-    //         Arc::new(final_props),
-    //     )?;
-
+    // 关闭写入器（这会写入页脚）
     writer.writer.close()?;
 
-    println!("Finished writing file");
-
+    println!("Finished writing file to {}", path.display());
     Ok(())
 }
 
 
-fn read_distinct_index(path: &Path) -> Result<HashSet<String>> {
-    // 1. Open reader for metadata
-    let reader = SerializedFileReader::new(
-        File::open(path)
-            .map_err(|e| ParquetError::General(e.to_string()))?
-    )?;
-    let meta = reader.metadata().file_metadata();
-    let (off_kv, len_kv) = meta
-        .key_value_metadata()
-        .and_then(|vec| {
-            let off = vec.iter().find(|kv| kv.key == "distinct_index_offset")?;
-            let len = vec.iter().find(|kv| kv.key == "distinct_index_length")?;
-            Some((off, len))
-        })
-        .ok_or_else(|| ParquetError::General("missing index offset/length metadata".into()))?;
+// 修改后的读取函数
+fn read_distinct_index(path: &Path) -> Result<HashSet<String>, ParquetError> {
+    let mut file = File::open(path)?;
 
-    // 2. Parse offset and length, converting any ParseIntError to String
-    let offset: u64 = off_kv
-        .value
-        .as_ref()
-        .ok_or_else(|| ParquetError::General("empty offset".into()))?
+
+    let file_size = file.metadata()?.len();
+    println!("Reading index from {} (size: {})", path.display(), file_size);
+
+    // 1. 读取元数据获取索引位置
+    let reader = SerializedFileReader::new(file.try_clone()?)?;
+    let meta = reader.metadata().file_metadata();
+
+
+    let offset = meta.key_value_metadata()
+        .and_then(|kvs| kvs.iter().find(|kv| kv.key == "distinct_index_offset"))
+        .and_then(|kv| kv.value.as_ref())
+        .ok_or_else(|| ParquetError::General("Missing index offset".into()))?
         .parse::<u64>()
         .map_err(|e| ParquetError::General(e.to_string()))?;
-    let length: usize = len_kv
-        .value
-        .as_ref()
-        .ok_or_else(|| ParquetError::General("empty length".into()))?
+
+    let length = meta.key_value_metadata()
+        .and_then(|kvs| kvs.iter().find(|kv| kv.key == "distinct_index_length"))
+        .and_then(|kv| kv.value.as_ref())
+        .ok_or_else(|| ParquetError::General("Missing index length".into()))?
         .parse::<usize>()
         .map_err(|e| ParquetError::General(e.to_string()))?;
 
-    // 3. Seek & read exactly `length` bytes at `offset`
-    let mut file = File::open(path)
-        .map_err(|e| ParquetError::General(e.to_string()))?;
-    file.seek(SeekFrom::Start(offset))
-        .map_err(|e| ParquetError::General(e.to_string()))?;
-    let mut buf = vec![0u8; length];
-    file.read_exact(&mut buf)
+    println!("Reading index at offset: {}, length: {}", offset, length);
+
+    // 2. 定位并读取索引
+    file.seek(SeekFrom::Start(offset))?;
+
+    // 验证魔术字
+    let mut magic_buf = [0u8; 4];
+    file.read_exact(&mut magic_buf)?;
+    if &magic_buf != INDEX_MAGIC {
+        return Err(ParquetError::General("Invalid index magic".into()));
+    }
+
+    // 读取索引长度
+    let mut len_buf = [0u8; 8];
+    file.read_exact(&mut len_buf)?;
+    let stored_len = u64::from_le_bytes(len_buf) as usize;
+
+    if stored_len != length {
+        return Err(ParquetError::General("Index length mismatch".into()));
+    }
+
+    // 读取索引数据
+    let mut index_buf = vec![0u8; length];
+    file.read_exact(&mut index_buf)?;
+
+    // 3. 解码索引
+    let s = String::from_utf8(index_buf)
         .map_err(|e| ParquetError::General(e.to_string()))?;
 
-    // 4. Decode UTF-8 & split into lines
-    let s = String::from_utf8(buf)
-        .map_err(|e| ParquetError::General(e.to_string()))?;
-    Ok(s.lines().map(|l| l.to_string()).collect())
+    Ok(s.lines().map(|s| s.to_string()).collect())
 }
 
 /// Implement TableProvider for DistinctIndexTable, using the distinct index to prune files
