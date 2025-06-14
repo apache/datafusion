@@ -221,22 +221,26 @@ impl TopK {
             let num_rows = batch.num_rows();
             let array = filtered.into_array(num_rows)?;
             let filter = array.as_boolean().clone();
-            if filter.true_count() == 0 {
+            let true_count = filter.true_count();
+            if true_count == 0 {
                 // nothing to filter, so no need to update
                 return Ok(());
             }
-            let filter_predicate = FilterBuilder::new(&filter);
-            let filter_predicate = if sort_keys.len() > 1 {
-                // Optimize filter when it has multiple sort keys
-                filter_predicate.optimize().build()
-            } else {
-                filter_predicate.build()
-            };
-            selected_rows = Some(filter);
-            sort_keys = sort_keys
-                .iter()
-                .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
-                .collect::<Result<Vec<_>>>()?;
+            // only update the keys / rows if the filter does not match all rows
+            if true_count < num_rows {
+                let filter_predicate = FilterBuilder::new(&filter);
+                let filter_predicate = if sort_keys.len() > 1 {
+                    // Optimize filter when it has multiple sort keys
+                    filter_predicate.optimize().build()
+                } else {
+                    filter_predicate.build()
+                };
+                selected_rows = Some(filter);
+                sort_keys = sort_keys
+                    .iter()
+                    .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
+                    .collect::<Result<Vec<_>>>()?;
+            }
         };
         // reuse existing `Rows` to avoid reallocations
         let rows = &mut self.scratch_rows;
