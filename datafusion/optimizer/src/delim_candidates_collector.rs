@@ -17,7 +17,7 @@
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{JoinKind, LogicalPlan};
 use indexmap::IndexMap;
 
 type ID = usize;
@@ -45,14 +45,23 @@ impl Node {
 struct JoinWithDelimScan {
     // Join node under DelimCandidate.
     node: Node,
-    depth: ID,
+    depth: usize,
+}
+
+impl JoinWithDelimScan {
+    fn new(plan: LogicalPlan, id: ID, depth: usize) -> Self {
+        Self {
+            node: Node::new(plan, id),
+            depth,
+        }
+    }
 }
 
 #[allow(dead_code)]
 struct DelimCandidate {
     node: Node,
     joins: Vec<JoinWithDelimScan>,
-    delim_scan_count: ID,
+    delim_scan_count: usize,
 }
 
 #[allow(dead_code)]
@@ -67,7 +76,7 @@ impl DelimCandidate {
 }
 
 #[allow(dead_code)]
-struct DelimCandidateVisitor {
+struct NodeVisitor {
     nodes: IndexMap<ID, Node>,
     candidates: Vec<DelimCandidate>,
     cur_id: ID,
@@ -77,7 +86,7 @@ struct DelimCandidateVisitor {
 }
 
 #[allow(dead_code)]
-impl DelimCandidateVisitor {
+impl NodeVisitor {
     fn new() -> Self {
         Self {
             nodes: IndexMap::new(),
@@ -116,12 +125,13 @@ impl DelimCandidateVisitor {
     }
 }
 
-impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
+impl TreeNodeVisitor<'_> for NodeVisitor {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, _plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
         self.stack.push(self.cur_id);
         self.cur_id += 1;
+
         Ok(TreeNodeRecursion::Continue)
     }
 
@@ -156,9 +166,171 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
     }
 }
 
+struct DelimCandidateVisitor {
+    candidates: Vec<DelimCandidate>,
+    node_visitor: NodeVisitor,
+    cur_id: ID,
+    // all the node ids from root to the current node
+    // this is mutated duri traversal
+    stack: Vec<usize>,
+}
+
+impl DelimCandidateVisitor {
+    fn new() -> Self {
+        Self {
+            candidates: vec![],
+            node_visitor: NodeVisitor::new(),
+            cur_id: 0,
+            stack: vec![],
+        }
+    }
+}
+
+impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
+    type Node = LogicalPlan;
+
+    fn f_down(&mut self, _plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        self.stack.push(self.cur_id);
+        self.cur_id += 1;
+
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        if let LogicalPlan::Join(join) = plan {
+            if join.join_kind == JoinKind::DelimJoin {
+                let cur_id = self.stack.pop().ok_or(internal_datafusion_err!(
+                    "stack cannot be empty during upward traversal"
+                ))?;
+
+                self.candidates
+                    .push(DelimCandidate::new(plan.clone(), cur_id));
+
+                let left_id = cur_id + 1;
+                // We calculate the right child id from left child's subplan size.
+                let right_id = self
+                    .node_visitor
+                    .nodes
+                    .get(&left_id)
+                    .ok_or_else(|| {
+                        DataFusionError::Plan("right id should exist in join".to_string())
+                    })?
+                    .sub_plan_size
+                    + left_id;
+
+                let mut candidate = self
+                    .candidates
+                    .last_mut()
+                    .ok_or_else(|| internal_datafusion_err!("Candidate should exist"))?;
+                let right_plan = &self
+                    .node_visitor
+                    .nodes
+                    .get(&right_id)
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "right child should exist in join".to_string(),
+                        )
+                    })?
+                    .plan;
+
+                // DelimScan are in the RHS.
+                let mut collector =
+                    DelimCandidatesCollector::new(&mut candidate, 0, cur_id);
+                right_plan.visit(&mut collector)?;
+            }
+        }
+
+        Ok(TreeNodeRecursion::Continue)
+    }
+}
+
+struct DelimCandidatesCollector<'a> {
+    candidate: &'a mut DelimCandidate,
+    depth: usize,
+    cur_id: ID,
+    // all the node ids from root to the current node
+    // this is mutated duri traversal
+    stack: Vec<usize>,
+}
+
+impl<'a> DelimCandidatesCollector<'a> {
+    fn new(candidate: &'a mut DelimCandidate, depth: usize, cur_id: ID) -> Self {
+        Self {
+            candidate,
+            depth,
+            cur_id,
+            stack: vec![],
+        }
+    }
+}
+
+impl<'n> TreeNodeVisitor<'n> for DelimCandidatesCollector<'_> {
+    type Node = LogicalPlan;
+
+    fn f_down(&mut self, _plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        self.stack.push(self.cur_id);
+        self.cur_id += 1;
+
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        let recursion;
+
+        let cur_id = self.stack.pop().ok_or(internal_datafusion_err!(
+            "stack cannot be empty during upward traversal"
+        ))?;
+
+        match plan {
+            LogicalPlan::Join(join) => {
+                if join.join_kind == JoinKind::DelimJoin {
+                    // TODO iterate left child
+                    recursion = TreeNodeRecursion::Stop;
+                } else {
+                    recursion = TreeNodeRecursion::Continue;
+                }
+            }
+            LogicalPlan::DelimGet(_) => {
+                self.candidate.delim_scan_count += 1;
+                recursion = TreeNodeRecursion::Stop;
+            }
+            _ => recursion = TreeNodeRecursion::Continue,
+        }
+
+        if let LogicalPlan::Join(join) = plan {
+            if join.join_kind == JoinKind::DelimJoin
+                && (plan_is_delim_scan(join.left.as_ref())
+                    || plan_is_delim_scan(join.right.as_ref()))
+            {
+                self.candidate.joins.push(JoinWithDelimScan::new(
+                    plan.clone(),
+                    cur_id,
+                    self.depth,
+                ));
+            }
+        }
+
+        Ok(recursion)
+    }
+}
+
+fn plan_is_delim_scan(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Filter(filter) => {
+            if let LogicalPlan::DelimGet(_) = filter.input.as_ref() {
+                true
+            } else {
+                false
+            }
+        }
+        LogicalPlan::DelimGet(_) => true,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::delim_candidates_collector::DelimCandidateVisitor;
+    use crate::delim_candidates_collector::NodeVisitor;
     use crate::test::test_table_scan_with_name;
     use datafusion_common::Result;
     use datafusion_expr::{expr_fn::col, lit, JoinType, LogicalPlan, LogicalPlanBuilder};
@@ -175,7 +347,7 @@ mod tests {
         //   Filter: t1.a = Int32(1)
         //     TableScan: t1
 
-        let mut visitor = DelimCandidateVisitor::new();
+        let mut visitor = NodeVisitor::new();
         visitor.collect_nodes(&plan)?;
 
         assert_eq!(visitor.nodes.len(), 3);
@@ -226,7 +398,7 @@ mod tests {
         //     Filter: t2.a = Int32(2)
         //       TableScan: t2
 
-        let mut visitor = DelimCandidateVisitor::new();
+        let mut visitor = NodeVisitor::new();
         visitor.collect_nodes(&plan)?;
 
         // Verify nodes count
@@ -306,7 +478,7 @@ mod tests {
         //           TableScan: t2
         //       TableScan: t4
 
-        let mut visitor = DelimCandidateVisitor::new();
+        let mut visitor = NodeVisitor::new();
         visitor.collect_nodes(&plan)?;
 
         // Add assertions to verify the structure
