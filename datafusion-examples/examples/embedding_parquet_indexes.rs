@@ -360,7 +360,12 @@ async fn main() -> Result<()> {
     let schema_ref = Arc::new(Schema::new(vec![field]));
     let provider = Arc::new(DistinctIndexTable::try_new(dir, schema_ref.clone())?);
     let ctx = SessionContext::new();
+
     ctx.register_table("t", provider)?;
+
+    // 3. Run a query: only files containing 'foo' get scanned
+    let df = ctx.sql("SELECT * FROM t").await?;
+    df.show().await?;
 
     // 3. Run a query: only files containing 'foo' get scanned
     let df = ctx.sql("SELECT * FROM t WHERE category = 'foo'").await?;
