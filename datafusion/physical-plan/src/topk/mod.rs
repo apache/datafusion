@@ -228,7 +228,9 @@ impl TopK {
             }
             // only update the keys / rows if the filter does not match all rows
             if true_count < num_rows {
-                // Indices should be correct w.r.t. null indices
+                // Indices in `set_indices` should be correct if filter contains nulls
+                // So we prepare the filter here. Note this is also done in the `FilterBuilder`
+                // so there is no overhead to do this here.
                 if filter.nulls().is_some() {
                     filter = prep_null_mask_filter(&filter);
                 }
