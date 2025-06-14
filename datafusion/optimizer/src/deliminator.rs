@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::hash_set;
+
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
-use datafusion_common::Result;
-use datafusion_expr::{Join, JoinKind, LogicalPlan};
+use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_expr::{interval_arithmetic, Join, JoinKind, JoinType, LogicalPlan};
+use itertools::join;
 
 use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
@@ -50,9 +53,9 @@ impl OptimizerRule for Deliminator {
 
         let mut visitor = DelimCandidateVisitor::new();
         let _ = rewrite_result.data.visit(&mut visitor)?;
-        for candidate in visitor.candidates {
+        for candidate in &visitor.candidates {
             println!("=== DelimCandidate ===");
-            println!("  op: {}", candidate.op.display());
+            println!("  plan: {}", candidate.plan.display());
             println!("  delim_get_count: {}", candidate.delim_get_count);
             println!("  joins: [");
             for join in &candidate.joins {
@@ -65,6 +68,61 @@ impl OptimizerRule for Deliminator {
             println!("==================\n");
         }
 
+        if visitor.candidates.is_empty() {
+            return Ok(rewrite_result);
+        }
+
+        for candidate in visitor.candidates.iter_mut() {
+            let delim_join = &candidate.delim_join;
+            let plan = &candidate.plan;
+
+            // Sort these so the deepest are first.
+            candidate.joins.sort_by(|a, b| b.depth.cmp(&a.depth));
+
+            let mut all_removed = true;
+            if !candidate.joins.is_empty() {
+                let mut has_selection = false;
+                plan.apply(|plan| {
+                    match plan {
+                        LogicalPlan::TableScan(_) => {
+                            has_selection = true;
+                            return Ok(TreeNodeRecursion::Stop);
+                        }
+                        LogicalPlan::Filter(_) => {
+                            has_selection = true;
+                            return Ok(TreeNodeRecursion::Stop);
+                        }
+                        _ => {}
+                    }
+
+                    Ok(TreeNodeRecursion::Continue)
+                });
+
+                if has_selection {
+                    // Keey the deepest join with DelimScan in these cases,
+                    // as the selection can greatly reduce the cost of the RHS child of the
+                    // DelimJoin.
+                    candidate.joins.remove(0);
+                    all_removed = false;
+                }
+
+                let mut all_equality_conditions = true;
+                for join in &candidate.joins {
+                    // TODO remove join with delim scan.
+                }
+
+                // Change type if there are no more duplicate-eliminated columns.
+                if candidate.joins.len() == candidate.delim_get_count && all_removed {
+                    // TODO: how we can change it.
+                    // delim_join.join_kind = JoinKind::ComparisonJoin;
+                }
+
+                // Only DelimJoins are ever created as SINGLE joins, and we can switch from SINGLE
+                // to LEFT if the RHS is de-deuplicated by an aggr.
+                // TODO: add single join support.
+            }
+        }
+
         Ok(rewrite_result)
     }
 
@@ -75,6 +133,88 @@ impl OptimizerRule for Deliminator {
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
     }
+}
+
+fn remove_join_with_delim_scan(
+    delim_join: &Join,
+    delim_get_count: usize,
+    join: &LogicalPlan,
+    all_equality_conditions: &mut bool,
+) -> Result<bool> {
+    if let LogicalPlan::Join(join) = join {
+        if !child_join_type_can_be_deliminated(join.join_type) {
+            return Ok(false);
+        }
+
+        // Fetch delim scan.
+        let mut plan_pair = fetch_delim_scan(join.left.as_ref());
+        if plan_pair.1.is_none() {
+            plan_pair = fetch_delim_scan(join.right.as_ref());
+        }
+
+        let delim_scan = plan_pair
+            .1
+            .ok_or_else(|| DataFusionError::Plan("No delim scan found".to_string()))?;
+        let delim_scan = if let LogicalPlan::DelimGet(delim_scan) = delim_scan {
+            delim_scan
+        } else {
+            return internal_err!("unreachable");
+        };
+
+        if join.on.len() != delim_scan.delim_types.len() {
+            // Joining with delim scan adds new information.
+            return Ok(false);
+        }
+
+        // Check if joining with the delim scan is redundant, and collect relevant column
+        // information.
+    } else {
+        return internal_err!("current plan must be join in remove_join_with_delim_scan");
+    }
+
+    todo!()
+}
+
+fn child_join_type_can_be_deliminated(join_type: JoinType) -> bool {
+    match join_type {
+        JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => true,
+        _ => false,
+    }
+}
+
+// fetch filter (if any) and delim scan
+fn fetch_delim_scan(plan: &LogicalPlan) -> (Option<&LogicalPlan>, Option<&LogicalPlan>) {
+    match plan {
+        LogicalPlan::Filter(filter) => {
+            if let LogicalPlan::SubqueryAlias(alias) = filter.input.as_ref() {
+                if let LogicalPlan::DelimGet(_) = alias.input.as_ref() {
+                    return (Some(plan), Some(alias.input.as_ref()));
+                };
+            };
+        }
+        LogicalPlan::SubqueryAlias(alias) => {
+            if let LogicalPlan::DelimGet(_) = alias.input.as_ref() {
+                return (None, Some(alias.input.as_ref()));
+            }
+        }
+        _ => return (None, None),
+    }
+
+    todo!()
+}
+
+fn remove_inequality_join_with_delim_scan(
+    delim_join: &Join,
+    delim_get_count: usize,
+    join: &LogicalPlan,
+) -> Result<bool> {
+    if let LogicalPlan::Join(join) = join {
+        let delim_on = &delim_join.on;
+    } else {
+        return internal_err!("current plan must be join in remove_inequality_join_with_delim_scan");
+    }
+
+    todo!()
 }
 
 struct JoinWithDelimGet {
@@ -90,16 +230,16 @@ impl JoinWithDelimGet {
 
 #[allow(dead_code)]
 struct DelimCandidate {
-    op: LogicalPlan,
+    plan: LogicalPlan,
     delim_join: Join,
     joins: Vec<JoinWithDelimGet>,
     delim_get_count: usize,
 }
 
 impl DelimCandidate {
-    fn new(op: LogicalPlan, delim_join: Join) -> Self {
+    fn new(plan: LogicalPlan, delim_join: Join) -> Self {
         Self {
-            op,
+            plan,
             delim_join,
             joins: vec![],
             delim_get_count: 0,
@@ -327,8 +467,6 @@ mod tests {
                         ),
                 )?
                 .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv1.a"))])?
-                // TODO: if uncomment this the test fail
-                // .project(vec![count(col("inner_table_lv1.a")).alias("count_a")])?
                 .build()?,
         );
 
@@ -367,5 +505,4 @@ mod tests {
         ");
         Ok(())
     }
-
 }
