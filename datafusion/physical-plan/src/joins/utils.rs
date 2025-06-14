@@ -850,6 +850,43 @@ pub(crate) fn apply_join_filter_to_indices(
     ))
 }
 
+
+pub(crate) fn apply_join_filter_to_hash_indices(
+    build_input_buffer: &Vec<RecordBatch>,
+    probe_batch: &RecordBatch,
+    build_indices: Vec<(usize, usize)>,
+    probe_indices: UInt32Array,
+    filter: &JoinFilter,
+    build_side: JoinSide,
+) -> Result<(Vec<(usize, usize)>, UInt32Array)> {
+    if build_indices.is_empty() && probe_indices.is_empty() {
+        return Ok((build_indices, probe_indices));
+    };
+
+    let intermediate_batch = build_batch_from_hash_indices(
+        filter.schema(),
+        build_input_buffer,
+        build_indexes,
+        probe_batch,
+        &build_indices,
+        &probe_indices,
+        filter.column_indices(),
+        build_side,
+    )?;
+    let filter_result = filter
+        .expression()
+        .evaluate(&intermediate_batch)?
+        .into_array(intermediate_batch.num_rows())?;
+    let mask = as_boolean_array(&filter_result)?;
+
+    let left_filtered = compute::filter(&build_indices, mask)?;
+    let right_filtered = compute::filter(&probe_indices, mask)?;
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
+}
+
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_from_indices(
@@ -892,6 +929,61 @@ pub(crate) fn build_batch_from_indices(
                 new_null_array(array.data_type(), build_indices.len())
             } else {
                 compute::take(array.as_ref(), build_indices, None)?
+            }
+        } else {
+            let array = probe_batch.column(column_index.index);
+            if array.is_empty() || probe_indices.null_count() == probe_indices.len() {
+                assert_eq!(probe_indices.null_count(), probe_indices.len());
+                new_null_array(array.data_type(), probe_indices.len())
+            } else {
+                compute::take(array.as_ref(), probe_indices, None)?
+            }
+        };
+        columns.push(array);
+    }
+    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+}
+
+pub(crate) fn build_batch_from_hash_indices(
+    schema: &Schema,
+    build_input_buffer: &Vec<RecordBatch>,
+    probe_batch: &RecordBatch,
+    build_indices: &Vec<(usize, usize)>,
+    probe_indices: &UInt32Array,
+    column_indices: &[ColumnIndex],
+    build_side: JoinSide,
+) -> Result<RecordBatch> {
+    if schema.fields().is_empty() {
+        let options = RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(build_indices.len()));
+
+        return Ok(RecordBatch::try_new_with_options(
+            Arc::new(schema.clone()),
+            vec![],
+            &options,
+        )?);
+    }
+
+    // build the columns of the new [RecordBatch]:
+    // 1. pick whether the column is from the left or right
+    // 2. based on the pick, `take` items from the different RecordBatches
+    let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
+
+    for column_index in column_indices {
+        let array = if column_index.side == JoinSide::None {
+            // LeftMark join, the mark column is a true if the indices is not null, otherwise it will be false
+            Arc::new(compute::is_not_null(probe_indices)?)
+        } else if column_index.side == build_side {
+            let array = build_input_buffer.column(column_index.index);
+            if array.is_empty() || build_indices.null_count() == build_indices.len() {
+                // Outer join would generate a null index when finding no match at our side.
+                // Therefore, it's possible we are empty but need to populate an n-length null array,
+                // where n is the length of the index array.
+                assert_eq!(build_indices.null_count(), build_indices.len());
+                new_null_array(array.data_type(), build_indices.len())
+            } else {
+                compute::interleave(array.as_ref(), build_indices)?
             }
         } else {
             let array = probe_batch.column(column_index.index);
