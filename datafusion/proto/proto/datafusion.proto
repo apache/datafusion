@@ -726,7 +726,7 @@ message PhysicalPlanNode {
     ParquetSinkExecNode parquet_sink = 29;
     UnnestExecNode unnest = 30;
     JsonScanExecNode json_scan = 31;
-    YieldStreamExecNode  yield_stream = 32;
+    CooperativeExecNode cooperative = 32;
   }
 }
 
@@ -1034,9 +1034,8 @@ message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 
-message YieldStreamExecNode {
+message CooperativeExecNode {
   PhysicalPlanNode input = 1;
-  uint32 frequency = 2;
 }
 
 enum PartitionMode {
