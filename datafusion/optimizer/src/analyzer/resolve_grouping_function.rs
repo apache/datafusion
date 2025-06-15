@@ -189,18 +189,6 @@ fn grouping_function_on_id(
     }
 
     let group_by_expr_count = group_by_expr.len();
-    let literal = |value: usize| {
-        if group_by_expr_count < 8 {
-            Expr::Literal(ScalarValue::from(value as u8), None)
-        } else if group_by_expr_count < 16 {
-            Expr::Literal(ScalarValue::from(value as u16), None)
-        } else if group_by_expr_count < 32 {
-            Expr::Literal(ScalarValue::from(value as u32), None)
-        } else {
-            Expr::Literal(ScalarValue::from(value as u64), None)
-        }
-    };
-
     let grouping_id_column = Expr::Column(Column::from(Aggregate::INTERNAL_GROUPING_ID));
     // The grouping call is exactly our internal grouping id
     if args.len() == group_by_expr_count
@@ -222,8 +210,11 @@ fn grouping_function_on_id(
         })
         .collect::<Vec<_>>();
 
-    let indices = Expr::Literal(ScalarValue::List(Arc::new(
-        ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(args)]),
-    )));
+    let indices = Expr::Literal(
+        ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(args)],
+        ))),
+        None,
+    );
     Ok(grouping().call(vec![grouping_id_column, indices]))
 }

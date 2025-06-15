@@ -209,7 +209,7 @@ pub(crate) fn unproject_agg_exprs(
                 let grouping_expr = grouping_set_to_exprlist(&agg.group_expr)?;
                 let args = if grouping.args.len() == 1 {
                     grouping_expr.iter().map(|e| (*e).clone()).collect()
-                } else if let Expr::Literal(ScalarValue::List(list)) = &grouping.args[1] {
+                } else if let Expr::Literal(ScalarValue::List(list), _) = &grouping.args[1] {
                     if list.len() != 1 {
                         return internal_err!("The second argument of grouping function must be a list with exactly one element");
                     }

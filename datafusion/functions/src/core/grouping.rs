@@ -244,8 +244,11 @@ mod tests {
         let result = func.invoke_with_args(ScalarFunctionArgs {
             args,
             number_rows: 4,
-            arg_fields: arg_fields_owned.iter().collect::<Vec<_>>(),
-            return_field: &Field::new("f", DataType::Int32, true),
+            arg_fields: arg_fields_owned
+                .iter()
+                .map(|f| Arc::new(f.clone()))
+                .collect::<Vec<_>>(),
+            return_field: Arc::new(Field::new("f", DataType::Int32, true)),
         })?;
 
         let result = match result {
@@ -280,8 +283,11 @@ mod tests {
         let result = func.invoke_with_args(ScalarFunctionArgs {
             args,
             number_rows: 4,
-            arg_fields: arg_fields_owned.iter().collect::<Vec<_>>(),
-            return_field: &Field::new("f", DataType::Int32, true),
+            arg_fields: arg_fields_owned
+                .iter()
+                .map(|f| Arc::new(f.clone()))
+                .collect::<Vec<_>>(),
+            return_field: Arc::new(Field::new("f", DataType::Int32, true)),
         })?;
 
         let result = match result {
@@ -316,8 +322,11 @@ mod tests {
         let result = func.invoke_with_args(ScalarFunctionArgs {
             args,
             number_rows: 4,
-            arg_fields: arg_fields_owned.iter().collect::<Vec<_>>(),
-            return_field: &Field::new("f", DataType::Int32, true),
+            arg_fields: arg_fields_owned
+                .iter()
+                .map(|f| Arc::new(f.clone()))
+                .collect::<Vec<_>>(),
+            return_field: Arc::new(Field::new("f", DataType::Int32, true)),
         })?;
 
         let result = match result {
@@ -351,9 +360,12 @@ mod tests {
         let func = GroupingFunc::new();
         let result = func.invoke_with_args(ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields_owned.iter().collect::<Vec<_>>(),
+            arg_fields: arg_fields_owned
+                .iter()
+                .map(|f| Arc::new(f.clone()))
+                .collect::<Vec<_>>(),
             number_rows: 4,
-            return_field: &Field::new("f", DataType::Int32, true),
+            return_field: Arc::new(Field::new("f", DataType::Int32, true)),
         })?;
 
         let result = match result {
@@ -389,9 +401,12 @@ mod tests {
         let func = GroupingFunc::new();
         let result = func.invoke_with_args(ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields_owned.iter().collect::<Vec<_>>(),
+            arg_fields: arg_fields_owned
+                .iter()
+                .map(|f| Arc::new(f.clone()))
+                .collect::<Vec<_>>(),
             number_rows: 4,
-            return_field: &Field::new("f", DataType::Int32, true),
+            return_field: Arc::new(Field::new("f", DataType::Int32, true)),
         });
         assert!(result.is_err());
 
@@ -406,9 +421,12 @@ mod tests {
         let func = GroupingFunc::new();
         let result = func.invoke_with_args(ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields_owned.iter().collect::<Vec<_>>(),
+            arg_fields: arg_fields_owned
+                .iter()
+                .map(|f| Arc::new(f.clone()))
+                .collect::<Vec<_>>(),
             number_rows: 1,
-            return_field: &Field::new("f", DataType::Int32, true),
+            return_field: Arc::new(Field::new("f", DataType::Int32, true)),
         });
         assert!(result.is_err());
         Ok(())
