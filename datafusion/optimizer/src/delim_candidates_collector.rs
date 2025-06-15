@@ -234,8 +234,12 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
                     .plan;
 
                 // DelimScan are in the RHS.
-                let mut collector =
-                    DelimCandidatesCollector::new(&mut candidate, 0, cur_id);
+                let mut collector = DelimCandidatesCollector::new(
+                    &self.node_visitor,
+                    &mut candidate,
+                    0,
+                    cur_id,
+                );
                 right_plan.visit(&mut collector)?;
             }
         }
@@ -245,6 +249,7 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
 }
 
 struct DelimCandidatesCollector<'a> {
+    node_visitor: &'a NodeVisitor,
     candidate: &'a mut DelimCandidate,
     depth: usize,
     cur_id: ID,
@@ -254,8 +259,14 @@ struct DelimCandidatesCollector<'a> {
 }
 
 impl<'a> DelimCandidatesCollector<'a> {
-    fn new(candidate: &'a mut DelimCandidate, depth: usize, cur_id: ID) -> Self {
+    fn new(
+        node_visitor: &'a NodeVisitor,
+        candidate: &'a mut DelimCandidate,
+        depth: usize,
+        cur_id: ID,
+    ) -> Self {
         Self {
+            node_visitor,
             candidate,
             depth,
             cur_id,
@@ -284,7 +295,26 @@ impl<'n> TreeNodeVisitor<'n> for DelimCandidatesCollector<'_> {
         match plan {
             LogicalPlan::Join(join) => {
                 if join.join_kind == JoinKind::DelimJoin {
-                    // TODO iterate left child
+                    // iterate left child
+                    let left_child_id = cur_id + 1;
+                    let left_plan = &self
+                        .node_visitor
+                        .nodes
+                        .get(&left_child_id)
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(
+                                "left child should exist in join".to_string(),
+                            )
+                        })?
+                        .plan;
+                    let mut new_collector = DelimCandidatesCollector::new(
+                        &self.node_visitor,
+                        &mut self.candidate,
+                        self.depth + 1,
+                        cur_id + 1,
+                    );
+                    left_plan.visit(&mut new_collector)?;
+
                     recursion = TreeNodeRecursion::Stop;
                 } else {
                     recursion = TreeNodeRecursion::Continue;
@@ -309,6 +339,8 @@ impl<'n> TreeNodeVisitor<'n> for DelimCandidatesCollector<'_> {
                 ));
             }
         }
+
+        self.depth += 1;
 
         Ok(recursion)
     }
