@@ -552,6 +552,7 @@ impl GroupedHashAggregateStream {
             context.runtime_env(),
             metrics::SpillMetrics::new(&agg.metrics, partition),
             Arc::clone(&partial_agg_schema),
+            context.session_config().spill_compression(),
         );
 
         let spill_state = SpillState {
