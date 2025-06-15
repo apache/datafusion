@@ -203,7 +203,7 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
                 Expr::Literal(ScalarValue::Int64(Some(n)), _) => normalize_args.push(*n),
                 other => {
                     return plan_err!(
-                        "Argument #{} must be an integer literal or null value, got {} ({:?})",
+                        "Argument #{} must be an INTEGER or NULL, got {} ({:?})",
                         expr_index + 1,
                         other,
                         other
