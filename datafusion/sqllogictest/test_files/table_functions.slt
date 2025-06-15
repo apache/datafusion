@@ -177,7 +177,7 @@ statement error DataFusion error: Error during planning: generate_series functio
 SELECT * FROM generate_series(1, 2, 3, 4)
 
 
-statement error DataFusion error: Error during planning: Argument #1 must be an INTEGER or NULL, got Utf8\("foo"\) \(Literal\(Utf8\("foo"\), None\)\)
+statement error DataFusion error: Error during planning: Argument #1 must be an INTEGER or NULL, got Literal\(Utf8\("foo"\), None\)
 SELECT * FROM generate_series('foo', 'bar')
 
 # UDF and UDTF `generate_series` can be used simultaneously
@@ -294,10 +294,10 @@ statement error DataFusion error: Error during planning: range function requires
 SELECT * FROM range(1, 2, 3, 4)
 
 
-statement error DataFusion error: Error during planning: Argument #1 must be an INTEGER or NULL, got Utf8\("foo"\) \(Literal\(Utf8\("foo"\), None\)\)
+statement error DataFusion error: Error during planning: Argument #1 must be an INTEGER or NULL, got Literal\(Utf8\("foo"\), None\)
 SELECT * FROM range('foo', 'bar')
 
-statement error DataFusion error: Error during planning: Argument #2 must be an INTEGER or NULL, got Utf8\("bar"\) \(Literal\(Utf8\("bar"\), None\)\)
+statement error DataFusion error: Error during planning: Argument #2 must be an INTEGER or NULL, got Literal\(Utf8\("foo"\), None\)
 SELECT * FROM range(1, 'bar')
 
 # UDF and UDTF `range` can be used simultaneously
