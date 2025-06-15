@@ -197,11 +197,17 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
         }
 
         let mut normalize_args = Vec::new();
-        for expr in exprs {
+        for (expr_index, expr) in exprs.iter().enumerate() {
             match expr {
                 Expr::Literal(ScalarValue::Null, _) => {}
                 Expr::Literal(ScalarValue::Int64(Some(n)), _) => normalize_args.push(*n),
-                _ => return plan_err!("First argument must be an integer literal"),
+                other => {
+                    return plan_err!(
+                        "Argument #{} must be an INTEGER or NULL, got {:?}",
+                        expr_index + 1,
+                        other
+                    )
+                }
             };
         }
 
@@ -232,15 +238,15 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
         };
 
         if start > end && step > 0 {
-            return plan_err!("start is bigger than end, but increment is positive: cannot generate infinite series");
+            return plan_err!("Start is bigger than end, but increment is positive: Cannot generate infinite series");
         }
 
         if start < end && step < 0 {
-            return plan_err!("start is smaller than end, but increment is negative: cannot generate infinite series");
+            return plan_err!("Start is smaller than end, but increment is negative: Cannot generate infinite series");
         }
 
         if step == 0 {
-            return plan_err!("step cannot be zero");
+            return plan_err!("Step cannot be zero");
         }
 
         Ok(Arc::new(GenerateSeriesTable {
