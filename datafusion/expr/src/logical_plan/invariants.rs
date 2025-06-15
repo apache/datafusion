@@ -201,20 +201,27 @@ pub fn check_subquery_expr(
             }?;
             match outer_plan {
                 LogicalPlan::Projection(_)
-                | LogicalPlan::Filter(_) => Ok(()),
-                LogicalPlan::Aggregate(Aggregate { group_expr, aggr_expr, .. }) => {
+                | LogicalPlan::Filter(_)
+                | LogicalPlan::DependentJoin(_) => Ok(()),
+                LogicalPlan::Aggregate(Aggregate {
+                    group_expr,
+                    aggr_expr,
+                    ..
+                }) => {
                     if group_expr.contains(expr) && !aggr_expr.contains(expr) {
                         // TODO revisit this validation logic
                         plan_err!(
-                            "Correlated scalar subquery in the GROUP BY clause must also be in the aggregate expressions"
+                            "Correlated scalar subquery in the GROUP BY clause must \
+                            also be in the aggregate expressions"
                         )
                     } else {
                         Ok(())
                     }
                 }
                 _ => plan_err!(
-                    "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan nodes"
-                )
+                    "Correlated scalar subquery can only be used in Projection, Filter, \
+                    Aggregate, DependentJoin plan nodes"
+                ),
             }?;
         }
         check_correlations_in_subquery(inner_plan)
@@ -235,11 +242,12 @@ pub fn check_subquery_expr(
             | LogicalPlan::TableScan(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Join(_) => Ok(()),
+            | LogicalPlan::Join(_)
+            | LogicalPlan::DependentJoin(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
-                Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, \
-                but was used in [{}]",
+                Projection, Filter, TableScan, Window functions, Aggregate, Join and \
+                Dependent Join plan nodes, but was used in [{}]",
                 outer_plan.display()
             ),
         }?;
@@ -323,6 +331,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
             }
         },
         LogicalPlan::Extension(_) => Ok(()),
+        LogicalPlan::DependentJoin(_) => Ok(()),
         plan => check_no_outer_references(plan),
     }
 }
