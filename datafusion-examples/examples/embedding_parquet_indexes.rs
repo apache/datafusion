@@ -109,7 +109,6 @@ impl DistinctIndexTable {
             }
             let file_name = path.file_name().unwrap().to_string_lossy().to_string();
 
-            // 直接用工具函数读取该文件的 distinct index
             let distinct_set = read_distinct_index(&path)?;
 
             println!("Read distinct index for {}: {:?}", file_name, distinct_set);
@@ -180,8 +179,8 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     let offset = writer.writer.inner().seek(SeekFrom::Current(0))?;
 
     let index_len = index_bytes.len() as u64;
-    writer.writer.inner().write_all(b"IDX1")?; // 4字节魔术字
-    writer.writer.inner().write_all(&index_len.to_le_bytes())?; // 8字节长度
+    writer.writer.inner().write_all(b"IDX1")?;
+    writer.writer.inner().write_all(&index_len.to_le_bytes())?;
 
     writer.writer.inner().write_all(&index_bytes)?;
 
