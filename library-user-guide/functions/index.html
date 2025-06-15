@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Specifications &#8212; Apache DataFusion  documentation</title>
+    <title>Functions &#8212; Apache DataFusion  documentation</title>
     
     <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -33,8 +33,8 @@
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Invariants" href="invariants.html" />
-    <link rel="prev" title="Inviting New Committers and PMC Members" href="../inviting.html" />
+    <link rel="next" title="Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions" href="adding-udfs.html" />
+    <link rel="prev" title="Catalogs, Schemas, and Tables" href="../catalogs.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -315,24 +315,24 @@
   Library User Guide
  </span>
 </p>
-<ul class="nav bd-sidenav">
+<ul class="current nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/index.html">
+  <a class="reference internal" href="../index.html">
    Introduction
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/extensions.html">
+  <a class="reference internal" href="../extensions.html">
    Extensions List
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/using-the-sql-api.html">
+  <a class="reference internal" href="../using-the-sql-api.html">
    Using the SQL API
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/working-with-exprs.html">
+  <a class="reference internal" href="../working-with-exprs.html">
    Working with
    <code class="docutils literal notranslate">
     <span class="pre">
@@ -343,69 +343,69 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/using-the-dataframe-api.html">
+  <a class="reference internal" href="../using-the-dataframe-api.html">
    Using the DataFrame API
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/building-logical-plans.html">
+  <a class="reference internal" href="../building-logical-plans.html">
    Building Logical Plans
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/catalogs.html">
+  <a class="reference internal" href="../catalogs.html">
    Catalogs, Schemas, and Tables
   </a>
  </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../library-user-guide/functions/index.html">
+ <li class="toctree-l1 current active has-children">
+  <a class="current reference internal" href="#">
    Functions
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
   <label for="toctree-checkbox-3">
    <i class="fas fa-chevron-down">
    </i>
   </label>
   <ul>
    <li class="toctree-l2">
-    <a class="reference internal" href="../../library-user-guide/functions/adding-udfs.html">
+    <a class="reference internal" href="adding-udfs.html">
      Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../../library-user-guide/functions/spark.html">
+    <a class="reference internal" href="spark.html">
      Spark Compatible Functions
     </a>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/custom-table-providers.html">
+  <a class="reference internal" href="../custom-table-providers.html">
    Custom Table Provider
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/table-constraints.html">
+  <a class="reference internal" href="../table-constraints.html">
    Table Constraint Enforcement
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/extending-operators.html">
+  <a class="reference internal" href="../extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/profiling.html">
+  <a class="reference internal" href="../profiling.html">
    Profiling Cookbook
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/query-optimizer.html">
+  <a class="reference internal" href="../query-optimizer.html">
    DataFusion Query Optimizer
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/upgrading.html">
+  <a class="reference internal" href="../upgrading.html">
    Upgrade Guides
   </a>
  </li>
@@ -415,86 +415,86 @@
   Contributor Guide
  </span>
 </p>
-<ul class="current nav bd-sidenav">
+<ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="../index.html">
+  <a class="reference internal" href="../../contributor-guide/index.html">
    Introduction
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../communication.html">
+  <a class="reference internal" href="../../contributor-guide/communication.html">
    Communication
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../development_environment.html">
+  <a class="reference internal" href="../../contributor-guide/development_environment.html">
    Development Environment
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../architecture.html">
+  <a class="reference internal" href="../../contributor-guide/architecture.html">
    Architecture
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../testing.html">
+  <a class="reference internal" href="../../contributor-guide/testing.html">
    Testing
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../api-health.html">
+  <a class="reference internal" href="../../contributor-guide/api-health.html">
    API health policy
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../howtos.html">
+  <a class="reference internal" href="../../contributor-guide/howtos.html">
    HOWTOs
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../roadmap.html">
+  <a class="reference internal" href="../../contributor-guide/roadmap.html">
    Roadmap
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../governance.html">
+  <a class="reference internal" href="../../contributor-guide/governance.html">
    Governance
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../inviting.html">
+  <a class="reference internal" href="../../contributor-guide/inviting.html">
    Inviting New Committers and PMC Members
   </a>
  </li>
- <li class="toctree-l1 current active has-children">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../contributor-guide/specification/index.html">
    Specifications
   </a>
-  <input checked="" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
   <label for="toctree-checkbox-4">
    <i class="fas fa-chevron-down">
    </i>
   </label>
   <ul>
    <li class="toctree-l2">
-    <a class="reference internal" href="invariants.html">
+    <a class="reference internal" href="../../contributor-guide/specification/invariants.html">
      Invariants
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="output-field-name-semantic.html">
+    <a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">
      Output field name semantics
     </a>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../gsoc_application_guidelines.html">
+  <a class="reference internal" href="../../contributor-guide/gsoc_application_guidelines.html">
    GSoC Application Guidelines
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../gsoc_project_ideas.html">
+  <a class="reference internal" href="../../contributor-guide/gsoc_project_ideas.html">
    GSoC Project Ideas
   </a>
  </li>
@@ -553,7 +553,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/specification/index.rst">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/functions/index.rst">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -572,19 +572,19 @@
               
               <div>
                 
-  <section id="specifications">
-<h1>Specifications<a class="headerlink" href="#specifications" title="Link to this heading">¶</a></h1>
-<p>We formalize some DataFusion semantics and behaviors through specification
-documents. These specifications are useful to be used as references to help
-resolve ambiguities during development or code reviews.</p>
-<p>You are also welcome to propose changes to existing specifications or create
-new specifications as you see fit. All specifications are stored in the
-<cite>docs/source/specification</cite> folder. Here is the list current active
-specifications:</p>
+  <section id="functions">
+<h1>Functions<a class="headerlink" href="#functions" title="Link to this heading">¶</a></h1>
 <div class="toctree-wrapper compound">
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="invariants.html">Invariants</a></li>
-<li class="toctree-l1"><a class="reference internal" href="output-field-name-semantic.html">Output field name semantics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="adding-udfs.html#adding-a-scalar-udf">Adding a Scalar UDF</a></li>
+<li class="toctree-l2"><a class="reference internal" href="adding-udfs.html#adding-a-window-udf">Adding a Window UDF</a></li>
+<li class="toctree-l2"><a class="reference internal" href="adding-udfs.html#adding-an-aggregate-udf">Adding an Aggregate UDF</a></li>
+<li class="toctree-l2"><a class="reference internal" href="adding-udfs.html#adding-a-user-defined-table-function">Adding a User-Defined Table Function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="adding-udfs.html#custom-expression-planning">Custom Expression Planning</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="spark.html">Spark Compatible Functions</a></li>
 </ul>
 </div>
 </section>
@@ -595,17 +595,17 @@ specifications:</p>
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="../inviting.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="../catalogs.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Inviting New Committers and PMC Members</p>
+            <p class="prev-next-title">Catalogs, Schemas, and Tables</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="invariants.html" title="next page">
+    <a class='right-next' id="next-link" href="adding-udfs.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Invariants</p>
+        <p class="prev-next-title">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

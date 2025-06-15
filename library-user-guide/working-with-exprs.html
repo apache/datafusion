@@ -357,10 +357,27 @@
    Catalogs, Schemas, and Tables
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="adding-udfs.html">
-   Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="functions/index.html">
+   Functions
   </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="functions/adding-udfs.html">
+     Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="functions/spark.html">
+     Spark Compatible Functions
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="custom-table-providers.html">
@@ -453,8 +470,8 @@
   <a class="reference internal" href="../contributor-guide/specification/index.html">
    Specifications
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
-  <label for="toctree-checkbox-3">
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
    <i class="fas fa-chevron-down">
    </i>
   </label>
@@ -716,7 +733,7 @@
 </section>
 <section id="a-scalar-udf-example">
 <h2>A Scalar UDF Example<a class="headerlink" href="#a-scalar-udf-example" title="Link to this heading">¶</a></h2>
-<p>We’ll use a <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code> expression as our example. This necessitates implementing an actual UDF, and for ease we’ll use the same example from the <a class="reference internal" href="adding-udfs.html"><span class="std std-doc">adding UDFs</span></a> guide.</p>
+<p>We’ll use a <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code> expression as our example. This necessitates implementing an actual UDF, and for ease we’ll use the same example from the <a class="reference internal" href="functions/adding-udfs.html"><span class="std std-doc">adding UDFs</span></a> guide.</p>
 <p>So assuming you’ve written that function, you can use it to create an <code class="docutils literal notranslate"><span class="pre">Expr</span></code>:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">create_udf</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">datatypes</span><span class="p">::</span><span class="n">DataType</span><span class="p">;</span>

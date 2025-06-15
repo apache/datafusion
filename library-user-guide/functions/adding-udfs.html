@@ -1,40 +1,40 @@
 <!DOCTYPE html>
 
-<html lang="en" data-content_root="../">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions &#8212; Apache DataFusion  documentation</title>
     
-    <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
-<link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+    <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
   
     
     <link rel="stylesheet"
-      href="../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+      href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
     <link rel="preload" as="font" type="font/woff2" crossorigin
-      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
     <link rel="preload" as="font" type="font/woff2" crossorigin
-      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
   
     
       
   
     
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
-    <link rel="stylesheet" type="text/css" href="../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
-    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=c6d785ac" />
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=c6d785ac" />
     
-    <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+    <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script src="../_static/documentation_options.js?v=8a448e45"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
-    <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Custom Table Provider" href="custom-table-providers.html" />
-    <link rel="prev" title="Catalogs, Schemas, and Tables" href="catalogs.html" />
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Spark Compatible Functions" href="spark.html" />
+    <link rel="prev" title="Functions" href="index.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -57,7 +57,7 @@
             <div class="col-12 col-md-3 bd-sidebar">
               <div class="sidebar-start-items">
 
-<form class="bd-search d-flex align-items-center" action="../search.html" method="get">
+<form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
   <i class="icon fas fa-search"></i>
   <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
 </form>
@@ -129,7 +129,7 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../download.html">
+  <a class="reference internal" href="../../download.html">
    Download
   </a>
  </li>
@@ -141,32 +141,32 @@
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/introduction.html">
+  <a class="reference internal" href="../../user-guide/introduction.html">
    Introduction
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/example-usage.html">
+  <a class="reference internal" href="../../user-guide/example-usage.html">
    Example Usage
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/features.html">
+  <a class="reference internal" href="../../user-guide/features.html">
    Features
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/concepts-readings-events.html">
+  <a class="reference internal" href="../../user-guide/concepts-readings-events.html">
    Concepts, Readings, Events
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/crate-configuration.html">
+  <a class="reference internal" href="../../user-guide/crate-configuration.html">
    Crate Configuration
   </a>
  </li>
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../user-guide/cli/index.html">
+  <a class="reference internal" href="../../user-guide/cli/index.html">
    DataFusion CLI
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
@@ -176,39 +176,39 @@
   </label>
   <ul>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/cli/overview.html">
+    <a class="reference internal" href="../../user-guide/cli/overview.html">
      Overview
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/cli/installation.html">
+    <a class="reference internal" href="../../user-guide/cli/installation.html">
      Installation
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/cli/usage.html">
+    <a class="reference internal" href="../../user-guide/cli/usage.html">
      Usage
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/cli/datasources.html">
+    <a class="reference internal" href="../../user-guide/cli/datasources.html">
      Local Files / Directories
     </a>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/dataframe.html">
+  <a class="reference internal" href="../../user-guide/dataframe.html">
    DataFrame API
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/expressions.html">
+  <a class="reference internal" href="../../user-guide/expressions.html">
    Expression API
   </a>
  </li>
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../user-guide/sql/index.html">
+  <a class="reference internal" href="../../user-guide/sql/index.html">
    SQL Reference
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
@@ -218,94 +218,94 @@
   </label>
   <ul>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/data_types.html">
+    <a class="reference internal" href="../../user-guide/sql/data_types.html">
      Data Types
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/select.html">
+    <a class="reference internal" href="../../user-guide/sql/select.html">
      SELECT syntax
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/subqueries.html">
+    <a class="reference internal" href="../../user-guide/sql/subqueries.html">
      Subqueries
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/ddl.html">
+    <a class="reference internal" href="../../user-guide/sql/ddl.html">
      DDL
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/dml.html">
+    <a class="reference internal" href="../../user-guide/sql/dml.html">
      DML
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/explain.html">
+    <a class="reference internal" href="../../user-guide/sql/explain.html">
      EXPLAIN
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/information_schema.html">
+    <a class="reference internal" href="../../user-guide/sql/information_schema.html">
      Information Schema
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/operators.html">
+    <a class="reference internal" href="../../user-guide/sql/operators.html">
      Operators and Literals
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/aggregate_functions.html">
+    <a class="reference internal" href="../../user-guide/sql/aggregate_functions.html">
      Aggregate Functions
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/window_functions.html">
+    <a class="reference internal" href="../../user-guide/sql/window_functions.html">
      Window Functions
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/scalar_functions.html">
+    <a class="reference internal" href="../../user-guide/sql/scalar_functions.html">
      Scalar Functions
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/special_functions.html">
+    <a class="reference internal" href="../../user-guide/sql/special_functions.html">
      Special Functions
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/format_options.html">
+    <a class="reference internal" href="../../user-guide/sql/format_options.html">
      Format Options
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user-guide/sql/prepared_statements.html">
+    <a class="reference internal" href="../../user-guide/sql/prepared_statements.html">
      Prepared Statements
     </a>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/configs.html">
+  <a class="reference internal" href="../../user-guide/configs.html">
    Configuration Settings
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/runtime_configs.html">
+  <a class="reference internal" href="../../user-guide/runtime_configs.html">
    Runtime Environment Configurations
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/explain-usage.html">
+  <a class="reference internal" href="../../user-guide/explain-usage.html">
    Reading Explain Plans
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../user-guide/faq.html">
+  <a class="reference internal" href="../../user-guide/faq.html">
    Frequently Asked Questions
   </a>
  </li>
@@ -317,22 +317,22 @@
 </p>
 <ul class="current nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="index.html">
+  <a class="reference internal" href="../index.html">
    Introduction
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="extensions.html">
+  <a class="reference internal" href="../extensions.html">
    Extensions List
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="using-the-sql-api.html">
+  <a class="reference internal" href="../using-the-sql-api.html">
    Using the SQL API
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="working-with-exprs.html">
+  <a class="reference internal" href="../working-with-exprs.html">
    Working with
    <code class="docutils literal notranslate">
     <span class="pre">
@@ -343,52 +343,69 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="using-the-dataframe-api.html">
+  <a class="reference internal" href="../using-the-dataframe-api.html">
    Using the DataFrame API
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="building-logical-plans.html">
+  <a class="reference internal" href="../building-logical-plans.html">
    Building Logical Plans
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="catalogs.html">
+  <a class="reference internal" href="../catalogs.html">
    Catalogs, Schemas, and Tables
   </a>
  </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
-   Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+ <li class="toctree-l1 current active has-children">
+  <a class="reference internal" href="index.html">
+   Functions
   </a>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul class="current">
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
+     Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="spark.html">
+     Spark Compatible Functions
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="custom-table-providers.html">
+  <a class="reference internal" href="../custom-table-providers.html">
    Custom Table Provider
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="table-constraints.html">
+  <a class="reference internal" href="../table-constraints.html">
    Table Constraint Enforcement
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="extending-operators.html">
+  <a class="reference internal" href="../extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="profiling.html">
+  <a class="reference internal" href="../profiling.html">
    Profiling Cookbook
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="query-optimizer.html">
+  <a class="reference internal" href="../query-optimizer.html">
    DataFusion Query Optimizer
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="upgrading.html">
+  <a class="reference internal" href="../upgrading.html">
    Upgrade Guides
   </a>
  </li>
@@ -400,84 +417,84 @@
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/index.html">
+  <a class="reference internal" href="../../contributor-guide/index.html">
    Introduction
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/communication.html">
+  <a class="reference internal" href="../../contributor-guide/communication.html">
    Communication
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/development_environment.html">
+  <a class="reference internal" href="../../contributor-guide/development_environment.html">
    Development Environment
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/architecture.html">
+  <a class="reference internal" href="../../contributor-guide/architecture.html">
    Architecture
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/testing.html">
+  <a class="reference internal" href="../../contributor-guide/testing.html">
    Testing
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/api-health.html">
+  <a class="reference internal" href="../../contributor-guide/api-health.html">
    API health policy
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/howtos.html">
+  <a class="reference internal" href="../../contributor-guide/howtos.html">
    HOWTOs
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/roadmap.html">
+  <a class="reference internal" href="../../contributor-guide/roadmap.html">
    Roadmap
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/governance.html">
+  <a class="reference internal" href="../../contributor-guide/governance.html">
    Governance
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/inviting.html">
+  <a class="reference internal" href="../../contributor-guide/inviting.html">
    Inviting New Committers and PMC Members
   </a>
  </li>
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../contributor-guide/specification/index.html">
+  <a class="reference internal" href="../../contributor-guide/specification/index.html">
    Specifications
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
-  <label for="toctree-checkbox-3">
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
    <i class="fas fa-chevron-down">
    </i>
   </label>
   <ul>
    <li class="toctree-l2">
-    <a class="reference internal" href="../contributor-guide/specification/invariants.html">
+    <a class="reference internal" href="../../contributor-guide/specification/invariants.html">
      Invariants
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">
+    <a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">
      Output field name semantics
     </a>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/gsoc_application_guidelines.html">
+  <a class="reference internal" href="../../contributor-guide/gsoc_application_guidelines.html">
    GSoC Application Guidelines
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../contributor-guide/gsoc_project_ideas.html">
+  <a class="reference internal" href="../../contributor-guide/gsoc_project_ideas.html">
    GSoC Project Ideas
   </a>
  </li>
@@ -508,8 +525,8 @@
     
   </div>
 
-  <a class="navbar-brand" href="../index.html">
-    <img src="../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
+  <a class="navbar-brand" href="../../index.html">
+    <img src="../../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
   </a>
 </nav>
 
@@ -636,7 +653,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/adding-udfs.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/functions/adding-udfs.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -1414,17 +1431,17 @@ validation of the input <code class="docutils literal notranslate"><span class="
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="catalogs.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="index.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Catalogs, Schemas, and Tables</p>
+            <p class="prev-next-title">Functions</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="custom-table-providers.html" title="next page">
+    <a class='right-next' id="next-link" href="spark.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Custom Table Provider</p>
+        <p class="prev-next-title">Spark Compatible Functions</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
@@ -1436,7 +1453,7 @@ validation of the input <code class="docutils literal notranslate"><span class="
       </div>
     </div>
   
-    <script src="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+    <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
   
 <!-- Based on pydata_sphinx_theme/footer.html -->
 <footer class="footer mt-5 mt-md-0">
