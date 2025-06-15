@@ -15,15 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, 
-};
-use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_expr::{Join,  JoinType, LogicalPlan};
+use std::any::Any;
 
 use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::delim_candidates_collector::DelimCandidateVisitor;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::{internal_err, Column, DataFusionError, Result};
+use datafusion_expr::utils::{disjunction, split_conjunction};
+use datafusion_expr::{
+    BinaryExpr, Expr, Join, JoinType, LogicalPlan, OperateFunctionArg, Operator,
+};
 
 /// The Deliminator optimizer traverses the logical operator tree and removes any
 /// redundant DelimScan/DelimJoins.
@@ -71,8 +73,7 @@ impl OptimizerRule for Deliminator {
         }
 
         for candidate in visitor.candidates.iter_mut() {
-            let _delim_join = &candidate.node.plan;
-            let plan = &candidate.node.plan;
+            let delim_join = &candidate.node.plan;
 
             // Sort these so the deepest are first.
             candidate.joins.sort_by(|a, b| b.depth.cmp(&a.depth));
@@ -80,11 +81,15 @@ impl OptimizerRule for Deliminator {
             let mut all_removed = true;
             if !candidate.joins.is_empty() {
                 let mut has_selection = false;
-                plan.apply(|plan| {
+                delim_join.apply(|plan| {
                     match plan {
-                        LogicalPlan::TableScan(_) => {
-                            has_selection = true;
-                            return Ok(TreeNodeRecursion::Stop);
+                        LogicalPlan::TableScan(table_scan) => {
+                            for expr in &table_scan.filters {
+                                if matches!(expr, Expr::IsNotNull(_)) {
+                                    has_selection = true;
+                                    return Ok(TreeNodeRecursion::Stop);
+                                }
+                            }
                         }
                         LogicalPlan::Filter(_) => {
                             has_selection = true;
@@ -97,7 +102,7 @@ impl OptimizerRule for Deliminator {
                 })?;
 
                 if has_selection {
-                    // Keey the deepest join with DelimScan in these cases,
+                    // Keep the deepest join with DelimScan in these cases,
                     // as the selection can greatly reduce the cost of the RHS child of the
                     // DelimJoin.
                     candidate.joins.remove(0);
@@ -133,23 +138,33 @@ impl OptimizerRule for Deliminator {
     }
 }
 
-#[allow(unused_mut)]
-#[allow(dead_code)]
 fn remove_join_with_delim_scan(
-    _delim_join: &Join,
-    _delim_get_count: usize,
+    delim_join: &Join,
+    delim_scan_count: usize,
     join: &LogicalPlan,
-    _all_equality_conditions: &mut bool,
+    all_equality_conditions: &mut bool,
 ) -> Result<bool> {
     if let LogicalPlan::Join(join) = join {
         if !child_join_type_can_be_deliminated(join.join_type) {
             return Ok(false);
         }
 
-        // Fetch delim scan.
+        // Fetch filter (if any) and delim scan.
+        let mut is_delim_side_left = true;
         let mut plan_pair = fetch_delim_scan(join.left.as_ref());
         if plan_pair.1.is_none() {
+            is_delim_side_left = false;
             plan_pair = fetch_delim_scan(join.right.as_ref());
+        }
+
+        // Collect filter exprs.
+        let mut filter_expressions = vec![];
+        if let Some(plan) = plan_pair.0 {
+            if let LogicalPlan::Filter(filter) = plan {
+                for expr in split_conjunction(&filter.predicate) {
+                    filter_expressions.push(expr.clone());
+                }
+            }
         }
 
         let delim_scan = plan_pair
@@ -161,18 +176,89 @@ fn remove_join_with_delim_scan(
             return internal_err!("unreachable");
         };
 
-        if join.on.len() != delim_scan.delim_types.len() {
-            // Joining with delim scan adds new information.
-            return Ok(false);
+        // Check if joining with the DelimScan is redundant, and collect relevant column
+        // information.
+        let mut replacement_cols = vec![];
+        if let Some(filter) = &join.filter {
+            let conditions = split_conjunction(filter);
+
+            if conditions.len() != delim_scan.delim_types.len() {
+                // Joining with delim scan adds new information.
+                return Ok(false);
+            }
+
+            for condition in conditions {
+                if let Expr::BinaryExpr(binary_expr) = condition {
+                    *all_equality_conditions &= is_equality_join_condition(&condition);
+
+                    if !matches!(*binary_expr.left, Expr::Column(_))
+                        || !matches!(*binary_expr.right, Expr::Column(_))
+                    {
+                        return Ok(false);
+                    }
+
+                    let (left_col, right_col) =
+                        if let (Expr::Column(left), Expr::Column(right)) =
+                            (&*binary_expr.left, &*binary_expr.right)
+                        {
+                            (left.clone(), right.clone())
+                        } else {
+                            return internal_err!("unreachable");
+                        };
+
+                    if is_delim_side_left {
+                        replacement_cols.push((left_col, right_col));
+                    } else {
+                        replacement_cols.push((right_col, left_col));
+                    }
+
+                    if !matches!(binary_expr.op, Operator::IsNotDistinctFrom) {
+                        let is_not_null_expr = if is_delim_side_left {
+                            binary_expr.right.clone().is_not_null()
+                        } else {
+                            binary_expr.left.clone().is_not_null()
+                        };
+                        filter_expressions.push(is_not_null_expr);
+                    }
+                }
+            }
+
+            // TODO
+            // // The join is redundant, check if we can remove the DelimScan.
+            // // Verify that all DelimScan's columns are covered by this join's ON clause.
+            // let mut delim_covered_columns = HashSet::new();
+            // for (col, _) in &replacement_cols {
+            //     delim_covered_columns.insert(col);
+            // }
+
+            // for col in delim_scan.delim_cols {
+            //     if !delim_covered_columns.contains(&col) {
+            //         // Some columns from DelimScan are not covered by this join.
+            //         return Ok(false);
+            //     }
+            // }
+
+            // All conditions passed, we can eliminate this join + DelimScan
+            return Ok(true);
         }
 
-        // Check if joining with the delim scan is redundant, and collect relevant column
-        // information.
+        // No join conditions, can't remove the join
+        return Ok(false);
     } else {
         return internal_err!("current plan must be join in remove_join_with_delim_scan");
     }
+}
 
-    todo!()
+fn is_equality_join_condition(expr: &Expr) -> bool {
+    if let Expr::BinaryExpr(binary_expr) = expr {
+        if matches!(binary_expr.op, Operator::IsNotDistinctFrom)
+            || matches!(binary_expr.op, Operator::Eq)
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn child_join_type_can_be_deliminated(join_type: JoinType) -> bool {
@@ -197,27 +283,227 @@ fn fetch_delim_scan(plan: &LogicalPlan) -> (Option<&LogicalPlan>, Option<&Logica
                 return (None, Some(alias.input.as_ref()));
             }
         }
-        _ => return (None, None),
+        _ => {}
     }
 
-    todo!()
+    (None, None)
 }
 
-#[allow(dead_code)]
-fn remove_inequality_join_with_delim_scan(
-    delim_join: &Join,
-    _delim_get_count: usize,
-    join: &LogicalPlan,
-) -> Result<bool> {
-    if let LogicalPlan::Join(_) = join {
-        let _delim_on = &delim_join.on;
-    } else {
-        return internal_err!(
-            "current plan must be join in remove_inequality_join_with_delim_scan"
-        );
+fn is_delim_scan(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Filter(filter) => {
+            if let LogicalPlan::SubqueryAlias(alias) = filter.input.as_ref() {
+                if let LogicalPlan::DelimGet(_) = alias.input.as_ref() {
+                    return true;
+                };
+            };
+        }
+        LogicalPlan::SubqueryAlias(alias) => {
+            if let LogicalPlan::DelimGet(_) = alias.input.as_ref() {
+                return true;
+            }
+        }
+        _ => return false,
     }
 
-    todo!()
+    false
+}
+
+fn remove_inequality_join_with_delim_scan(
+    delim_join: &Join,
+    delim_scan_count: usize,
+    join_plan: &LogicalPlan,
+) -> Result<bool> {
+    if let LogicalPlan::Join(join) = join_plan {
+        if delim_scan_count != 1
+            || !inequality_delim_join_can_be_eliminated(&join.join_type)
+        {
+            return Ok(false);
+        }
+
+        let mut delim_conditions = if let Some(filter) = &delim_join.filter {
+            split_conjunction(filter)
+        } else {
+            return Ok(false);
+        };
+        let join_conditions = if let Some(filter) = &join.filter {
+            split_conjunction(filter)
+        } else {
+            return Ok(false);
+        };
+        if delim_conditions.len() != join_conditions.len() {
+            return Ok(false);
+        }
+
+        // TODO add single join support
+        if delim_join.join_type == JoinType::LeftMark {
+            let mut has_one_equality = false;
+            for condition in &join_conditions {
+                has_one_equality |= is_equality_join_condition(condition);
+            }
+
+            if !has_one_equality {
+                return Ok(false);
+            }
+        }
+
+        // We only support colref
+        let mut traced_cols = vec![];
+        for condition in &delim_conditions {
+            if let Expr::BinaryExpr(binary_expr) = condition {
+                if let Expr::Column(column) = &*binary_expr.right {
+                    traced_cols.push(column.clone());
+                } else {
+                    return Ok(false);
+                }
+            } else {
+                return Ok(false);
+            }
+        }
+
+        // Now we trace down the column to join (for now, we only trace it through a few
+        // operators).
+        let mut cur_op = delim_join.right.as_ref();
+        while *cur_op != *join_plan {
+            if cur_op.inputs().len() != 1 {
+                return Ok(false);
+            }
+
+            match cur_op {
+                LogicalPlan::Projection(projection) => find_and_replace_cols(
+                    &mut traced_cols,
+                    &cur_op.expressions(),
+                    &cur_op.schema().columns(),
+                )?,
+                LogicalPlan::Filter(filter) => {
+                    // Doesn't change bindings.
+                    break;
+                }
+                _ => return Ok(false),
+            };
+
+            cur_op = *cur_op.inputs().get(0).ok_or_else(|| {
+                DataFusionError::Plan("current plan has no child".to_string())
+            })?;
+        }
+
+        let is_left_delim_scan = is_delim_scan(join.right.as_ref());
+
+        let mut found_all = true;
+        for (idx, mut delim_condition) in delim_conditions.iter_mut().enumerate() {
+            let traced_col = traced_cols.get(idx).ok_or_else(|| {
+                DataFusionError::Plan("get get col under traced cols".to_string())
+            })?;
+
+            let mut delim_comparison = if let Expr::BinaryExpr(binary_expr) = delim_condition
+            {
+                binary_expr.op
+            } else {
+                return internal_err!("expr must be binary");
+            };
+
+            let mut found = false;
+            for join_condition in &join_conditions {
+                if let Expr::BinaryExpr(binary_expr) = join_condition {
+                    let delim_side = if is_left_delim_scan {
+                        &*binary_expr.left
+                    } else {
+                        &*binary_expr.right
+                    };
+
+                    if let Expr::Column(column) = delim_side {
+                        if *column == *traced_col {
+                            let mut join_comparison = binary_expr.op;
+
+                            if matches!(delim_comparison, Operator::IsDistinctFrom)
+                                || matches!(delim_comparison, Operator::IsNotDistinctFrom)
+                            {
+                                // We need to compare Null values.
+                                if matches!(join_comparison, Operator::Eq) {
+                                    join_comparison = Operator::IsNotDistinctFrom;
+                                } else if matches!(join_comparison, Operator::NotEq) {
+                                    join_comparison = Operator::IsDistinctFrom;
+                                } else if !matches!(
+                                    join_comparison,
+                                    Operator::IsDistinctFrom
+                                ) && !matches!(
+                                    join_comparison,
+                                    Operator::IsNotDistinctFrom,
+                                ) {
+                                    // The optimization does not work here
+                                    found = false;
+                                    break;
+                                }
+
+                                // TODO how to change delim condition's comparison
+
+                                // Join condition was a not equal and filtered out all NULLs.
+                                // Delim join need to do that for not delim scan side. Easiest way
+                                // is to change the comparison expression type.
+
+                                found = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        return internal_err!("expr must be column");
+                    }
+                } else {
+                    return internal_err!("expr must be binary");
+                }
+            }
+            found_all &= found;
+        }
+
+        Ok(found_all)
+    } else {
+        internal_err!(
+            "current plan must be join in remove_inequality_join_with_delim_scan"
+        )
+    }
+}
+
+fn inequality_delim_join_can_be_eliminated(join_type: &JoinType) -> bool {
+    // TODO add single join support
+    *join_type == JoinType::LeftAnti
+        || *join_type == JoinType::RightAnti
+        || *join_type == JoinType::LeftSemi
+        || *join_type == JoinType::RightSemi
+}
+
+fn find_and_replace_cols(
+    traced_cols: &mut Vec<Column>,
+    exprs: &Vec<Expr>,
+    cur_cols: &Vec<Column>,
+) -> Result<bool> {
+    for col in traced_cols {
+        let mut cur_idx = 0;
+        for (idx, iter) in exprs.iter().enumerate() {
+            cur_idx = idx;
+            if *col
+                == *cur_cols.get(idx).ok_or_else(|| {
+                    DataFusionError::Plan("no column at idx".to_string())
+                })?
+            {
+                break;
+            }
+        }
+
+        if cur_idx == exprs.len() {
+            return Ok(false);
+        }
+
+        if let Expr::Column(column) = exprs
+            .get(cur_idx)
+            .ok_or_else(|| DataFusionError::Plan("no expr at cur_idx".to_string()))?
+        {
+            *col = column.clone();
+        } else {
+            return Ok(false);
+        }
+    }
+
+    return Ok(true);
 }
 
 #[cfg(test)]

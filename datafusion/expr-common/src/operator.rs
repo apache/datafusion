@@ -17,6 +17,8 @@
 
 use std::fmt;
 
+use datafusion_common::{internal_err, Result};
+
 /// Operators applied to expressions
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Operator {
@@ -386,5 +388,19 @@ impl fmt::Display for Operator {
             Operator::QuestionPipe => "?|",
         };
         write!(f, "{display}")
+    }
+}
+
+pub fn flip_comparison_operator(operator: Operator) -> Result<Operator> {
+    match operator {
+        Operator::Eq
+        | Operator::NotEq
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => Ok(operator),
+        Operator::Lt => Ok(Operator::Gt),
+        Operator::LtEq => Ok(Operator::GtEq),
+        Operator::Gt => Ok(Operator::Lt),
+        Operator::GtEq => Ok(Operator::LtEq),
+        _ => internal_err!("unsupported comparison type in flip"),
     }
 }
