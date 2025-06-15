@@ -39,9 +39,9 @@ use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    stream, DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream,
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
@@ -54,6 +54,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 
+use datafusion_common_runtime::SpawnedTask;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -1123,20 +1124,17 @@ impl ExecutionPlan for SortExec {
                     context.runtime_env(),
                     &self.metrics_set,
                 )?;
-                Ok(Box::pin(RecordBatchStreamAdapter::new(
-                    self.schema(),
-                    futures::stream::once(async move {
-                        while let Some(batch) = input.next().await {
-                            let batch = batch?;
-                            topk.insert_batch(batch)?;
-                            if topk.finished {
-                                break;
-                            }
+
+                Ok(stream::create_async_then_emit(self.schema(), async move {
+                    while let Some(batch) = input.next().await {
+                        let batch = batch?;
+                        topk.insert_batch(batch)?;
+                        if topk.finished {
+                            break;
                         }
-                        topk.emit()
-                    })
-                    .try_flatten(),
-                )))
+                    }
+                    topk.emit()
+                }))
             }
             (false, None) => {
                 let mut sorter = ExternalSorter::new(
@@ -1152,11 +1150,17 @@ impl ExecutionPlan for SortExec {
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
-                        while let Some(batch) = input.next().await {
-                            let batch = batch?;
-                            sorter.insert_batch(batch).await?;
-                        }
-                        sorter.sort().await
+                        // Spawn a task the first time the stream is polled for the sort phase.
+                        // This ensures the consumer of the sort does not poll unnecessarily
+                        // while the sort is ongoing
+                        SpawnedTask::spawn(async move {
+                            while let Some(batch) = input.next().await {
+                                let batch = batch?;
+                                sorter.insert_batch(batch).await?;
+                            }
+                            sorter.sort().await
+                        })
+                        .await?
                     })
                     .try_flatten(),
                 )))
@@ -1242,9 +1246,9 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::test;
-    use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::{assert_is_pending, panic_exec};
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -1990,6 +1994,25 @@ mod tests {
             | 8  |
             +----+
             "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unpolled_sort_does_not_start_eagerly() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let source = panic_exec(1);
+        let schema = source.schema();
+
+        let sort_exec = Arc::new(SortExec::new(
+            [PhysicalSortExpr {
+                expr: col("i", &schema)?,
+                options: SortOptions::default(),
+            }]
+            .into(),
+            source,
+        ));
+
+        let _ = sort_exec.execute(1, task_ctx);
         Ok(())
     }
 }
