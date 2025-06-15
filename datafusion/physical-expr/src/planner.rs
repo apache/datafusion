@@ -28,7 +28,9 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
+use datafusion_expr::expr::{
+    Alias, Cast, FieldMetadata, InList, Placeholder, ScalarFunction,
+};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
@@ -111,14 +113,29 @@ pub fn create_physical_expr(
     let input_schema: &Schema = &input_dfschema.into();
 
     match e {
-        Expr::Alias(Alias { expr, .. }) => {
-            Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+        Expr::Alias(Alias { expr, metadata, .. }) => {
+            if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
+                let metadata = metadata.as_ref().map(|m| FieldMetadata::from(m.clone()));
+                let new_metadata = FieldMetadata::merge_options(
+                    prior_metadata.as_ref(),
+                    metadata.as_ref(),
+                );
+                Ok(Arc::new(Literal::new_with_metadata(
+                    v.clone(),
+                    new_metadata,
+                )))
+            } else {
+                Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
+            }
         }
         Expr::Column(c) => {
             let idx = input_dfschema.index_of_column(c)?;
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
+        Expr::Literal(value, metadata) => Ok(Arc::new(Literal::new_with_metadata(
+            value.clone(),
+            metadata.clone(),
+        ))),
         Expr::ScalarVariable(_, variable_names) => {
             if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {
@@ -168,7 +185,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(ScalarValue::Boolean(None), None),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
@@ -176,7 +193,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(ScalarValue::Boolean(None), None),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
@@ -347,7 +364,7 @@ pub fn create_physical_expr(
             list,
             negated,
         }) => match expr.as_ref() {
-            Expr::Literal(ScalarValue::Utf8(None)) => {
+            Expr::Literal(ScalarValue::Utf8(None), _) => {
                 Ok(expressions::lit(ScalarValue::Boolean(None)))
             }
             _ => {
@@ -380,7 +397,7 @@ where
     exprs
         .into_iter()
         .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 /// Convert a logical expression to a physical expression (without any simplification, etc)

@@ -18,7 +18,7 @@
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::{Field, SchemaRef};
+use arrow::datatypes::{FieldRef, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::PartitionEvaluator;
@@ -41,7 +41,7 @@ pub trait StandardWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn as_any(&self) -> &dyn Any;
 
     /// The field of the final result of evaluating this window function.
-    fn field(&self) -> Result<Field>;
+    fn field(&self) -> Result<FieldRef>;
 
     /// Expressions that are passed to the [`PartitionEvaluator`].
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;

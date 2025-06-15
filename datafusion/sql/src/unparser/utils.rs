@@ -300,51 +300,58 @@ fn find_window_expr<'a>(
         .find(|expr| expr.schema_name().to_string() == column_name)
 }
 
-/// Transforms a Column expression into the actual expression from aggregation or projection if found.
+/// Transforms all Column expressions in a sort expression into the actual expression from aggregation or projection if found.
 /// This is required because if an ORDER BY expression is present in an Aggregate or Select, it is replaced
 /// with a Column expression (e.g., "sum(catalog_returns.cr_net_loss)"). We need to transform it back to
 /// the actual expression, such as sum("catalog_returns"."cr_net_loss").
 pub(crate) fn unproject_sort_expr(
-    sort_expr: &SortExpr,
+    mut sort_expr: SortExpr,
     agg: Option<&Aggregate>,
     input: &LogicalPlan,
 ) -> Result<SortExpr> {
-    let mut sort_expr = sort_expr.clone();
+    sort_expr.expr = sort_expr
+        .expr
+        .transform(|sub_expr| {
+            match sub_expr {
+                // Remove alias if present, because ORDER BY cannot use aliases
+                Expr::Alias(alias) => Ok(Transformed::yes(*alias.expr)),
+                Expr::Column(col) => {
+                    if col.relation.is_some() {
+                        return Ok(Transformed::no(Expr::Column(col)));
+                    }
 
-    // Remove alias if present, because ORDER BY cannot use aliases
-    if let Expr::Alias(alias) = &sort_expr.expr {
-        sort_expr.expr = *alias.expr.clone();
-    }
+                    // In case of aggregation there could be columns containing aggregation functions we need to unproject
+                    if let Some(agg) = agg {
+                        if agg.schema.is_column_from_schema(&col) {
+                            return Ok(Transformed::yes(unproject_agg_exprs(
+                                Expr::Column(col),
+                                agg,
+                                None,
+                            )?));
+                        }
+                    }
 
-    let Expr::Column(ref col_ref) = sort_expr.expr else {
-        return Ok(sort_expr);
-    };
+                    // If SELECT and ORDER BY contain the same expression with a scalar function, the ORDER BY expression will
+                    // be replaced by a Column expression (e.g., "substr(customer.c_last_name, Int64(0), Int64(5))"), and we need
+                    // to transform it back to the actual expression.
+                    if let LogicalPlan::Projection(Projection { expr, schema, .. }) =
+                        input
+                    {
+                        if let Ok(idx) = schema.index_of_column(&col) {
+                            if let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx) {
+                                return Ok(Transformed::yes(Expr::ScalarFunction(
+                                    scalar_fn.clone(),
+                                )));
+                            }
+                        }
+                    }
 
-    if col_ref.relation.is_some() {
-        return Ok(sort_expr);
-    };
-
-    // In case of aggregation there could be columns containing aggregation functions we need to unproject
-    if let Some(agg) = agg {
-        if agg.schema.is_column_from_schema(col_ref) {
-            let new_expr = unproject_agg_exprs(sort_expr.expr, agg, None)?;
-            sort_expr.expr = new_expr;
-            return Ok(sort_expr);
-        }
-    }
-
-    // If SELECT and ORDER BY contain the same expression with a scalar function, the ORDER BY expression will
-    // be replaced by a Column expression (e.g., "substr(customer.c_last_name, Int64(0), Int64(5))"), and we need
-    // to transform it back to the actual expression.
-    if let LogicalPlan::Projection(Projection { expr, schema, .. }) = input {
-        if let Ok(idx) = schema.index_of_column(col_ref) {
-            if let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx) {
-                sort_expr.expr = Expr::ScalarFunction(scalar_fn.clone());
+                    Ok(Transformed::no(Expr::Column(col)))
+                }
+                _ => Ok(Transformed::no(sub_expr)),
             }
-        }
-        return Ok(sort_expr);
-    }
-
+        })
+        .map(|e| e.data)?;
     Ok(sort_expr)
 }
 
@@ -445,7 +452,7 @@ pub(crate) fn date_part_to_sql(
     match (style, date_part_args.len()) {
         (DateFieldExtractStyle::Extract, 2) => {
             let date_expr = unparser.expr_to_sql(&date_part_args[1])?;
-            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+            if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => ast::DateTimeField::Year,
                     "month" => ast::DateTimeField::Month,
@@ -466,7 +473,7 @@ pub(crate) fn date_part_to_sql(
         (DateFieldExtractStyle::Strftime, 2) => {
             let column = unparser.expr_to_sql(&date_part_args[1])?;
 
-            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+            if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => "%Y",
                     "month" => "%m",
@@ -554,7 +561,7 @@ pub(crate) fn sqlite_from_unixtime_to_sql(
         "datetime",
         &[
             from_unixtime_args[0].clone(),
-            Expr::Literal(ScalarValue::Utf8(Some("unixepoch".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("unixepoch".to_string())), None),
         ],
     )?))
 }
@@ -577,7 +584,7 @@ pub(crate) fn sqlite_date_trunc_to_sql(
         );
     }
 
-    if let Expr::Literal(ScalarValue::Utf8(Some(unit))) = &date_trunc_args[0] {
+    if let Expr::Literal(ScalarValue::Utf8(Some(unit)), _) = &date_trunc_args[0] {
         let format = match unit.to_lowercase().as_str() {
             "year" => "%Y",
             "month" => "%Y-%m",
@@ -591,7 +598,7 @@ pub(crate) fn sqlite_date_trunc_to_sql(
         return Ok(Some(unparser.scalar_function_to_sql(
             "strftime",
             &[
-                Expr::Literal(ScalarValue::Utf8(Some(format.to_string()))),
+                Expr::Literal(ScalarValue::Utf8(Some(format.to_string())), None),
                 date_trunc_args[1].clone(),
             ],
         )?));

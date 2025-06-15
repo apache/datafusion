@@ -102,10 +102,8 @@ pub async fn partitioned_sym_join_with_filter(
         filter,
         join_type,
         null_equals_null,
-        left.output_ordering().map(|p| LexOrdering::new(p.to_vec())),
-        right
-            .output_ordering()
-            .map(|p| LexOrdering::new(p.to_vec())),
+        left.output_ordering().cloned(),
+        right.output_ordering().cloned(),
         StreamJoinPartitionMode::Partitioned,
     )?;
 
@@ -195,7 +193,7 @@ struct AscendingRandomFloatIterator {
 impl AscendingRandomFloatIterator {
     fn new(min: f64, max: f64) -> Self {
         let mut rng = StdRng::seed_from_u64(42);
-        let initial = rng.gen_range(min..max);
+        let initial = rng.random_range(min..max);
         AscendingRandomFloatIterator {
             prev: initial,
             max,
@@ -208,7 +206,7 @@ impl Iterator for AscendingRandomFloatIterator {
     type Item = f64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let value = self.rng.gen_range(self.prev..self.max);
+        let value = self.rng.random_range(self.prev..self.max);
         self.prev = value;
         Some(value)
     }

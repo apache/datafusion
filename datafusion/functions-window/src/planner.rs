@@ -43,7 +43,7 @@ impl ExprPlanner for WindowFunctionPlanner {
             null_treatment,
         } = raw_expr;
 
-        let origin_expr = Expr::WindowFunction(WindowFunction {
+        let origin_expr = Expr::from(WindowFunction {
             fun: func_def,
             params: WindowFunctionParams {
                 args,
@@ -56,7 +56,10 @@ impl ExprPlanner for WindowFunctionPlanner {
 
         let saved_name = NamePreserver::new_for_projection().save(&origin_expr);
 
-        let Expr::WindowFunction(WindowFunction {
+        let Expr::WindowFunction(window_fun) = origin_expr else {
+            unreachable!("")
+        };
+        let WindowFunction {
             fun,
             params:
                 WindowFunctionParams {
@@ -66,10 +69,7 @@ impl ExprPlanner for WindowFunctionPlanner {
                     window_frame,
                     null_treatment,
                 },
-        }) = origin_expr
-        else {
-            unreachable!("")
-        };
+        } = *window_fun;
         let raw_expr = RawWindowExpr {
             func_def: fun,
             args,
@@ -95,9 +95,9 @@ impl ExprPlanner for WindowFunctionPlanner {
                 null_treatment,
             } = raw_expr;
 
-            let new_expr = Expr::WindowFunction(WindowFunction::new(
+            let new_expr = Expr::from(WindowFunction::new(
                 func_def,
-                vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
             ))
             .partition_by(partition_by)
             .order_by(order_by)

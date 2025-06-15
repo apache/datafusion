@@ -16,7 +16,9 @@
 // under the License.
 
 use super::*;
-use datafusion::scalar::ScalarValue;
+use datafusion::common::test_util::batches_to_string;
+use datafusion_catalog::MemTable;
+use datafusion_common::ScalarValue;
 
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
@@ -318,6 +320,123 @@ async fn test_accumulator_row_accumulator() -> Result<()> {
     | a  | 5  | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 141047417 | QJYm7YRA3YetcBHI5wkMZeLXVmfuNy | 2496054700 | 1216992989.6666667 | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 3    | 1825431770.0 |
     +----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+
     ");
+
+    Ok(())
+}
+
+/// Test that COUNT(DISTINCT) correctly handles dictionary arrays with all null values.
+/// Verifies behavior across both single and multiple partitions.
+#[tokio::test]
+async fn count_distinct_dictionary_all_null_values() -> Result<()> {
+    let n: usize = 5;
+    let num = Arc::new(Int32Array::from_iter(0..n as i32)) as ArrayRef;
+
+    // Create dictionary where all indices point to a null value (index 0)
+    let dict_values = StringArray::from(vec![None, Some("abc")]);
+    let dict_indices = Int32Array::from(vec![0; n]);
+    let dict = DictionaryArray::new(dict_indices, Arc::new(dict_values));
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("num1", DataType::Int32, false),
+        Field::new("num2", DataType::Int32, false),
+        Field::new(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![num.clone(), num.clone(), Arc::new(dict)],
+    )?;
+
+    // Test with single partition
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    let provider = MemTable::try_new(schema.clone(), vec![vec![batch.clone()]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let df = ctx
+        .sql("SELECT count(distinct dict) as cnt, count(num2) FROM t GROUP BY num1")
+        .await?;
+    let results = df.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +-----+---------------+
+    | cnt | count(t.num2) |
+    +-----+---------------+
+    | 0   | 1             |
+    | 0   | 1             |
+    | 0   | 1             |
+    | 0   | 1             |
+    | 0   | 1             |
+    +-----+---------------+
+    "###
+    );
+
+    // Test with multiple partitions
+    let ctx_multi =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
+    let provider_multi = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx_multi.register_table("t", Arc::new(provider_multi))?;
+
+    let df_multi = ctx_multi
+        .sql("SELECT count(distinct dict) as cnt, count(num2) FROM t GROUP BY num1")
+        .await?;
+    let results_multi = df_multi.collect().await?;
+
+    // Results should be identical across partition configurations
+    assert_eq!(
+        batches_to_string(&results),
+        batches_to_string(&results_multi)
+    );
+
+    Ok(())
+}
+
+/// Test COUNT(DISTINCT) with mixed null and non-null dictionary values
+#[tokio::test]
+async fn count_distinct_dictionary_mixed_values() -> Result<()> {
+    let n: usize = 6;
+    let num = Arc::new(Int32Array::from_iter(0..n as i32)) as ArrayRef;
+
+    // Dictionary values array with nulls and non-nulls
+    let dict_values = StringArray::from(vec![None, Some("abc"), Some("def"), None]);
+    // Create indices that point to both null and non-null values
+    let dict_indices = Int32Array::from(vec![0, 1, 2, 0, 1, 3]);
+    let dict = DictionaryArray::new(dict_indices, Arc::new(dict_values));
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("num1", DataType::Int32, false),
+        Field::new(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]));
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![num, Arc::new(dict)])?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // COUNT(DISTINCT) should only count non-null values "abc" and "def"
+    let df = ctx.sql("SELECT count(distinct dict) FROM t").await?;
+    let results = df.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +------------------------+
+    | count(DISTINCT t.dict) |
+    +------------------------+
+    | 2                      |
+    +------------------------+
+    "###
+    );
 
     Ok(())
 }

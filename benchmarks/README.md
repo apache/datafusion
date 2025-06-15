@@ -33,8 +33,8 @@ benchmarks that compare performance with other engines. For example:
 - [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
 - [H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
 
-[ClickBench]: https://github.com/ClickHouse/ClickBench/tree/main
-[H2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
+[clickbench]: https://github.com/ClickHouse/ClickBench/tree/main
+[h2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
 
 # Running the benchmarks
 
@@ -509,6 +509,15 @@ See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
 ```bash
 ./bench.sh run sort_tpch
 ```
+
+### TopK TPCH
+
+In addition, topk_tpch is available from the bench.sh script:
+
+```bash
+./bench.sh run topk_tpch
+```
+
 
 ## IMDB
 

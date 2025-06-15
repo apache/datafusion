@@ -24,8 +24,8 @@ use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
 use arrow::compute::bool_and as compute_bool_and;
 use arrow::compute::bool_or as compute_bool_or;
-use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
+use arrow::datatypes::{DataType, FieldRef};
 
 use datafusion_common::internal_err;
 use datafusion_common::{downcast_value, not_impl_err};
@@ -150,12 +150,13 @@ impl AggregateUDFImpl for BoolAnd {
         Ok(Box::<BoolAndAccumulator>::default())
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![Field::new(
             format_state_name(args.name, self.name()),
             DataType::Boolean,
             true,
-        )])
+        )
+        .into()])
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -176,10 +177,6 @@ impl AggregateUDFImpl for BoolAnd {
                 args.return_field.data_type()
             ),
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
@@ -288,12 +285,13 @@ impl AggregateUDFImpl for BoolOr {
         Ok(Box::<BoolOrAccumulator>::default())
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![Field::new(
             format_state_name(args.name, self.name()),
             DataType::Boolean,
             true,
-        )])
+        )
+        .into()])
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -315,10 +313,6 @@ impl AggregateUDFImpl for BoolOr {
                 args.return_field.data_type()
             ),
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {

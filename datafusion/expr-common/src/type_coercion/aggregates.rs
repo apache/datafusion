@@ -17,7 +17,7 @@
 
 use crate::signature::TypeSignature;
 use arrow::datatypes::{
-    DataType, Field, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, FieldRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
@@ -89,7 +89,7 @@ pub static TIMES: &[DataType] = &[
 /// number of input types.
 pub fn check_arg_count(
     func_name: &str,
-    input_fields: &[Field],
+    input_fields: &[FieldRef],
     signature: &TypeSignature,
 ) -> Result<()> {
     match signature {
