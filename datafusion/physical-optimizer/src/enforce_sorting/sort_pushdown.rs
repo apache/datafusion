@@ -26,7 +26,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, HashSet, JoinSide, Result};
 use datafusion_expr::JoinType;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     add_offset_to_physical_sort_exprs, EquivalenceProperties,
@@ -57,6 +57,7 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 pub struct ParentRequirements {
     ordering_requirement: Option<OrderingRequirements>,
     fetch: Option<usize>,
+    filter: Option<Arc<DynamicFilterPhysicalExpr>>,
 }
 
 pub type SortPushDown = PlanContext<ParentRequirements>;
@@ -70,6 +71,8 @@ pub fn assign_initial_requirements(sort_push_down: &mut SortPushDown) {
             // If the parent has a fetch value, assign it to the children
             // Or use the fetch value of the child.
             fetch: child.plan.fetch(),
+            // If the parent has a filter, assign it to the children
+            filter: sort_push_down.data.filter.clone(),
         };
     }
 }
@@ -95,6 +98,7 @@ fn pushdown_sorts_helper(
 ) -> Result<Transformed<SortPushDown>> {
     let plan = sort_push_down.plan;
     let parent_fetch = sort_push_down.data.fetch;
+    let parent_filter = sort_push_down.data.filter.clone();
 
     let Some(parent_requirement) = sort_push_down.data.ordering_requirement.clone()
     else {
@@ -114,6 +118,18 @@ fn pushdown_sorts_helper(
             sort_push_down.data.fetch = fetch;
             sort_push_down.data.ordering_requirement =
                 Some(OrderingRequirements::from(sort_ordering));
+            let filter = plan
+                .as_any()
+                .downcast_ref::<SortExec>()
+                .and_then(|s| s.filter().clone());
+            match filter {
+                Some(filter) => {
+                    sort_push_down.data.filter = Some(filter);
+                }
+                None => {
+                    sort_push_down.data.filter = parent_filter.clone();
+                }
+            }
             // Recursive call to helper, so it doesn't transform_down and miss
             // the new node (previous child of sort):
             return pushdown_sorts_helper(sort_push_down);
@@ -131,11 +147,20 @@ fn pushdown_sorts_helper(
             return internal_err!("SortExec should have output ordering");
         };
 
+        let filter = plan
+            .as_any()
+            .downcast_ref::<SortExec>()
+            .and_then(|s| s.filter().clone());
+
         let sort_fetch = plan.fetch();
         let parent_is_stricter = eqp.requirements_compatible(
             parent_requirement.first().clone(),
             sort_ordering.clone().into(),
         );
+        let sort_filter = plan
+            .as_any()
+            .downcast_ref::<SortExec>()
+            .and_then(|s| s.filter().clone());
 
         // Remove the current sort as we are either going to prove that it is
         // unnecessary, or replace it with a stricter sort.
@@ -152,17 +177,27 @@ fn pushdown_sorts_helper(
                 sort_push_down,
                 parent_requirement.into_single(),
                 parent_fetch,
+                filter.clone(),
             );
             // Update pushdown requirements:
             sort_push_down.children[0].data = ParentRequirements {
                 ordering_requirement: Some(OrderingRequirements::from(sort_ordering)),
                 fetch: sort_fetch,
+                filter,
             };
             return Ok(Transformed::yes(sort_push_down));
         } else {
             // Sort was unnecessary, just propagate the stricter fetch and
             // ordering requirements:
             sort_push_down.data.fetch = min_fetch(sort_fetch, parent_fetch);
+            match sort_filter {
+                Some(filter) => {
+                    sort_push_down.data.filter = Some(filter);
+                }
+                None => {
+                    sort_push_down.data.filter = parent_filter.clone();
+                }
+            }
             let current_is_stricter = eqp.requirements_compatible(
                 sort_ordering.clone().into(),
                 parent_requirement.first().clone(),
@@ -194,9 +229,22 @@ fn pushdown_sorts_helper(
         // For operators that can take a sort pushdown, continue with updated
         // requirements:
         let current_fetch = sort_push_down.plan.fetch();
+        let current_filter = sort_push_down
+            .plan
+            .as_any()
+            .downcast_ref::<SortExec>()
+            .and_then(|s| s.filter().clone());
         for (child, order) in sort_push_down.children.iter_mut().zip(adjusted) {
             child.data.ordering_requirement = order;
             child.data.fetch = min_fetch(current_fetch, parent_fetch);
+            match current_filter {
+                Some(ref filter) => {
+                    child.data.filter = Some(Arc::clone(filter));
+                }
+                None => {
+                    child.data.filter = parent_filter.clone();
+                }
+            }
         }
         sort_push_down.data.ordering_requirement = None;
     } else {
@@ -205,6 +253,7 @@ fn pushdown_sorts_helper(
             sort_push_down,
             parent_requirement.into_single(),
             parent_fetch,
+            parent_filter,
         );
         assign_initial_requirements(&mut sort_push_down);
     }
