@@ -1106,6 +1106,7 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else {
                         // there is no equal join condition, use the nested loop join
+                        // TODO: Support null_equals_null + equijoin (refer to https://github.com/apache/datafusion/pull/16210)
                         Arc::new(NestedLoopJoinExec::try_new(
                             physical_left,
                             physical_right,
