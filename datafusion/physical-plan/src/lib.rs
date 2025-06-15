@@ -92,6 +92,5 @@ pub mod udaf {
 }
 
 pub mod coalesce;
-#[cfg(any(test, feature = "bench"))]
 pub mod test;
 pub mod yield_stream;
