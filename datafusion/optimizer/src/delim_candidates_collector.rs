@@ -24,11 +24,11 @@ type ID = usize;
 type SubPlanSize = usize;
 
 #[allow(dead_code)]
-struct Node {
-    plan: LogicalPlan,
-    id: ID,
+pub struct Node {
+    pub plan: LogicalPlan,
+    pub id: ID,
     // subplan size of current node.
-    sub_plan_size: SubPlanSize,
+    pub sub_plan_size: SubPlanSize,
 }
 
 impl Node {
@@ -42,10 +42,10 @@ impl Node {
 }
 
 #[allow(dead_code)]
-struct JoinWithDelimScan {
+pub struct JoinWithDelimScan {
     // Join node under DelimCandidate.
-    node: Node,
-    depth: usize,
+    pub node: Node,
+    pub depth: usize,
 }
 
 impl JoinWithDelimScan {
@@ -58,10 +58,10 @@ impl JoinWithDelimScan {
 }
 
 #[allow(dead_code)]
-struct DelimCandidate {
-    node: Node,
-    joins: Vec<JoinWithDelimScan>,
-    delim_scan_count: usize,
+pub struct DelimCandidate {
+    pub node: Node,
+    pub joins: Vec<JoinWithDelimScan>,
+    pub delim_scan_count: usize,
 }
 
 #[allow(dead_code)]
@@ -166,8 +166,8 @@ impl TreeNodeVisitor<'_> for NodeVisitor {
     }
 }
 
-struct DelimCandidateVisitor {
-    candidates: Vec<DelimCandidate>,
+pub struct DelimCandidateVisitor {
+    pub candidates: Vec<DelimCandidate>,
     node_visitor: NodeVisitor,
     cur_id: ID,
     // all the node ids from root to the current node
@@ -176,7 +176,7 @@ struct DelimCandidateVisitor {
 }
 
 impl DelimCandidateVisitor {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             candidates: vec![],
             node_visitor: NodeVisitor::new(),
@@ -286,7 +286,7 @@ impl<'n> TreeNodeVisitor<'n> for DelimCandidatesCollector<'_> {
     }
 
     fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
-        let recursion;
+        let mut recursion = TreeNodeRecursion::Continue;
 
         let cur_id = self.stack.pop().ok_or(internal_datafusion_err!(
             "stack cannot be empty during upward traversal"
@@ -316,15 +316,12 @@ impl<'n> TreeNodeVisitor<'n> for DelimCandidatesCollector<'_> {
                     left_plan.visit(&mut new_collector)?;
 
                     recursion = TreeNodeRecursion::Stop;
-                } else {
-                    recursion = TreeNodeRecursion::Continue;
                 }
             }
             LogicalPlan::DelimGet(_) => {
                 self.candidate.delim_scan_count += 1;
-                recursion = TreeNodeRecursion::Stop;
             }
-            _ => recursion = TreeNodeRecursion::Continue,
+            _ => {}
         }
 
         if let LogicalPlan::Join(join) = plan {
@@ -534,4 +531,6 @@ mod tests {
 
         Ok(())
     }
+
+    // TODO: add test for candidate collector.
 }

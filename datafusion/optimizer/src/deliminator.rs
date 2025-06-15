@@ -16,12 +16,13 @@
 // under the License.
 
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+    Transformed, TreeNode, TreeNodeRecursion, 
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_expr::{Join, JoinKind, JoinType, LogicalPlan};
+use datafusion_expr::{Join,  JoinType, LogicalPlan};
 
 use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
+use crate::delim_candidates_collector::DelimCandidateVisitor;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
 /// The Deliminator optimizer traverses the logical operator tree and removes any
@@ -52,13 +53,13 @@ impl OptimizerRule for Deliminator {
         let _ = rewrite_result.data.visit(&mut visitor)?;
         for candidate in &visitor.candidates {
             println!("=== DelimCandidate ===");
-            println!("  plan: {}", candidate.plan.display());
-            println!("  delim_get_count: {}", candidate.delim_get_count);
+            println!("  plan: {}", candidate.node.plan.display());
+            println!("  delim_get_count: {}", candidate.delim_scan_count);
             println!("  joins: [");
             for join in &candidate.joins {
                 println!("    JoinWithDelimGet {{");
                 println!("      depth: {}", join.depth);
-                println!("      join: {}", join.join.display());
+                println!("      join: {}", join.node.plan.display());
                 println!("    }},");
             }
             println!("  ]");
@@ -70,8 +71,8 @@ impl OptimizerRule for Deliminator {
         }
 
         for candidate in visitor.candidates.iter_mut() {
-            let _delim_join = &candidate.delim_join;
-            let plan = &candidate.plan;
+            let _delim_join = &candidate.node.plan;
+            let plan = &candidate.node.plan;
 
             // Sort these so the deepest are first.
             candidate.joins.sort_by(|a, b| b.depth.cmp(&a.depth));
@@ -109,7 +110,7 @@ impl OptimizerRule for Deliminator {
                 }
 
                 // Change type if there are no more duplicate-eliminated columns.
-                if candidate.joins.len() == candidate.delim_get_count && all_removed {
+                if candidate.joins.len() == candidate.delim_scan_count && all_removed {
                     // TODO: how we can change it.
                     // delim_join.join_kind = JoinKind::ComparisonJoin;
                 }
@@ -217,116 +218,6 @@ fn remove_inequality_join_with_delim_scan(
     }
 
     todo!()
-}
-
-struct JoinWithDelimGet {
-    join: LogicalPlan,
-    depth: usize,
-}
-
-impl JoinWithDelimGet {
-    fn new(join: LogicalPlan, depth: usize) -> Self {
-        Self { join, depth }
-    }
-}
-
-#[allow(dead_code)]
-struct DelimCandidate {
-    plan: LogicalPlan,
-    delim_join: Join,
-    joins: Vec<JoinWithDelimGet>,
-    delim_get_count: usize,
-}
-
-impl DelimCandidate {
-    fn new(plan: LogicalPlan, delim_join: Join) -> Self {
-        Self {
-            plan,
-            delim_join,
-            joins: vec![],
-            delim_get_count: 0,
-        }
-    }
-}
-
-struct DelimCandidateVisitor {
-    candidates: Vec<DelimCandidate>,
-}
-
-impl DelimCandidateVisitor {
-    fn new() -> Self {
-        Self { candidates: vec![] }
-    }
-}
-
-impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
-    type Node = LogicalPlan;
-
-    fn f_down(&mut self, _node: &Self::Node) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
-    fn f_up(&mut self, plan: &Self::Node) -> Result<TreeNodeRecursion> {
-        if let LogicalPlan::Join(join) = plan {
-            if join.join_kind == JoinKind::DelimJoin {
-                self.candidates
-                    .push(DelimCandidate::new(plan.clone(), join.clone()));
-
-                if let Some(candidate) = self.candidates.last_mut() {
-                    // DelimScans are in the RHS.
-                    find_join_with_delim_scan(join.right.as_ref(), candidate, 0);
-                } else {
-                    unreachable!()
-                }
-            }
-        }
-
-        Ok(TreeNodeRecursion::Continue)
-    }
-}
-
-fn find_join_with_delim_scan(
-    plan: &LogicalPlan,
-    candidate: &mut DelimCandidate,
-    depth: usize,
-) {
-    if let LogicalPlan::Join(join) = plan {
-        if join.join_kind == JoinKind::DelimJoin {
-            find_join_with_delim_scan(join.left.as_ref(), candidate, depth + 1);
-        } else {
-            for child in plan.inputs() {
-                find_join_with_delim_scan(child, candidate, depth + 1);
-            }
-        }
-    } else if let LogicalPlan::DelimGet(_) = plan {
-        candidate.delim_get_count += 1;
-    } else {
-        for child in plan.inputs() {
-            find_join_with_delim_scan(child, candidate, depth + 1);
-        }
-    }
-
-    if let LogicalPlan::Join(join) = plan {
-        if join.join_kind == JoinKind::DelimJoin
-            && (is_delim_scan(join.left.as_ref()) || is_delim_scan(join.right.as_ref()))
-        {
-            candidate
-                .joins
-                .push(JoinWithDelimGet::new(plan.clone(), depth));
-        }
-    }
-}
-
-fn is_delim_scan(plan: &LogicalPlan) -> bool {
-    if let LogicalPlan::SubqueryAlias(alias) = plan {
-        if let LogicalPlan::DelimGet(_) = alias.input.as_ref() {
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    }
 }
 
 #[cfg(test)]
