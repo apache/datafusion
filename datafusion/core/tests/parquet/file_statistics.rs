@@ -28,7 +28,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
-use datafusion_common::DFSchema;
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::cache::cache_unit::{
     DefaultFileStatisticsCache, DefaultListFilesCache,
@@ -96,6 +96,35 @@ async fn check_stats_precision_with_filter_pushdown() {
         optimized_exec.partition_statistics(None).unwrap().num_rows,
         Precision::Inexact(8),
         "Stats after filter pushdown should be inexact"
+    );
+}
+
+#[tokio::test]
+async fn check_stats_inexact_for_truncated_values() {
+    let filename = "long_strings.parquet";
+    let table_path = ListingTableUrl::parse(filename).unwrap();
+
+    let opt =
+        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
+    let table = get_listing_table(&table_path, None, &opt).await;
+
+    let (_, _, state) = get_cache_runtime_state();
+
+    let exec = table.scan(&state, None, &[], None).await.unwrap();
+    assert_eq!(
+        exec.partition_statistics(None).unwrap().num_rows,
+        Precision::Exact(2),
+        "Stats without filter should be exact"
+    );
+
+    let col_stats = &exec.partition_statistics(None).unwrap().column_statistics[0];
+    assert_eq!(
+        col_stats.min_value,
+        Precision::Inexact(ScalarValue::Utf8View(Some("A".repeat(4096))))
+    );
+    assert_eq!(
+        col_stats.max_value,
+        Precision::Inexact(ScalarValue::Utf8View(Some("Z".repeat(4095) + "[")))
     );
 }
 
