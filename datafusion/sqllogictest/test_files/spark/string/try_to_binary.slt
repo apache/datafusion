@@ -16,17 +16,17 @@
 # under the License.
 
 ## Original Query: SELECT try_to_binary('abc', 'utf-8');
-## PySpark 3.5.5 Result: {'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
+## PySpark 3.5.5 Result: {'try_to_binary(abc, utf-8)': bytearray(b'abc'), 'typeof(try_to_binary(abc, utf-8))': 'binary', 'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
 #query
 #SELECT try_to_binary('abc'::string, 'utf-8'::string);
 
 ## Original Query: select try_to_binary('a!', 'base64');
-## PySpark 3.5.5 Result: {'typeof(a!)': 'string', 'typeof(base64)': 'string'}
+## PySpark 3.5.5 Result: {'try_to_binary(a!, base64)': None, 'typeof(try_to_binary(a!, base64))': 'binary', 'typeof(a!)': 'string', 'typeof(base64)': 'string'}
 #query
 #SELECT try_to_binary('a!'::string, 'base64'::string);
 
 ## Original Query: select try_to_binary('abc', 'invalidFormat');
-## PySpark 3.5.5 Result: {'typeof(abc)': 'string', 'typeof(invalidFormat)': 'string'}
+## PySpark 3.5.5 Result: {'try_to_binary(abc, invalidFormat)': None, 'typeof(try_to_binary(abc, invalidFormat))': 'binary', 'typeof(abc)': 'string', 'typeof(invalidFormat)': 'string'}
 #query
 #SELECT try_to_binary('abc'::string, 'invalidFormat'::string);
 

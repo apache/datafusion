@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT shiftright(4, 1);
-## PySpark 3.5.5 Result: {'typeof(4)': 'int', 'typeof(1)': 'int'}
+## PySpark 3.5.5 Result: {'shiftright(4, 1)': 2, 'typeof(shiftright(4, 1))': 'int', 'typeof(4)': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT shiftright(4::int, 1::int);
 

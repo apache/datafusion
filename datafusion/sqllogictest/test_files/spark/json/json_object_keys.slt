@@ -16,17 +16,17 @@
 # under the License.
 
 ## Original Query: SELECT json_object_keys('{"f1":"abc","f2":{"f3":"a", "f4":"b"}}');
-## PySpark 3.5.5 Result: {'typeof({"f1":"abc","f2":{"f3":"a", "f4":"b"}})': 'string'}
+## PySpark 3.5.5 Result: {'json_object_keys({"f1":"abc","f2":{"f3":"a", "f4":"b"}})': ['f1', 'f2'], 'typeof(json_object_keys({"f1":"abc","f2":{"f3":"a", "f4":"b"}}))': 'array<string>', 'typeof({"f1":"abc","f2":{"f3":"a", "f4":"b"}})': 'string'}
 #query
 #SELECT json_object_keys('{"f1":"abc","f2":{"f3":"a", "f4":"b"}}'::string);
 
 ## Original Query: SELECT json_object_keys('{"key": "value"}');
-## PySpark 3.5.5 Result: {'typeof({"key": "value"})': 'string'}
+## PySpark 3.5.5 Result: {'json_object_keys({"key": "value"})': ['key'], 'typeof(json_object_keys({"key": "value"}))': 'array<string>', 'typeof({"key": "value"})': 'string'}
 #query
 #SELECT json_object_keys('{"key": "value"}'::string);
 
 ## Original Query: SELECT json_object_keys('{}');
-## PySpark 3.5.5 Result: {'typeof({})': 'string'}
+## PySpark 3.5.5 Result: {'json_object_keys({})': [], 'typeof(json_object_keys({}))': 'array<string>', 'typeof({})': 'string'}
 #query
 #SELECT json_object_keys('{}'::string);
 

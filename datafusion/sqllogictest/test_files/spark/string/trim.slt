@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT trim('    SparkSQL   ');
-## PySpark 3.5.5 Result: {'typeof(    SparkSQL   )': 'string'}
+## PySpark 3.5.5 Result: {'trim(    SparkSQL   )': 'SparkSQL', 'typeof(trim(    SparkSQL   ))': 'string', 'typeof(    SparkSQL   )': 'string'}
 #query
 #SELECT trim('    SparkSQL   '::string);
 

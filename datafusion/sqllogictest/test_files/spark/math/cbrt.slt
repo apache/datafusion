@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT cbrt(27.0);
-## PySpark 3.5.5 Result: {'typeof(27.0)': 'decimal(3,1)'}
+## PySpark 3.5.5 Result: {'CBRT(27.0)': 3.0, 'typeof(CBRT(27.0))': 'double', 'typeof(27.0)': 'decimal(3,1)'}
 #query
 #SELECT cbrt(27.0::decimal(3,1));
 

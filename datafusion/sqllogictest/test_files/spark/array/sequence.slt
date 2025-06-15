@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT sequence(1, 5);
-## PySpark 3.5.5 Result: {'typeof(1)': 'int', 'typeof(5)': 'int'}
+## PySpark 3.5.5 Result: {'sequence(1, 5)': [1, 2, 3, 4, 5], 'typeof(sequence(1, 5))': 'array<int>', 'typeof(1)': 'int', 'typeof(5)': 'int'}
 #query
 #SELECT sequence(1::int, 5::int);
 
 ## Original Query: SELECT sequence(5, 1);
-## PySpark 3.5.5 Result: {'typeof(5)': 'int', 'typeof(1)': 'int'}
+## PySpark 3.5.5 Result: {'sequence(5, 1)': [5, 4, 3, 2, 1], 'typeof(sequence(5, 1))': 'array<int>', 'typeof(5)': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT sequence(5::int, 1::int);
 

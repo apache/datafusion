@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT unix_timestamp('2016-04-08', 'yyyy-MM-dd');
-## PySpark 3.5.5 Result: {'typeof(2016-04-08)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
+## PySpark 3.5.5 Result: {'unix_timestamp(2016-04-08, yyyy-MM-dd)': 1460098800, 'typeof(unix_timestamp(2016-04-08, yyyy-MM-dd))': 'bigint', 'typeof(2016-04-08)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
 #query
 #SELECT unix_timestamp('2016-04-08'::string, 'yyyy-MM-dd'::string);
 
-#S
-#E
+## Original Query: SELECT unix_timestamp();
+## PySpark 3.5.5 Result: {'unix_timestamp(current_timestamp(), yyyy-MM-dd HH:mm:ss)': 1749970660, 'typeof(unix_timestamp(current_timestamp(), yyyy-MM-dd HH:mm:ss))': 'bigint'}
 #query
-#L
+#SELECT unix_timestamp();
 

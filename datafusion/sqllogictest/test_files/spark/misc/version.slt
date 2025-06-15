@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT version();
+## PySpark 3.5.5 Result: {'version()': '3.5.5 7c29c664cdc9321205a98a14858aaf8daaa19db2', 'typeof(version())': 'string'}
 #query
-#L
+#SELECT version();
 

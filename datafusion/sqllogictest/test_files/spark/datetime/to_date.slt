@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT to_date('2009-07-30 04:17:52');
-## PySpark 3.5.5 Result: {'typeof(2009-07-30 04:17:52)': 'string'}
+## PySpark 3.5.5 Result: {'to_date(2009-07-30 04:17:52)': datetime.date(2009, 7, 30), 'typeof(to_date(2009-07-30 04:17:52))': 'date', 'typeof(2009-07-30 04:17:52)': 'string'}
 #query
 #SELECT to_date('2009-07-30 04:17:52'::string);
 
 ## Original Query: SELECT to_date('2016-12-31', 'yyyy-MM-dd');
-## PySpark 3.5.5 Result: {'typeof(2016-12-31)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
+## PySpark 3.5.5 Result: {'to_date(2016-12-31, yyyy-MM-dd)': datetime.date(2016, 12, 31), 'typeof(to_date(2016-12-31, yyyy-MM-dd))': 'date', 'typeof(2016-12-31)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
 #query
 #SELECT to_date('2016-12-31'::string, 'yyyy-MM-dd'::string);
 

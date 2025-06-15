@@ -16,27 +16,27 @@
 # under the License.
 
 ## Original Query: SELECT date_trunc('DD', '2015-03-05T09:32:05.359');
-## PySpark 3.5.5 Result: {'typeof(DD)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
+## PySpark 3.5.5 Result: {'date_trunc(DD, 2015-03-05T09:32:05.359)': datetime.datetime(2015, 3, 5, 0, 0), 'typeof(date_trunc(DD, 2015-03-05T09:32:05.359))': 'timestamp', 'typeof(DD)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
 #query
 #SELECT date_trunc('DD'::string, '2015-03-05T09:32:05.359'::string);
 
 ## Original Query: SELECT date_trunc('HOUR', '2015-03-05T09:32:05.359');
-## PySpark 3.5.5 Result: {'typeof(HOUR)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
+## PySpark 3.5.5 Result: {'date_trunc(HOUR, 2015-03-05T09:32:05.359)': datetime.datetime(2015, 3, 5, 9, 0), 'typeof(date_trunc(HOUR, 2015-03-05T09:32:05.359))': 'timestamp', 'typeof(HOUR)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
 #query
 #SELECT date_trunc('HOUR'::string, '2015-03-05T09:32:05.359'::string);
 
 ## Original Query: SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456');
-## PySpark 3.5.5 Result: {'typeof(MILLISECOND)': 'string', 'typeof(2015-03-05T09:32:05.123456)': 'string'}
+## PySpark 3.5.5 Result: {'date_trunc(MILLISECOND, 2015-03-05T09:32:05.123456)': datetime.datetime(2015, 3, 5, 9, 32, 5, 123000), 'typeof(date_trunc(MILLISECOND, 2015-03-05T09:32:05.123456))': 'timestamp', 'typeof(MILLISECOND)': 'string', 'typeof(2015-03-05T09:32:05.123456)': 'string'}
 #query
 #SELECT date_trunc('MILLISECOND'::string, '2015-03-05T09:32:05.123456'::string);
 
 ## Original Query: SELECT date_trunc('MM', '2015-03-05T09:32:05.359');
-## PySpark 3.5.5 Result: {'typeof(MM)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
+## PySpark 3.5.5 Result: {'date_trunc(MM, 2015-03-05T09:32:05.359)': datetime.datetime(2015, 3, 1, 0, 0), 'typeof(date_trunc(MM, 2015-03-05T09:32:05.359))': 'timestamp', 'typeof(MM)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
 #query
 #SELECT date_trunc('MM'::string, '2015-03-05T09:32:05.359'::string);
 
 ## Original Query: SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359');
-## PySpark 3.5.5 Result: {'typeof(YEAR)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
+## PySpark 3.5.5 Result: {'date_trunc(YEAR, 2015-03-05T09:32:05.359)': datetime.datetime(2015, 1, 1, 0, 0), 'typeof(date_trunc(YEAR, 2015-03-05T09:32:05.359))': 'timestamp', 'typeof(YEAR)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
 #query
 #SELECT date_trunc('YEAR'::string, '2015-03-05T09:32:05.359'::string);
 

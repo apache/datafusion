@@ -15,18 +15,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT randn();
+## PySpark 3.5.5 Result: {'randn()': 1.498983714060803, 'typeof(randn())': 'double'}
 #query
-#L
+#SELECT randn();
 
 ## Original Query: SELECT randn(0);
-## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+## PySpark 3.5.5 Result: {'randn(0)': 1.6034991609278433, 'typeof(randn(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT randn(0::int);
 
 ## Original Query: SELECT randn(null);
-## PySpark 3.5.5 Result: {'typeof(NULL)': 'void'}
+## PySpark 3.5.5 Result: {'randn(NULL)': 1.6034991609278433, 'typeof(randn(NULL))': 'double', 'typeof(NULL)': 'void'}
 #query
 #SELECT randn(NULL::void);
 

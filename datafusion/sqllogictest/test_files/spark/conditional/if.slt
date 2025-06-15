@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT if(1 < 2, 'a', 'b');
-## PySpark 3.5.5 Result: {'typeof((1 < 2))': 'boolean', 'typeof(a)': 'string', 'typeof(b)': 'string'}
+## PySpark 3.5.5 Result: {'(IF((1 < 2), a, b))': 'a', 'typeof((IF((1 < 2), a, b)))': 'string', 'typeof((1 < 2))': 'boolean', 'typeof(a)': 'string', 'typeof(b)': 'string'}
 #query
 #SELECT if((1 < 2)::boolean, 'a'::string, 'b'::string);
 

@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT concat('Spark', 'SQL');
-## PySpark 3.5.5 Result: {'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
+## PySpark 3.5.5 Result: {'concat(Spark, SQL)': 'SparkSQL', 'typeof(concat(Spark, SQL))': 'string', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
 #query
 #SELECT concat('Spark'::string, 'SQL'::string);
 

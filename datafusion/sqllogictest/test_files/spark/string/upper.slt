@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT upper('SparkSql');
-## PySpark 3.5.5 Result: {'typeof(SparkSql)': 'string'}
+## PySpark 3.5.5 Result: {'upper(SparkSql)': 'SPARKSQL', 'typeof(upper(SparkSql))': 'string', 'typeof(SparkSql)': 'string'}
 #query
 #SELECT upper('SparkSql'::string);
 

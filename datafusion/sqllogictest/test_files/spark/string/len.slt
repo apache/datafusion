@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT len('Spark SQL ');
-## PySpark 3.5.5 Result: {'typeof(Spark SQL )': 'string'}
+## PySpark 3.5.5 Result: {'len(Spark SQL )': 10, 'typeof(len(Spark SQL ))': 'int', 'typeof(Spark SQL )': 'string'}
 #query
 #SELECT len('Spark SQL '::string);
 
 ## Original Query: SELECT len(x'537061726b2053514c');
-## PySpark 3.5.5 Result: {"typeof(X'537061726B2053514C')": 'binary'}
+## PySpark 3.5.5 Result: {"len(X'537061726B2053514C')": 9, "typeof(len(X'537061726B2053514C'))": 'int', "typeof(X'537061726B2053514C')": 'binary'}
 #query
 #SELECT len(X'537061726B2053514C'::binary);
 

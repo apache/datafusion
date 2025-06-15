@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT get_json_object('{"a":"b"}', '$.a');
-## PySpark 3.5.5 Result: {'typeof({"a":"b"})': 'string', 'typeof($.a)': 'string'}
+## PySpark 3.5.5 Result: {'get_json_object({"a":"b"}, $.a)': 'b', 'typeof(get_json_object({"a":"b"}, $.a))': 'string', 'typeof({"a":"b"})': 'string', 'typeof($.a)': 'string'}
 #query
 #SELECT get_json_object('{"a":"b"}'::string, '$.a'::string);
 

@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT sign(40);
-## PySpark 3.5.5 Result: {'typeof(40)': 'int'}
+## PySpark 3.5.5 Result: {'sign(40)': 1.0, 'typeof(sign(40))': 'double', 'typeof(40)': 'int'}
 #query
 #SELECT sign(40::int);
 
 ## Original Query: SELECT sign(INTERVAL -'100' YEAR);
-## PySpark 3.5.5 Result: {"typeof(INTERVAL '-100' YEAR)": 'interval year'}
+## PySpark 3.5.5 Result: {"sign(INTERVAL '-100' YEAR)": -1.0, "typeof(sign(INTERVAL '-100' YEAR))": 'double', "typeof(INTERVAL '-100' YEAR)": 'interval year'}
 #query
 #SELECT sign(INTERVAL '-100' YEAR::interval year);
 

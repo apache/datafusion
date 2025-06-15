@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT hypot(3, 4);
-## PySpark 3.5.5 Result: {'typeof(3)': 'int', 'typeof(4)': 'int'}
+## PySpark 3.5.5 Result: {'HYPOT(3, 4)': 5.0, 'typeof(HYPOT(3, 4))': 'double', 'typeof(3)': 'int', 'typeof(4)': 'int'}
 #query
 #SELECT hypot(3::int, 4::int);
 

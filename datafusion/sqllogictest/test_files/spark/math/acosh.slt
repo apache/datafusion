@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT acosh(0);
-## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+## PySpark 3.5.5 Result: {'ACOSH(0)': nan, 'typeof(ACOSH(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT acosh(0::int);
 
 ## Original Query: SELECT acosh(1);
-## PySpark 3.5.5 Result: {'typeof(1)': 'int'}
+## PySpark 3.5.5 Result: {'ACOSH(1)': 0.0, 'typeof(ACOSH(1))': 'double', 'typeof(1)': 'int'}
 #query
 #SELECT acosh(1::int);
 

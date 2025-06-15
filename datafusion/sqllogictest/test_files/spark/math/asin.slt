@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT asin(0);
-## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+## PySpark 3.5.5 Result: {'ASIN(0)': 0.0, 'typeof(ASIN(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT asin(0::int);
 
 ## Original Query: SELECT asin(2);
-## PySpark 3.5.5 Result: {'typeof(2)': 'int'}
+## PySpark 3.5.5 Result: {'ASIN(2)': nan, 'typeof(ASIN(2))': 'double', 'typeof(2)': 'int'}
 #query
 #SELECT asin(2::int);
 

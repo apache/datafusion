@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT degrees(3.141592653589793);
-## PySpark 3.5.5 Result: {'typeof(3.141592653589793)': 'decimal(16,15)'}
+## PySpark 3.5.5 Result: {'DEGREES(3.141592653589793)': 180.0, 'typeof(DEGREES(3.141592653589793))': 'double', 'typeof(3.141592653589793)': 'decimal(16,15)'}
 #query
 #SELECT degrees(3.141592653589793::decimal(16,15));
 

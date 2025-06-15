@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT initcap('sPark sql');
-## PySpark 3.5.5 Result: {'typeof(sPark sql)': 'string'}
+## PySpark 3.5.5 Result: {'initcap(sPark sql)': 'Spark Sql', 'typeof(initcap(sPark sql))': 'string', 'typeof(sPark sql)': 'string'}
 #query
 #SELECT initcap('sPark sql'::string);
 

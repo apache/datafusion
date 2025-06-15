@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT reverse('Spark SQL');
-## PySpark 3.5.5 Result: {'typeof(Spark SQL)': 'string'}
+## PySpark 3.5.5 Result: {'reverse(Spark SQL)': 'LQS krapS', 'typeof(reverse(Spark SQL))': 'string', 'typeof(Spark SQL)': 'string'}
 #query
 #SELECT reverse('Spark SQL'::string);
 

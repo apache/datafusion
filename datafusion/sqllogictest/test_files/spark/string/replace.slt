@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT replace('ABCabc', 'abc', 'DEF');
-## PySpark 3.5.5 Result: {'typeof(ABCabc)': 'string', 'typeof(abc)': 'string', 'typeof(DEF)': 'string'}
+## PySpark 3.5.5 Result: {'replace(ABCabc, abc, DEF)': 'ABCDEF', 'typeof(replace(ABCabc, abc, DEF))': 'string', 'typeof(ABCabc)': 'string', 'typeof(abc)': 'string', 'typeof(DEF)': 'string'}
 #query
 #SELECT replace('ABCabc'::string, 'abc'::string, 'DEF'::string);
 

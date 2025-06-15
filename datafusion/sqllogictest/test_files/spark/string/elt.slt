@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT elt(1, 'scala', 'java');
-## PySpark 3.5.5 Result: {'typeof(1)': 'int', 'typeof(scala)': 'string', 'typeof(java)': 'string'}
+## PySpark 3.5.5 Result: {'elt(1, scala, java)': 'scala', 'typeof(elt(1, scala, java))': 'string', 'typeof(1)': 'int', 'typeof(scala)': 'string', 'typeof(java)': 'string'}
 #query
 #SELECT elt(1::int, 'scala'::string, 'java'::string);
 
 ## Original Query: SELECT elt(2, 'a', 1);
-## PySpark 3.5.5 Result: {'typeof(2)': 'int', 'typeof(a)': 'string', 'typeof(1)': 'int'}
+## PySpark 3.5.5 Result: {'elt(2, a, 1)': '1', 'typeof(elt(2, a, 1))': 'string', 'typeof(2)': 'int', 'typeof(a)': 'string', 'typeof(1)': 'int'}
 #query
 #SELECT elt(2::int, 'a'::string, 1::int);
 

@@ -16,27 +16,27 @@
 # under the License.
 
 ## Original Query: SELECT to_number('$78.12', '$99.99');
-## PySpark 3.5.5 Result: {'typeof($78.12)': 'string', 'typeof($99.99)': 'string'}
+## PySpark 3.5.5 Result: {'to_number($78.12, $99.99)': Decimal('78.12'), 'typeof(to_number($78.12, $99.99))': 'decimal(4,2)', 'typeof($78.12)': 'string', 'typeof($99.99)': 'string'}
 #query
 #SELECT to_number('$78.12'::string, '$99.99'::string);
 
 ## Original Query: SELECT to_number('12,454', '99,999');
-## PySpark 3.5.5 Result: {'typeof(12,454)': 'string', 'typeof(99,999)': 'string'}
+## PySpark 3.5.5 Result: {'to_number(12,454, 99,999)': Decimal('12454'), 'typeof(to_number(12,454, 99,999))': 'decimal(5,0)', 'typeof(12,454)': 'string', 'typeof(99,999)': 'string'}
 #query
 #SELECT to_number('12,454'::string, '99,999'::string);
 
 ## Original Query: SELECT to_number('12,454.8-', '99,999.9S');
-## PySpark 3.5.5 Result: {'typeof(12,454.8-)': 'string', 'typeof(99,999.9S)': 'string'}
+## PySpark 3.5.5 Result: {'to_number(12,454.8-, 99,999.9S)': Decimal('-12454.8'), 'typeof(to_number(12,454.8-, 99,999.9S))': 'decimal(6,1)', 'typeof(12,454.8-)': 'string', 'typeof(99,999.9S)': 'string'}
 #query
 #SELECT to_number('12,454.8-'::string, '99,999.9S'::string);
 
 ## Original Query: SELECT to_number('454', '999');
-## PySpark 3.5.5 Result: {'typeof(454)': 'string', 'typeof(999)': 'string'}
+## PySpark 3.5.5 Result: {'to_number(454, 999)': Decimal('454'), 'typeof(to_number(454, 999))': 'decimal(3,0)', 'typeof(454)': 'string', 'typeof(999)': 'string'}
 #query
 #SELECT to_number('454'::string, '999'::string);
 
 ## Original Query: SELECT to_number('454.00', '000.00');
-## PySpark 3.5.5 Result: {'typeof(454.00)': 'string', 'typeof(000.00)': 'string'}
+## PySpark 3.5.5 Result: {'to_number(454.00, 000.00)': Decimal('454.00'), 'typeof(to_number(454.00, 000.00))': 'decimal(5,2)', 'typeof(454.00)': 'string', 'typeof(000.00)': 'string'}
 #query
 #SELECT to_number('454.00'::string, '000.00'::string);
 

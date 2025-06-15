@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT signum(40);
-## PySpark 3.5.5 Result: {'typeof(40)': 'int'}
+## PySpark 3.5.5 Result: {'SIGNUM(40)': 1.0, 'typeof(SIGNUM(40))': 'double', 'typeof(40)': 'int'}
 #query
 #SELECT signum(40::int);
 
 ## Original Query: SELECT signum(INTERVAL -'100' YEAR);
-## PySpark 3.5.5 Result: {"typeof(INTERVAL '-100' YEAR)": 'interval year'}
+## PySpark 3.5.5 Result: {"SIGNUM(INTERVAL '-100' YEAR)": -1.0, "typeof(SIGNUM(INTERVAL '-100' YEAR))": 'double', "typeof(INTERVAL '-100' YEAR)": 'interval year'}
 #query
 #SELECT signum(INTERVAL '-100' YEAR::interval year);
 

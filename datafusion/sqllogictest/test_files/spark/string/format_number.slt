@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT format_number(12332.123456, '##################.###');
-## PySpark 3.5.5 Result: {'typeof(12332.123456)': 'decimal(11,6)', 'typeof(##################.###)': 'string'}
+## PySpark 3.5.5 Result: {'format_number(12332.123456, ##################.###)': '12332.123', 'typeof(format_number(12332.123456, ##################.###))': 'string', 'typeof(12332.123456)': 'decimal(11,6)', 'typeof(##################.###)': 'string'}
 #query
 #SELECT format_number(12332.123456::decimal(11,6), '##################.###'::string);
 
 ## Original Query: SELECT format_number(12332.123456, 4);
-## PySpark 3.5.5 Result: {'typeof(12332.123456)': 'decimal(11,6)', 'typeof(4)': 'int'}
+## PySpark 3.5.5 Result: {'format_number(12332.123456, 4)': '12,332.1235', 'typeof(format_number(12332.123456, 4))': 'string', 'typeof(12332.123456)': 'decimal(11,6)', 'typeof(4)': 'int'}
 #query
 #SELECT format_number(12332.123456::decimal(11,6), 4::int);
 

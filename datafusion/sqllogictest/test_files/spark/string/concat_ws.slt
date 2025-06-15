@@ -16,22 +16,22 @@
 # under the License.
 
 ## Original Query: SELECT concat_ws(' ', 'Spark', 'SQL');
-## PySpark 3.5.5 Result: {'typeof( )': 'string', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
+## PySpark 3.5.5 Result: {'concat_ws( , Spark, SQL)': 'Spark SQL', 'typeof(concat_ws( , Spark, SQL))': 'string', 'typeof( )': 'string', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
 #query
 #SELECT concat_ws(' '::string, 'Spark'::string, 'SQL'::string);
 
 ## Original Query: SELECT concat_ws('/', 'foo', null, 'bar');
-## PySpark 3.5.5 Result: {'typeof(/)': 'string', 'typeof(foo)': 'string', 'typeof(NULL)': 'void', 'typeof(bar)': 'string'}
+## PySpark 3.5.5 Result: {'concat_ws(/, foo, NULL, bar)': 'foo/bar', 'typeof(concat_ws(/, foo, NULL, bar))': 'string', 'typeof(/)': 'string', 'typeof(foo)': 'string', 'typeof(NULL)': 'void', 'typeof(bar)': 'string'}
 #query
 #SELECT concat_ws('/'::string, 'foo'::string, NULL::void, 'bar'::string);
 
 ## Original Query: SELECT concat_ws('s');
-## PySpark 3.5.5 Result: {'typeof(s)': 'string'}
+## PySpark 3.5.5 Result: {'concat_ws(s)': '', 'typeof(concat_ws(s))': 'string', 'typeof(s)': 'string'}
 #query
 #SELECT concat_ws('s'::string);
 
 ## Original Query: SELECT concat_ws(null, 'Spark', 'SQL');
-## PySpark 3.5.5 Result: {'typeof(NULL)': 'void', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
+## PySpark 3.5.5 Result: {'concat_ws(NULL, Spark, SQL)': None, 'typeof(concat_ws(NULL, Spark, SQL))': 'string', 'typeof(NULL)': 'void', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
 #query
 #SELECT concat_ws(NULL::void, 'Spark'::string, 'SQL'::string);
 

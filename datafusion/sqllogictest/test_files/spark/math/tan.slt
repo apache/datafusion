@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT tan(0);
-## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+## PySpark 3.5.5 Result: {'TAN(0)': 0.0, 'typeof(TAN(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT tan(0::int);
 

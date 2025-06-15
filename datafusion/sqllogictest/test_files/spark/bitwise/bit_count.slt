@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT bit_count(0);
-## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+## PySpark 3.5.5 Result: {'bit_count(0)': 0, 'typeof(bit_count(0))': 'int', 'typeof(0)': 'int'}
 #query
 #SELECT bit_count(0::int);
 

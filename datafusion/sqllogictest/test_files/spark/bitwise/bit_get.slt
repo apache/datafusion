@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT bit_get(11, 0);
-## PySpark 3.5.5 Result: {'typeof(11)': 'int', 'typeof(0)': 'int'}
+## PySpark 3.5.5 Result: {'bit_get(11, 0)': 1, 'typeof(bit_get(11, 0))': 'tinyint', 'typeof(11)': 'int', 'typeof(0)': 'int'}
 #query
 #SELECT bit_get(11::int, 0::int);
 
 ## Original Query: SELECT bit_get(11, 2);
-## PySpark 3.5.5 Result: {'typeof(11)': 'int', 'typeof(2)': 'int'}
+## PySpark 3.5.5 Result: {'bit_get(11, 2)': 0, 'typeof(bit_get(11, 2))': 'tinyint', 'typeof(11)': 'int', 'typeof(2)': 'int'}
 #query
 #SELECT bit_get(11::int, 2::int);
 

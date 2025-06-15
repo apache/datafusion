@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT sha('Spark');
-## PySpark 3.5.5 Result: {'typeof(Spark)': 'string'}
+## PySpark 3.5.5 Result: {'sha(Spark)': '85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c', 'typeof(sha(Spark))': 'string', 'typeof(Spark)': 'string'}
 #query
 #SELECT sha('Spark'::string);
 

@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT current_catalog();
+## PySpark 3.5.5 Result: {'current_catalog()': 'spark_catalog', 'typeof(current_catalog())': 'string'}
 #query
-#L
+#SELECT current_catalog();
 

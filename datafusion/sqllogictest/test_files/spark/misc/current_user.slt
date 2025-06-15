@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT current_user();
+## PySpark 3.5.5 Result: {'current_user()': 'r', 'typeof(current_user())': 'string'}
 #query
-#L
+#SELECT current_user();
 

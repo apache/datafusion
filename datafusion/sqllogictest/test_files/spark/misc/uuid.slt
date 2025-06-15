@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT uuid();
+## PySpark 3.5.5 Result: {'uuid()': '96981e67-62f6-49bc-a6f4-2f9bc676edda', 'typeof(uuid())': 'string'}
 #query
-#L
+#SELECT uuid();
 

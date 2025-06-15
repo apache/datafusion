@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT instr('SparkSQL', 'SQL');
-## PySpark 3.5.5 Result: {'typeof(SparkSQL)': 'string', 'typeof(SQL)': 'string'}
+## PySpark 3.5.5 Result: {'instr(SparkSQL, SQL)': 6, 'typeof(instr(SparkSQL, SQL))': 'int', 'typeof(SparkSQL)': 'string', 'typeof(SQL)': 'string'}
 #query
 #SELECT instr('SparkSQL'::string, 'SQL'::string);
 

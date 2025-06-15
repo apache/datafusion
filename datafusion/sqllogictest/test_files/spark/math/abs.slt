@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT abs(-1);
-## PySpark 3.5.5 Result: {'typeof(-1)': 'int'}
+## PySpark 3.5.5 Result: {'abs(-1)': 1, 'typeof(abs(-1))': 'int', 'typeof(-1)': 'int'}
 #query
 #SELECT abs(-1::int);
 
 ## Original Query: SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);
-## PySpark 3.5.5 Result: {"typeof(INTERVAL '-1-1' YEAR TO MONTH)": 'interval year to month'}
+## PySpark 3.5.5 Result: {"abs(INTERVAL '-1-1' YEAR TO MONTH)": 13, "typeof(abs(INTERVAL '-1-1' YEAR TO MONTH))": 'interval year to month', "typeof(INTERVAL '-1-1' YEAR TO MONTH)": 'interval year to month'}
 #query
 #SELECT abs(INTERVAL '-1-1' YEAR TO MONTH::interval year to month);
 

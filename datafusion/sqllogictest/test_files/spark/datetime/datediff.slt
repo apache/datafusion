@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT datediff('2009-07-30', '2009-07-31');
-## PySpark 3.5.5 Result: {'typeof(2009-07-30)': 'string', 'typeof(2009-07-31)': 'string'}
+## PySpark 3.5.5 Result: {'datediff(2009-07-30, 2009-07-31)': -1, 'typeof(datediff(2009-07-30, 2009-07-31))': 'int', 'typeof(2009-07-30)': 'string', 'typeof(2009-07-31)': 'string'}
 #query
 #SELECT datediff('2009-07-30'::string, '2009-07-31'::string);
 
 ## Original Query: SELECT datediff('2009-07-31', '2009-07-30');
-## PySpark 3.5.5 Result: {'typeof(2009-07-31)': 'string', 'typeof(2009-07-30)': 'string'}
+## PySpark 3.5.5 Result: {'datediff(2009-07-31, 2009-07-30)': 1, 'typeof(datediff(2009-07-31, 2009-07-30))': 'int', 'typeof(2009-07-31)': 'string', 'typeof(2009-07-30)': 'string'}
 #query
 #SELECT datediff('2009-07-31'::string, '2009-07-30'::string);
 

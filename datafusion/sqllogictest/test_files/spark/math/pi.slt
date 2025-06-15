@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT pi();
+## PySpark 3.5.5 Result: {'PI()': 3.141592653589793, 'typeof(PI())': 'double'}
 #query
-#L
+#SELECT pi();
 

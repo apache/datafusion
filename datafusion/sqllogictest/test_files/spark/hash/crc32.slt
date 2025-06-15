@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT crc32('Spark');
-## PySpark 3.5.5 Result: {'typeof(Spark)': 'string'}
+## PySpark 3.5.5 Result: {'crc32(Spark)': 1557323817, 'typeof(crc32(Spark))': 'bigint', 'typeof(Spark)': 'string'}
 #query
 #SELECT crc32('Spark'::string);
 

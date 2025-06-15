@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT atan(0);
-## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+## PySpark 3.5.5 Result: {'ATAN(0)': 0.0, 'typeof(ATAN(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT atan(0::int);
 

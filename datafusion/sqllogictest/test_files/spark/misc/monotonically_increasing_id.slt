@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT monotonically_increasing_id();
+## PySpark 3.5.5 Result: {'monotonically_increasing_id()': 0, 'typeof(monotonically_increasing_id())': 'bigint'}
 #query
-#L
+#SELECT monotonically_increasing_id();
 

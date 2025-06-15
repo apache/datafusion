@@ -16,17 +16,17 @@
 # under the License.
 
 ## Original Query: SELECT make_dt_interval(1, 12, 30, 01.001001);
-## PySpark 3.5.5 Result: {'typeof(1)': 'int', 'typeof(12)': 'int', 'typeof(30)': 'int', 'typeof(1.001001)': 'decimal(7,6)'}
+## PySpark 3.5.5 Result: {'make_dt_interval(1, 12, 30, 1.001001)': datetime.timedelta(days=1, seconds=45001, microseconds=1001), 'typeof(make_dt_interval(1, 12, 30, 1.001001))': 'interval day to second', 'typeof(1)': 'int', 'typeof(12)': 'int', 'typeof(30)': 'int', 'typeof(1.001001)': 'decimal(7,6)'}
 #query
 #SELECT make_dt_interval(1::int, 12::int, 30::int, 1.001001::decimal(7,6));
 
 ## Original Query: SELECT make_dt_interval(100, null, 3);
-## PySpark 3.5.5 Result: {'typeof(100)': 'int', 'typeof(NULL)': 'void', 'typeof(3)': 'int'}
+## PySpark 3.5.5 Result: {'make_dt_interval(100, NULL, 3, 0.000000)': None, 'typeof(make_dt_interval(100, NULL, 3, 0.000000))': 'interval day to second', 'typeof(100)': 'int', 'typeof(NULL)': 'void', 'typeof(3)': 'int'}
 #query
 #SELECT make_dt_interval(100::int, NULL::void, 3::int);
 
 ## Original Query: SELECT make_dt_interval(2);
-## PySpark 3.5.5 Result: {'typeof(2)': 'int'}
+## PySpark 3.5.5 Result: {'make_dt_interval(2, 0, 0, 0.000000)': datetime.timedelta(days=2), 'typeof(make_dt_interval(2, 0, 0, 0.000000))': 'interval day to second', 'typeof(2)': 'int'}
 #query
 #SELECT make_dt_interval(2::int);
 

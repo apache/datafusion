@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT atanh(0);
-## PySpark 3.5.5 Result: {'typeof(0)': 'int'}
+## PySpark 3.5.5 Result: {'ATANH(0)': 0.0, 'typeof(ATANH(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT atanh(0::int);
 
 ## Original Query: SELECT atanh(2);
-## PySpark 3.5.5 Result: {'typeof(2)': 'int'}
+## PySpark 3.5.5 Result: {'ATANH(2)': nan, 'typeof(ATANH(2))': 'double', 'typeof(2)': 'int'}
 #query
 #SELECT atanh(2::int);
 

@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT btrim('    SparkSQL   ');
-## PySpark 3.5.5 Result: {'typeof(    SparkSQL   )': 'string'}
+## PySpark 3.5.5 Result: {'btrim(    SparkSQL   )': 'SparkSQL', 'typeof(btrim(    SparkSQL   ))': 'string', 'typeof(    SparkSQL   )': 'string'}
 #query
 #SELECT btrim('    SparkSQL   '::string);
 
 ## Original Query: SELECT btrim('SSparkSQLS', 'SL');
-## PySpark 3.5.5 Result: {'typeof(SSparkSQLS)': 'string', 'typeof(SL)': 'string'}
+## PySpark 3.5.5 Result: {'btrim(SSparkSQLS, SL)': 'parkSQ', 'typeof(btrim(SSparkSQLS, SL))': 'string', 'typeof(SSparkSQLS)': 'string', 'typeof(SL)': 'string'}
 #query
 #SELECT btrim('SSparkSQLS'::string, 'SL'::string);
 

@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT current_timezone();
+## PySpark 3.5.5 Result: {'current_timezone()': 'America/Los_Angeles', 'typeof(current_timezone())': 'string'}
 #query
-#L
+#SELECT current_timezone();
 

@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT bround(2.5, 0);
-## PySpark 3.5.5 Result: {'typeof(2.5)': 'decimal(2,1)', 'typeof(0)': 'int'}
+## PySpark 3.5.5 Result: {'bround(2.5, 0)': Decimal('2'), 'typeof(bround(2.5, 0))': 'decimal(2,0)', 'typeof(2.5)': 'decimal(2,1)', 'typeof(0)': 'int'}
 #query
 #SELECT bround(2.5::decimal(2,1), 0::int);
 
 ## Original Query: SELECT bround(25, -1);
-## PySpark 3.5.5 Result: {'typeof(25)': 'int', 'typeof(-1)': 'int'}
+## PySpark 3.5.5 Result: {'bround(25, -1)': 20, 'typeof(bround(25, -1))': 'int', 'typeof(25)': 'int', 'typeof(-1)': 'int'}
 #query
 #SELECT bround(25::int, -1::int);
 

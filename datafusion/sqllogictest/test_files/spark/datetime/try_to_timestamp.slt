@@ -16,17 +16,17 @@
 # under the License.
 
 ## Original Query: SELECT try_to_timestamp('2016-12-31 00:12:00');
-## PySpark 3.5.5 Result: {'typeof(2016-12-31 00:12:00)': 'string'}
+## PySpark 3.5.5 Result: {'try_to_timestamp(2016-12-31 00:12:00)': datetime.datetime(2016, 12, 31, 0, 12), 'typeof(try_to_timestamp(2016-12-31 00:12:00))': 'timestamp', 'typeof(2016-12-31 00:12:00)': 'string'}
 #query
 #SELECT try_to_timestamp('2016-12-31 00:12:00'::string);
 
 ## Original Query: SELECT try_to_timestamp('2016-12-31', 'yyyy-MM-dd');
-## PySpark 3.5.5 Result: {'typeof(2016-12-31)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
+## PySpark 3.5.5 Result: {'try_to_timestamp(2016-12-31, yyyy-MM-dd)': datetime.datetime(2016, 12, 31, 0, 0), 'typeof(try_to_timestamp(2016-12-31, yyyy-MM-dd))': 'timestamp', 'typeof(2016-12-31)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
 #query
 #SELECT try_to_timestamp('2016-12-31'::string, 'yyyy-MM-dd'::string);
 
 ## Original Query: SELECT try_to_timestamp('foo', 'yyyy-MM-dd');
-## PySpark 3.5.5 Result: {'typeof(foo)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
+## PySpark 3.5.5 Result: {'try_to_timestamp(foo, yyyy-MM-dd)': None, 'typeof(try_to_timestamp(foo, yyyy-MM-dd))': 'timestamp', 'typeof(foo)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
 #query
 #SELECT try_to_timestamp('foo'::string, 'yyyy-MM-dd'::string);
 

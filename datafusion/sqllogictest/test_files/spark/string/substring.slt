@@ -16,17 +16,17 @@
 # under the License.
 
 ## Original Query: SELECT substring('Spark SQL', -3);
-## PySpark 3.5.5 Result: {'typeof(Spark SQL)': 'string', 'typeof(-3)': 'int'}
+## PySpark 3.5.5 Result: {'substring(Spark SQL, -3, 2147483647)': 'SQL', 'typeof(substring(Spark SQL, -3, 2147483647))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(-3)': 'int'}
 #query
 #SELECT substring('Spark SQL'::string, -3::int);
 
 ## Original Query: SELECT substring('Spark SQL', 5);
-## PySpark 3.5.5 Result: {'typeof(Spark SQL)': 'string', 'typeof(5)': 'int'}
+## PySpark 3.5.5 Result: {'substring(Spark SQL, 5, 2147483647)': 'k SQL', 'typeof(substring(Spark SQL, 5, 2147483647))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(5)': 'int'}
 #query
 #SELECT substring('Spark SQL'::string, 5::int);
 
 ## Original Query: SELECT substring('Spark SQL', 5, 1);
-## PySpark 3.5.5 Result: {'typeof(Spark SQL)': 'string', 'typeof(5)': 'int', 'typeof(1)': 'int'}
+## PySpark 3.5.5 Result: {'substring(Spark SQL, 5, 1)': 'k', 'typeof(substring(Spark SQL, 5, 1))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(5)': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT substring('Spark SQL'::string, 5::int, 1::int);
 

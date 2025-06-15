@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT array_repeat('123', 2);
-## PySpark 3.5.5 Result: {'typeof(123)': 'string', 'typeof(2)': 'int'}
+## PySpark 3.5.5 Result: {'array_repeat(123, 2)': ['123', '123'], 'typeof(array_repeat(123, 2))': 'array<string>', 'typeof(123)': 'string', 'typeof(2)': 'int'}
 #query
 #SELECT array_repeat('123'::string, 2::int);
 

@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT localtimestamp();
+## PySpark 3.5.5 Result: {'localtimestamp()': datetime.datetime(2025, 6, 14, 23, 57, 39, 529742), 'typeof(localtimestamp())': 'timestamp_ntz'}
 #query
-#L
+#SELECT localtimestamp();
 

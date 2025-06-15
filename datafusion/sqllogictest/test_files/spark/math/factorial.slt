@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT factorial(5);
-## PySpark 3.5.5 Result: {'typeof(5)': 'int'}
+## PySpark 3.5.5 Result: {'factorial(5)': 120, 'typeof(factorial(5))': 'bigint', 'typeof(5)': 'int'}
 #query
 #SELECT factorial(5::int);
 

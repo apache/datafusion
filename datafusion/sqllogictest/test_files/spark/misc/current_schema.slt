@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#S
-#E
+## Original Query: SELECT current_schema();
+## PySpark 3.5.5 Result: {'current_database()': 'default', 'typeof(current_database())': 'string'}
 #query
-#L
+#SELECT current_schema();
 

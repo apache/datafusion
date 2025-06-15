@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT array(1, 2, 3);
-## PySpark 3.5.5 Result: {'typeof(1)': 'int', 'typeof(2)': 'int', 'typeof(3)': 'int'}
+## PySpark 3.5.5 Result: {'array(1, 2, 3)': [1, 2, 3], 'typeof(array(1, 2, 3))': 'array<int>', 'typeof(1)': 'int', 'typeof(2)': 'int', 'typeof(3)': 'int'}
 #query
 #SELECT array(1::int, 2::int, 3::int);
 

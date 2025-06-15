@@ -16,17 +16,17 @@
 # under the License.
 
 ## Original Query: SELECT try_multiply(-2147483648, 10);
-## PySpark 3.5.5 Result: {'typeof(-2147483648)': 'int', 'typeof(10)': 'int'}
+## PySpark 3.5.5 Result: {'try_multiply(-2147483648, 10)': None, 'typeof(try_multiply(-2147483648, 10))': 'int', 'typeof(-2147483648)': 'int', 'typeof(10)': 'int'}
 #query
 #SELECT try_multiply(-2147483648::int, 10::int);
 
 ## Original Query: SELECT try_multiply(2, 3);
-## PySpark 3.5.5 Result: {'typeof(2)': 'int', 'typeof(3)': 'int'}
+## PySpark 3.5.5 Result: {'try_multiply(2, 3)': 6, 'typeof(try_multiply(2, 3))': 'int', 'typeof(2)': 'int', 'typeof(3)': 'int'}
 #query
 #SELECT try_multiply(2::int, 3::int);
 
 ## Original Query: SELECT try_multiply(interval 2 year, 3);
-## PySpark 3.5.5 Result: {"typeof(INTERVAL '2' YEAR)": 'interval year', 'typeof(3)': 'int'}
+## PySpark 3.5.5 Result: {"try_multiply(INTERVAL '2' YEAR, 3)": 72, "typeof(try_multiply(INTERVAL '2' YEAR, 3))": 'interval year to month', "typeof(INTERVAL '2' YEAR)": 'interval year', 'typeof(3)': 'int'}
 #query
 #SELECT try_multiply(INTERVAL '2' YEAR::interval year, 3::int);
 

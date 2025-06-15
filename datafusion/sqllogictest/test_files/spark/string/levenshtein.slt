@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT levenshtein('kitten', 'sitting');
-## PySpark 3.5.5 Result: {'typeof(kitten)': 'string', 'typeof(sitting)': 'string'}
+## PySpark 3.5.5 Result: {'levenshtein(kitten, sitting)': 3, 'typeof(levenshtein(kitten, sitting))': 'int', 'typeof(kitten)': 'string', 'typeof(sitting)': 'string'}
 #query
 #SELECT levenshtein('kitten'::string, 'sitting'::string);
 
 ## Original Query: SELECT levenshtein('kitten', 'sitting', 2);
-## PySpark 3.5.5 Result: {'typeof(kitten)': 'string', 'typeof(sitting)': 'string', 'typeof(2)': 'int'}
+## PySpark 3.5.5 Result: {'levenshtein(kitten, sitting, 2)': -1, 'typeof(levenshtein(kitten, sitting, 2))': 'int', 'typeof(kitten)': 'string', 'typeof(sitting)': 'string', 'typeof(2)': 'int'}
 #query
 #SELECT levenshtein('kitten'::string, 'sitting'::string, 2::int);
 
