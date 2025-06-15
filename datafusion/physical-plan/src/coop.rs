@@ -15,6 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Utilities for improved cooperative scheduling.
+//!
+//! # Cooperative scheduling
+//!
+//! A single call to `poll_next` on a top-level `Stream` may potentially do a lot of work before it
+//! returns a `Poll::Pending`. Think for instance of calculating an aggregation over a large dataset.
+//! If an operator tree runs for a long period of time without yielding back to the Tokio executor,
+//! it can starve other tasks waiting on that executor to execute them.
+//! Additionally, this prevents the query execution from being cancelled.
+//!
+//! To ensure that `Stream` implementations yield regularly, operators can insert explicit yield
+//! points using the utilities in this module. For most operators this is **not** necessary. The
+//! built-in DataFusion operators that generate (rather than manipulate; for instance `DataSourceExec`)
+//! or repartition `RecordBatch`es (for instance, `RepartitionExec`) contain yield points that will
+//! make most operator trees yield as appropriate.
+//!
+//! There are a couple of types of operators that should insert yield points:
+//! - New source operators that do not make use of Tokio resources
+//! - Exchange like operators that do not use Tokio's `Channel` implementation to pass data between
+//!   tasks
+
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -53,8 +74,8 @@ where
     T: RecordBatchStream,
 {
     /// Creates a new `CooperativeStream` that wraps the provided stream.
-    /// The resulting stream will cooperate with the Tokio runtime by yielding
-    /// after processing each record batch.
+    /// The resulting stream will cooperate with the Tokio scheduler by consuming a unit of
+    /// scheduling budget when the wrapped `Stream` returns a record batch.
     pub fn new(inner: T) -> Self {
         Self { inner }
     }
@@ -120,7 +141,7 @@ impl CooperativeExec {
         Self { input, properties }
     }
 
-    /// Returns a reference to the wrapped child execution plan.
+    /// Returns a reference to the wrapped input execution plan.
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
@@ -193,9 +214,9 @@ impl ExecutionPlan for CooperativeExec {
     }
 }
 
-/// Creates a cooperative wrapper around the given [`RecordBatchStream`].
+/// Creates a [`CooperativeStream`] wrapper around the given [`RecordBatchStream`].
 /// This wrapper collaborates with the Tokio cooperative scheduler by consuming a unit of
-/// budget for each returned record batch.
+/// scheduling budget for each returned record batch.
 pub fn cooperative<T>(stream: T) -> CooperativeStream<T>
 where
     T: RecordBatchStream + Send + 'static,
@@ -203,9 +224,11 @@ where
     CooperativeStream::new(stream)
 }
 
-/// Wraps a `SendableRecordBatchStream` inside a `CooperativeStream` to enable cooperative multitasking.
-/// This function handles dynamic `RecordBatchStream` objects through virtual function calls.
-/// For better performance with statically-typed streams, use the generic [`cooperative`] function instead.
+/// Wraps a `SendableRecordBatchStream` inside a [`CooperativeStream`] to enable cooperative multitasking.
+/// Since `SendableRecordBatchStream` is a `dyn RecordBatchStream` this requires the use of dynamic
+/// method dispatch.
+/// When the stream type is statically known, consider use the generic [`cooperative`] function
+/// to allow static method dispatch.
 pub fn make_cooperative(stream: SendableRecordBatchStream) -> SendableRecordBatchStream {
     // TODO is there a more elegant way to overload cooperative
     Box::pin(cooperative(RecordBatchStreamAdapter::new(
