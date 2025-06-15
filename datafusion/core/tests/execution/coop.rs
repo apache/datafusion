@@ -286,59 +286,6 @@ async fn sort_yields(
 
 #[rstest]
 #[tokio::test]
-async fn filter_yields(
-    #[values(false, true)] pretend_infinite: bool,
-) -> Result<(), Box<dyn Error>> {
-    // build session
-    let session_ctx = SessionContext::new();
-
-    // set up the infinite source
-    let inf = Arc::new(make_lazy_exec("value", pretend_infinite));
-
-    // set up a FilterExec that will filter out entire batches
-    let filter_expr = binary(
-        col("value", &inf.schema())?,
-        Operator::Lt,
-        lit(i64::MIN),
-        &inf.schema(),
-    )?;
-    let filter = Arc::new(FilterExec::try_new(filter_expr, inf.clone())?);
-
-    query_yields(filter, session_ctx.task_ctx()).await
-}
-
-#[rstest]
-#[tokio::test]
-async fn hash_join_yields(
-    #[values(false, true)] pretend_infinite: bool,
-) -> Result<(), Box<dyn Error>> {
-    // build session
-    let session_ctx = SessionContext::new();
-
-    // set up the join sources
-    let inf1 = Arc::new(make_lazy_exec("value1", pretend_infinite));
-    let inf2 = Arc::new(make_lazy_exec("value2", pretend_infinite));
-
-    // set up a HashJoinExec that will take a long time in the build phase
-    let join = Arc::new(HashJoinExec::try_new(
-        inf1.clone(),
-        inf2.clone(),
-        vec![(
-            col("value1", &inf1.schema())?,
-            col("value2", &inf2.schema())?,
-        )],
-        None,
-        &JoinType::Left,
-        None,
-        PartitionMode::CollectLeft,
-        true,
-    )?);
-
-    query_yields(join, session_ctx.task_ctx()).await
-}
-
-#[rstest]
-#[tokio::test]
 async fn sort_merge_join_yields(
     #[values(false, true)] pretend_infinite: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -373,6 +320,54 @@ async fn sort_merge_join_yields(
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
+}
+
+#[rstest]
+#[tokio::test]
+async fn filter_yields(
+    #[values(false, true)] pretend_infinite: bool,
+) -> Result<(), Box<dyn Error>> {
+    // build session
+    let session_ctx = SessionContext::new();
+
+    // set up the infinite source
+    let inf = Arc::new(make_lazy_exec("value", pretend_infinite));
+
+    // set up a FilterExec that will filter out entire batches
+    let filter_expr = binary(
+        col("value", &inf.schema())?,
+        Operator::Lt,
+        lit(i64::MIN),
+        &inf.schema(),
+    )?;
+    let filter = Arc::new(FilterExec::try_new(filter_expr, inf.clone())?);
+
+    query_yields(filter, session_ctx.task_ctx()).await
+}
+
+#[rstest]
+#[tokio::test]
+async fn filter_reject_all_batches_yields(
+    #[values(false, true)] pretend_infinite: bool,
+) -> Result<(), Box<dyn Error>> {
+    // Create a Session, Schema, and an 8K-row RecordBatch
+    let session_ctx = SessionContext::new();
+
+    // Wrap this batch in an InfiniteExec
+    let infinite = make_lazy_exec_with_range("value", i64::MIN..0, pretend_infinite);
+
+    // 2b) Construct a FilterExec that is always false: “value > 10000” (no rows pass)
+    let false_predicate = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("value", 0)),
+        Gt,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
+    ));
+    let filtered = Arc::new(FilterExec::try_new(false_predicate, Arc::new(infinite))?);
+
+    // Use CoalesceBatchesExec to guarantee each Filter pull always yields an 8192-row batch
+    let coalesced = Arc::new(CoalesceBatchesExec::new(filtered, 8_192));
+
+    query_yields(coalesced, session_ctx.task_ctx()).await
 }
 
 #[rstest]
@@ -622,27 +617,32 @@ async fn join_agg_yields(
 
 #[rstest]
 #[tokio::test]
-async fn filter_reject_all_batches_yields(
+async fn hash_join_yields(
     #[values(false, true)] pretend_infinite: bool,
 ) -> Result<(), Box<dyn Error>> {
-    // Create a Session, Schema, and an 8K-row RecordBatch
+    // build session
     let session_ctx = SessionContext::new();
 
-    // Wrap this batch in an InfiniteExec
-    let infinite = make_lazy_exec_with_range("value", i64::MIN..0, pretend_infinite);
+    // set up the join sources
+    let inf1 = Arc::new(make_lazy_exec("value1", pretend_infinite));
+    let inf2 = Arc::new(make_lazy_exec("value2", pretend_infinite));
 
-    // 2b) Construct a FilterExec that is always false: “value > 10000” (no rows pass)
-    let false_predicate = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new("value", 0)),
-        Gt,
-        Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
-    ));
-    let filtered = Arc::new(FilterExec::try_new(false_predicate, Arc::new(infinite))?);
+    // set up a HashJoinExec that will take a long time in the build phase
+    let join = Arc::new(HashJoinExec::try_new(
+        inf1.clone(),
+        inf2.clone(),
+        vec![(
+            col("value1", &inf1.schema())?,
+            col("value2", &inf2.schema())?,
+        )],
+        None,
+        &JoinType::Left,
+        None,
+        PartitionMode::CollectLeft,
+        true,
+    )?);
 
-    // Use CoalesceBatchesExec to guarantee each Filter pull always yields an 8192-row batch
-    let coalesced = Arc::new(CoalesceBatchesExec::new(filtered, 8_192));
-
-    query_yields(coalesced, session_ctx.task_ctx()).await
+    query_yields(join, session_ctx.task_ctx()).await
 }
 
 #[rstest]
