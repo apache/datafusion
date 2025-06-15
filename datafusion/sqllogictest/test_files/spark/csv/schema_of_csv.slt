@@ -18,5 +18,5 @@
 ## Original Query: SELECT schema_of_csv('1,abc');
 ## PySpark 3.5.5 Result: {'typeof(1,abc)': 'string'}
 #query
-#SELECT schema_of_csv(1,'abc'::string);
+#SELECT schema_of_csv('1,abc'::string);
 

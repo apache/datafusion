@@ -16,27 +16,27 @@
 # under the License.
 
 ## Original Query: SELECT startswith('Spark SQL', 'SQL');
-## PySpark 3.5.5 Result: {'typeof(spark sql)': 'string', 'typeof(sql)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Spark SQL)': 'string', 'typeof(SQL)': 'string'}
 #query
-#SELECT startswith('spark sql'::string, 'sql'::string);
+#SELECT startswith('Spark SQL'::string, 'SQL'::string);
 
 ## Original Query: SELECT startswith('Spark SQL', 'Spark');
-## PySpark 3.5.5 Result: {'typeof(spark sql)': 'string', 'typeof(spark)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Spark SQL)': 'string', 'typeof(Spark)': 'string'}
 #query
-#SELECT startswith('spark sql'::string, 'spark'::string);
+#SELECT startswith('Spark SQL'::string, 'Spark'::string);
 
 ## Original Query: SELECT startswith('Spark SQL', null);
-## PySpark 3.5.5 Result: {'typeof(spark sql)': 'string', 'typeof(null)': 'void'}
+## PySpark 3.5.5 Result: {'typeof(Spark SQL)': 'string', 'typeof(NULL)': 'void'}
 #query
-#SELECT startswith('spark sql'::string, null::void);
+#SELECT startswith('Spark SQL'::string, NULL::void);
 
 ## Original Query: SELECT startswith(x'537061726b2053514c', x'53514c');
-## PySpark 3.5.5 Result: {"typeof(x'537061726b2053514c')": 'binary', "typeof(x'53514c')": 'binary'}
+## PySpark 3.5.5 Result: {"typeof(X'537061726B2053514C')": 'binary', "typeof(X'53514C')": 'binary'}
 #query
-#SELECT startswith(x'537061726b2053514c'::binary, x'53514c'::binary);
+#SELECT startswith(X'537061726B2053514C'::binary, X'53514C'::binary);
 
 ## Original Query: SELECT startswith(x'537061726b2053514c', x'537061726b');
-## PySpark 3.5.5 Result: {"typeof(x'537061726b2053514c')": 'binary', "typeof(x'537061726b')": 'binary'}
+## PySpark 3.5.5 Result: {"typeof(X'537061726B2053514C')": 'binary', "typeof(X'537061726B')": 'binary'}
 #query
-#SELECT startswith(x'537061726b2053514c'::binary, x'537061726b'::binary);
+#SELECT startswith(X'537061726B2053514C'::binary, X'537061726B'::binary);
 

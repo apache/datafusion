@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT lcase('SparkSql');
-## PySpark 3.5.5 Result: {'typeof(sparksql)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(SparkSql)': 'string'}
 #query
-#SELECT lcase('sparksql'::string);
+#SELECT lcase('SparkSql'::string);
 

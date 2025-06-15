@@ -16,67 +16,67 @@
 # under the License.
 
 ## Original Query: SELECT mask('AbCD123-@$#');
-## PySpark 3.5.5 Result: {'typeof(abcd123-@$#)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(AbCD123-@$#)': 'string'}
 #query
-#SELECT mask('abcd123-@$#'::string);
+#SELECT mask('AbCD123-@$#'::string);
 
 ## Original Query: SELECT mask('AbCD123-@$#', 'Q');
-## PySpark 3.5.5 Result: {'typeof(abcd123-@$#)': 'string', 'typeof(q)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(AbCD123-@$#)': 'string', 'typeof(Q)': 'string'}
 #query
-#SELECT mask('abcd123-@$#'::string, 'q'::string);
+#SELECT mask('AbCD123-@$#'::string, 'Q'::string);
 
 ## Original Query: SELECT mask('AbCD123-@$#', 'Q', 'q');
-## PySpark 3.5.5 Result: {'typeof(abcd123-@$#)': 'string', 'typeof(q)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(AbCD123-@$#)': 'string', 'typeof(Q)': 'string', 'typeof(q)': 'string'}
 #query
-#SELECT mask('abcd123-@$#'::string, 'q'::string);
+#SELECT mask('AbCD123-@$#'::string, 'Q'::string, 'q'::string);
 
 ## Original Query: SELECT mask('AbCD123-@$#', 'Q', 'q', 'd');
-## PySpark 3.5.5 Result: {'typeof(abcd123-@$#)': 'string', 'typeof(q)': 'string', 'typeof(d)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(AbCD123-@$#)': 'string', 'typeof(Q)': 'string', 'typeof(q)': 'string', 'typeof(d)': 'string'}
 #query
-#SELECT mask('abcd123-@$#'::string, 'q'::string, 'd'::string);
+#SELECT mask('AbCD123-@$#'::string, 'Q'::string, 'q'::string, 'd'::string);
 
 ## Original Query: SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', 'o');
-## PySpark 3.5.5 Result: {'typeof(abcd123-@$#)': 'string', 'typeof(q)': 'string', 'typeof(d)': 'string', 'typeof(o)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(AbCD123-@$#)': 'string', 'typeof(Q)': 'string', 'typeof(q)': 'string', 'typeof(d)': 'string', 'typeof(o)': 'string'}
 #query
-#SELECT mask('abcd123-@$#'::string, 'q'::string, 'd'::string, 'o'::string);
+#SELECT mask('AbCD123-@$#'::string, 'Q'::string, 'q'::string, 'd'::string, 'o'::string);
 
 ## Original Query: SELECT mask('AbCD123-@$#', NULL, 'q', 'd', 'o');
-## PySpark 3.5.5 Result: {'typeof(abcd123-@$#)': 'string', 'typeof(null)': 'void', 'typeof(q)': 'string', 'typeof(d)': 'string', 'typeof(o)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(AbCD123-@$#)': 'string', 'typeof(NULL)': 'void', 'typeof(q)': 'string', 'typeof(d)': 'string', 'typeof(o)': 'string'}
 #query
-#SELECT mask('abcd123-@$#'::string, null::void, 'q'::string, 'd'::string, 'o'::string);
+#SELECT mask('AbCD123-@$#'::string, NULL::void, 'q'::string, 'd'::string, 'o'::string);
 
 ## Original Query: SELECT mask('AbCD123-@$#', NULL, NULL, 'd', 'o');
-## PySpark 3.5.5 Result: {'typeof(abcd123-@$#)': 'string', 'typeof(null)': 'void', 'typeof(d)': 'string', 'typeof(o)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(AbCD123-@$#)': 'string', 'typeof(NULL)': 'void', 'typeof(d)': 'string', 'typeof(o)': 'string'}
 #query
-#SELECT mask('abcd123-@$#'::string, null::void, 'd'::string, 'o'::string);
+#SELECT mask('AbCD123-@$#'::string, NULL::void, 'd'::string, 'o'::string);
 
 ## Original Query: SELECT mask('AbCD123-@$#', NULL, NULL, NULL, 'o');
-## PySpark 3.5.5 Result: {'typeof(abcd123-@$#)': 'string', 'typeof(null)': 'void', 'typeof(o)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(AbCD123-@$#)': 'string', 'typeof(NULL)': 'void', 'typeof(o)': 'string'}
 #query
-#SELECT mask('abcd123-@$#'::string, null::void, 'o'::string);
+#SELECT mask('AbCD123-@$#'::string, NULL::void, 'o'::string);
 
 ## Original Query: SELECT mask('AbCD123-@$#', NULL, NULL, NULL, NULL);
-## PySpark 3.5.5 Result: {'typeof(abcd123-@$#)': 'string', 'typeof(null)': 'void'}
+## PySpark 3.5.5 Result: {'typeof(AbCD123-@$#)': 'string', 'typeof(NULL)': 'void'}
 #query
-#SELECT mask('abcd123-@$#'::string, null::void);
+#SELECT mask('AbCD123-@$#'::string, NULL::void);
 
 ## Original Query: SELECT mask('abcd-EFGH-8765-4321');
-## PySpark 3.5.5 Result: {'typeof(abcd-efgh-8765-4321)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(abcd-EFGH-8765-4321)': 'string'}
 #query
-#SELECT mask('abcd-efgh-8765-4321'::string);
+#SELECT mask('abcd-EFGH-8765-4321'::string);
 
 ## Original Query: SELECT mask('abcd-EFGH-8765-4321', 'Q');
-## PySpark 3.5.5 Result: {'typeof(abcd-efgh-8765-4321)': 'string', 'typeof(q)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(abcd-EFGH-8765-4321)': 'string', 'typeof(Q)': 'string'}
 #query
-#SELECT mask('abcd-efgh-8765-4321'::string, 'q'::string);
+#SELECT mask('abcd-EFGH-8765-4321'::string, 'Q'::string);
 
 ## Original Query: SELECT mask(NULL);
-## PySpark 3.5.5 Result: {'typeof(null)': 'void'}
+## PySpark 3.5.5 Result: {'typeof(NULL)': 'void'}
 #query
-#SELECT mask(null::void);
+#SELECT mask(NULL::void);
 
 ## Original Query: SELECT mask(NULL, NULL, NULL, NULL, 'o');
-## PySpark 3.5.5 Result: {'typeof(null)': 'void', 'typeof(o)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(NULL)': 'void', 'typeof(o)': 'string'}
 #query
-#SELECT mask(null::void, 'o'::string);
+#SELECT mask(NULL::void, 'o'::string);
 

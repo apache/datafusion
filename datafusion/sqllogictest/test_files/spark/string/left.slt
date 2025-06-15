@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT left('Spark SQL', 3);
-## PySpark 3.5.5 Result: {'typeof(spark sql)': 'string', 'typeof(3)': 'int'}
+## PySpark 3.5.5 Result: {'typeof(Spark SQL)': 'string', 'typeof(3)': 'int'}
 #query
-#SELECT left('spark sql'::string, 3::int);
+#SELECT left('Spark SQL'::string, 3::int);
 

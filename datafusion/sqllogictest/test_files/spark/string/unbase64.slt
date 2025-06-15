@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT unbase64('U3BhcmsgU1FM');
-## PySpark 3.5.5 Result: {'typeof(u3bhcmsgu1fm)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(U3BhcmsgU1FM)': 'string'}
 #query
-#SELECT unbase64('u3bhcmsgu1fm'::string);
+#SELECT unbase64('U3BhcmsgU1FM'::string);
 

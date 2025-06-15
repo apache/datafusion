@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT sentences('Hi there! Good morning.');
-## PySpark 3.5.5 Result: {'typeof(hi there! good morning.)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Hi there! Good morning.)': 'string'}
 #query
-#SELECT sentences('hi there! good morning.'::string);
+#SELECT sentences('Hi there! Good morning.'::string);
 

@@ -16,14 +16,14 @@
 # under the License.
 
 ## Original Query: SELECT concat_ws(' ', 'Spark', 'SQL');
-## PySpark 3.5.5 Result: {'typeof( )': 'string', 'typeof(spark)': 'string', 'typeof(sql)': 'string'}
+## PySpark 3.5.5 Result: {'typeof( )': 'string', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
 #query
-#SELECT concat_ws(' '::string, 'spark'::string, 'sql'::string);
+#SELECT concat_ws(' '::string, 'Spark'::string, 'SQL'::string);
 
 ## Original Query: SELECT concat_ws('/', 'foo', null, 'bar');
-## PySpark 3.5.5 Result: {'typeof(/)': 'string', 'typeof(foo)': 'string', 'typeof(null)': 'void', 'typeof(bar)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(/)': 'string', 'typeof(foo)': 'string', 'typeof(NULL)': 'void', 'typeof(bar)': 'string'}
 #query
-#SELECT concat_ws('/'::string, 'foo'::string, null::void, 'bar'::string);
+#SELECT concat_ws('/'::string, 'foo'::string, NULL::void, 'bar'::string);
 
 ## Original Query: SELECT concat_ws('s');
 ## PySpark 3.5.5 Result: {'typeof(s)': 'string'}
@@ -31,7 +31,7 @@
 #SELECT concat_ws('s'::string);
 
 ## Original Query: SELECT concat_ws(null, 'Spark', 'SQL');
-## PySpark 3.5.5 Result: {'typeof(null)': 'void', 'typeof(spark)': 'string', 'typeof(sql)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(NULL)': 'void', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
 #query
-#SELECT concat_ws(null::void, 'spark'::string, 'sql'::string);
+#SELECT concat_ws(NULL::void, 'Spark'::string, 'SQL'::string);
 

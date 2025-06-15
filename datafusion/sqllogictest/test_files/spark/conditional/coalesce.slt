@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT coalesce(NULL, 1, NULL);
-## PySpark 3.5.5 Result: {'typeof(null)': 'void', 'typeof(1)': 'int'}
+## PySpark 3.5.5 Result: {'typeof(NULL)': 'void', 'typeof(1)': 'int'}
 #query
-#SELECT coalesce(null::void, 1::int);
+#SELECT coalesce(NULL::void, 1::int);
 

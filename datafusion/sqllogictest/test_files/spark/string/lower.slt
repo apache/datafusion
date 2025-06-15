@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT lower('SparkSql');
-## PySpark 3.5.5 Result: {'typeof(sparksql)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(SparkSql)': 'string'}
 #query
-#SELECT lower('sparksql'::string);
+#SELECT lower('SparkSql'::string);
 

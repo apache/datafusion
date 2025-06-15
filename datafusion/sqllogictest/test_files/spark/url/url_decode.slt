@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT url_decode('https%3A%2F%2Fspark.apache.org');
-## PySpark 3.5.5 Result: {'typeof(https%3a%2f%2fspark.apache.org)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(https%3A%2F%2Fspark.apache.org)': 'string'}
 #query
-#SELECT url_decode('https%3a%2f%2fspark.apache.org'::string);
+#SELECT url_decode('https%3A%2F%2Fspark.apache.org'::string);
 

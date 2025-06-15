@@ -36,22 +36,22 @@
 #SELECT width_bucket(8.1::decimal(2,1), 0.0::decimal(1,1), 5.7::decimal(2,1), 4::int);
 
 ## Original Query: SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
-## PySpark 3.5.5 Result: {"typeof(interval '0' day)": 'interval day', "typeof(interval '10' day)": 'interval day', 'typeof(10)': 'int'}
+## PySpark 3.5.5 Result: {"typeof(INTERVAL '0' DAY)": 'interval day', "typeof(INTERVAL '10' DAY)": 'interval day', 'typeof(10)': 'int'}
 #query
-#SELECT width_bucket(interval '0' day::interval day, interval '10' day::interval day, 10::int);
+#SELECT width_bucket(INTERVAL '0' DAY::interval day, INTERVAL '10' DAY::interval day, 10::int);
 
 ## Original Query: SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
-## PySpark 3.5.5 Result: {"typeof(interval '0' year)": 'interval year', "typeof(interval '10' year)": 'interval year', 'typeof(10)': 'int'}
+## PySpark 3.5.5 Result: {"typeof(INTERVAL '0' YEAR)": 'interval year', "typeof(INTERVAL '10' YEAR)": 'interval year', 'typeof(10)': 'int'}
 #query
-#SELECT width_bucket(interval '0' year::interval year, interval '10' year::interval year, 10::int);
+#SELECT width_bucket(INTERVAL '0' YEAR::interval year, INTERVAL '10' YEAR::interval year, 10::int);
 
 ## Original Query: SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
-## PySpark 3.5.5 Result: {"typeof(interval '1' day)": 'interval day', "typeof(interval '0' day)": 'interval day', "typeof(interval '10' day)": 'interval day', 'typeof(10)': 'int'}
+## PySpark 3.5.5 Result: {"typeof(INTERVAL '1' DAY)": 'interval day', "typeof(INTERVAL '0' DAY)": 'interval day', "typeof(INTERVAL '10' DAY)": 'interval day', 'typeof(10)': 'int'}
 #query
-#SELECT width_bucket(interval '1' day::interval day, interval '0' day::interval day, interval '10' day::interval day, 10::int);
+#SELECT width_bucket(INTERVAL '1' DAY::interval day, INTERVAL '0' DAY::interval day, INTERVAL '10' DAY::interval day, 10::int);
 
 ## Original Query: SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
-## PySpark 3.5.5 Result: {"typeof(interval '1' year)": 'interval year', "typeof(interval '0' year)": 'interval year', "typeof(interval '10' year)": 'interval year', 'typeof(10)': 'int'}
+## PySpark 3.5.5 Result: {"typeof(INTERVAL '1' YEAR)": 'interval year', "typeof(INTERVAL '0' YEAR)": 'interval year', "typeof(INTERVAL '10' YEAR)": 'interval year', 'typeof(10)': 'int'}
 #query
-#SELECT width_bucket(interval '1' year::interval year, interval '0' year::interval year, interval '10' year::interval year, 10::int);
+#SELECT width_bucket(INTERVAL '1' YEAR::interval year, INTERVAL '0' YEAR::interval year, INTERVAL '10' YEAR::interval year, 10::int);
 

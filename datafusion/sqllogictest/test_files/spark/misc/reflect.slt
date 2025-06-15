@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT reflect('java.util.UUID', 'randomUUID');
-## PySpark 3.5.5 Result: {'typeof(java.util.uuid)': 'string', 'typeof(randomuuid)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(java.util.UUID)': 'string', 'typeof(randomUUID)': 'string'}
 #query
-#SELECT reflect('java.util.uuid'::string, 'randomuuid'::string);
+#SELECT reflect('java.util.UUID'::string, 'randomUUID'::string);
 

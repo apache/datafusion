@@ -16,17 +16,17 @@
 # under the License.
 
 ## Original Query: SELECT parse_url('http://spark.apache.org/path?query=1', 'HOST');
-## PySpark 3.5.5 Result: {'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(host)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(HOST)': 'string'}
 #query
-#SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'host'::string);
+#SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'HOST'::string);
 
 ## Original Query: SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY');
-## PySpark 3.5.5 Result: {'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(query)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(QUERY)': 'string'}
 #query
-#SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'query'::string);
+#SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'QUERY'::string);
 
 ## Original Query: SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', 'query');
-## PySpark 3.5.5 Result: {'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(query)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(QUERY)': 'string', 'typeof(query)': 'string'}
 #query
-#SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'query'::string);
+#SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'QUERY'::string, 'query'::string);
 

@@ -21,7 +21,7 @@
 #SELECT sign(40::int);
 
 ## Original Query: SELECT sign(INTERVAL -'100' YEAR);
-## PySpark 3.5.5 Result: {"typeof(interval '-100' year)": 'interval year'}
+## PySpark 3.5.5 Result: {"typeof(INTERVAL '-100' YEAR)": 'interval year'}
 #query
-#SELECT sign(interval '-100' year::interval year);
+#SELECT sign(INTERVAL '-100' YEAR::interval year);
 

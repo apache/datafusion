@@ -16,14 +16,14 @@
 # under the License.
 
 ## Original Query: SELECT trunc('2009-02-12', 'MM');
-## PySpark 3.5.5 Result: {'typeof(2009-02-12)': 'string', 'typeof(mm)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(2009-02-12)': 'string', 'typeof(MM)': 'string'}
 #query
-#SELECT trunc('2009-02-12'::string, 'mm'::string);
+#SELECT trunc('2009-02-12'::string, 'MM'::string);
 
 ## Original Query: SELECT trunc('2015-10-27', 'YEAR');
-## PySpark 3.5.5 Result: {'typeof(2015-10-27)': 'string', 'typeof(year)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(2015-10-27)': 'string', 'typeof(YEAR)': 'string'}
 #query
-#SELECT trunc('2015-10-27'::string, 'year'::string);
+#SELECT trunc('2015-10-27'::string, 'YEAR'::string);
 
 ## Original Query: SELECT trunc('2019-08-04', 'quarter');
 ## PySpark 3.5.5 Result: {'typeof(2019-08-04)': 'string', 'typeof(quarter)': 'string'}

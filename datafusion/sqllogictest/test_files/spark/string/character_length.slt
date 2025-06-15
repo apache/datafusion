@@ -16,17 +16,17 @@
 # under the License.
 
 ## Original Query: SELECT CHARACTER_LENGTH('Spark SQL ');
-## PySpark 3.5.5 Result: {'typeof(spark sql )': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Spark SQL )': 'string'}
 #query
-#SELECT CHARACTER_LENGTH('spark sql '::string);
+#SELECT CHARACTER_LENGTH('Spark SQL '::string);
 
 ## Original Query: SELECT character_length('Spark SQL ');
-## PySpark 3.5.5 Result: {'typeof(spark sql )': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Spark SQL )': 'string'}
 #query
-#SELECT character_length('spark sql '::string);
+#SELECT character_length('Spark SQL '::string);
 
 ## Original Query: SELECT character_length(x'537061726b2053514c');
-## PySpark 3.5.5 Result: {"typeof(x'537061726b2053514c')": 'binary'}
+## PySpark 3.5.5 Result: {"typeof(X'537061726B2053514C')": 'binary'}
 #query
-#SELECT character_length(x'537061726b2053514c'::binary);
+#SELECT character_length(X'537061726B2053514C'::binary);
 

@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT printf("Hello World %d %s", 100, "days");
-## PySpark 3.5.5 Result: {'typeof(hello world %d %s)': 'string', 'typeof(100)': 'int', 'typeof(days)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Hello World %d %s)': 'string', 'typeof(100)': 'int', 'typeof(days)': 'string'}
 #query
-#SELECT printf('hello world %d %s'::string, 100::int, 'days'::string);
+#SELECT printf('Hello World %d %s'::string, 100::int, 'days'::string);
 

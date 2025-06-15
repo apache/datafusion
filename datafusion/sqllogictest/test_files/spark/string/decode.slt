@@ -16,22 +16,22 @@
 # under the License.
 
 ## Original Query: SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
-## PySpark 3.5.5 Result: {'typeof(2)': 'int', 'typeof(1)': 'int', 'typeof(southlake)': 'string', 'typeof(san francisco)': 'string', 'typeof(3)': 'int', 'typeof(new jersey)': 'string', 'typeof(4)': 'int', 'typeof(seattle)': 'string', 'typeof(non domestic)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(2)': 'int', 'typeof(1)': 'int', 'typeof(Southlake)': 'string', 'typeof(San Francisco)': 'string', 'typeof(3)': 'int', 'typeof(New Jersey)': 'string', 'typeof(4)': 'int', 'typeof(Seattle)': 'string', 'typeof(Non domestic)': 'string'}
 #query
-#SELECT decode(2::int, 1::int, 'southlake'::string, 'san francisco'::string, 3::int, 'new jersey'::string, 4::int, 'seattle'::string, 'non domestic'::string);
+#SELECT decode(2::int, 1::int, 'Southlake'::string, 'San Francisco'::string, 3::int, 'New Jersey'::string, 4::int, 'Seattle'::string, 'Non domestic'::string);
 
 ## Original Query: SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle');
-## PySpark 3.5.5 Result: {'typeof(6)': 'int', 'typeof(1)': 'int', 'typeof(southlake)': 'string', 'typeof(2)': 'int', 'typeof(san francisco)': 'string', 'typeof(3)': 'int', 'typeof(new jersey)': 'string', 'typeof(4)': 'int', 'typeof(seattle)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(6)': 'int', 'typeof(1)': 'int', 'typeof(Southlake)': 'string', 'typeof(2)': 'int', 'typeof(San Francisco)': 'string', 'typeof(3)': 'int', 'typeof(New Jersey)': 'string', 'typeof(4)': 'int', 'typeof(Seattle)': 'string'}
 #query
-#SELECT decode(6::int, 1::int, 'southlake'::string, 2::int, 'san francisco'::string, 3::int, 'new jersey'::string, 4::int, 'seattle'::string);
+#SELECT decode(6::int, 1::int, 'Southlake'::string, 2::int, 'San Francisco'::string, 3::int, 'New Jersey'::string, 4::int, 'Seattle'::string);
 
 ## Original Query: SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
-## PySpark 3.5.5 Result: {'typeof(6)': 'int', 'typeof(1)': 'int', 'typeof(southlake)': 'string', 'typeof(2)': 'int', 'typeof(san francisco)': 'string', 'typeof(3)': 'int', 'typeof(new jersey)': 'string', 'typeof(4)': 'int', 'typeof(seattle)': 'string', 'typeof(non domestic)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(6)': 'int', 'typeof(1)': 'int', 'typeof(Southlake)': 'string', 'typeof(2)': 'int', 'typeof(San Francisco)': 'string', 'typeof(3)': 'int', 'typeof(New Jersey)': 'string', 'typeof(4)': 'int', 'typeof(Seattle)': 'string', 'typeof(Non domestic)': 'string'}
 #query
-#SELECT decode(6::int, 1::int, 'southlake'::string, 2::int, 'san francisco'::string, 3::int, 'new jersey'::string, 4::int, 'seattle'::string, 'non domestic'::string);
+#SELECT decode(6::int, 1::int, 'Southlake'::string, 2::int, 'San Francisco'::string, 3::int, 'New Jersey'::string, 4::int, 'Seattle'::string, 'Non domestic'::string);
 
 ## Original Query: SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, 'rocks');
-## PySpark 3.5.5 Result: {'typeof(null)': 'void', 'typeof(6)': 'int', 'typeof(spark)': 'string', 'typeof(sql)': 'string', 'typeof(4)': 'int', 'typeof(rocks)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(NULL)': 'void', 'typeof(6)': 'int', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string', 'typeof(4)': 'int', 'typeof(rocks)': 'string'}
 #query
-#SELECT decode(null::void, 6::int, 'spark'::string, 'sql'::string, 4::int, 'rocks'::string);
+#SELECT decode(NULL::void, 6::int, 'Spark'::string, 'SQL'::string, 4::int, 'rocks'::string);
 

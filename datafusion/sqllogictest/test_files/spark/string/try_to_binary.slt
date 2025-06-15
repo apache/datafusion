@@ -26,7 +26,7 @@
 #SELECT try_to_binary('a!'::string, 'base64'::string);
 
 ## Original Query: select try_to_binary('abc', 'invalidFormat');
-## PySpark 3.5.5 Result: {'typeof(abc)': 'string', 'typeof(invalidformat)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(abc)': 'string', 'typeof(invalidFormat)': 'string'}
 #query
-#SELECT try_to_binary('abc'::string, 'invalidformat'::string);
+#SELECT try_to_binary('abc'::string, 'invalidFormat'::string);
 

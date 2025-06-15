@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT to_utc_timestamp('2016-08-31', 'Asia/Seoul');
-## PySpark 3.5.5 Result: {'typeof(2016-08-31)': 'string', 'typeof(asia/seoul)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(2016-08-31)': 'string', 'typeof(Asia/Seoul)': 'string'}
 #query
-#SELECT to_utc_timestamp('2016-08-31'::string, 'asia/seoul'::string);
+#SELECT to_utc_timestamp('2016-08-31'::string, 'Asia/Seoul'::string);
 

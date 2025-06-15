@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT ltrim('    SparkSQL   ');
-## PySpark 3.5.5 Result: {'typeof(    sparksql   )': 'string'}
+## PySpark 3.5.5 Result: {'typeof(    SparkSQL   )': 'string'}
 #query
-#SELECT ltrim('    sparksql   '::string);
+#SELECT ltrim('    SparkSQL   '::string);
 

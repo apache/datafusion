@@ -16,42 +16,42 @@
 # under the License.
 
 ## Original Query: SELECT datepart('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND);
-## PySpark 3.5.5 Result: {'typeof(minute)': 'string', "typeof(interval '123 23:55:59.002001' day to second)": 'interval day to second'}
+## PySpark 3.5.5 Result: {'typeof(MINUTE)': 'string', "typeof(INTERVAL '123 23:55:59.002001' DAY TO SECOND)": 'interval day to second'}
 #query
-#SELECT datepart('minute'::string, interval '123 23:55:59.002001' day to second::interval day to second);
+#SELECT datepart('MINUTE'::string, INTERVAL '123 23:55:59.002001' DAY TO SECOND::interval day to second);
 
 ## Original Query: SELECT datepart('MONTH', INTERVAL '2021-11' YEAR TO MONTH);
-## PySpark 3.5.5 Result: {'typeof(month)': 'string', "typeof(interval '2021-11' year to month)": 'interval year to month'}
+## PySpark 3.5.5 Result: {'typeof(MONTH)': 'string', "typeof(INTERVAL '2021-11' YEAR TO MONTH)": 'interval year to month'}
 #query
-#SELECT datepart('month'::string, interval '2021-11' year to month::interval year to month);
+#SELECT datepart('MONTH'::string, INTERVAL '2021-11' YEAR TO MONTH::interval year to month);
 
 ## Original Query: SELECT datepart('SECONDS', timestamp'2019-10-01 00:00:01.000001');
-## PySpark 3.5.5 Result: {'typeof(seconds)': 'string', "typeof(timestamp '2019-10-01 00:00:01.000001')": 'timestamp'}
+## PySpark 3.5.5 Result: {'typeof(SECONDS)': 'string', "typeof(TIMESTAMP '2019-10-01 00:00:01.000001')": 'timestamp'}
 #query
-#SELECT datepart('seconds'::string, timestamp '2019-10-01 00:00:01.000001'::timestamp);
+#SELECT datepart('SECONDS'::string, TIMESTAMP '2019-10-01 00:00:01.000001'::timestamp);
 
 ## Original Query: SELECT datepart('YEAR', TIMESTAMP '2019-08-12 01:00:00.123456');
-## PySpark 3.5.5 Result: {'typeof(year)': 'string', "typeof(timestamp '2019-08-12 01:00:00.123456')": 'timestamp'}
+## PySpark 3.5.5 Result: {'typeof(YEAR)': 'string', "typeof(TIMESTAMP '2019-08-12 01:00:00.123456')": 'timestamp'}
 #query
-#SELECT datepart('year'::string, timestamp '2019-08-12 01:00:00.123456'::timestamp);
+#SELECT datepart('YEAR'::string, TIMESTAMP '2019-08-12 01:00:00.123456'::timestamp);
 
 ## Original Query: SELECT datepart('days', interval 5 days 3 hours 7 minutes);
-## PySpark 3.5.5 Result: {'typeof(days)': 'string', "typeof(interval '5 03:07' day to minute)": 'interval day to minute'}
+## PySpark 3.5.5 Result: {'typeof(days)': 'string', "typeof(INTERVAL '5 03:07' DAY TO MINUTE)": 'interval day to minute'}
 #query
-#SELECT datepart('days'::string, interval '5 03:07' day to minute::interval day to minute);
+#SELECT datepart('days'::string, INTERVAL '5 03:07' DAY TO MINUTE::interval day to minute);
 
 ## Original Query: SELECT datepart('doy', DATE'2019-08-12');
-## PySpark 3.5.5 Result: {'typeof(doy)': 'string', "typeof(date '2019-08-12')": 'date'}
+## PySpark 3.5.5 Result: {'typeof(doy)': 'string', "typeof(DATE '2019-08-12')": 'date'}
 #query
-#SELECT datepart('doy'::string, date '2019-08-12'::date);
+#SELECT datepart('doy'::string, DATE '2019-08-12'::date);
 
 ## Original Query: SELECT datepart('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
-## PySpark 3.5.5 Result: {'typeof(seconds)': 'string', "typeof(interval '05:00:30.001001' hour to second)": 'interval hour to second'}
+## PySpark 3.5.5 Result: {'typeof(seconds)': 'string', "typeof(INTERVAL '05:00:30.001001' HOUR TO SECOND)": 'interval hour to second'}
 #query
-#SELECT datepart('seconds'::string, interval '05:00:30.001001' hour to second::interval hour to second);
+#SELECT datepart('seconds'::string, INTERVAL '05:00:30.001001' HOUR TO SECOND::interval hour to second);
 
 ## Original Query: SELECT datepart('week', timestamp'2019-08-12 01:00:00.123456');
-## PySpark 3.5.5 Result: {'typeof(week)': 'string', "typeof(timestamp '2019-08-12 01:00:00.123456')": 'timestamp'}
+## PySpark 3.5.5 Result: {'typeof(week)': 'string', "typeof(TIMESTAMP '2019-08-12 01:00:00.123456')": 'timestamp'}
 #query
-#SELECT datepart('week'::string, timestamp '2019-08-12 01:00:00.123456'::timestamp);
+#SELECT datepart('week'::string, TIMESTAMP '2019-08-12 01:00:00.123456'::timestamp);
 

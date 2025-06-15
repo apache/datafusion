@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00');
-## PySpark 3.5.5 Result: {'typeof(europe/brussels)': 'string', 'typeof(america/los_angeles)': 'string', "typeof(timestamp_ntz '2021-12-06 00:00:00')": 'timestamp_ntz'}
+## PySpark 3.5.5 Result: {'typeof(Europe/Brussels)': 'string', 'typeof(America/Los_Angeles)': 'string', "typeof(TIMESTAMP_NTZ '2021-12-06 00:00:00')": 'timestamp_ntz'}
 #query
-#SELECT convert_timezone('europe/brussels'::string, 'america/los_angeles'::string, timestamp_ntz '2021-12-06 00:00:00'::timestamp_ntz);
+#SELECT convert_timezone('Europe/Brussels'::string, 'America/Los_Angeles'::string, TIMESTAMP_NTZ '2021-12-06 00:00:00'::timestamp_ntz);
 
 ## Original Query: SELECT convert_timezone('Europe/Brussels', timestamp_ntz'2021-12-05 15:00:00');
-## PySpark 3.5.5 Result: {'typeof(europe/brussels)': 'string', "typeof(timestamp_ntz '2021-12-05 15:00:00')": 'timestamp_ntz'}
+## PySpark 3.5.5 Result: {'typeof(Europe/Brussels)': 'string', "typeof(TIMESTAMP_NTZ '2021-12-05 15:00:00')": 'timestamp_ntz'}
 #query
-#SELECT convert_timezone('europe/brussels'::string, timestamp_ntz '2021-12-05 15:00:00'::timestamp_ntz);
+#SELECT convert_timezone('Europe/Brussels'::string, TIMESTAMP_NTZ '2021-12-05 15:00:00'::timestamp_ntz);
 

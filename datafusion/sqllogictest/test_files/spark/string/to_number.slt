@@ -26,9 +26,9 @@
 #SELECT to_number('12,454'::string, '99,999'::string);
 
 ## Original Query: SELECT to_number('12,454.8-', '99,999.9S');
-## PySpark 3.5.5 Result: {'typeof(12,454.8-)': 'string', 'typeof(99,999.9s)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(12,454.8-)': 'string', 'typeof(99,999.9S)': 'string'}
 #query
-#SELECT to_number('12,454.8-'::string, '99,999.9s'::string);
+#SELECT to_number('12,454.8-'::string, '99,999.9S'::string);
 
 ## Original Query: SELECT to_number('454', '999');
 ## PySpark 3.5.5 Result: {'typeof(454)': 'string', 'typeof(999)': 'string'}

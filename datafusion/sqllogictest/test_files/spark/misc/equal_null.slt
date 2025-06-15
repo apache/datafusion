@@ -26,17 +26,17 @@
 #SELECT equal_null(3::int);
 
 ## Original Query: SELECT equal_null(NULL, 'abc');
-## PySpark 3.5.5 Result: {'typeof(null)': 'void', 'typeof(abc)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(NULL)': 'void', 'typeof(abc)': 'string'}
 #query
-#SELECT equal_null(null::void, 'abc'::string);
+#SELECT equal_null(NULL::void, 'abc'::string);
 
 ## Original Query: SELECT equal_null(NULL, NULL);
-## PySpark 3.5.5 Result: {'typeof(null)': 'void'}
+## PySpark 3.5.5 Result: {'typeof(NULL)': 'void'}
 #query
-#SELECT equal_null(null::void);
+#SELECT equal_null(NULL::void);
 
 ## Original Query: SELECT equal_null(true, NULL);
-## PySpark 3.5.5 Result: {'typeof(true)': 'boolean', 'typeof(null)': 'void'}
+## PySpark 3.5.5 Result: {'typeof(true)': 'boolean', 'typeof(NULL)': 'void'}
 #query
-#SELECT equal_null(true::boolean, null::void);
+#SELECT equal_null(true::boolean, NULL::void);
 

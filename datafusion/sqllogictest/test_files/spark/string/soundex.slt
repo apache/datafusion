@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT soundex('Miller');
-## PySpark 3.5.5 Result: {'typeof(miller)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Miller)': 'string'}
 #query
-#SELECT soundex('miller'::string);
+#SELECT soundex('Miller'::string);
 

@@ -21,7 +21,7 @@
 #SELECT make_date(2013::int, 7::int, 15::int);
 
 ## Original Query: SELECT make_date(2019, 7, NULL);
-## PySpark 3.5.5 Result: {'typeof(2019)': 'int', 'typeof(7)': 'int', 'typeof(null)': 'void'}
+## PySpark 3.5.5 Result: {'typeof(2019)': 'int', 'typeof(7)': 'int', 'typeof(NULL)': 'void'}
 #query
-#SELECT make_date(2019::int, 7::int, null::void);
+#SELECT make_date(2019::int, 7::int, NULL::void);
 

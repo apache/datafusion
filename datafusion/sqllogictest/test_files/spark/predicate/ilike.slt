@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT ilike('Spark', '_Park');
-## PySpark 3.5.5 Result: {'typeof(spark)': 'string', 'typeof(_park)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Spark)': 'string', 'typeof(_Park)': 'string'}
 #query
-#SELECT ilike('spark'::string, '_park'::string);
+#SELECT ilike('Spark'::string, '_Park'::string);
 

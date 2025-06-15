@@ -26,7 +26,7 @@
 #SELECT random(0::int);
 
 ## Original Query: SELECT random(null);
-## PySpark 3.5.5 Result: {'typeof(null)': 'void'}
+## PySpark 3.5.5 Result: {'typeof(NULL)': 'void'}
 #query
-#SELECT random(null::void);
+#SELECT random(NULL::void);
 

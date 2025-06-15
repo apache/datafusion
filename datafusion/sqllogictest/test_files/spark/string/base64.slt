@@ -16,12 +16,12 @@
 # under the License.
 
 ## Original Query: SELECT base64('Spark SQL');
-## PySpark 3.5.5 Result: {'typeof(spark sql)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Spark SQL)': 'string'}
 #query
-#SELECT base64('spark sql'::string);
+#SELECT base64('Spark SQL'::string);
 
 ## Original Query: SELECT base64(x'537061726b2053514c');
-## PySpark 3.5.5 Result: {"typeof(x'537061726b2053514c')": 'binary'}
+## PySpark 3.5.5 Result: {"typeof(X'537061726B2053514C')": 'binary'}
 #query
-#SELECT base64(x'537061726b2053514c'::binary);
+#SELECT base64(X'537061726B2053514C'::binary);
 

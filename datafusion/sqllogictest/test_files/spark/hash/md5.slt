@@ -16,7 +16,7 @@
 # under the License.
 
 ## Original Query: SELECT md5('Spark');
-## PySpark 3.5.5 Result: {'typeof(spark)': 'string'}
+## PySpark 3.5.5 Result: {'typeof(Spark)': 'string'}
 #query
-#SELECT md5('spark'::string);
+#SELECT md5('Spark'::string);
 
