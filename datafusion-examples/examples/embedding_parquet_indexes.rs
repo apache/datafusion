@@ -28,8 +28,6 @@ use arrow::array::{ArrayRef, StringArray};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use base64::engine::general_purpose;
-use base64::Engine;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{HashMap, HashSet, Result};
 use datafusion::datasource::listing::PartitionedFile;
@@ -38,25 +36,26 @@ use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource
 use datafusion::datasource::TableType;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Operator, TableProviderFilterPushDown};
-use datafusion::parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
+use datafusion::parquet::arrow::ArrowSchemaConverter;
+use datafusion::parquet::data_type::{ByteArray, ByteArrayType};
+use datafusion::parquet::errors::ParquetError;
 use datafusion::parquet::file::metadata::KeyValue;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
+use datafusion::parquet::file::writer::SerializedFileWriter;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
+use futures::AsyncWriteExt;
 use std::fs::{create_dir_all, read_dir, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use futures::AsyncWriteExt;
 use tempfile::TempDir;
-use datafusion::parquet::column::writer::ColumnWriter;
-use datafusion::parquet::data_type::{ByteArray, ByteArrayType};
-use datafusion::parquet::errors::ParquetError;
-use datafusion::parquet::file::writer::{SerializedColumnWriter, SerializedFileWriter};
-use datafusion_proto::protobuf::FromProtoError::DataFusionError;
 
+/// We should disable page index support in the Parquet reader
+/// when we ennable this feature, since we are using a custom index.
+///
 /// Example creating parquet file that
 /// contains specialized indexes that
 /// are ignored by other readers
@@ -126,7 +125,6 @@ pub struct IndexedParquetWriter<W: Write + Seek> {
 }
 
 impl<W: Write + Seek + Send> IndexedParquetWriter<W> {
-    /// 构造：传入已经创建好的文件、schema 和普通的 WriterProperties（不要在 metadata 里放 Base64）
     pub fn try_new(
         sink: W,
         schema: Arc<Schema>,
@@ -134,23 +132,20 @@ impl<W: Write + Seek + Send> IndexedParquetWriter<W> {
     ) -> Result<Self> {
         let schema_desc = ArrowSchemaConverter::new().convert(schema.as_ref())?;
         let props_ptr = Arc::new(props);
-        let writer = SerializedFileWriter::new(sink, schema_desc.root_schema_ptr(), props_ptr)?;
+        let writer =
+            SerializedFileWriter::new(sink, schema_desc.root_schema_ptr(), props_ptr)?;
         Ok(Self { writer })
     }
 }
 
+const INDEX_MAGIC: &[u8] = b"IDX1";
 
-const PARQUET_MAGIC: &[u8] = b"PAR1";
-const INDEX_MAGIC: &[u8] = b"IDX1"; // 自定义索引魔术字
-
-// 修改 write_file_with_index 函数
 fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     let field = Field::new("category", DataType::Utf8, false);
     let schema = Arc::new(Schema::new(vec![field.clone()]));
     let arr: ArrayRef = Arc::new(StringArray::from(values.to_vec()));
     let batch = RecordBatch::try_new(schema.clone(), vec![arr])?;
 
-    // 计算不同值索引
     let distinct: HashSet<_> = values.iter().copied().collect();
     let serialized = distinct.into_iter().collect::<Vec<_>>().join("\n");
     let index_bytes = serialized.into_bytes();
@@ -160,7 +155,6 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
 
     let mut writer = IndexedParquetWriter::try_new(file, schema.clone(), props)?;
 
-    // 写入数据
     {
         let mut rg_writer = writer.writer.next_row_group()?;
         let mut ser_col_writer = rg_writer
@@ -183,18 +177,14 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
         rg_writer.close()?;
     }
 
-    // 获取当前写入位置（索引开始位置）
     let offset = writer.writer.inner().seek(SeekFrom::Current(0))?;
 
-    // 写入索引魔术字和长度
     let index_len = index_bytes.len() as u64;
     writer.writer.inner().write_all(b"IDX1")?; // 4字节魔术字
     writer.writer.inner().write_all(&index_len.to_le_bytes())?; // 8字节长度
 
-    // 写入索引数据
     writer.writer.inner().write_all(&index_bytes)?;
 
-    // 记录索引元数据
     writer.writer.append_key_value_metadata(KeyValue::new(
         "distinct_index_offset".to_string(),
         offset.to_string(),
@@ -204,35 +194,35 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
         index_bytes.len().to_string(),
     ));
 
-    // 关闭写入器（这会写入页脚）
     writer.writer.close()?;
 
     println!("Finished writing file to {}", path.display());
     Ok(())
 }
 
-
-// 修改后的读取函数
 fn read_distinct_index(path: &Path) -> Result<HashSet<String>, ParquetError> {
     let mut file = File::open(path)?;
 
-
     let file_size = file.metadata()?.len();
-    println!("Reading index from {} (size: {})", path.display(), file_size);
+    println!(
+        "Reading index from {} (size: {})",
+        path.display(),
+        file_size
+    );
 
-    // 1. 读取元数据获取索引位置
     let reader = SerializedFileReader::new(file.try_clone()?)?;
     let meta = reader.metadata().file_metadata();
 
-
-    let offset = meta.key_value_metadata()
+    let offset = meta
+        .key_value_metadata()
         .and_then(|kvs| kvs.iter().find(|kv| kv.key == "distinct_index_offset"))
         .and_then(|kv| kv.value.as_ref())
         .ok_or_else(|| ParquetError::General("Missing index offset".into()))?
         .parse::<u64>()
         .map_err(|e| ParquetError::General(e.to_string()))?;
 
-    let length = meta.key_value_metadata()
+    let length = meta
+        .key_value_metadata()
         .and_then(|kvs| kvs.iter().find(|kv| kv.key == "distinct_index_length"))
         .and_then(|kv| kv.value.as_ref())
         .ok_or_else(|| ParquetError::General("Missing index length".into()))?
@@ -241,17 +231,14 @@ fn read_distinct_index(path: &Path) -> Result<HashSet<String>, ParquetError> {
 
     println!("Reading index at offset: {}, length: {}", offset, length);
 
-    // 2. 定位并读取索引
     file.seek(SeekFrom::Start(offset))?;
 
-    // 验证魔术字
     let mut magic_buf = [0u8; 4];
     file.read_exact(&mut magic_buf)?;
     if &magic_buf != INDEX_MAGIC {
         return Err(ParquetError::General("Invalid index magic".into()));
     }
 
-    // 读取索引长度
     let mut len_buf = [0u8; 8];
     file.read_exact(&mut len_buf)?;
     let stored_len = u64::from_le_bytes(len_buf) as usize;
@@ -260,13 +247,11 @@ fn read_distinct_index(path: &Path) -> Result<HashSet<String>, ParquetError> {
         return Err(ParquetError::General("Index length mismatch".into()));
     }
 
-    // 读取索引数据
     let mut index_buf = vec![0u8; length];
     file.read_exact(&mut index_buf)?;
 
-    // 3. 解码索引
-    let s = String::from_utf8(index_buf)
-        .map_err(|e| ParquetError::General(e.to_string()))?;
+    let s =
+        String::from_utf8(index_buf).map_err(|e| ParquetError::General(e.to_string()))?;
 
     Ok(s.lines().map(|s| s.to_string()).collect())
 }
@@ -373,24 +358,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
-
-// ┌──────────────────────┐
-// │┌───────────────────┐│
-// ││     DataPage      ││ ← 实际数据存储
-// │└───────────────────┘│
-// │┌───────────────────┐│
-// ││     DataPage      ││
-// │└───────────────────┘│
-// │        ...          │
-// │┌───────────────────┐│
-// ││    ColumnIndex    ││ ← 列索引
-// │└───────────────────┘│
-// │┌───────────────────┐│
-// ││    OffsetIndex    ││ ← 偏移索引
-// │└───────────────────┘│
-// │╔═══════════════════╗│
-// │║  Parquet Footer   ║│ ← 页脚元数据
-// │╚═══════════════════╝│
-// │      PAR1           │ ← 文件结束标记
-// └──────────────────────┘
