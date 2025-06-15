@@ -62,6 +62,8 @@ default = [
     "compression",
     "parquet",
     "recursive_protection",
+    "sqlparser_std",
+    "sqlparser_recursive_protection",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
@@ -79,6 +81,9 @@ recursive_protection = [
     "datafusion-physical-optimizer/recursive_protection",
     "datafusion-sql/recursive_protection",
 ]
+# Enable sqlparser's default features for backward compatibility
+sqlparser_std = ["sqlparser/std"]
+sqlparser_recursive_protection = ["sqlparser/recursive-protection"]
 serde = [
     "dep:serde",
     # Enable `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
