@@ -29,9 +29,10 @@ pub enum FilterPushdownPhase {
     /// Implementers are however allowed to modify the execution plan themselves during this phase, for example by returning a completely
     /// different [`ExecutionPlan`] from [`ExecutionPlan::handle_child_pushdown_result`].
     ///
-    /// Pushdown of `FilterExec` into `DataSourceExec` is an example of a pre-pushdown.
+    /// Pushdown of [`FilterExec`] into `DataSourceExec` is an example of a pre-pushdown.
     ///
     /// [`ExecutionPlan`]: crate::ExecutionPlan
+    /// [`FilterExec`]: crate::filter::FilterExec
     /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
     Pre,
     /// Pushdown that happens after most other optimizations.
@@ -39,10 +40,12 @@ pub enum FilterPushdownPhase {
     /// Since subsequent optimizations should not change the structure of the plan tree except for calling [`ExecutionPlan::with_new_children`]
     /// (which generally preserves internal references) it is safe for references between [`ExecutionPlan`]s to be established at this stage.
     ///
-    /// This phase is used to link a `SortExec` (with a TopK operator) or a `HashJoinExec` to a `DataSourceExec`.
+    /// This phase is used to link a [`SortExec`] (with a TopK operator) or a [`HashJoinExec`] to a `DataSourceExec`.
     ///
     /// [`ExecutionPlan`]: crate::ExecutionPlan
     /// [`ExecutionPlan::with_new_children`]: crate::ExecutionPlan::with_new_children
+    /// [`SortExec`]: crate::sorts::sort::SortExec
+    /// [`HashJoinExec`]: crate::joins::HashJoinExec
     /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
     Post,
 }
