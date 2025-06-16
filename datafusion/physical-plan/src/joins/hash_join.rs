@@ -1338,8 +1338,8 @@ fn eq_dyn_null(
         return Ok(compare_op_for_nested(op, &left, &right)?);
     }
     match null_equality {
-        NullEquality::NullEqualsNothing => not_distinct(&left, &right),
-        NullEquality::NullEqualsNull => eq(&left, &right),
+        NullEquality::NullEqualsNothing => eq(&left, &right),
+        NullEquality::NullEqualsNull => not_distinct(&left, &right),
     }
 }
 
