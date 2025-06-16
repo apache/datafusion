@@ -32,20 +32,18 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use datafusion::execution::SessionStateBuilder;
-use datafusion_common::config::ConfigFileDecryptionProperties;
-use datafusion_execution::config::SessionConfig;
 use parquet::arrow::ArrowWriter;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
 
-async fn read_parquet_test_data<T: Into<String>>(
+async fn read_parquet_test_data<'a, T: Into<String>>(
     path: T,
     ctx: &SessionContext,
+    options: ParquetReadOptions<'a>,
 ) -> Vec<RecordBatch> {
-    ctx.read_parquet(path.into(), ParquetReadOptions::default())
+    ctx.read_parquet(path.into(), options)
         .await
         .unwrap()
         .collect()
@@ -80,9 +78,13 @@ pub fn write_batches(
 async fn round_trip_encryption() {
     let ctx: SessionContext = SessionContext::new();
 
-    let batches =
-        read_parquet_test_data("tests/data/filter_pushdown/single_file.gz.parquet", &ctx)
-            .await;
+    let options = ParquetReadOptions::default();
+    let batches = read_parquet_test_data(
+        "tests/data/filter_pushdown/single_file.gz.parquet",
+        &ctx,
+        options,
+    )
+    .await;
 
     let schema = batches[0].schema();
     let footer_key = b"0123456789012345".to_vec(); // 128bit/16
@@ -108,19 +110,15 @@ async fn round_trip_encryption() {
     let num_rows_written = write_batches(tempfile.clone(), props, batches).unwrap();
 
     // Read encrypted parquet
-    let mut sc = SessionConfig::new();
-    let fd: ConfigFileDecryptionProperties = (&decrypt).into();
-    sc.options_mut()
-        .execution
-        .parquet
-        .file_decryption_properties = Some(fd);
+    let ctx: SessionContext = SessionContext::new();
+    let options = ParquetReadOptions::default().file_decryption_properties(decrypt);
 
-    let state = SessionStateBuilder::new().with_config(sc).build();
-    let ctx: SessionContext = SessionContext::new_with_state(state);
-
-    let encrypted_batches =
-        read_parquet_test_data(tempfile.into_os_string().into_string().unwrap(), &ctx)
-            .await;
+    let encrypted_batches = read_parquet_test_data(
+        tempfile.into_os_string().into_string().unwrap(),
+        &ctx,
+        options,
+    )
+    .await;
 
     let num_rows_read = encrypted_batches
         .iter()

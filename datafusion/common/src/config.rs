@@ -229,13 +229,13 @@ impl ConfigField for ConfigFileEncryptionProperties {
 
         let desc = "Per column encryption keys";
         for (col_name, col_val) in self.column_keys_as_hex.iter() {
-            let key = format!("{key_prefix}.column_keys_as_hex.{col_name}");
+            let key = format!("{key_prefix}.column_keys_as_hex::{col_name}");
             col_val.visit(v, key.as_str(), desc);
         }
 
         let desc = "Per column metadata";
         for (col_name, col_val) in self.column_metadata_as_hex.iter() {
-            let key = format!("{key_prefix}.column_metadata_as_hex.{col_name}");
+            let key = format!("{key_prefix}.column_metadata_as_hex::{col_name}");
             col_val.visit(v, key.as_str(), desc);
         }
 
@@ -251,17 +251,17 @@ impl ConfigField for ConfigFileEncryptionProperties {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Any hex encoded values must be pre-encoded using
         // hex::encode() before calling set.
-        if key.starts_with("column_keys_as_hex.") {
-            let k = match key.split(".").collect::<Vec<_>>()[..] {
+        if key.starts_with("column_keys_as_hex::") {
+            let k = match key.split("::").collect::<Vec<_>>()[..] {
                 [_meta] | [_meta, ""] => {
                     return _config_err!(
-                        "Invalid column name provided, missing name in column_keys_as_hex.<key>"
+                        "Invalid column name provided, missing name in column_keys_as_hex::<key>"
                     )
                 }
                 [_meta, k] => k.into(),
                 _ => {
                     return _config_err!(
-                        "Invalid column name provided, found too many '.' in \"{key}\""
+                        "Invalid column name provided, found too many '::' in \"{key}\""
                     )
                 }
             };
@@ -269,17 +269,17 @@ impl ConfigField for ConfigFileEncryptionProperties {
             return Ok(());
         };
 
-        if key.starts_with("column_metadata_as_hex.") {
-            let k = match key.split(".").collect::<Vec<_>>()[..] {
+        if key.starts_with("column_metadata_as_hex::") {
+            let k = match key.split("::").collect::<Vec<_>>()[..] {
                 [_meta] | [_meta, ""] => {
                     return _config_err!(
-                        "Invalid column name provided, missing name in column_metadata_as_hex.<key>"
+                        "Invalid column name provided, missing name in column_metadata_as_hex::<key>"
                     )
                 }
                 [_meta, k] => k.into(),
                 _ => {
                     return _config_err!(
-                        "Invalid column name provided, found too many '.' in \"{key}\""
+                        "Invalid column name provided, found too many '::' in \"{key}\""
                     )
                 }
             };
@@ -419,7 +419,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
 
         let desc = "Per column decryption keys";
         for (col_name, col_val) in self.column_keys_as_hex.iter() {
-            let key = format!("{key_prefix}.column_keys_as_hex.{col_name}");
+            let key = format!("{key_prefix}.column_keys_as_hex::{col_name}");
             col_val.visit(v, key.as_str(), desc);
         }
 
@@ -436,8 +436,8 @@ impl ConfigField for ConfigFileDecryptionProperties {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Any hex encoded values must be pre-encoded using
         // hex::encode() before calling set.
-        if key.starts_with("column_keys_as_hex.") {
-            let k = match key.split(".").collect::<Vec<_>>()[..] {
+        if key.starts_with("column_keys_as_hex::") {
+            let k = match key.split("::").collect::<Vec<_>>()[..] {
                 [_meta] | [_meta, ""] => {
                     return _config_err!(
                         "Invalid column name provided, missing name in column_keys_as_hex.<key>"
@@ -446,7 +446,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
                 [_meta, k] => k.into(),
                 _ => {
                     return _config_err!(
-                        "Invalid column name provided, found too many '.' in \"{key}\""
+                        "Invalid column name provided, found too many '::' in \"{key}\""
                     )
                 }
             };
@@ -930,12 +930,17 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
+    }
+}
 
+config_namespace! {
+    /// Options for configuring Parquet Modular Encryption
+    pub struct ParquetEncryptionOptions {
         /// Optional file decryption properties
-        pub file_decryption_properties: Option<ConfigFileDecryptionProperties>, default = None
+        pub file_decryption: Option<ConfigFileDecryptionProperties>, default = None
 
         /// Optional file encryption properties
-        pub file_encryption_properties: Option<ConfigFileEncryptionProperties>, default = None
+        pub file_encryption: Option<ConfigFileEncryptionProperties>, default = None
     }
 }
 
@@ -2070,6 +2075,8 @@ pub struct TableParquetOptions {
     /// )
     /// ```
     pub key_value_metadata: HashMap<String, Option<String>>,
+    /// Options for configuring Parquet modular encryption
+    pub crypto: ParquetEncryptionOptions,
 }
 
 impl TableParquetOptions {
@@ -2097,7 +2104,9 @@ impl ConfigField for TableParquetOptions {
     fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, description: &'static str) {
         self.global.visit(v, key_prefix, description);
         self.column_specific_options
-            .visit(v, key_prefix, description)
+            .visit(v, key_prefix, description);
+        self.crypto
+            .visit(v, &format!("{key_prefix}.crypto"), description);
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -2118,6 +2127,8 @@ impl ConfigField for TableParquetOptions {
             };
             self.key_value_metadata.insert(k, Some(value.into()));
             Ok(())
+        } else if key.starts_with("crypto.") {
+            self.crypto.set(&key[7..], value)
         } else if key.contains("::") {
             self.column_specific_options.set(key, value)
         } else {
@@ -2635,20 +2646,20 @@ mod tests {
         table_config
             .parquet
             .set(
-                "file_encryption_properties.encrypt_footer",
+                "crypto.file_encryption.encrypt_footer",
                 config_encrypt.encrypt_footer.to_string().as_str(),
             )
             .unwrap();
         table_config
             .parquet
             .set(
-                "file_encryption_properties.footer_key_as_hex",
+                "crypto.file_encryption.footer_key_as_hex",
                 config_encrypt.footer_key_as_hex.as_str(),
             )
             .unwrap();
 
         for (i, col_name) in column_names.iter().enumerate() {
-            let key = format!("file_encryption_properties.column_keys_as_hex.{col_name}");
+            let key = format!("crypto.file_encryption.column_keys_as_hex::{col_name}");
             let value = hex::encode(column_keys[i].clone());
             table_config
                 .parquet
@@ -2657,10 +2668,10 @@ mod tests {
         }
 
         // Print matching final encryption config
-        // println!("{:#?}", table_config.parquet.global.file_encryption_properties);
+        // println!("{:#?}", table_config.parquet.crypto.file_encryption);
 
         assert_eq!(
-            table_config.parquet.global.file_encryption_properties,
+            table_config.parquet.crypto.file_encryption,
             Some(config_encrypt)
         );
 
@@ -2675,13 +2686,13 @@ mod tests {
         table_config
             .parquet
             .set(
-                "file_decryption_properties.footer_key_as_hex",
+                "crypto.file_decryption.footer_key_as_hex",
                 config_decrypt.footer_key_as_hex.as_str(),
             )
             .unwrap();
 
         for (i, col_name) in column_names.iter().enumerate() {
-            let key = format!("file_decryption_properties.column_keys_as_hex.{col_name}");
+            let key = format!("crypto.file_decryption.column_keys_as_hex::{col_name}");
             let value = hex::encode(column_keys[i].clone());
             table_config
                 .parquet
@@ -2690,20 +2701,19 @@ mod tests {
         }
 
         // Print matching final decryption config
-        // println!("{:#?}", table_config.parquet.global.file_decryption_properties);
+        // println!("{:#?}", table_config.parquet.crypto.file_decryption);
 
         assert_eq!(
-            table_config.parquet.global.file_decryption_properties,
+            table_config.parquet.crypto.file_decryption,
             Some(config_decrypt.clone())
         );
 
         // Set config directly
         let mut table_config = TableOptions::new();
         table_config.set_config_format(ConfigFileType::PARQUET);
-        table_config.parquet.global.file_decryption_properties =
-            Some(config_decrypt.clone());
+        table_config.parquet.crypto.file_decryption = Some(config_decrypt.clone());
         assert_eq!(
-            table_config.parquet.global.file_decryption_properties,
+            table_config.parquet.crypto.file_decryption,
             Some(config_decrypt.clone())
         );
     }

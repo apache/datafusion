@@ -249,8 +249,6 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_parquet_with_encryption() -> Result<()> {
-        use crate::execution::SessionStateBuilder;
-        use datafusion_common::config::ConfigFileDecryptionProperties;
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
 
@@ -278,7 +276,7 @@ mod tests {
 
         // Write encrypted parquet using write_parquet
         let mut options = TableParquetOptions::default();
-        options.global.file_encryption_properties = Some((&encrypt).into());
+        options.crypto.file_encryption = Some((&encrypt).into());
 
         df.write_parquet(
             tempfile_str.as_str(),
@@ -289,22 +287,12 @@ mod tests {
         let num_rows_written = test_df.count().await?;
 
         // Read encrypted parquet
-        let mut sc = SessionConfig::new();
-        let fd: ConfigFileDecryptionProperties = (&decrypt).into();
-        sc.options_mut()
-            .execution
-            .parquet
-            .file_decryption_properties = Some(fd);
+        let ctx: SessionContext = SessionContext::new();
+        let read_options =
+            ParquetReadOptions::default().file_decryption_properties(decrypt);
 
-        let state = SessionStateBuilder::new().with_config(sc).build();
-        let ctx: SessionContext = SessionContext::new_with_state(state);
-
-        ctx.register_parquet(
-            "roundtrip_parquet",
-            &tempfile_str,
-            ParquetReadOptions::default(),
-        )
-        .await?;
+        ctx.register_parquet("roundtrip_parquet", &tempfile_str, read_options.clone())
+            .await?;
 
         let df_enc = ctx.sql("SELECT * FROM roundtrip_parquet").await?;
         let num_rows_read = df_enc.count().await?;
@@ -312,9 +300,7 @@ mod tests {
         assert_eq!(num_rows_read, num_rows_written);
 
         // Read encrypted parquet and subset rows + columns
-        let encrypted_parquet_df = ctx
-            .read_parquet(tempfile_str, ParquetReadOptions::default())
-            .await?;
+        let encrypted_parquet_df = ctx.read_parquet(tempfile_str, read_options).await?;
 
         // Select three columns and filter the results
         // Test that the filter works as expected

@@ -41,8 +41,6 @@ use parquet::{
     schema::types::ColumnPath,
 };
 
-use parquet::encryption::encrypt::FileEncryptionProperties;
-
 /// Options for writing parquet files
 #[derive(Clone, Debug)]
 pub struct ParquetWriterOptions {
@@ -97,9 +95,16 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             global,
             column_specific_options,
             key_value_metadata,
+            crypto,
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
+
+        if let Some(file_encryption_properties) = &crypto.file_encryption {
+            builder = builder.with_file_encryption_properties(
+                file_encryption_properties.clone().into(),
+            );
+        }
 
         // check that the arrow schema is present in the kv_metadata, if configured to do so
         if !global.skip_arrow_metadata
@@ -227,8 +232,6 @@ impl ParquetOptions {
             bloom_filter_on_write,
             bloom_filter_fpp,
             bloom_filter_ndv,
-            file_decryption_properties: _,
-            file_encryption_properties,
 
             // not in WriterProperties
             enable_page_index: _,
@@ -264,14 +267,6 @@ impl ParquetOptions {
             .set_statistics_truncate_length(*statistics_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
-
-        let fep: Option<FileEncryptionProperties> = file_encryption_properties
-            .as_ref()
-            .map(|fe| fe.clone().into());
-
-        if fep.is_some() {
-            builder = builder.with_file_encryption_properties(fep.unwrap());
-        }
 
         builder = {
             #[allow(deprecated)]
@@ -462,7 +457,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::config::{
-        ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetOptions,
+        ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetEncryptionOptions,
+        ParquetOptions,
     };
 
     use super::*;
@@ -513,8 +509,6 @@ mod tests {
             bloom_filter_on_write: !defaults.bloom_filter_on_write,
             bloom_filter_fpp: Some(0.42),
             bloom_filter_ndv: Some(42),
-            file_decryption_properties: None,
-            file_encryption_properties: None,
 
             // not in WriterProperties, but itemizing here to not skip newly added props
             enable_page_index: defaults.enable_page_index,
@@ -624,8 +618,6 @@ mod tests {
                     .unwrap_or_default(),
                 bloom_filter_fpp: default_col_props.bloom_filter_fpp,
                 bloom_filter_ndv: default_col_props.bloom_filter_ndv,
-                file_encryption_properties: fep,
-                file_decryption_properties: None,
 
                 // not in WriterProperties
                 enable_page_index: global_options_defaults.enable_page_index,
@@ -648,6 +640,10 @@ mod tests {
             },
             column_specific_options,
             key_value_metadata,
+            crypto: ParquetEncryptionOptions {
+                file_encryption: fep,
+                file_decryption: None,
+            },
         }
     }
 
@@ -702,6 +698,7 @@ mod tests {
             )]
             .into(),
             key_value_metadata: [(key, value)].into(),
+            crypto: Default::default(),
         };
 
         let writer_props = WriterPropertiesBuilder::try_from(&table_parquet_opts)
