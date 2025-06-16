@@ -37,7 +37,9 @@ use datafusion_common::pruning::{
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_datasource::PartitionedFile;
-use datafusion_physical_expr_common::physical_expr::{is_dynamic_physical_expr, PhysicalExpr};
+use datafusion_physical_expr_common::physical_expr::{
+    is_dynamic_physical_expr, PhysicalExpr,
+};
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
 
@@ -138,18 +140,20 @@ impl FileOpener for ParquetOpener {
             // Since dynamic filters may have been updated since planning it is possible that we are able
             // to prune files now that we couldn't prune at planning time.
             // We'll also check this after every record batch we read, and if at some point we are able to prove we can prune the file using just the file level statistics we can return an empty stream.
-            let file_pruner = predicate.as_ref().map(|p| {
-                FilePruner::new_opt(
-                    Arc::clone(&p),
-                    &logical_file_schema,
-                    partition_fields.clone(),
-                    file.clone(),
-                    predicate_creation_errors.clone(),
-                )
-            })
-            .transpose()?
-            .flatten()
-            .map(Arc::new);
+            let file_pruner = predicate
+                .as_ref()
+                .map(|p| {
+                    FilePruner::new_opt(
+                        Arc::clone(&p),
+                        &logical_file_schema,
+                        partition_fields.clone(),
+                        file.clone(),
+                        predicate_creation_errors.clone(),
+                    )
+                })
+                .transpose()?
+                .flatten()
+                .map(Arc::new);
 
             if let Some(file_pruner) = &file_pruner {
                 if file_pruner.should_prune()? {
@@ -361,9 +365,7 @@ impl FileOpener for ParquetOpener {
                                 futures::future::ready(true)
                             }
                             Err(e) => {
-                                debug!(
-                                    "Error evaluating file pruning predicate: {e}"
-                                );
+                                debug!("Error evaluating file pruning predicate: {e}");
                                 futures::future::ready(true)
                             }
                         }
@@ -510,8 +512,6 @@ fn should_enable_page_index(
             .unwrap_or(false)
 }
 
-
-
 /// Prune based on partition values and file-level statistics.
 pub struct FilePruner {
     predicate: Arc<dyn PhysicalExpr>,
@@ -566,8 +566,7 @@ impl FilePruner {
             let mut pruning = Box::new(PartitionPruningStatistics::try_new(
                 vec![self.file.partition_values.clone()],
                 self.partition_fields.clone(),
-            )?)
-                as Box<dyn PruningStatistics>;
+            )?) as Box<dyn PruningStatistics>;
             if let Some(stats) = &self.file.statistics {
                 let stats_pruning = Box::new(PrunableStatistics::new(
                     vec![Arc::clone(stats)],
@@ -583,19 +582,17 @@ impl FilePruner {
                     assert!(values.len() == 1);
                     // We expect a single container -> if all containers are false skip this file
                     if values.into_iter().all(|v| !v) {
-                        return Ok(true)
+                        return Ok(true);
                     }
                 }
                 // Stats filter array could not be built, so we can't prune
                 Err(e) => {
-                    debug!(
-                        "Ignoring error building pruning predicate for file: {e}"
-                    );
+                    debug!("Ignoring error building pruning predicate for file: {e}");
                     self.predicate_creation_errors.add(1);
                 }
             }
         }
-        
+
         Ok(false)
     }
 }
