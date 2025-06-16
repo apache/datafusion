@@ -19,10 +19,14 @@ use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::delim_candidate_rewriter::DelimCandidateRewriter;
 use crate::delim_candidates_collector::DelimCandidateVisitor;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_common::{internal_err, Column, DataFusionError, Result};
 use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{Expr, Join, JoinKind, JoinType, LogicalPlan, Operator};
+use datafusion_expr::{
+    Expr, Filter, Join, JoinKind, JoinType, LogicalPlan, Operator, Projection,
+};
 
 /// The Deliminator optimizer traverses the logical operator tree and removes any
 /// redundant DelimScan/DelimJoins.
@@ -69,6 +73,7 @@ impl OptimizerRule for Deliminator {
             return Ok(rewrite_result);
         }
 
+        let mut replacement_cols: Vec<(Column, Column)> = vec![];
         for (_, candidate) in visitor.candidates.iter_mut() {
             let delim_join = &mut candidate.node.plan;
 
@@ -121,6 +126,7 @@ impl OptimizerRule for Deliminator {
                         &join.node.plan,
                         &mut all_equality_conditions,
                         &mut is_transformed,
+                        &mut replacement_cols,
                     )?;
                 }
 
@@ -143,6 +149,10 @@ impl OptimizerRule for Deliminator {
         let mut rewriter = DelimCandidateRewriter::new(visitor.candidates);
         let rewrite_result = rewrite_result.data.rewrite(&mut rewriter)?;
 
+        // Replace all columns.
+        let mut rewriter = ColumnRewriter::new(replacement_cols);
+        let rewrite_result = rewrite_result.data.rewrite(&mut rewriter)?;
+
         Ok(rewrite_result)
     }
 
@@ -161,6 +171,7 @@ fn remove_join_with_delim_scan(
     join_plan: &LogicalPlan,
     all_equality_conditions: &mut bool,
     is_transformed: &mut bool,
+    replacement_cols: &mut Vec<(Column, Column)>,
 ) -> Result<bool> {
     if let LogicalPlan::Join(join) = join_plan {
         if !child_join_type_can_be_deliminated(join.join_type) {
@@ -196,7 +207,6 @@ fn remove_join_with_delim_scan(
 
         // Check if joining with the DelimScan is redundant, and collect relevant column
         // information.
-        let mut replacement_cols = vec![];
         if let Some(filter) = &join.filter {
             let conditions = split_conjunction(filter);
 
@@ -556,6 +566,95 @@ fn flip_comparison_operator(operator: Operator) -> Result<Operator> {
         Operator::Gt => Ok(Operator::Lt),
         Operator::GtEq => Ok(Operator::LtEq),
         _ => internal_err!("unsupported comparison type in flip"),
+    }
+}
+
+struct ColumnRewriter {
+    // <old_col, new_col>
+    replacement_cols: Vec<(Column, Column)>,
+}
+
+impl ColumnRewriter {
+    fn new(replacement_cols: Vec<(Column, Column)>) -> Self {
+        Self { replacement_cols }
+    }
+}
+
+impl TreeNodeRewriter for ColumnRewriter {
+    type Node = LogicalPlan;
+
+    fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        Ok(Transformed::no(plan))
+    }
+
+    fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // Helper closure to rewrite expressions
+        let rewrite_expr = |expr: Expr| -> Result<Transformed<Expr>> {
+            let mut transformed = false;
+            let new_expr = expr.clone().transform_down(|expr| {
+                Ok(match expr {
+                    Expr::Column(col) => {
+                        if let Some((_, new_col)) = self
+                            .replacement_cols
+                            .iter()
+                            .find(|(old_col, _)| old_col == &col)
+                        {
+                            transformed = true;
+                            Transformed::yes(Expr::Column(new_col.clone()))
+                        } else {
+                            Transformed::no(Expr::Column(col))
+                        }
+                    }
+                    _ => Transformed::no(expr),
+                })
+            })?;
+
+            Ok(if transformed {
+                Transformed::yes(new_expr.data)
+            } else {
+                Transformed::no(expr)
+            })
+        };
+
+        // Rewrite expressions in the plan
+        // Apply the rewrite to all expressions in the plan node
+        match plan {
+            LogicalPlan::Filter(filter) => {
+                let new_predicate = rewrite_expr(filter.predicate.clone())?;
+                Ok(if new_predicate.transformed {
+                    Transformed::yes(LogicalPlan::Filter(Filter::try_new(
+                        new_predicate.data,
+                        filter.input,
+                    )?))
+                } else {
+                    Transformed::no(LogicalPlan::Filter(filter))
+                })
+            }
+            LogicalPlan::Projection(projection) => {
+                let mut transformed = false;
+                let new_exprs: Vec<Expr> = projection
+                    .expr
+                    .clone()
+                    .into_iter()
+                    .map(|expr| {
+                        let res = rewrite_expr(expr)?;
+                        transformed |= res.transformed;
+                        Ok(res.data)
+                    })
+                    .collect::<Result<_>>()?;
+
+                Ok(if transformed {
+                    Transformed::yes(LogicalPlan::Projection(Projection::try_new(
+                        new_exprs,
+                        projection.input,
+                    )?))
+                } else {
+                    Transformed::no(LogicalPlan::Projection(projection))
+                })
+            }
+            // Add other cases as needed...
+            _ => Ok(Transformed::no(plan)),
+        }
     }
 }
 
