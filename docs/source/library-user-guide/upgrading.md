@@ -21,6 +21,41 @@
 
 ## DataFusion `48.0.0`
 
+### `Expr::Literal` has optional metadata
+
+The [`Expr::Literal`] variant now includes optional metadata, which allows for
+carrying through Arrow field metadata to support extension types and other uses.
+
+This means code such as
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar) => ...
+...
+}
+#  */
+```
+
+Should be updated to:
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar, _metadata) => ...
+...
+}
+#  */
+```
+
+Likewise constructing `Expr::Literal` requires metadata as well. The [`lit`] function
+has not changed and returns an `Expr::Literal` with no metadata.
+
+[`expr::literal`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Literal
+[`lit`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.lit.html
+
 ### `Expr::WindowFunction` is now `Box`ed
 
 `Expr::WindowFunction` is now a `Box<WindowFunction>` instead of a `WindowFunction` directly.
@@ -200,7 +235,7 @@ working but no one knows due to lack of test coverage).
 
 [api deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines
 
-### `PartitionedFile` added as an arguement to the `FileOpener` trait
+### `PartitionedFile` added as an argument to the `FileOpener` trait
 
 This is necessary to properly fix filter pushdown for filters that combine partition
 columns and file columns (e.g. `day = username['dob']`).
