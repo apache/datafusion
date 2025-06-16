@@ -157,7 +157,7 @@ impl FileOpener for ParquetOpener {
 
             if let Some(file_pruner) = &file_pruner {
                 if file_pruner.should_prune()? {
-                    // Return an empty stream
+                    // Return an empty stream immediately to skip the work of setting up the actual stream
                     file_metrics.files_pruned_statistics.add(1);
                     return Ok(futures::stream::empty().boxed());
                 }
