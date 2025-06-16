@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
+use crate::delim_candidate_rewriter::DelimCandidateRewriter;
 use crate::delim_candidates_collector::DelimCandidateVisitor;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_err, Column, DataFusionError, Result};
 use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{Expr, Join, JoinType, LogicalPlan, Operator};
+use datafusion_expr::{Expr, Join, JoinKind, JoinType, LogicalPlan, Operator};
 
 /// The Deliminator optimizer traverses the logical operator tree and removes any
 /// redundant DelimScan/DelimJoins.
@@ -49,7 +50,7 @@ impl OptimizerRule for Deliminator {
 
         let mut visitor = DelimCandidateVisitor::new();
         let _ = rewrite_result.data.visit(&mut visitor)?;
-        for candidate in &visitor.candidates {
+        for (_, candidate) in visitor.candidates.iter() {
             println!("=== DelimCandidate ===");
             println!("  plan: {}", candidate.node.plan.display());
             println!("  delim_get_count: {}", candidate.delim_scan_count);
@@ -68,7 +69,7 @@ impl OptimizerRule for Deliminator {
             return Ok(rewrite_result);
         }
 
-        for candidate in visitor.candidates.iter_mut() {
+        for (_, candidate) in visitor.candidates.iter_mut() {
             let delim_join = &mut candidate.node.plan;
 
             // Sort these so the deepest are first.
@@ -112,27 +113,35 @@ impl OptimizerRule for Deliminator {
                 };
 
                 let mut all_equality_conditions = true;
+                let mut is_transformed = false;
                 for join in &candidate.joins {
                     all_removed = remove_join_with_delim_scan(
                         delim_join,
                         candidate.delim_scan_count,
                         &join.node.plan,
                         &mut all_equality_conditions,
+                        &mut is_transformed,
                     )?;
-                    // TODO remove join with delim scan.
                 }
 
                 // Change type if there are no more duplicate-eliminated columns.
                 if candidate.joins.len() == candidate.delim_scan_count && all_removed {
-                    // TODO: how we can change it.
-                    // delim_join.join_kind = JoinKind::ComparisonJoin;
+                    is_transformed |= true;
+                    delim_join.join_kind = JoinKind::ComparisonJoin;
+                    // TODO: clear duplicate eliminated columns if any, or should it have?
                 }
 
                 // Only DelimJoins are ever created as SINGLE joins, and we can switch from SINGLE
                 // to LEFT if the RHS is de-deuplicated by an aggr.
-                // TODO: add single join support.
+                // TODO: add single join support and try switch single to left.
+
+                candidate.is_transformed = is_transformed;
             }
         }
+
+        // Replace all with candidate.
+        let mut rewriter = DelimCandidateRewriter::new(visitor.candidates);
+        let rewrite_result = rewrite_result.data.rewrite(&mut rewriter)?;
 
         Ok(rewrite_result)
     }
@@ -151,6 +160,7 @@ fn remove_join_with_delim_scan(
     delim_scan_count: usize,
     join_plan: &LogicalPlan,
     all_equality_conditions: &mut bool,
+    is_transformed: &mut bool,
 ) -> Result<bool> {
     if let LogicalPlan::Join(join) = join_plan {
         if !child_join_type_can_be_deliminated(join.join_type) {
@@ -236,6 +246,7 @@ fn remove_join_with_delim_scan(
                     delim_join,
                     delim_scan_count,
                     join_plan,
+                    is_transformed,
                 )?
             {
                 return Ok(false);
@@ -316,6 +327,7 @@ fn remove_inequality_join_with_delim_scan(
     delim_join: &mut Join,
     delim_scan_count: usize,
     join_plan: &LogicalPlan,
+    is_transformed: &mut bool,
 ) -> Result<bool> {
     if let LogicalPlan::Join(join) = join_plan {
         if delim_scan_count != 1
@@ -478,6 +490,8 @@ fn remove_inequality_join_with_delim_scan(
             } else {
                 delim_join.filter = None;
             }
+
+            *is_transformed = true;
         }
 
         Ok(found_all)

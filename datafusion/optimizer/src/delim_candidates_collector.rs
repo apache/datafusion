@@ -23,7 +23,6 @@ use indexmap::IndexMap;
 type ID = usize;
 type SubPlanSize = usize;
 
-#[allow(dead_code)]
 pub struct Node {
     pub plan: LogicalPlan,
     pub id: ID,
@@ -41,7 +40,6 @@ impl Node {
     }
 }
 
-#[allow(dead_code)]
 pub struct JoinWithDelimScan {
     // Join node under DelimCandidate.
     pub node: Node,
@@ -57,40 +55,35 @@ impl JoinWithDelimScan {
     }
 }
 
-#[allow(dead_code)]
 pub struct DelimCandidate {
     pub node: Node,
     pub joins: Vec<JoinWithDelimScan>,
     pub delim_scan_count: usize,
+    pub is_transformed: bool,
 }
 
-#[allow(dead_code)]
 impl DelimCandidate {
     fn new(plan: LogicalPlan, id: ID) -> Self {
         Self {
             node: Node::new(plan, id),
             joins: vec![],
             delim_scan_count: 0,
+            is_transformed: false,
         }
     }
 }
 
-#[allow(dead_code)]
 struct NodeVisitor {
     nodes: IndexMap<ID, Node>,
-    candidates: Vec<DelimCandidate>,
     cur_id: ID,
     // all the node ids from root to the current node
-    // this is mutated duri traversal
     stack: Vec<usize>,
 }
 
-#[allow(dead_code)]
 impl NodeVisitor {
     fn new() -> Self {
         Self {
             nodes: IndexMap::new(),
-            candidates: vec![],
             cur_id: 0,
             stack: vec![],
         }
@@ -167,18 +160,17 @@ impl TreeNodeVisitor<'_> for NodeVisitor {
 }
 
 pub struct DelimCandidateVisitor {
-    pub candidates: Vec<DelimCandidate>,
+    pub candidates: IndexMap<ID, DelimCandidate>,
     node_visitor: NodeVisitor,
     cur_id: ID,
     // all the node ids from root to the current node
-    // this is mutated duri traversal
     stack: Vec<usize>,
 }
 
 impl DelimCandidateVisitor {
     pub fn new() -> Self {
         Self {
-            candidates: vec![],
+            candidates: IndexMap::new(),
             node_visitor: NodeVisitor::new(),
             cur_id: 0,
             stack: vec![],
@@ -204,7 +196,7 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
                 ))?;
 
                 self.candidates
-                    .push(DelimCandidate::new(plan.clone(), cur_id));
+                    .insert(cur_id, DelimCandidate::new(plan.clone(), cur_id));
 
                 let left_id = cur_id + 1;
                 // We calculate the right child id from left child's subplan size.
@@ -220,7 +212,7 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
 
                 let mut candidate = self
                     .candidates
-                    .last_mut()
+                    .get_mut(&cur_id)
                     .ok_or_else(|| internal_datafusion_err!("Candidate should exist"))?;
                 let right_plan = &self
                     .node_visitor
@@ -254,7 +246,6 @@ struct DelimCandidatesCollector<'a> {
     depth: usize,
     cur_id: ID,
     // all the node ids from root to the current node
-    // this is mutated duri traversal
     stack: Vec<usize>,
 }
 

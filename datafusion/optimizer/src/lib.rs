@@ -66,6 +66,7 @@ pub mod rewrite_dependent_join;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
+pub mod delim_candidate_rewriter;
 pub mod utils;
 
 #[cfg(test)]
