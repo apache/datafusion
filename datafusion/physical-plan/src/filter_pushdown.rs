@@ -26,20 +26,23 @@ pub enum FilterPushdownPhase {
     /// This pushdown allows static filters that do not reference any [`ExecutionPlan`]s to be pushed down.
     /// Filters that reference an [`ExecutionPlan`] cannot be pushed down at this stage since the whole plan tree may be rewritten
     /// by other optimizations.
-    /// Implemneters are however allowed to modify the execution plan themselves during this phase, for example by returning a completely
+    /// Implementers are however allowed to modify the execution plan themselves during this phase, for example by returning a completely
     /// different [`ExecutionPlan`] from [`ExecutionPlan::handle_child_pushdown_result`].
+    ///
+    /// Pushdown of `FilterExec` into `DataSourceExec` is an example of a pre-pushdown.
     ///
     /// [`ExecutionPlan`]: crate::ExecutionPlan
     /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
     Pre,
     /// Pushdown that happens after most other optimizations.
-    /// This pushdown allows filters that reference an [`ExecutionPlan`] to be pushed down.
-    /// It is guaranteed that subsequent optimizations will not make large changes to the plan tree,
-    /// but implementers are likewise not allowed to modify the plan tree themselves.
-    /// [`ExecutionPlan::handle_child_pushdown_result`] may still return a different [`ExecutionPlan`] (e.g. with internal state replaced) but
-    /// larger changes to the plan tree are likely to conflict with other optimizations or break execution outright.
+    /// This stage of filter pushdown allows filters that reference an [`ExecutionPlan`] to be pushed down.
+    /// Since subsequent optimizations should not change the structure of the plan tree except for calling [`ExecutionPlan::with_new_children`]
+    /// (which generally preserves internal references) it is safe for references between [`ExecutionPlan`]s to be established at this stage.
+    ///
+    /// This phase is used to link a `SortExec` (with a TopK operator) or a `HashJoinExec` to a `DataSourceExec`.
     ///
     /// [`ExecutionPlan`]: crate::ExecutionPlan
+    /// [`ExecutionPlan::with_new_children`]: crate::ExecutionPlan::with_new_children
     /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
     Post,
 }

@@ -97,9 +97,11 @@ impl PhysicalOptimizer {
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
             // The FilterPushdown rule tries to push down filters as far as it can.
-            // For example, it will push down filtering from a `FilterExec` to
-            // a `DataSourceExec`.
-            Arc::new(FilterPushdown::new_pre_optimization()),
+            // For example, it will push down filtering from a `FilterExec` to `DataSourceExec`.
+            // Note that this does not push down dynamic filters (such as those created by a `SortExec` operator in TopK mode),
+            // those are handled by the later `FilterPushdown` rule.
+            // See `FilterPushdownPhase` for more details.
+            Arc::new(FilterPushdown::new()),
             // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
             // requirements. Please make sure that the whole plan tree is determined before this rule.
             // This rule increases parallelism if doing so is beneficial to the physical plan; i.e. at
@@ -131,8 +133,6 @@ impl PhysicalOptimizer {
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.
             Arc::new(LimitPushdown::new()),
-            // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan
-            Arc::new(FilterPushdown::new_post_optimization()),
             // The ProjectionPushdown rule tries to push projections towards
             // the sources in the execution plan. As a result of this process,
             // a projection can disappear if it reaches the source providers, and
@@ -141,6 +141,10 @@ impl PhysicalOptimizer {
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
             Arc::new(InsertYieldExec::new()),
+            // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
+            // Therefore it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
+            // See `FilterPushdownPhase` for more details.
+            Arc::new(FilterPushdown::new_post_optimization()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query

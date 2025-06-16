@@ -105,7 +105,7 @@ fn bench_push_down_filter(c: &mut Criterion) {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     let plan = BenchmarkPlan { plan, config };
-    let optimizer = FilterPushdown::new_pre_optimization();
+    let optimizer = FilterPushdown::new();
 
     c.bench_function("push_down_filter", |b| {
         b.iter(|| {

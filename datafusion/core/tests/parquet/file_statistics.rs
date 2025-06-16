@@ -83,7 +83,7 @@ async fn check_stats_precision_with_filter_pushdown() {
         Arc::new(FilterExec::try_new(physical_filter, exec_with_filter).unwrap())
             as Arc<dyn ExecutionPlan>;
 
-    let optimized_exec = FilterPushdown::new_pre_optimization()
+    let optimized_exec = FilterPushdown::new()
         .optimize(filtered_exec, &options)
         .unwrap();
 

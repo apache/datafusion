@@ -369,19 +369,25 @@ pub struct FilterPushdown {
 }
 
 impl FilterPushdown {
-    fn new(phase: FilterPushdownPhase) -> Self {
-        Self {
-            phase,
-            name: format!("FilterPushdown({phase})"),
+    fn new_with_phase(phase: FilterPushdownPhase) -> Self {
+        let name = match phase {
+            FilterPushdownPhase::Pre => "FilterPushdown",
+            FilterPushdownPhase::Post => "FilterPushdown(Post)",
         }
+        .to_string();
+        Self { phase, name }
     }
 
-    pub fn new_pre_optimization() -> Self {
-        Self::new(FilterPushdownPhase::Pre)
+    /// Create a new [`FilterPushdown`] optimizer rule that runs in the pre-optimization phase.
+    /// See [`FilterPushdownPhase`] for more details.
+    pub fn new() -> Self {
+        Self::new_with_phase(FilterPushdownPhase::Pre)
     }
 
+    /// Create a new [`FilterPushdown`] optimizer rule that runs in the post-optimization phase.
+    /// See [`FilterPushdownPhase`] for more details.
     pub fn new_post_optimization() -> Self {
-        Self::new(FilterPushdownPhase::Post)
+        Self::new_with_phase(FilterPushdownPhase::Post)
     }
 }
 

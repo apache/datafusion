@@ -511,18 +511,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// The default implementation bars all parent filters from being pushed down and adds no new filters.
     /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
     ///
-    /// Since this may perform deep modifications to the plan tree it is called early in the optimization phase
-    /// and is not expected to be called multiple times on the same plan.
-    ///
-    /// A quick summary of the phases is below, see [`FilterPushdownPhase`] for more details:
-    /// - [`FilterPushdownPhase::Pre`]: Filters get pushded down before most other optimizations are applied.
-    ///   At this stage the plan can be modified (e.g. when [`ExecutionPlan::handle_child_pushdown_result`] is called the plan may choose to return an entirely new plan tree)
-    ///   but subsequent optimizations may also rewrite the plan tree drastically, thus it is *not guaranteed* that a [`PhysicalExpr`] can hold on to a reference to the plan tree.
-    ///   During this phase static filters (such as `col = 1`) are pushed down.
-    /// - [`FilterPushdownPhase::Post`]: Filters get pushed down after most other optimizations are applied.
-    ///   At this stage the plan tree is expected to be stable and not change drastically, and operators that do filter pushdown during this phase should also not change the plan tree.
-    ///   They may still return a new plan tree, but it should be equivalent to the old one to avoid breaking invariants from other optimizations.
-    ///   During this phase dynamic filters (such as a reference to a TopK heap) are pushed down.
+    /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
+    /// Depending on the phase the operator may or may not be allowed to modify the plan.
+    /// See [`FilterPushdownPhase`] for more details.
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
@@ -564,15 +555,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///   to dynamically build a result with a mix of supported and unsupported filters.
     ///
     /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
-    /// A quick summary of the phases is below, see [`FilterPushdownPhase`] for more details:
-    /// - [`FilterPushdownPhase::Pre`]: Filters get pushded down before most other optimizations are applied.
-    ///   At this stage the plan can be modified (e.g. when [`ExecutionPlan::handle_child_pushdown_result`] is called the plan may choose to return an entirely new plan tree)
-    ///   but subsequent optimizations may also rewrite the plan tree drastically, thus it is *not guaranteed* that a [`PhysicalExpr`] can hold on to a reference to the plan tree.
-    ///   During this phase static filters (such as `col = 1`) are pushed down.
-    /// - [`FilterPushdownPhase::Post`]: Filters get pushed down after most other optimizations are applied.
-    ///   At this stage the plan tree is expected to be stable and not change drastically, and operators that do filter pushdown during this phase should also not change the plan tree.
-    ///   They may still return a new plan tree, but it should be equivalent to the old one to avoid breaking invariants from other optimizations.
-    ///   During this phase dynamic filters (such as a reference to a TopK heap) are pushed down.
+    /// Depending on the phase the operator may or may not be allowed to modify the plan.
+    /// See [`FilterPushdownPhase`] for more details.
     ///
     /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
     /// [`PredicateSupports::new_with_supported_check`]: crate::filter_pushdown::PredicateSupports::new_with_supported_check
