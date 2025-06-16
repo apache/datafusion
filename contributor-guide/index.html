@@ -579,6 +579,11 @@
        What Contributions are Good Fits?
       </a>
      </li>
+     <li class="toc-h3 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#design-build-vs-big-up-front-design">
+       Design Build vs. Big Up Front Design
+      </a>
+     </li>
     </ul>
    </li>
   </ul>
@@ -751,6 +756,24 @@ Features above) prior to acceptance include:</p>
 <li><p>New functions, especially if they aren’t part of “standard SQL”</p></li>
 <li><p>New data sources (e.g. support for Apache ORC)</p></li>
 </ol>
+</section>
+<section id="design-build-vs-big-up-front-design">
+<h3>Design Build vs. Big Up Front Design<a class="headerlink" href="#design-build-vs-big-up-front-design" title="Link to this heading">¶</a></h3>
+<p>Typically, the DataFusion community attacks large problems by solving them bit
+by bit and refining a solution iteratively on the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch as a series of
+Pull Requests. This is different from projects which front-load the effort
+with a more comprehensive design process.</p>
+<p>By “advancing the front” the community always makes tangible progress, and the strategy is
+especially effective in a project that relies on individual contributors who may
+not have the time or resources to invest in a large upfront design effort.
+However, this “bit by bit approach” doesn’t always succeed, and sometimes we get
+stuck or go down the wrong path and then change directions.</p>
+<p>Our process necessarily results in imperfect solutions being the “state of the
+code” in some cases, and larger visions are not yet fully realized. However, the
+community is good at driving things to completion in the long run. If you see
+something that needs improvement or an area that is not yet fully realized,
+please consider submitting an issue or PR to improve it. We are always looking
+for more contributions.</p>
 </section>
 </section>
 </section>
