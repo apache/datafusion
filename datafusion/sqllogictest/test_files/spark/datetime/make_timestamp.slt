@@ -15,6 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# This file was originally created by a porting script from:
+#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
+# This file is part of the implementation of the datafusion-spark function library.
+# For more information, please see:
+#   https://github.com/apache/datafusion/issues/15914
+
 ## Original Query: SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887);
 ## PySpark 3.5.5 Result: {'make_timestamp(2014, 12, 28, 6, 30, 45.887)': datetime.datetime(2014, 12, 28, 6, 30, 45, 887000), 'typeof(make_timestamp(2014, 12, 28, 6, 30, 45.887))': 'timestamp', 'typeof(2014)': 'int', 'typeof(12)': 'int', 'typeof(28)': 'int', 'typeof(6)': 'int', 'typeof(30)': 'int', 'typeof(45.887)': 'decimal(5,3)'}
 #query

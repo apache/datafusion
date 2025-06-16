@@ -15,6 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# This file was originally created by a porting script from:
+#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
+# This file is part of the implementation of the datafusion-spark function library.
+# For more information, please see:
+#   https://github.com/apache/datafusion/issues/15914
+
 ## Original Query: SELECT ceiling(-0.1);
 ## PySpark 3.5.5 Result: {'ceiling(-0.1)': Decimal('0'), 'typeof(ceiling(-0.1))': 'decimal(1,0)', 'typeof(-0.1)': 'decimal(1,1)'}
 #query
