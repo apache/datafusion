@@ -28,7 +28,7 @@ Many of the tests in this directory are commented out and are waiting for help w
 
 For more information please see:
 * [The `datafusion-spark` Epic](https://github.com/apache/datafusion/issues/15914)
-* [The Porting Script] (https://github.com/apache/datafusion/pull/16409#issuecomment-2972618052)
+* [Spark Test Generation Script] (https://github.com/apache/datafusion/pull/16409#issuecomment-2972618052)
 
 ## Testing Guide
 
