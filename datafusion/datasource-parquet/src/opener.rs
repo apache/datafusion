@@ -32,7 +32,7 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use arrow::datatypes::{FieldRef, Schema, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::pruning::{
-    PartitionPruningStatistics, PrunableStatistics, PruningStatistics,
+    CompositePruningStatistics, PartitionPruningStatistics, PrunableStatistics, PruningStatistics
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_datasource::PartitionedFile;
@@ -570,11 +570,10 @@ impl FilePruner {
                     vec![Arc::clone(stats)],
                     Arc::clone(&self.pruning_schema),
                 ));
-                pruning = stats_pruning;
-                // pruning = Box::new(CompositePruningStatistics::new(vec![
-                //     pruning,
-                //     stats_pruning,
-                // ]));
+                pruning = Box::new(CompositePruningStatistics::new(vec![
+                    pruning,
+                    stats_pruning,
+                ]));
             }
             match pruning_predicate.prune(pruning.as_ref()) {
                 Ok(values) => {
