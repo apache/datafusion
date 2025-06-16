@@ -513,7 +513,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// Since this may perform deep modifications to the plan tree it is called early in the optimization phase
     /// and is not expected to be called multiple times on the same plan.
-    /// 
+    ///
     /// A quick summary of the phases is below, see [`FilterPushdownPhase`] for more details:
     /// - [`FilterPushdownPhase::Pre`]: Filters get pushded down before most other optimizations are applied.
     ///   At this stage the plan can be modified (e.g. when [`ExecutionPlan::handle_child_pushdown_result`] is called the plan may choose to return an entirely new plan tree)
@@ -562,7 +562,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// - [`PredicateSupports::new_with_supported_check`]: takes a callback that returns true / false for each filter to indicate pushdown support.
     ///   This can be used alongside [`FilterPushdownPropagation::with_filters`] and [`FilterPushdownPropagation::with_updated_node`]
     ///   to dynamically build a result with a mix of supported and unsupported filters.
-    /// 
+    ///
     /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
     /// A quick summary of the phases is below, see [`FilterPushdownPhase`] for more details:
     /// - [`FilterPushdownPhase::Pre`]: Filters get pushded down before most other optimizations are applied.
