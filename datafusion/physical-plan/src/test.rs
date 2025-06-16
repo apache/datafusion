@@ -300,7 +300,7 @@ impl TestMemoryExec {
     }
 
     /// refer to `try_with_sort_information` at MemorySourceConfig for more information.
-    /// https://github.com/apache/datafusion/tree/main/datafusion/datasource/src/memory.rs
+    /// <https://github.com/apache/datafusion/tree/main/datafusion/datasource/src/memory.rs>
     pub fn try_with_sort_information(
         mut self,
         mut sort_information: Vec<LexOrdering>,
