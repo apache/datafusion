@@ -15,7 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Represents the behavior for null values when evaluating equality.
+/// Represents the behavior for null values when evaluating equality. Currently, its primary use
+/// case is to define the behavior of joins for null values.
+///
+/// # Examples
+///
+/// The following table shows the expected equality behavior for `NullEquality`.
+///
+/// | A    | B    | NullEqualsNothing | NullEqualsNull |
+/// |------|------|-------------------|----------------|
+/// | NULL | NULL | false             | true           |
+/// | NULL | 'b'  | false             | false          |
+/// | 'a'  | NULL | false             | false          |
+/// | 'a'  | 'b'  | false             | false          |
 ///
 /// # Order
 ///
