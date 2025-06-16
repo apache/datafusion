@@ -115,7 +115,7 @@ by bit and refining a solution iteratively on the `main` branch as a series of
 Pull Requests. This is different from projects which front-load the effort
 with a more comprehensive design process.
 
-By "advancing the front" we always make tangible progress, and the strategy is
+By "advancing the front" the community always makes tangible progress, and the strategy is
 especially effective in a project that relies on individual contributors who may
 not have the time or resources to invest in a large upfront design effort.
 However, this "bit by bit approach" doesn't always succeed, and sometimes we get
