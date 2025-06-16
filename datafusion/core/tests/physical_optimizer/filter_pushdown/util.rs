@@ -29,6 +29,7 @@ use datafusion_datasource::{
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::filter_pushdown::FilterPushdownPhase;
 use datafusion_physical_plan::{
     displayable,
     filter::FilterExec,
@@ -510,6 +511,7 @@ impl ExecutionPlan for TestNode {
 
     fn gather_filters_for_pushdown(
         &self,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -520,6 +522,7 @@ impl ExecutionPlan for TestNode {
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {

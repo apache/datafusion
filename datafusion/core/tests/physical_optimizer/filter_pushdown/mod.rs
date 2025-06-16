@@ -63,7 +63,7 @@ fn test_pushdown_into_scan() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new_pre_optimization(), true),
         @r"
     OptimizationTest:
       input:
@@ -87,7 +87,7 @@ fn test_pushdown_into_scan_with_config_options() {
     insta::assert_snapshot!(
         OptimizationTest::new(
             Arc::clone(&plan),
-            FilterPushdown {},
+            FilterPushdown::new_pre_optimization(),
             false
         ),
         @r"
@@ -106,7 +106,7 @@ fn test_pushdown_into_scan_with_config_options() {
     insta::assert_snapshot!(
         OptimizationTest::new(
             plan,
-            FilterPushdown {},
+            FilterPushdown::new_pre_optimization(),
             true
         ),
         @r"
@@ -131,7 +131,7 @@ fn test_filter_collapse() {
     let plan = Arc::new(FilterExec::try_new(predicate2, filter1).unwrap());
 
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new_pre_optimization(), true),
         @r"
     OptimizationTest:
       input:
@@ -159,7 +159,7 @@ fn test_filter_with_projection() {
 
     // expect the predicate to be pushed down into the DataSource but the FilterExec to be converted to ProjectionExec
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new_pre_optimization(), true),
         @r"
     OptimizationTest:
       input:
@@ -182,7 +182,7 @@ fn test_filter_with_projection() {
             .unwrap(),
     );
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{},true),
+        OptimizationTest::new(plan, FilterPushdown::new_pre_optimization(),true),
         @r"
     OptimizationTest:
       input:
@@ -211,7 +211,7 @@ fn test_push_down_through_transparent_nodes() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{},true),
+        OptimizationTest::new(plan, FilterPushdown::new_pre_optimization(),true),
         @r"
     OptimizationTest:
       input:
@@ -275,7 +275,7 @@ fn test_no_pushdown_through_aggregates() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new_pre_optimization(), true),
         @r"
     OptimizationTest:
       input:
@@ -306,7 +306,7 @@ fn test_node_handles_child_pushdown_result() {
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(TestNode::new(true, Arc::clone(&scan), predicate));
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new_pre_optimization(), true),
         @r"
     OptimizationTest:
       input:
@@ -325,7 +325,7 @@ fn test_node_handles_child_pushdown_result() {
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(TestNode::new(true, Arc::clone(&scan), predicate));
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new_pre_optimization(), true),
         @r"
     OptimizationTest:
       input:
@@ -345,7 +345,7 @@ fn test_node_handles_child_pushdown_result() {
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(TestNode::new(false, Arc::clone(&scan), predicate));
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new_pre_optimization(), true),
         @r"
     OptimizationTest:
       input:
@@ -393,7 +393,7 @@ async fn test_topk_dynamic_filter_pushdown() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(Arc::clone(&plan), FilterPushdown{}, true),
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
         @r"
     OptimizationTest:
       input:
@@ -409,7 +409,9 @@ async fn test_topk_dynamic_filter_pushdown() {
     // Actually apply the optimization to the plan and put some data through it to check that the filter is updated to reflect the TopK state
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
-    let plan = FilterPushdown::new().optimize(plan, &config).unwrap();
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
     let config = SessionConfig::new().with_batch_size(2);
     let session_ctx = SessionContext::new_with_config(config);
     session_ctx.register_object_store(

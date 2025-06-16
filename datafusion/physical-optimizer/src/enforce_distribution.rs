@@ -1308,7 +1308,6 @@ pub fn ensure_distribution(
                                 .downcast_ref::<OutputRequirementExec>()
                                 .map(|output| output.fetch())
                                 .unwrap_or(None),
-                            None,
                         )?;
                     }
                 }

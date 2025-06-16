@@ -27,7 +27,7 @@ use std::sync::Arc;
 use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
-use crate::filter_pushdown::FilterDescription;
+use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
@@ -1268,9 +1268,14 @@ impl ExecutionPlan for SortExec {
 
     fn gather_filters_for_pushdown(
         &self,
+        phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<FilterDescription> {
+        if !matches!(phase, FilterPushdownPhase::Post) {
+            return Ok(FilterDescription::new_with_child_count(1)
+                .all_parent_filters_supported(parent_filters));
+        }
         if let Some(filter) = &self.filter {
             if config.optimizer.enable_dynamic_filter_pushdown {
                 let filter = Arc::clone(filter) as Arc<dyn PhysicalExpr>;

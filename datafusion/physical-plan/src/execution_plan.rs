@@ -17,7 +17,8 @@
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -509,8 +510,12 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// The default implementation bars all parent filters from being pushed down and adds no new filters.
     /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
+    ///
+    /// Since this may perform deep modifications to the plan tree it is called early in the optimization phase
+    /// and is not expected to be called multiple times on the same plan.
     fn gather_filters_for_pushdown(
         &self,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -552,6 +557,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`PredicateSupports::new_with_supported_check`]: crate::filter_pushdown::PredicateSupports::new_with_supported_check
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {

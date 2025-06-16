@@ -20,6 +20,39 @@ use std::vec::IntoIter;
 
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+#[derive(Debug, Clone, Copy)]
+pub enum FilterPushdownPhase {
+    /// Pushdown that happens before most other optimizations.
+    /// This pushdown allows static filters that do not reference any [`ExecutionPlan`]s to be pushed down.
+    /// Filters that reference an [`ExecutionPlan`] cannot be pushed down at this stage since the whole plan tree may be rewritten
+    /// by other optimizations.
+    /// Implemneters are however allowed to modify the execution plan themselves during this phase, for example by returning a completely
+    /// different [`ExecutionPlan`] from [`ExecutionPlan::handle_child_pushdown_result`].
+    ///
+    /// [`ExecutionPlan`]: crate::ExecutionPlan
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
+    Pre,
+    /// Pushdown that happens after most other optimizations.
+    /// This pushdown allows filters that reference an [`ExecutionPlan`] to be pushed down.
+    /// It is guaranteed that subsequent optimizations will not make large changes to the plan tree,
+    /// but implementers are likewise not allowed to modify the plan tree themselves.
+    /// [`ExecutionPlan::handle_child_pushdown_result`] may still return a different [`ExecutionPlan`] (e.g. with internal state replaced) but
+    /// larger changes to the plan tree are likely to conflict with other optimizations or break execution outright.
+    ///
+    /// [`ExecutionPlan`]: crate::ExecutionPlan
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
+    Post,
+}
+
+impl std::fmt::Display for FilterPushdownPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FilterPushdownPhase::Pre => write!(f, "Pre"),
+            FilterPushdownPhase::Post => write!(f, "Post"),
+        }
+    }
+}
+
 /// The result of a plan for pushing down a filter into a child node.
 /// This contains references to filters so that nodes can mutate a filter
 /// before pushing it down to a child node (e.g. to adjust a projection)

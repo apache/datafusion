@@ -130,13 +130,10 @@ impl TopKAggregation {
             Ok(Transformed::no(plan))
         };
         let child = Arc::clone(child).transform_down(closure).data().ok()?;
-        let mut new_sort = SortExec::new(sort.expr().clone(), child)
+        let sort = SortExec::new(sort.expr().clone(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
-        if let Some(filter) = sort.filter() {
-            new_sort = new_sort.with_filter(Arc::clone(&filter));
-        }
-        Some(Arc::new(new_sort))
+        Some(Arc::new(sort))
     }
 }
 
