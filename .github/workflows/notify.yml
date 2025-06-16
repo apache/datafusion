@@ -1,0 +1,37 @@
+name: Alert on Regression
+on:
+  workflow_run:
+    workflows: ["Run Benchmarks"]
+    types:
+      - completed
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Results
+        uses: actions/download-artifact@v3
+        with:
+          name: benchmark-results
+      
+      - name: Check for Regressions
+        run: |
+          python scripts/process_results.py \
+            --current current-results.json \
+            --baseline main-results.json
+          
+          if [ -n "$REGESSED_QUERIES" ]; then
+            echo "PERF_REGRESSION=true" >> $GITHUB_ENV
+          fi
+
+      - name: Comment on PR
+        if: env.PERF_REGRESSION == 'true'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.payload.workflow_run.pull_requests[0].number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '⚠️ Performance regression detected in queries: ${REGESSED_QUERIES}'
+            })
