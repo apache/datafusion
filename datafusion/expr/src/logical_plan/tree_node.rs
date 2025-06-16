@@ -436,11 +436,11 @@ impl LogicalPlan {
                 filters.apply_elements(f)
             }
             LogicalPlan::Unnest(unnest) => {
-                let columns = unnest.exec_columns.clone();
-
-                let exprs = columns
+                let exprs = unnest
+                    .exec_columns
                     .iter()
-                    .map(|c| Expr::Column(c.clone()))
+                    .cloned()
+                    .map(Expr::Column)
                     .collect::<Vec<_>>();
                 exprs.apply_elements(f)
             }
