@@ -21,7 +21,7 @@
 
 This directory contains test files for the `spark` test suite.
 
-## Implementation Status
+## RoadMap
 
 Implementing the `datafusion-spark` compatible functions project is still a work in progress.
 Many of the tests in this directory are commented out and are waiting for help with implementation.
