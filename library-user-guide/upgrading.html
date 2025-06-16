@@ -560,6 +560,16 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#expr-literal-has-optional-metadata">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       Expr::Literal
+      </span>
+     </code>
+     has optional metadata
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#expr-windowfunction-is-now-boxed">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -690,13 +700,13 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#partitionedfile-added-as-an-arguement-to-the-fileopener-trait">
+    <a class="reference internal nav-link" href="#partitionedfile-added-as-an-argument-to-the-fileopener-trait">
      <code class="docutils literal notranslate">
       <span class="pre">
        PartitionedFile
       </span>
      </code>
-     added as an arguement to the
+     added as an argument to the
      <code class="docutils literal notranslate">
       <span class="pre">
        FileOpener
@@ -918,6 +928,29 @@
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">¶</a></h1>
 <section id="datafusion-48-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">48.0.0</span></code><a class="headerlink" href="#datafusion-48-0-0" title="Link to this heading">¶</a></h2>
+<section id="expr-literal-has-optional-metadata">
+<h3><code class="docutils literal notranslate"><span class="pre">Expr::Literal</span></code> has optional metadata<a class="headerlink" href="#expr-literal-has-optional-metadata" title="Link to this heading">¶</a></h3>
+<p>The <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Literal"><code class="docutils literal notranslate"><span class="pre">Expr::Literal</span></code></a> variant now includes optional metadata, which allows for
+carrying through Arrow field metadata to support extension types and other uses.</p>
+<p>This means code such as</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">match</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
+<span class="o">..</span><span class="p">.</span>
+<span class="w">  </span><span class="n">Expr</span><span class="p">::</span><span class="n">Literal</span><span class="p">(</span><span class="n">scalar</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="o">..</span><span class="p">.</span>
+<span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Should be updated to:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">match</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
+<span class="o">..</span><span class="p">.</span>
+<span class="w">  </span><span class="n">Expr</span><span class="p">::</span><span class="n">Literal</span><span class="p">(</span><span class="n">scalar</span><span class="p">,</span><span class="w"> </span><span class="n">_metadata</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="o">..</span><span class="p">.</span>
+<span class="o">..</span><span class="p">.</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Likewise constructing <code class="docutils literal notranslate"><span class="pre">Expr::Literal</span></code> requires metadata as well. The <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.lit.html"><code class="docutils literal notranslate"><span class="pre">lit</span></code></a> function
+has not changed and returns an <code class="docutils literal notranslate"><span class="pre">Expr::Literal</span></code> with no metadata.</p>
+</section>
 <section id="expr-windowfunction-is-now-boxed">
 <h3><code class="docutils literal notranslate"><span class="pre">Expr::WindowFunction</span></code> is now <code class="docutils literal notranslate"><span class="pre">Box</span></code>ed<a class="headerlink" href="#expr-windowfunction-is-now-boxed" title="Link to this heading">¶</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">Expr::WindowFunction</span></code> is now a <code class="docutils literal notranslate"><span class="pre">Box&lt;WindowFunction&gt;</span></code> instead of a <code class="docutils literal notranslate"><span class="pre">WindowFunction</span></code> directly.
@@ -1070,8 +1103,8 @@ cover the new <code class="docutils literal notranslate"><span class="pre">DataS
 <code class="docutils literal notranslate"><span class="pre">DataSource</span></code>, the old structures began to show signs of “bit rotting” (not
 working but no one knows due to lack of test coverage).</p>
 </section>
-<section id="partitionedfile-added-as-an-arguement-to-the-fileopener-trait">
-<h3><code class="docutils literal notranslate"><span class="pre">PartitionedFile</span></code> added as an arguement to the <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> trait<a class="headerlink" href="#partitionedfile-added-as-an-arguement-to-the-fileopener-trait" title="Link to this heading">¶</a></h3>
+<section id="partitionedfile-added-as-an-argument-to-the-fileopener-trait">
+<h3><code class="docutils literal notranslate"><span class="pre">PartitionedFile</span></code> added as an argument to the <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> trait<a class="headerlink" href="#partitionedfile-added-as-an-argument-to-the-fileopener-trait" title="Link to this heading">¶</a></h3>
 <p>This is necessary to properly fix filter pushdown for filters that combine partition
 columns and file columns (e.g. <code class="docutils literal notranslate"><span class="pre">day</span> <span class="pre">=</span> <span class="pre">username['dob']</span></code>).</p>
 <p>If you implemented a custom <code class="docutils literal notranslate"><span class="pre">FileOpener</span></code> you will need to add the <code class="docutils literal notranslate"><span class="pre">PartitionedFile</span></code> argument
