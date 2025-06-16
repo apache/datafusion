@@ -37,7 +37,7 @@ use datafusion_common::pruning::{
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_datasource::PartitionedFile;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::{is_dynamic_physical_expr, PhysicalExpr};
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
 
@@ -137,63 +137,28 @@ impl FileOpener for ParquetOpener {
             // Prune this file using the file level statistics.
             // Since dynamic filters may have been updated since planning it is possible that we are able
             // to prune files now that we couldn't prune at planning time.
-            if let Some(predicate) = &predicate {
-                // Build a pruning schema that combines the file fields and partition fields.
-                // Partition fileds are always at the end.
-                let pruning_schema = Arc::new(
-                    Schema::new(
-                        logical_file_schema
-                            .fields()
-                            .iter()
-                            .cloned()
-                            .chain(partition_fields.iter().cloned())
-                            .collect_vec(),
-                    )
-                    .with_metadata(logical_file_schema.metadata().clone()),
-                );
-                let pruning_predicate = build_pruning_predicate(
-                    Arc::clone(predicate),
-                    &pruning_schema,
-                    &predicate_creation_errors,
-                );
-                if let Some(pruning_predicate) = pruning_predicate {
-                    // The partition column schema is the schema of the table - the schema of the file
-                    let mut pruning = Box::new(PartitionPruningStatistics::try_new(
-                        vec![file.partition_values],
-                        partition_fields.clone(),
-                    )?)
-                        as Box<dyn PruningStatistics>;
-                    if let Some(stats) = file.statistics {
-                        let stats_pruning = Box::new(PrunableStatistics::new(
-                            vec![stats],
-                            Arc::clone(&pruning_schema),
-                        ));
-                        pruning = Box::new(CompositePruningStatistics::new(vec![
-                            pruning,
-                            stats_pruning,
-                        ]));
-                    }
-                    match pruning_predicate.prune(pruning.as_ref()) {
-                        Ok(values) => {
-                            assert!(values.len() == 1);
-                            // We expect a single container -> if all containers are false skip this file
-                            if values.into_iter().all(|v| !v) {
-                                // Return an empty stream
-                                file_metrics.files_pruned_statistics.add(1);
-                                return Ok(futures::stream::empty().boxed());
-                            }
-                        }
-                        // Stats filter array could not be built, so we can't prune
-                        Err(e) => {
-                            debug!(
-                                "Ignoring error building pruning predicate for file '{}': {e}",
-                                file_meta.location(),
-                            );
-                            predicate_creation_errors.add(1);
-                        }
-                    }
+            // We'll also check this after every record batch we read, and if at some point we are able to prove we can prune the file using just the file level statistics we can return an empty stream.
+            let file_pruner = predicate.as_ref().map(|p| {
+                FilePruner::new_opt(
+                    Arc::clone(&p),
+                    &logical_file_schema,
+                    partition_fields.clone(),
+                    file.clone(),
+                    predicate_creation_errors.clone(),
+                )
+            })
+            .transpose()?
+            .flatten()
+            .map(Arc::new);
+
+            if let Some(file_pruner) = &file_pruner {
+                if file_pruner.should_prune()? {
+                    // Return an empty stream
+                    file_metrics.files_pruned_statistics.add(1);
+                    return Ok(futures::stream::empty().boxed());
                 }
             }
+
             // Don't load the page index yet. Since it is not stored inline in
             // the footer, loading the page index if it is not needed will do
             // unecessary I/O. We decide later if it is needed to evaluate the
@@ -384,6 +349,27 @@ impl FileOpener for ParquetOpener {
                 .map(move |maybe_batch| {
                     maybe_batch
                         .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
+                })
+                .take_while(move |_| {
+                    if let Some(file_pruner) = file_pruner.as_ref() {
+                        let res = file_pruner.should_prune();
+                        match res {
+                            Ok(false) => futures::future::ready(false),
+                            Ok(true) => {
+                                // Would it be more appropriate to calculate the number of row groups pruned here?
+                                file_metrics.files_pruned_statistics.add(1);
+                                futures::future::ready(true)
+                            }
+                            Err(e) => {
+                                debug!(
+                                    "Error evaluating file pruning predicate: {e}"
+                                );
+                                futures::future::ready(true)
+                            }
+                        }
+                    } else {
+                        futures::future::ready(true)
+                    }
                 });
 
             Ok(adapted.boxed())
@@ -522,6 +508,96 @@ fn should_enable_page_index(
             .as_ref()
             .map(|p| p.filter_number() > 0)
             .unwrap_or(false)
+}
+
+
+
+/// Prune based on partition values and file-level statistics.
+pub struct FilePruner {
+    predicate: Arc<dyn PhysicalExpr>,
+    pruning_schema: Arc<Schema>,
+    file: PartitionedFile,
+    partition_fields: Vec<FieldRef>,
+    predicate_creation_errors: Count,
+}
+
+impl FilePruner {
+    pub fn new_opt(
+        predicate: Arc<dyn PhysicalExpr>,
+        logical_file_schema: &SchemaRef,
+        partition_fields: Vec<FieldRef>,
+        file: PartitionedFile,
+        predicate_creation_errors: Count,
+    ) -> Result<Option<Self>> {
+        // If there is not dynamic predicate, we don't need to prune
+        if !is_dynamic_physical_expr(Arc::clone(&predicate))? {
+            return Ok(None);
+        }
+        // Build a pruning schema that combines the file fields and partition fields.
+        // Partition fileds are always at the end.
+        let pruning_schema = Arc::new(
+            Schema::new(
+                logical_file_schema
+                    .fields()
+                    .iter()
+                    .cloned()
+                    .chain(partition_fields.iter().cloned())
+                    .collect_vec(),
+            )
+            .with_metadata(logical_file_schema.metadata().clone()),
+        );
+        Ok(Some(Self {
+            predicate,
+            pruning_schema,
+            file,
+            partition_fields,
+            predicate_creation_errors,
+        }))
+    }
+
+    pub fn should_prune(&self) -> Result<bool> {
+        let pruning_predicate = build_pruning_predicate(
+            Arc::clone(&self.predicate),
+            &self.pruning_schema,
+            &self.predicate_creation_errors,
+        );
+        if let Some(pruning_predicate) = pruning_predicate {
+            // The partition column schema is the schema of the table - the schema of the file
+            let mut pruning = Box::new(PartitionPruningStatistics::try_new(
+                vec![self.file.partition_values.clone()],
+                self.partition_fields.clone(),
+            )?)
+                as Box<dyn PruningStatistics>;
+            if let Some(stats) = &self.file.statistics {
+                let stats_pruning = Box::new(PrunableStatistics::new(
+                    vec![Arc::clone(stats)],
+                    Arc::clone(&self.pruning_schema),
+                ));
+                pruning = Box::new(CompositePruningStatistics::new(vec![
+                    pruning,
+                    stats_pruning,
+                ]));
+            }
+            match pruning_predicate.prune(pruning.as_ref()) {
+                Ok(values) => {
+                    assert!(values.len() == 1);
+                    // We expect a single container -> if all containers are false skip this file
+                    if values.into_iter().all(|v| !v) {
+                        return Ok(true)
+                    }
+                }
+                // Stats filter array could not be built, so we can't prune
+                Err(e) => {
+                    debug!(
+                        "Ignoring error building pruning predicate for file: {e}"
+                    );
+                    self.predicate_creation_errors.add(1);
+                }
+            }
+        }
+        
+        Ok(false)
+    }
 }
 
 #[cfg(test)]

@@ -537,3 +537,18 @@ pub fn snapshot_physical_expr(
     })
     .data()
 }
+
+/// Check if the given `PhysicalExpr` is dynamic.
+/// See the documentation of [`PhysicalExpr::snapshot`] for more details.
+pub fn is_dynamic_physical_expr(
+    expr: Arc<dyn PhysicalExpr>,
+) -> Result<bool> {
+    let mut is_dynamic = false;
+    expr.transform_up(|e| {
+        if e.snapshot()?.is_some() {
+            is_dynamic = true;
+        }
+        Ok(Transformed::no(e))
+    }).data()?;
+    Ok(is_dynamic)
+}
