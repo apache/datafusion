@@ -27,8 +27,9 @@ Implementing the `datafusion-spark` compatible functions project is still a work
 Many of the tests in this directory are commented out and are waiting for help with implementation.
 
 For more information please see:
-* [The `datafusion-spark` Epic](https://github.com/apache/datafusion/issues/15914)
-* [Spark Test Generation Script] (https://github.com/apache/datafusion/pull/16409#issuecomment-2972618052)
+
+- [The `datafusion-spark` Epic](https://github.com/apache/datafusion/issues/15914)
+- [Spark Test Generation Script] (https://github.com/apache/datafusion/pull/16409#issuecomment-2972618052)
 
 ## Testing Guide
 
