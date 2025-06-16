@@ -144,7 +144,7 @@ impl FileOpener for ParquetOpener {
                 .as_ref()
                 .map(|p| {
                     FilePruner::new_opt(
-                        Arc::clone(&p),
+                        Arc::clone(p),
                         &logical_file_schema,
                         partition_fields.clone(),
                         file.clone(),
