@@ -7853,11 +7853,10 @@ select array_reverse(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array
 ----
 [3, 2, 1] [1]
 
-#TODO: support after FixedSizeList type coercion
-#query ??
-#select array_reverse(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_reverse(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'));
-#----
-#[3, 2, 1] [1]
+query ??
+select array_reverse(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_reverse(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'));
+----
+[3, 2, 1] [1]
 
 query ??
 select array_reverse(NULL), array_reverse([]);
