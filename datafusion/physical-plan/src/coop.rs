@@ -37,7 +37,8 @@
 //!   tasks
 
 use std::any::Any;
-use std::pin::Pin;
+use std::future::Future;
+use std::pin::{pin, Pin};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -53,8 +54,9 @@ use datafusion_execution::TaskContext;
 
 use crate::execution_plan::SchedulingType;
 use crate::stream::RecordBatchStreamAdapter;
-use futures::{FutureExt, Stream};
+use futures::Stream;
 use pin_project_lite::pin_project;
+use tokio::task::consume_budget;
 
 pin_project! {
     /// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
@@ -105,8 +107,9 @@ where
         let value = self.project().inner.poll_next(cx);
         if value.is_ready() {
             // This is a temporary placeholder implementation
-            let mut budget = Box::pin(tokio::task::coop::consume_budget());
-            let _ = budget.poll_unpin(cx);
+            let consume = consume_budget();
+            let consume_ref = pin!(consume);
+            let _ = consume_ref.poll(cx);
         }
         value
     }
