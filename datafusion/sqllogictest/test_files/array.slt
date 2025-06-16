@@ -7854,9 +7854,12 @@ select array_reverse(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)')), array
 [3, 2, 1] [1]
 
 query ??
-select array_reverse(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_reverse(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'));
+select array_reverse(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), 
+  array_reverse(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)')),
+  array_reverse(arrow_cast(make_array(1, NULL, 3), 'FixedSizeList(3, Int64)')),
+  array_reverse(arrow_cast(make_array(NULL, NULL, NULL), 'FixedSizeList(3, Int64)'));
 ----
-[3, 2, 1] [1]
+[3, 2, 1] [1] [3, NULL, 1] [NULL, NULL, NULL]
 
 query ??
 select array_reverse(NULL), array_reverse([]);

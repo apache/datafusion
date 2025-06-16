@@ -193,26 +193,21 @@ fn fixed_size_array_reverse(
     let mut nulls = vec![];
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], false, capacity);
-    let value_length = array.value_length();
+    let value_length = array.value_length() as usize;
 
-    for row_index in 0..(array.len() as i32) {
+    for row_index in 0..array.len() {
         // skip the null value
-        if array.is_null(row_index as usize) {
+        if array.is_null(row_index) {
             nulls.push(false);
             mutable.extend(0, 0, 1);
             continue;
         } else {
             nulls.push(true);
         }
-
         let start = row_index * value_length;
-        let end = (row_index + 1) * value_length;
-
-        let mut index = end - 1;
-
-        while index >= start {
-            mutable.extend(0, index as usize, index as usize + 1);
-            index -= 1;
+        let end = start + value_length;
+        for idx in (start..end).rev() {
+            mutable.extend(0, idx, idx + 1);
         }
     }
 
