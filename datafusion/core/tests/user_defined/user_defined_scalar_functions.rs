@@ -1181,7 +1181,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
                 quote_style: None,
                 span: Span::empty(),
             }),
-            data_type: DataType::Utf8,
+            data_type: DataType::Utf8View,
             default_expr: None,
         }]),
         return_type: Some(DataType::Int32),
