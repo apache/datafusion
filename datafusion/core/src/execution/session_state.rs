@@ -494,7 +494,7 @@ impl SessionState {
             enable_options_value_normalization: sql_parser_options
                 .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
-            map_varchar_to_utf8view: sql_parser_options.map_varchar_to_utf8view,
+            map_string_types_to_utf8view: sql_parser_options.map_string_types_to_utf8view,
             collect_spans: sql_parser_options.collect_spans,
         }
     }

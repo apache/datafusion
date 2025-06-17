@@ -2278,10 +2278,10 @@ create table t (c string) as values
 query T
 select arrow_typeof(c) from t;
 ----
-Utf8
-Utf8
-Utf8
-Utf8
+Utf8View
+Utf8View
+Utf8View
+Utf8View
 
 query IT
 select count(c), arrow_typeof(count(c)) from t;
