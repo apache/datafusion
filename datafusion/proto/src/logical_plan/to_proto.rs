@@ -211,7 +211,10 @@ pub fn serialize_expr(
                     .map(|r| vec![r.into()])
                     .unwrap_or(vec![]),
                 alias: name.to_owned(),
-                metadata: metadata.to_owned().unwrap_or(HashMap::new()),
+                metadata: metadata
+                    .as_ref()
+                    .map(|m| m.to_hashmap())
+                    .unwrap_or(HashMap::new()),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Alias(alias)),
@@ -682,6 +685,7 @@ impl From<JoinType> for protobuf::JoinType {
             JoinType::LeftAnti => protobuf::JoinType::Leftanti,
             JoinType::RightAnti => protobuf::JoinType::Rightanti,
             JoinType::LeftMark => protobuf::JoinType::Leftmark,
+            JoinType::RightMark => protobuf::JoinType::Rightmark,
         }
     }
 }

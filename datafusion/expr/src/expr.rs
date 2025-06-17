@@ -517,6 +517,9 @@ impl FieldMetadata {
 
     /// Adds metadata from `other` into `self`, overwriting any existing keys.
     pub fn extend(&mut self, other: Self) {
+        if other.is_empty() {
+            return;
+        }
         let other = Arc::unwrap_or_clone(other.into_inner());
         Arc::make_mut(&mut self.inner).extend(other);
     }
@@ -531,18 +534,21 @@ impl FieldMetadata {
         self.inner.len()
     }
 
+    /// Convert this `FieldMetadata` into a `HashMap<String, String>`
+    pub fn to_hashmap(&self) -> std::collections::HashMap<String, String> {
+        self.inner
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     /// Updates the metadata on the Field with this metadata, if it is not empty.
     pub fn add_to_field(&self, field: Field) -> Field {
         if self.inner.is_empty() {
             return field;
         }
 
-        field.with_metadata(
-            self.inner
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        )
+        field.with_metadata(self.to_hashmap())
     }
 }
 
@@ -575,6 +581,24 @@ impl From<&std::collections::HashMap<String, String>> for FieldMetadata {
     }
 }
 
+/// From hashbrown map
+impl From<HashMap<String, String>> for FieldMetadata {
+    fn from(map: HashMap<String, String>) -> Self {
+        let inner = map.into_iter().collect();
+        Self::new(inner)
+    }
+}
+
+impl From<&HashMap<String, String>> for FieldMetadata {
+    fn from(map: &HashMap<String, String>) -> Self {
+        let inner = map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self::new(inner)
+    }
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
@@ -601,7 +625,7 @@ pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
-    pub metadata: Option<std::collections::HashMap<String, String>>,
+    pub metadata: Option<FieldMetadata>,
 }
 
 impl Hash for Alias {
@@ -641,10 +665,7 @@ impl Alias {
         }
     }
 
-    pub fn with_metadata(
-        mut self,
-        metadata: Option<std::collections::HashMap<String, String>>,
-    ) -> Self {
+    pub fn with_metadata(mut self, metadata: Option<FieldMetadata>) -> Self {
         self.metadata = metadata;
         self
     }
@@ -1591,15 +1612,17 @@ impl Expr {
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
-    /// use std::collections::HashMap;
+    /// # use std::collections::HashMap;
+    /// # use datafusion_expr::expr::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
     /// ```
     ///
     pub fn alias_with_metadata(
         self,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, None::<&str>, name.into()).with_metadata(metadata))
     }
@@ -1621,8 +1644,10 @@ impl Expr {
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
-    /// use std::collections::HashMap;
+    /// # use std::collections::HashMap;
+    /// # use datafusion_expr::expr::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
     /// ```
     ///
@@ -1630,7 +1655,7 @@ impl Expr {
         self,
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, relation, name.into()).with_metadata(metadata))
     }
@@ -3819,7 +3844,7 @@ mod test {
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
         // See https://github.com/apache/datafusion/issues/16199 for details
-        assert_eq!(size_of::<Expr>(), 144);
+        assert_eq!(size_of::<Expr>(), 128);
         assert_eq!(size_of::<ScalarValue>(), 64);
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
         assert_eq!(size_of::<Vec<Expr>>(), 24);

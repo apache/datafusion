@@ -55,10 +55,10 @@ fn test_pushdown_into_scan() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }
@@ -81,11 +81,11 @@ fn test_pushdown_into_scan_with_config_options() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - FilterExec: a@0 = foo
-          -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     "
     );
 
@@ -100,10 +100,10 @@ fn test_pushdown_into_scan_with_config_options() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }
@@ -124,10 +124,10 @@ fn test_filter_collapse() {
       input:
         - FilterExec: b@1 = bar
         -   FilterExec: a@0 = foo
-        -     DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
+          - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
@@ -151,11 +151,11 @@ fn test_filter_with_projection() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo, projection=[b@1, a@0]
-        -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b, a@0 as a]
-          -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     ",
     );
 
@@ -174,11 +174,11 @@ fn test_filter_with_projection() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo, projection=[b@1]
-        -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b]
-          -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }
@@ -206,12 +206,12 @@ fn test_push_down_through_transparent_nodes() {
         -   RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=1
         -     FilterExec: a@0 = foo
         -       CoalesceBatchesExec: target_batch_size=1
-        -         DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=1
           -   CoalesceBatchesExec: target_batch_size=1
-          -     DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
@@ -271,14 +271,14 @@ fn test_no_pushdown_through_aggregates() {
         -     AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
         -       FilterExec: a@0 = foo
         -         CoalesceBatchesExec: target_batch_size=10
-        -           DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -           DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - FilterExec: b@1 = bar
           -   CoalesceBatchesExec: target_batch_size=100
           -     AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
           -       CoalesceBatchesExec: target_batch_size=10
-          -         DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }
@@ -298,11 +298,11 @@ fn test_node_handles_child_pushdown_result() {
     OptimizationTest:
       input:
         - TestInsertExec { inject_filter: true }
-        -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - TestInsertExec { inject_filter: true }
-          -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     ",
     );
 
@@ -317,12 +317,12 @@ fn test_node_handles_child_pushdown_result() {
     OptimizationTest:
       input:
         - TestInsertExec { inject_filter: true }
-        -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
       output:
         Ok:
           - TestInsertExec { inject_filter: false }
           -   FilterExec: a@0 = foo
-          -     DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     ",
     );
 
@@ -337,11 +337,11 @@ fn test_node_handles_child_pushdown_result() {
     OptimizationTest:
       input:
         - TestInsertExec { inject_filter: false }
-        -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
       output:
         Ok:
           - TestInsertExec { inject_filter: false }
-          -   DataSourceExec: file_groups={1 group: [[test.paqruet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     ",
     );
 }
