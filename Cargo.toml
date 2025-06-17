@@ -218,7 +218,7 @@ uninlined_format_args = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(datafusion_coop, values("tokio", "tokio_fallback"))',
+    'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
     "cfg(tarpaulin)",
     "cfg(tarpaulin_include)",
 ] }

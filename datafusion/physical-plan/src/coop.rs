@@ -35,20 +35,23 @@
 //! - New source operators that do not make use of Tokio resources
 //! - Exchange like operators that do not use Tokio's `Channel` implementation to pass data between
 //!   tasks
-//! 
+//!
 //! # Available utilities
-//! 
+//!
 //! This module provides two function that can be used to add cooperative scheduling to existing
 //! `Stream` implementations.
-//! 
+//!
 //! [`cooperative`] is a generic function that takes ownership of the wrapped [`RecordBatchStream`].
 //! This function has the benefit of not requiring an additional heap allocation and can avoid
 //! dynamic dispatch.
-//! 
+//!
 //! [`make_cooperative`] is a non-generic function that wraps a [`SendableRecordBatchStream`]. This
 //! can be used to wrap dynamically typed, heap allocated [`RecordBatchStream`]s.
 
-#[cfg(datafusion_coop = "tokio_fallback")]
+#[cfg(any(
+    datafusion_coop = "tokio_fallback",
+    not(any(datafusion_coop = "tokio", datafusion_coop = "per_stream"))
+))]
 use futures::Future;
 use std::any::Any;
 use std::pin::Pin;
@@ -72,18 +75,18 @@ use futures::{Stream, StreamExt};
 /// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
 /// It consumes cooperative scheduling budget for each returned [`RecordBatch`],
 /// allowing other tasks to execute when the budget is exhausted.
-/// 
-/// See the [module level documentation](crate::coop) for an in-depth discussion. 
+///
+/// See the [module level documentation](crate::coop) for an in-depth discussion.
 pub struct CooperativeStream<T>
 where
     T: RecordBatchStream + Unpin,
 {
     inner: T,
-    #[cfg(not(any(datafusion_coop = "tokio", datafusion_coop = "tokio_fallback")))]
+    #[cfg(datafusion_coop = "per_stream")]
     budget: u8,
 }
 
-#[cfg(not(any(datafusion_coop = "tokio", datafusion_coop = "tokio_fallback")))]
+#[cfg(datafusion_coop = "per_stream")]
 // Magic value that matches Tokio's task budget value
 const YIELD_FREQUENCY: u8 = 128;
 
@@ -97,10 +100,7 @@ where
     pub fn new(inner: T) -> Self {
         Self {
             inner,
-            #[cfg(not(any(
-                datafusion_coop = "tokio",
-                datafusion_coop = "tokio_fallback"
-            )))]
+            #[cfg(datafusion_coop = "per_stream")]
             budget: YIELD_FREQUENCY,
         }
     }
@@ -128,10 +128,13 @@ where
             value
         }
 
-        #[cfg(datafusion_coop = "tokio_fallback")]
+        #[cfg(any(
+            datafusion_coop = "tokio_fallback",
+            not(any(datafusion_coop = "tokio", datafusion_coop = "per_stream"))
+        ))]
         {
-            // This is a temporary placeholder implementation
-            // that may have slightly worse performance compared to `poll_proceed`
+            // This is a temporary placeholder implementation that may have slightly
+            // worse performance compared to `poll_proceed`
             if !tokio::task::coop::has_budget_remaining() {
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
@@ -151,7 +154,7 @@ where
             value
         }
 
-        #[cfg(not(any(datafusion_coop = "tokio", datafusion_coop = "tokio_fallback")))]
+        #[cfg(datafusion_coop = "per_stream")]
         {
             if self.budget == 0 {
                 self.budget = YIELD_FREQUENCY;
