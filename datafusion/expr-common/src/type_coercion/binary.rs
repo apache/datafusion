@@ -25,8 +25,9 @@ use crate::operator::Operator;
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    enum_type, json_type, DataType, Field, FieldRef, Fields, TimeUnit,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
@@ -250,6 +251,13 @@ impl<'a> BinaryTypeCoercer<'a> {
             } else if let Some(numeric) = mathematics_numerical_coercion(self.lhs, self.rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
+            } else if let Some(json_result_type) = json_coercion(self.lhs, self.rhs) {
+                // JSON Arithmetic, i.e `json - text` for removing a key
+                Ok(Signature {
+                    lhs: self.lhs.clone(),
+                    rhs: self.rhs.clone(),
+                    ret: json_result_type,
+                })
             } else {
                 plan_err!(
                     "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
@@ -609,6 +617,7 @@ fn type_union_resolution_coercion(
                 .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
                 .or_else(|| binary_coercion(lhs_type, rhs_type))
+                .or_else(|| json_coercion(lhs_type, rhs_type))
         }
     }
 }
@@ -1195,6 +1204,20 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
         (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
         // Utf8 coerces to Utf8
         (Utf8, Utf8) => Some(Utf8),
+        _ => None,
+    }
+}
+
+/// The JSONB type in postgres supports some binary operators, like "-" to delete a key from an object.
+/// This coercion is for these kind of operators
+pub fn json_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    match (lhs_type, rhs_type) {
+        (DataType::Utf8 | DataType::LargeUtf8, _) if rhs_type == &json_type() => {
+            Some(json_type())
+        }
+        (_, DataType::Utf8 | DataType::LargeUtf8) if lhs_type == &json_type() => {
+            Some(json_type())
+        }
         _ => None,
     }
 }
