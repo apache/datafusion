@@ -19,7 +19,71 @@
 
 # Upgrade Guides
 
+## DataFusion `49.0.0`
+
+### Metadata is now represented by `FieldMetadata`
+
+Metadata from the Arrow `Field` is now stored using the `FieldMetadata`
+structure. In prior versions it was stored as both a `HashMap<String, String>`
+and a `BTreeMap<String, String>`. `FieldMetadata` is a easier to work with and
+is more efficient.
+
+To create `FieldMetadata` from a `Field`:
+
+```rust
+# /* comment to avoid running
+ let metadata = FieldMetadata::from(&field);
+# */
+```
+
+To add metadata to a `Field`, use the `add_to_field` method:
+
+```rust
+# /* comment to avoid running
+let updated_field = metadata.add_to_field(field);
+# */
+```
+
+See [#16317] for details.
+
+[#16317]: https://github.com/apache/datafusion/pull/16317
+
 ## DataFusion `48.0.0`
+
+### `Expr::Literal` has optional metadata
+
+The [`Expr::Literal`] variant now includes optional metadata, which allows for
+carrying through Arrow field metadata to support extension types and other uses.
+
+This means code such as
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar) => ...
+...
+}
+#  */
+```
+
+Should be updated to:
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar, _metadata) => ...
+...
+}
+#  */
+```
+
+Likewise constructing `Expr::Literal` requires metadata as well. The [`lit`] function
+has not changed and returns an `Expr::Literal` with no metadata.
+
+[`expr::literal`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Literal
+[`lit`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.lit.html
 
 ### `Expr::WindowFunction` is now `Box`ed
 
@@ -199,6 +263,14 @@ cover the new `DataSourceExec` rather than the older structures. As we evolve
 working but no one knows due to lack of test coverage).
 
 [api deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines
+
+### `PartitionedFile` added as an argument to the `FileOpener` trait
+
+This is necessary to properly fix filter pushdown for filters that combine partition
+columns and file columns (e.g. `day = username['dob']`).
+
+If you implemented a custom `FileOpener` you will need to add the `PartitionedFile` argument
+but are not required to use it in any way.
 
 ## DataFusion `47.0.0`
 

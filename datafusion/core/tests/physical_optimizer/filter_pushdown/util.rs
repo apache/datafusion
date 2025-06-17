@@ -57,7 +57,11 @@ pub struct TestOpener {
 }
 
 impl FileOpener for TestOpener {
-    fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(
+        &self,
+        _file_meta: FileMeta,
+        _file: PartitionedFile,
+    ) -> Result<FileOpenFuture> {
         let mut batches = self.batches.clone();
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -274,7 +278,7 @@ impl TestScanBuilder {
             Arc::clone(&self.schema),
             source,
         )
-        .with_file(PartitionedFile::new("test.paqruet", 123))
+        .with_file(PartitionedFile::new("test.parquet", 123))
         .build();
         DataSourceExec::from_data_source(base_config)
     }

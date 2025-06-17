@@ -280,9 +280,10 @@ If you accept, please let us know by replying to private@datafusion.apache.org.
 
 ## New PMC Members
 
-See also the ASF instructions on [how to add a PMC member].
+This is a DataFusion specific cookbook for the Apache Software Foundation
+instructions on [how to add a PMC member].
 
-[how to add a pmc member]: https://www.apache.org/dev/pmc.html#newpmc
+[how to add a pmc member]: https://www.apache.org/dev/pmc.html#pmcmembers
 
 ### Step 1: Start a Discussion Thread
 
@@ -333,29 +334,18 @@ Thanks,
 Your Name
 ```
 
-### Step 3: Send Notice to ASF Board
-
-The DataFusion PMC Chair then sends a NOTICE to `board@apache.org` (cc'ing
-`private@`) like this:
+If this vote succeeds, send a "RESULT" email to `private@` like this:
 
 ```
-To: board@apache.org
-Cc: private@datafusion.apache.org
-Subject: [NOTICE] $NEW_PMC_MEMBER to join DataFusion PMC
+To: private@datafusion.apache.org
+Subject: [RESULT][VOTE] $NEW_PMC_MEMBER for PMC
 
-DataFusion proposes to invite $NEW_PMC_MEMBER ($NEW_PMC_MEMBER_APACHE_ID) to join the PMC.
-
-The vote result is available here:
-$VOTE_RESULT_URL
-
-FYI: Full vote details:
-$VOTE_URL
+The vote carries with N +1 votes and no -1 votes. I will send an invitation
 ```
 
-### Step 4: Send invitation email
+### Step 3: Send invitation email
 
-Once, the PMC chair has confirmed that the email sent to `board@apache.org` has
-made it to the archives, the Chair sends an invitation e-mail to the new PMC
+Assuming the vote passes, the Chair sends an invitation e-mail to the new PMC
 member (cc'ing `private@`) like this:
 
 ```
@@ -405,11 +395,11 @@ With the expectation of your acceptance, welcome!
 The Apache DataFusion PMC
 ```
 
-### Step 5: Chair Promotes the Committer to PMC
+### Step 4: Chair Promotes the Committer to PMC
 
 The PMC chair adds the user to the PMC using the [Whimsy Roster Tool].
 
-### Step 6: Announce and Celebrate the New PMC Member
+### Step 5: Announce and Celebrate the New PMC Member
 
 Send an email such as the following to `dev@datafusion.apache.org` to celebrate:
 
