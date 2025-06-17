@@ -1274,6 +1274,8 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
             Some(List(coerce_list_children(lhs_field, rhs_field)?))
         }
+        // Text on lhs can be coerced to list on rhs
+        (&Utf8, List(_)) | (&LargeUtf8, List(_)) => Some(rhs_type.clone()),
         _ => None,
     }
 }
