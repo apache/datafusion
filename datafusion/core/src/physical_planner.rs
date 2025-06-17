@@ -901,12 +901,10 @@ impl DefaultPhysicalPlanner {
                 on: keys,
                 filter,
                 join_type,
-                null_equals_null,
+                null_equality,
                 schema: join_schema,
                 ..
             }) => {
-                let null_equals_null = *null_equals_null;
-
                 let [physical_left, physical_right] = children.two()?;
 
                 // If join has expression equijoin keys, add physical projection.
@@ -1127,7 +1125,7 @@ impl DefaultPhysicalPlanner {
                         join_filter,
                         *join_type,
                         vec![SortOptions::default(); join_on_len],
-                        null_equals_null,
+                        *null_equality,
                     )?)
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
@@ -1141,7 +1139,7 @@ impl DefaultPhysicalPlanner {
                         join_type,
                         None,
                         PartitionMode::Auto,
-                        null_equals_null,
+                        *null_equality,
                     )?)
                 } else {
                     Arc::new(HashJoinExec::try_new(
@@ -1152,7 +1150,7 @@ impl DefaultPhysicalPlanner {
                         join_type,
                         None,
                         PartitionMode::CollectLeft,
-                        null_equals_null,
+                        *null_equality,
                     )?)
                 };
 
