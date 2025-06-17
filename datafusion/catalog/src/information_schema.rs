@@ -1361,3 +1361,6 @@ impl PartitionStream for InformationSchemaParameters {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests;
