@@ -46,12 +46,13 @@ make review efficient and avoid surprises.
 
 # Quarterly Roadmap
 
-The DataFusion roadmap is driven the priorities of the contributors rather than
-any single organization or coordinating committee. We typically discuss roadmap
-approximately quarterly in GitHub issues.
+The DataFusion roadmap is driven by the priorities of contributors rather than
+any single organization or coordinating committee. We typically discuss our
+roadmap using GitHub issues, approximately quarterly, and invite you to join the
+discussion.
 
 For more information:
 
 1. [Search for issues labeled `roadmap`](https://github.com/apache/datafusion/issues?q=is%3Aissue%20%20%20roadmap)
 2. [DataFusion Road Map: Q3-Q4 2025](https://github.com/apache/datafusion/issues/15878)
-   3[2024 Q4 / 2025 Q1 Roadmap](https://github.com/apache/datafusion/issues/13274)
+3. [2024 Q4 / 2025 Q1 Roadmap](https://github.com/apache/datafusion/issues/13274)
