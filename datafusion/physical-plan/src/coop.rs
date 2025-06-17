@@ -69,6 +69,10 @@ where
     budget: u8,
 }
 
+#[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
+// Magic value that matches Tokio's task budget value
+const YIELD_FREQUENCY: u8 = 128;
+
 impl<T> CooperativeStream<T>
 where
     T: RecordBatchStream + Unpin,
@@ -80,7 +84,7 @@ where
         Self {
             inner,
             #[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
-            budget: 128,
+            budget: YIELD_FREQUENCY,
         }
     }
 }
@@ -125,7 +129,7 @@ where
         #[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
         {
             if self.budget == 0 {
-                self.budget = 128;
+                self.budget = YIELD_FREQUENCY;
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
             }
@@ -135,7 +139,7 @@ where
             if value.is_ready() {
                 self.budget -= 1;
             } else {
-                self.budget = 128;
+                self.budget = YIELD_FREQUENCY;
             }
             value
         }
