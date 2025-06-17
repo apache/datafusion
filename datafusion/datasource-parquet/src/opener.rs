@@ -38,7 +38,7 @@ use datafusion_common::pruning::{
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr_common::physical_expr::{
-    is_dynamic_physical_expr, PhysicalExpr,
+    is_dynamic_physical_expr, snapshot_generation, PhysicalExpr,
 };
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -144,25 +144,23 @@ impl FileOpener for ParquetOpener {
             // We'll also check this after every record batch we read,
             // and if at some point we are able to prove we can prune the file using just the file level statistics
             // we can end the stream early.
-            let file_pruner = predicate
+            let mut file_pruner = predicate
                 .as_ref()
                 .map(|p| {
-                    Ok::<_, DataFusionError>(
-                        is_dynamic_physical_expr(Arc::clone(p))?.then_some(Arc::new(
-                            FilePruner::new(
-                                Arc::clone(p),
-                                &logical_file_schema,
-                                partition_fields.clone(),
-                                file.clone(),
-                                predicate_creation_errors.clone(),
-                            )?,
-                        )),
-                    )
+                    Ok::<_, DataFusionError>(is_dynamic_physical_expr(&p).then_some(
+                        FilePruner::new(
+                            Arc::clone(p),
+                            &logical_file_schema,
+                            partition_fields.clone(),
+                            file.clone(),
+                            predicate_creation_errors.clone(),
+                        )?,
+                    ))
                 })
                 .transpose()?
                 .flatten();
 
-            if let Some(file_pruner) = &file_pruner {
+            if let Some(file_pruner) = &mut file_pruner {
                 if file_pruner.should_prune()? {
                     // Return an empty stream immediately to skip the work of setting up the actual stream
                     file_metrics.files_pruned_statistics.add(1);
@@ -362,7 +360,7 @@ impl FileOpener for ParquetOpener {
                         .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
                 })
                 .take_while(move |_| {
-                    if let Some(file_pruner) = file_pruner.as_ref() {
+                    if let Some(file_pruner) = file_pruner.as_mut() {
                         match file_pruner.should_prune() {
                             Ok(false) => futures::future::ready(true),
                             Ok(true) => {
@@ -520,6 +518,7 @@ fn should_enable_page_index(
 
 /// Prune based on partition values and file-level statistics.
 pub struct FilePruner {
+    predicate_generation: u64,
     predicate: Arc<dyn PhysicalExpr>,
     /// Schema used for pruning, which combines the file schema and partition fields.
     /// Partition fields are always at the end, as they are during scans.
@@ -551,6 +550,7 @@ impl FilePruner {
             .with_metadata(logical_file_schema.metadata().clone()),
         );
         Ok(Self {
+            predicate_generation: snapshot_generation(&predicate),
             predicate,
             pruning_schema,
             file,
@@ -559,7 +559,14 @@ impl FilePruner {
         })
     }
 
-    pub fn should_prune(&self) -> Result<bool> {
+    pub fn should_prune(&mut self) -> Result<bool> {
+        let current_generation = self.predicate_generation;
+        let new_generation = snapshot_generation(&self.predicate);
+        // If the predicate has not changed since the last time we checked, we can skip pruning
+        if current_generation == new_generation {
+            return Ok(false);
+        }
+        self.predicate_generation = new_generation;
         let pruning_predicate = build_pruning_predicate(
             Arc::clone(&self.predicate),
             &self.pruning_schema,

@@ -43,12 +43,31 @@ pub struct DynamicFilterPhysicalExpr {
     /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
     /// The source of dynamic filters.
-    inner: Arc<RwLock<Arc<dyn PhysicalExpr>>>,
+    inner: Arc<RwLock<Inner>>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
     data_type: Arc<RwLock<Option<DataType>>>,
     nullable: Arc<RwLock<Option<bool>>>,
+}
+
+#[derive(Debug)]
+struct Inner {
+    /// A counter that gets incremented every time the expression is updated so that we can track changes cheaply.
+    /// This is used for [`PhysicalExpr::generation`] to have a cheap check for changes.
+    generation: u64,
+    expr: Arc<dyn PhysicalExpr>,
+}
+
+impl Inner {
+    fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            // Start with generation 1 which gives us a different result for [`PhysicalExpr::generation`] than the default 0.
+            // This is not currently used anywhere but it seems useful to have this simple distinction.
+            generation: 1,
+            expr,
+        }
+    }
 }
 
 impl Hash for DynamicFilterPhysicalExpr {
@@ -111,7 +130,7 @@ impl DynamicFilterPhysicalExpr {
         Self {
             children,
             remapped_children: None, // Initially no remapped children
-            inner: Arc::new(RwLock::new(inner)),
+            inner: Arc::new(RwLock::new(Inner::new(inner))),
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
@@ -158,6 +177,7 @@ impl DynamicFilterPhysicalExpr {
                     "Failed to acquire read lock for inner".to_string(),
                 )
             })?
+            .expr
             .clone();
         let inner =
             Self::remap_children(&self.children, self.remapped_children.as_ref(), inner)?;
@@ -186,7 +206,9 @@ impl DynamicFilterPhysicalExpr {
             self.remapped_children.as_ref(),
             new_expr,
         )?;
-        *current = new_expr;
+        current.expr = new_expr;
+        current.generation += 1; // Increment the generation to indicate that the expression has changed.
+                                 // Increment the generation to indicate that the expression has changed.
         Ok(())
     }
 }
@@ -290,6 +312,14 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // Return the current expression as a snapshot.
         Ok(Some(self.current()?))
+    }
+
+    fn snapshot_generation(&self) -> u64 {
+        // Return the current generation of the expression.
+        self.inner
+            .read()
+            .expect("Failed to acquire read lock for inner")
+            .generation
     }
 }
 
