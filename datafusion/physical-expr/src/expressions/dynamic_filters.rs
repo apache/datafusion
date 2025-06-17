@@ -54,7 +54,7 @@ pub struct DynamicFilterPhysicalExpr {
 #[derive(Debug)]
 struct Inner {
     /// A counter that gets incremented every time the expression is updated so that we can track changes cheaply.
-    /// This is used for [`PhysicalExpr::generation`] to have a cheap check for changes.
+    /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
     generation: u64,
     expr: Arc<dyn PhysicalExpr>,
 }
@@ -169,16 +169,17 @@ impl DynamicFilterPhysicalExpr {
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let inner = self
-            .inner
-            .read()
-            .map_err(|_| {
-                datafusion_common::DataFusionError::Execution(
-                    "Failed to acquire read lock for inner".to_string(),
-                )
-            })?
-            .expr
-            .clone();
+        let inner = Arc::clone(
+            &self
+                .inner
+                .read()
+                .map_err(|_| {
+                    datafusion_common::DataFusionError::Execution(
+                        "Failed to acquire read lock for inner".to_string(),
+                    )
+                })?
+                .expr,
+        );
         let inner =
             Self::remap_children(&self.children, self.remapped_children.as_ref(), inner)?;
         Ok(inner)

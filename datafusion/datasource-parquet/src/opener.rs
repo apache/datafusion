@@ -550,7 +550,8 @@ impl FilePruner {
             .with_metadata(logical_file_schema.metadata().clone()),
         );
         Ok(Self {
-            predicate_generation: snapshot_generation(&predicate),
+            // Initialize the predicate generation to 0 so that the first time we call `should_prune` we actually check the predicate
+            predicate_generation: 0,
             predicate,
             pruning_schema,
             file,
