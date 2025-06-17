@@ -58,7 +58,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use futures::{Stream, StreamExt};
 
 /// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
-/// It consumes cooperative scheduling budget for each returned [`RecordBatch`](RecordBatch),
+/// It consumes cooperative scheduling budget for each returned [`RecordBatch`],
 /// allowing other tasks to execute when the budget is exhausted.
 pub struct CooperativeStream<T>
 where
