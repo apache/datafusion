@@ -19,6 +19,35 @@
 
 # Upgrade Guides
 
+## DataFusion `49.0.0`
+
+### Metadata is now represented by `FieldMetadata`
+
+Metadata from the Arrow `Field` is now stored using the `FieldMetadata`
+structure. In prior versions it was stored as both a `HashMap<String, String>`
+and a `BTreeMap<String, String>`. `FieldMetadata` is a easier to work with and
+is more efficient.
+
+To create `FieldMetadata` from a `Field`:
+
+```rust
+# /* comment to avoid running
+ let metadata = FieldMetadata::from(&field);
+# */
+```
+
+To add metadata to a `Field`, use the `add_to_field` method:
+
+```rust
+# /* comment to avoid running
+let updated_field = metadata.add_to_field(field);
+# */
+```
+
+See [#16317] for details.
+
+[#16317]: https://github.com/apache/datafusion/pull/16317
+
 ## DataFusion `48.0.0`
 
 ### `Expr::Literal` has optional metadata
