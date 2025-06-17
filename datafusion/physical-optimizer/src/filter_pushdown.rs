@@ -391,6 +391,12 @@ impl FilterPushdown {
     }
 }
 
+impl Default for FilterPushdown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhysicalOptimizerRule for FilterPushdown {
     fn optimize(
         &self,
