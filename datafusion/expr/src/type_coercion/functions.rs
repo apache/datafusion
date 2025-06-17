@@ -858,8 +858,8 @@ fn coerced_from<'a>(
             | Decimal128(_, _),
         ) => Some(type_into.clone()),
         (
-            Timestamp(TimeUnit::Nanosecond, None),
-            Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
+            Timestamp(TimeUnit::Nanosecond, _),
+            Null | Timestamp(_, _) | Date32 | Date64 | Utf8 | LargeUtf8,
         ) => Some(type_into.clone()),
         (Interval(_), Utf8 | LargeUtf8) => Some(type_into.clone()),
         // We can go into a Utf8View from a Utf8 or LargeUtf8
