@@ -27,10 +27,10 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{JoinType, ScalarValue};
+use datafusion_common::{DataFusionError, JoinType, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr_common::operator::Operator;
-use datafusion_expr_common::operator::Operator::Gt;
+use datafusion_expr_common::operator::Operator::{Divide, Eq, Gt, Modulo};
 use datafusion_functions_aggregate::min_max;
 use datafusion_physical_expr::expressions::{
     binary, col, lit, BinaryExpr, Column, Literal,
@@ -56,6 +56,7 @@ use std::fmt::Formatter;
 use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::Duration;
 use tokio::runtime::{Handle, Runtime};
 use tokio::select;
 
@@ -191,12 +192,7 @@ async fn agg_grouping_yields(
     let inf = Arc::new(make_lazy_exec("value", pretend_infinite));
 
     let value_col = col("value", &inf.schema())?;
-    let group = binary(
-        value_col.clone(),
-        Operator::Divide,
-        lit(1000000i64),
-        &inf.schema(),
-    )?;
+    let group = binary(value_col.clone(), Divide, lit(1000000i64), &inf.schema())?;
 
     let aggr = Arc::new(AggregateExec::try_new(
         AggregateMode::Single,
@@ -227,12 +223,7 @@ async fn agg_grouped_topk_yields(
     let inf = Arc::new(make_lazy_exec("value", pretend_infinite));
 
     let value_col = col("value", &inf.schema())?;
-    let group = binary(
-        value_col.clone(),
-        Operator::Divide,
-        lit(1000000i64),
-        &inf.schema(),
-    )?;
+    let group = binary(value_col.clone(), Divide, lit(1000000i64), &inf.schema())?;
 
     let aggr = Arc::new(
         AggregateExec::try_new(
@@ -372,7 +363,7 @@ async fn filter_reject_all_batches_yields(
 
 #[rstest]
 #[tokio::test]
-async fn interleave_yields(
+async fn interleave_then_filter_all_yields(
     #[values(false, true)] pretend_infinite: bool,
 ) -> Result<(), Box<dyn Error>> {
     // Build a session and a schema with one i64 column.
@@ -381,12 +372,11 @@ async fn interleave_yields(
     // Create multiple infinite sources, each filtered by a different threshold.
     // This ensures InterleaveExec has many children.
     let mut infinite_children = vec![];
-    // Use 32 distinct thresholds (each > 0 and < 8192) for 32 infinite inputs.
-    let thresholds = (0..32).map(|i| 8191 - (i * 256) as i64);
 
-    for thr in thresholds {
+    // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
+    for thr in 1..32 {
         // One infinite exec:
-        let mut inf = make_lazy_exec("value", pretend_infinite);
+        let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
         // Now repartition so that all children share identical Hash partitioning
         // on “value” into 1 bucket. This is required for InterleaveExec::try_new.
@@ -394,12 +384,23 @@ async fn interleave_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “value > thr”.
-        let filter_expr = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("value", 0)),
-            Gt,
-            Arc::new(Literal::new(ScalarValue::Int64(Some(thr)))),
-        ));
+        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        let filter_expr = binary(
+            binary(
+                binary(
+                    col("value", &inf.schema())?,
+                    Divide,
+                    lit(8192i64),
+                    &inf.schema(),
+                )?,
+                Modulo,
+                lit(thr as i64),
+                &inf.schema(),
+            )?,
+            Eq,
+            lit(0i64),
+            &inf.schema(),
+        )?;
         let filtered = Arc::new(FilterExec::try_new(filter_expr, Arc::new(inf))?);
 
         infinite_children.push(filtered as _);
@@ -418,7 +419,7 @@ async fn interleave_yields(
 
 #[rstest]
 #[tokio::test]
-async fn interleave_agg_yields(
+async fn interleave_then_aggregate_yields(
     #[values(false, true)] pretend_infinite: bool,
 ) -> Result<(), Box<dyn Error>> {
     // Build session, schema, and a sample batch.
@@ -427,12 +428,11 @@ async fn interleave_agg_yields(
     // Create N infinite sources, each filtered by a different predicate.
     // That way, the InterleaveExec will have multiple children.
     let mut infinite_children = vec![];
-    // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    let thresholds = (0..32).map(|i| 8_192 - 1 - (i * 256) as i64);
 
-    for thr in thresholds {
+    // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
+    for thr in 1..32 {
         // One infinite exec:
-        let mut inf = make_lazy_exec("value", pretend_infinite);
+        let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
         // Now repartition so that all children share identical Hash partitioning
         // on “value” into 1 bucket. This is required for InterleaveExec::try_new.
@@ -440,12 +440,23 @@ async fn interleave_agg_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “value > thr”.
-        let filter_expr = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("value", 0)),
-            Gt,
-            Arc::new(Literal::new(ScalarValue::Int64(Some(thr)))),
-        ));
+        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        let filter_expr = binary(
+            binary(
+                binary(
+                    col("value", &inf.schema())?,
+                    Divide,
+                    lit(8192i64),
+                    &inf.schema(),
+                )?,
+                Modulo,
+                lit(thr as i64),
+                &inf.schema(),
+            )?,
+            Eq,
+            lit(0i64),
+            &inf.schema(),
+        )?;
         let filtered = Arc::new(FilterExec::try_new(filter_expr, Arc::new(inf))?);
 
         infinite_children.push(filtered as _);
@@ -697,7 +708,9 @@ async fn query_yields(
     // The task returns Ready when the stream yielded with either Ready or Pending
     let join_handle = child_runtime.spawn(std::future::poll_fn(move |cx| {
         match stream.poll_next_unpin(cx) {
-            Poll::Ready(_) => Poll::Ready(Poll::Ready(())),
+            Poll::Ready(Some(Ok(_))) => Poll::Ready(Poll::Ready(Ok(()))),
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Poll::Ready(Err(e))),
+            Poll::Ready(None) => Poll::Ready(Poll::Ready(Ok(()))),
             Poll::Pending => Poll::Ready(Poll::Pending),
         }
     }));
@@ -706,17 +719,27 @@ async fn query_yields(
 
     // Now select on the join handle of the task running in the child executor with a timeout
     let yielded = select! {
-        _ = join_handle => true,
-        _ = tokio::time::sleep(tokio::time::Duration::from_secs(10)) => false
+        result = join_handle => {
+            match result {
+                Ok(Pending) => Ok(()),
+                // The task yielded which is ok
+                Ok(Ready(Ok(_))) => Ok(()),
+                Ok(Ready(Err(e))) => Err(e),
+                Err(_) => Err(DataFusionError::Execution("join error".into())),
+            }
+        },
+        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+            Err(DataFusionError::Execution("time out".into()))
+        }
     };
 
     // Try to abort the poll task and shutdown the child runtime
     abort_handle.abort();
     Handle::current().spawn_blocking(move || {
-        drop(child_runtime);
+        child_runtime.shutdown_timeout(Duration::from_secs(5));
     });
 
     // Finally, check if poll_next yielded
-    assert!(yielded, "Task did not yield in a timely fashion");
+    yielded?;
     Ok(())
 }
