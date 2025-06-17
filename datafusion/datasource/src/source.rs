@@ -146,7 +146,7 @@ pub trait DataSource: Send + Sync + Debug {
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
     fn scheduling_type(&self) -> SchedulingType {
-        SchedulingType::Blocking
+        SchedulingType::NonCooperative
     }
     fn statistics(&self) -> Result<Statistics>;
     /// Return a copy of this DataSource with a new fetch limit

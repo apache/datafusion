@@ -27,9 +27,9 @@
 //!
 //! To ensure that `Stream` implementations yield regularly, operators can insert explicit yield
 //! points using the utilities in this module. For most operators this is **not** necessary. The
-//! built-in DataFusion operators that generate (rather than manipulate; for instance `DataSourceExec`)
-//! or repartition `RecordBatch`es (for instance, `RepartitionExec`) contain yield points that will
-//! make most operator trees yield as appropriate.
+//! built-in DataFusion operators that generate (rather than manipulate) `RecordBatch`es such as
+//! `DataSourceExec` and those that eagerly consume `RecordBatch`es (for instance, `RepartitionExec`)
+//! contain yield points that will make most operator trees yield as appropriate.
 //!
 //! There are a couple of types of operators that should insert yield points:
 //! - New source operators that do not make use of Tokio resources
@@ -104,6 +104,8 @@ where
     ) -> Poll<Option<Self::Item>> {
         #[cfg(datafusion_coop = "tokio")]
         {
+            // TODO this should be the default implementation
+            // Enable once https://github.com/tokio-rs/tokio/issues/7403 is merged and released
             let coop = std::task::ready!(tokio::task::coop::poll_proceed(cx));
             let value = self.inner.poll_next_unpin(cx);
             if value.is_ready() {
@@ -114,6 +116,8 @@ where
 
         #[cfg(datafusion_coop = "tokio_fallback")]
         {
+            // This is a temporary placeholder implementation
+            // that may have slightly worse performance compared to `poll_proceed`
             if !tokio::task::coop::has_budget_remaining() {
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
@@ -121,7 +125,11 @@ where
 
             let value = self.inner.poll_next_unpin(cx);
             if value.is_ready() {
-                // This is a temporary placeholder implementation
+                // In contrast to `poll_proceed` we are not able to consume
+                // budget before proceeding to do work. Instead, we try to consume budget
+                // after the work has been done and just assume that that succeeded.
+                // The poll result is ignored because we don't want to discard
+                // or buffer the Ready result we got from the inner stream.
                 let consume = tokio::task::consume_budget();
                 let consume_ref = std::pin::pin!(consume);
                 let _ = consume_ref.poll(cx);
