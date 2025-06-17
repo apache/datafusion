@@ -36,7 +36,7 @@
 //! - Exchange like operators that do not use Tokio's `Channel` implementation to pass data between
 //!   tasks
 
-#[cfg(feature = "tokio_coop_fallback")]
+#[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
 use std::any::Any;
 use std::pin::Pin;
@@ -65,11 +65,11 @@ where
     T: RecordBatchStream + Unpin,
 {
     inner: T,
-    #[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
+    #[cfg(not(any(datafusion_coop = "tokio", datafusion_coop = "tokio_fallback")))]
     budget: u8,
 }
 
-#[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
+#[cfg(not(any(datafusion_coop = "tokio", datafusion_coop = "tokio_fallback")))]
 // Magic value that matches Tokio's task budget value
 const YIELD_FREQUENCY: u8 = 128;
 
@@ -83,7 +83,10 @@ where
     pub fn new(inner: T) -> Self {
         Self {
             inner,
-            #[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
+            #[cfg(not(any(
+                datafusion_coop = "tokio",
+                datafusion_coop = "tokio_fallback"
+            )))]
             budget: YIELD_FREQUENCY,
         }
     }
@@ -99,7 +102,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        #[cfg(all(feature = "tokio_coop", not(feature = "tokio_coop_fallback")))]
+        #[cfg(datafusion_coop = "tokio")]
         {
             let coop = std::task::ready!(tokio::task::coop::poll_proceed(cx));
             let value = self.inner.poll_next_unpin(cx);
@@ -109,7 +112,7 @@ where
             value
         }
 
-        #[cfg(feature = "tokio_coop_fallback")]
+        #[cfg(datafusion_coop = "tokio_fallback")]
         {
             if !tokio::task::coop::has_budget_remaining() {
                 cx.waker().wake_by_ref();
@@ -126,7 +129,7 @@ where
             value
         }
 
-        #[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
+        #[cfg(not(any(datafusion_coop = "tokio", datafusion_coop = "tokio_fallback")))]
         {
             if self.budget == 0 {
                 self.budget = YIELD_FREQUENCY;
