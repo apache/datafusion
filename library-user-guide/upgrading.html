@@ -550,6 +550,28 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#datafusion-49-0-0">
+   DataFusion
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     49.0.0
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#metadata-is-now-represented-by-fieldmetadata">
+     Metadata is now represented by
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       FieldMetadata
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#datafusion-48-0-0">
    DataFusion
    <code class="docutils literal notranslate">
@@ -926,6 +948,25 @@
 -->
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">¶</a></h1>
+<section id="datafusion-49-0-0">
+<h2>DataFusion <code class="docutils literal notranslate"><span class="pre">49.0.0</span></code><a class="headerlink" href="#datafusion-49-0-0" title="Link to this heading">¶</a></h2>
+<section id="metadata-is-now-represented-by-fieldmetadata">
+<h3>Metadata is now represented by <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code><a class="headerlink" href="#metadata-is-now-represented-by-fieldmetadata" title="Link to this heading">¶</a></h3>
+<p>Metadata from the Arrow <code class="docutils literal notranslate"><span class="pre">Field</span></code> is now stored using the <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code>
+structure. In prior versions it was stored as both a <code class="docutils literal notranslate"><span class="pre">HashMap&lt;String,</span> <span class="pre">String&gt;</span></code>
+and a <code class="docutils literal notranslate"><span class="pre">BTreeMap&lt;String,</span> <span class="pre">String&gt;</span></code>. <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code> is a easier to work with and
+is more efficient.</p>
+<p>To create <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code> from a <code class="docutils literal notranslate"><span class="pre">Field</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="n">metadata</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FieldMetadata</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="o">&amp;</span><span class="n">field</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>To add metadata to a <code class="docutils literal notranslate"><span class="pre">Field</span></code>, use the <code class="docutils literal notranslate"><span class="pre">add_to_field</span></code> method:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">updated_field</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">metadata</span><span class="p">.</span><span class="n">add_to_field</span><span class="p">(</span><span class="n">field</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/16317">#16317</a> for details.</p>
+</section>
+</section>
 <section id="datafusion-48-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">48.0.0</span></code><a class="headerlink" href="#datafusion-48-0-0" title="Link to this heading">¶</a></h2>
 <section id="expr-literal-has-optional-metadata">
