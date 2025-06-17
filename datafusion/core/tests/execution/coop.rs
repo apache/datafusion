@@ -692,6 +692,13 @@ async fn hash_join_without_repartition_and_no_agg(
     query_yields(join, session_ctx.task_ctx()).await
 }
 
+#[derive(Debug)]
+enum Yielded {
+    ReadyOrPending,
+    Err(#[allow(dead_code)] DataFusionError),
+    Timeout,
+}
+
 async fn query_yields(
     plan: Arc<dyn ExecutionPlan>,
     task_ctx: Arc<TaskContext>,
@@ -723,15 +730,14 @@ async fn query_yields(
     let yielded = select! {
         result = join_handle => {
             match result {
-                Ok(Pending) => Ok(()),
-                // The task yielded which is ok
-                Ok(Ready(Ok(_))) => Ok(()),
-                Ok(Ready(Err(e))) => Err(e),
-                Err(_) => Err(DataFusionError::Execution("join error".into())),
+                Ok(Pending) => Yielded::ReadyOrPending,
+                Ok(Ready(Ok(_))) => Yielded::ReadyOrPending,
+                Ok(Ready(Err(e))) => Yielded::Err(e),
+                Err(_) => Yielded::Err(DataFusionError::Execution("join error".into())),
             }
         },
         _ = tokio::time::sleep(Duration::from_secs(10)) => {
-            Err(DataFusionError::Execution("time out".into()))
+            Yielded::Timeout
         }
     };
 
@@ -742,6 +748,9 @@ async fn query_yields(
     });
 
     // Finally, check if poll_next yielded
-    yielded?;
+    assert!(
+        matches!(yielded, Yielded::ReadyOrPending),
+        "Result is not Ready or Pending: {yielded:?}"
+    );
     Ok(())
 }
