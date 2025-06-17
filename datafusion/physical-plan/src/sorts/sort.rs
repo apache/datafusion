@@ -276,8 +276,8 @@ impl ExternalSorter {
             Arc::clone(&runtime),
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
-            spill_compression,
-        );
+        )
+        .with_compression_type(spill_compression);
 
         Ok(Self {
             schema,

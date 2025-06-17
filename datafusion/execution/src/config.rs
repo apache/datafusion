@@ -426,6 +426,14 @@ impl SessionConfig {
         self
     }
 
+    /// Set the compression codec [`spill_compression`] used when spilling data to disk.
+    ///
+    /// [`spill_compression`]: datafusion_common::config::ExecutionOptions::spill_compression
+    pub fn with_spill_compression(mut self, spill_compression: SpillCompression) -> Self {
+        self.options.execution.spill_compression = spill_compression;
+        self
+    }
+
     /// Set the size of [`sort_in_place_threshold_bytes`] to control
     /// how sort does things.
     ///

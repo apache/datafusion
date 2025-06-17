@@ -1347,8 +1347,8 @@ impl SortMergeJoinStream {
             Arc::clone(&runtime_env),
             join_metrics.spill_metrics.clone(),
             Arc::clone(&buffered_schema),
-            spill_compression,
-        );
+        )
+        .with_compression_type(spill_compression);
         Ok(Self {
             state: SortMergeJoinState::Init,
             sort_options,

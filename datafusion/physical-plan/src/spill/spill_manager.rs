@@ -49,19 +49,19 @@ pub struct SpillManager {
 }
 
 impl SpillManager {
-    pub fn new(
-        env: Arc<RuntimeEnv>,
-        metrics: SpillMetrics,
-        schema: SchemaRef,
-        compression: SpillCompression,
-    ) -> Self {
+    pub fn new(env: Arc<RuntimeEnv>, metrics: SpillMetrics, schema: SchemaRef) -> Self {
         Self {
             env,
             metrics,
             schema,
             batch_read_buffer_capacity: 2,
-            compression,
+            compression: SpillCompression::default(),
         }
+    }
+
+    pub fn with_compression_type(mut self, spill_compression: SpillCompression) -> Self {
+        self.compression = spill_compression;
+        self
     }
 
     /// Creates a temporary file for in-progress operations, returning an error

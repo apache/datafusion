@@ -276,10 +276,11 @@ config_namespace! {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum SpillCompression {
     Zstd,
     Lz4Frame,
+    #[default]
     Uncompressed,
 }
 
@@ -291,8 +292,8 @@ impl FromStr for SpillCompression {
             "zstd" => Ok(Self::Zstd),
             "lz4_frame" => Ok(Self::Lz4Frame),
             "uncompressed" | "" => Ok(Self::Uncompressed),
-            other => Err(DataFusionError::Execution(format!(
-                "Invalid Spill file compression type: {other}. Expected one of: zstd, lz4, uncompressed"
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid Spill file compression type: {other}. Expected one of: zstd, lz4_frame, uncompressed"
             ))),
         }
     }
@@ -314,7 +315,7 @@ impl Display for SpillCompression {
         let str = match self {
             Self::Zstd => "zstd",
             Self::Lz4Frame => "lz4_frame",
-            Self::Uncompressed => "",
+            Self::Uncompressed => "uncompressed",
         };
         write!(f, "{str}")
     }
@@ -390,7 +391,10 @@ config_namespace! {
         ///
         /// Since datafusion writes spill files using the Arrow IPC Stream format,
         /// only codecs supported by the Arrow IPC Stream Writer are allowed.
-        /// Valid values are: uncompressed, lz4_frame, zstd
+        /// Valid values are: uncompressed, lz4_frame, zstd.
+        /// Note: lz4_frame offers faster (de)compression, but typically results in
+        /// larger spill files. In contrast, zstd achieves
+        /// higher compression ratios at the cost of slower (de)compression speed.
         pub spill_compression: SpillCompression, default = SpillCompression::Uncompressed
 
         /// Specifies the reserved memory for each spillable sort operation to

@@ -378,12 +378,7 @@ mod tests {
         // Construct SpillManager
         let env = Arc::new(RuntimeEnv::default());
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let spill_manager = SpillManager::new(
-            env,
-            metrics,
-            Arc::clone(&schema),
-            SpillCompression::Uncompressed,
-        );
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
 
         let spill_file = spill_manager
             .spill_record_batch_and_finish(&[batch1, batch2], "Test")?
@@ -447,12 +442,7 @@ mod tests {
         // Construct SpillManager
         let env = Arc::new(RuntimeEnv::default());
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let spill_manager = SpillManager::new(
-            env,
-            metrics,
-            Arc::clone(&dict_schema),
-            SpillCompression::Uncompressed,
-        );
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&dict_schema));
 
         let num_rows = batch1.num_rows() + batch2.num_rows();
         let spill_file = spill_manager
@@ -480,12 +470,7 @@ mod tests {
         let schema = batch1.schema();
         let env = Arc::new(RuntimeEnv::default());
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let spill_manager = SpillManager::new(
-            env,
-            metrics,
-            Arc::clone(&schema),
-            SpillCompression::Uncompressed,
-        );
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
 
         let spill_file = spill_manager
             .spill_record_batch_by_size(&batch1, "Test Spill", 1)?
@@ -553,20 +538,13 @@ mod tests {
             Arc::clone(&env),
             uncompressed_metrics,
             Arc::clone(&schema),
-            SpillCompression::Uncompressed,
         );
-        let lz4_spill_manager = SpillManager::new(
-            Arc::clone(&env),
-            lz4_metrics,
-            Arc::clone(&schema),
-            SpillCompression::Lz4Frame,
-        );
-        let zstd_spill_manager = SpillManager::new(
-            env,
-            zstd_metrics,
-            Arc::clone(&schema),
-            SpillCompression::Zstd,
-        );
+        let lz4_spill_manager =
+            SpillManager::new(Arc::clone(&env), lz4_metrics, Arc::clone(&schema))
+                .with_compression_type(SpillCompression::Lz4Frame);
+        let zstd_spill_manager =
+            SpillManager::new(env, zstd_metrics, Arc::clone(&schema))
+                .with_compression_type(SpillCompression::Zstd);
         let uncompressed_spill_file = uncompressed_spill_manager
             .spill_record_batch_and_finish(&batches, "Test")?
             .unwrap();
@@ -753,12 +731,7 @@ mod tests {
             Field::new("b", DataType::Utf8, false),
         ]));
 
-        let spill_manager = SpillManager::new(
-            env,
-            metrics,
-            Arc::clone(&schema),
-            SpillCompression::Uncompressed,
-        );
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
 
         let batch = RecordBatch::try_new(
             schema,
@@ -815,12 +788,8 @@ mod tests {
             Field::new("b", DataType::Utf8, false),
         ]));
 
-        let spill_manager = Arc::new(SpillManager::new(
-            env,
-            metrics,
-            Arc::clone(&schema),
-            SpillCompression::Uncompressed,
-        ));
+        let spill_manager =
+            Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
         let mut in_progress_file = spill_manager.create_in_progress_file("Test")?;
 
         let batch1 = RecordBatch::try_new(
@@ -866,12 +835,8 @@ mod tests {
             Field::new("b", DataType::Utf8, false),
         ]));
 
-        let spill_manager = Arc::new(SpillManager::new(
-            env,
-            metrics,
-            Arc::clone(&schema),
-            SpillCompression::Uncompressed,
-        ));
+        let spill_manager =
+            Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
 
         // Test write empty batch with interface `InProgressSpillFile` and `append_batch()`
         let mut in_progress_file = spill_manager.create_in_progress_file("Test")?;
@@ -916,12 +881,7 @@ mod tests {
                 // Construct SpillManager
                 let env = Arc::new(RuntimeEnv::default());
                 let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-                let spill_manager = SpillManager::new(
-                    env,
-                    metrics,
-                    Arc::clone(&schema),
-                    SpillCompression::Uncompressed,
-                );
+                let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
                 let batches: [_; 10] = std::array::from_fn(|_| batch.clone());
 
                 let spill_file_1 = spill_manager
