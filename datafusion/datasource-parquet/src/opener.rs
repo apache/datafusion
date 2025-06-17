@@ -25,6 +25,8 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
+use arrow::compute::can_cast_types;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
@@ -35,7 +37,7 @@ use datafusion_common::pruning::{
     CompositePruningStatistics, PartitionPruningStatistics, PrunableStatistics,
     PruningStatistics,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
@@ -248,10 +250,16 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
+            let predicate = predicate
+                .map(|p| {
+                    cast_expr_to_schema(p, &physical_file_schema, &logical_file_schema)
+                })
+                .transpose()?;
+
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 predicate.as_ref(),
-                &logical_file_schema,
+                &physical_file_schema,
                 &predicate_creation_errors,
             );
 
@@ -522,6 +530,56 @@ fn should_enable_page_index(
             .as_ref()
             .map(|p| p.filter_number() > 0)
             .unwrap_or(false)
+}
+
+use datafusion_physical_expr::expressions;
+
+/// Given a [`PhysicalExpr`] and a [`SchemaRef`], returns a new [`PhysicalExpr`] that
+/// is cast to the specified data type.
+/// Preference is always given to casting literal values to the data type of the column
+/// since casting the column to the literal value's data type can be significantly more expensive.
+/// Given two columns the cast is applied arbitrarily to the first column.
+pub fn cast_expr_to_schema(
+    expr: Arc<dyn PhysicalExpr>,
+    physical_file_schema: &Schema,
+    logical_file_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform(|expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<expressions::Column>() {
+            let logical_field = logical_file_schema.field_with_name(column.name())?;
+            let Ok(physical_field) = physical_file_schema.field_with_name(column.name())
+            else {
+                // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` would do.
+                let value = ScalarValue::Null.cast_to(logical_field.data_type())?;
+                return Ok(Transformed::yes(expressions::lit(value)));
+            };
+
+            if logical_field.data_type() == physical_field.data_type() {
+                return Ok(Transformed::no(expr));
+            }
+
+            // If the logical field and physical field are different, we need to cast
+            // the column to the logical field's data type.
+            // We will try later to move the cast to literal values if possible, which is computationally cheaper.
+            if !can_cast_types(logical_field.data_type(), physical_field.data_type()) {
+                return exec_err!(
+                    "Cannot cast column '{}' from '{}' to '{}'",
+                    column.name(),
+                    logical_field.data_type(),
+                    physical_field.data_type()
+                );
+            }
+            let casted_expr = Arc::new(expressions::CastExpr::new(
+                expr,
+                logical_field.data_type().clone(),
+                None,
+            ));
+            return Ok(Transformed::yes(casted_expr));
+        }
+
+        Ok(Transformed::no(expr))
+    })
+    .data()
 }
 
 #[cfg(test)]
