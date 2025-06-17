@@ -687,8 +687,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
             }
+            SQLDataType::JSON | SQLDataType::JSONB => Ok(json_type()),
             SQLDataType::Nvarchar(_)
-            | SQLDataType::JSON
             | SQLDataType::Uuid
             | SQLDataType::Binary(_)
             | SQLDataType::Varbinary(_)
@@ -715,7 +715,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Bytes(_)
             | SQLDataType::Int64
             | SQLDataType::Float64
-            | SQLDataType::JSONB
             | SQLDataType::Unspecified
             | SQLDataType::Int16
             | SQLDataType::Int32
