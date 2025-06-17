@@ -160,16 +160,16 @@ physical_plan LazyMemoryExec: partitions=1, batch_generators=[generate_series: s
 # Test generate_series with invalid arguments
 #
 
-query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
 SELECT * FROM generate_series(5, 1)
 
-query error DataFusion error: Error during planning: start is smaller than end, but increment is negative: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
 SELECT * FROM generate_series(-6, 6, -1)
 
-query error DataFusion error: Error during planning: step cannot be zero
+query error DataFusion error: Error during planning: Step cannot be zero
 SELECT * FROM generate_series(-6, 6, 0)
 
-query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
 SELECT * FROM generate_series(6, -6, 1)
 
 
@@ -177,7 +177,7 @@ statement error DataFusion error: Error during planning: generate_series functio
 SELECT * FROM generate_series(1, 2, 3, 4)
 
 
-statement error DataFusion error: Error during planning: First argument must be an integer literal
+statement error DataFusion error: Error during planning: Argument #1 must be an INTEGER or NULL, got Literal\(Utf8\("foo"\), None\)
 SELECT * FROM generate_series('foo', 'bar')
 
 # UDF and UDTF `generate_series` can be used simultaneously
@@ -219,6 +219,12 @@ SELECT * FROM range(3, 6)
 3
 4
 5
+
+query I rowsort
+SELECT * FROM range(1, 1+2)
+----
+1
+2
 
 # #generated_data > batch_size
 query I
@@ -277,16 +283,16 @@ physical_plan LazyMemoryExec: partitions=1, batch_generators=[range: start=1, en
 # Test range with invalid arguments
 #
 
-query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
 SELECT * FROM range(5, 1)
 
-query error DataFusion error: Error during planning: start is smaller than end, but increment is negative: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
 SELECT * FROM range(-6, 6, -1)
 
-query error DataFusion error: Error during planning: step cannot be zero
+query error DataFusion error: Error during planning: Step cannot be zero
 SELECT * FROM range(-6, 6, 0)
 
-query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
 SELECT * FROM range(6, -6, 1)
 
 
@@ -294,8 +300,11 @@ statement error DataFusion error: Error during planning: range function requires
 SELECT * FROM range(1, 2, 3, 4)
 
 
-statement error DataFusion error: Error during planning: First argument must be an integer literal
+statement error DataFusion error: Error during planning: Argument #1 must be an INTEGER or NULL, got Literal\(Utf8\("foo"\), None\)
 SELECT * FROM range('foo', 'bar')
+
+statement error DataFusion error: Error during planning: Argument #2 must be an INTEGER or NULL, got Literal\(Utf8\("bar"\), None\)
+SELECT * FROM range(1, 'bar')
 
 # UDF and UDTF `range` can be used simultaneously
 query ? rowsort
