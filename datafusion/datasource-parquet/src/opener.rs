@@ -35,7 +35,7 @@ use datafusion_common::pruning::{
     CompositePruningStatistics, PartitionPruningStatistics, PrunableStatistics,
     PruningStatistics,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr_common::physical_expr::{
     is_dynamic_physical_expr, PhysicalExpr,
@@ -139,21 +139,25 @@ impl FileOpener for ParquetOpener {
             // Prune this file using the file level statistics.
             // Since dynamic filters may have been updated since planning it is possible that we are able
             // to prune files now that we couldn't prune at planning time.
+            // It is assumed that there is no point in doing pruning here if the predicate is not dynamic, as it would have been done at planning time.
             // We'll also check this after every record batch we read, and if at some point we are able to prove we can prune the file using just the file level statistics we can return an empty stream.
             let file_pruner = predicate
                 .as_ref()
                 .map(|p| {
-                    FilePruner::new_opt(
-                        Arc::clone(p),
-                        &logical_file_schema,
-                        partition_fields.clone(),
-                        file.clone(),
-                        predicate_creation_errors.clone(),
+                    Ok::<_, DataFusionError>(
+                        is_dynamic_physical_expr(Arc::clone(p))?.then_some(Arc::new(
+                            FilePruner::new(
+                                Arc::clone(p),
+                                &logical_file_schema,
+                                partition_fields.clone(),
+                                file.clone(),
+                                predicate_creation_errors.clone(),
+                            )?,
+                        )),
                     )
                 })
                 .transpose()?
-                .flatten()
-                .map(Arc::new);
+                .flatten();
 
             if let Some(file_pruner) = &file_pruner {
                 if file_pruner.should_prune()? {
@@ -514,6 +518,8 @@ fn should_enable_page_index(
 /// Prune based on partition values and file-level statistics.
 pub struct FilePruner {
     predicate: Arc<dyn PhysicalExpr>,
+    /// Schema used for pruning, which combines the file schema and partition fields.
+    /// Partition fields are always at the end, as they are during scans.
     pruning_schema: Arc<Schema>,
     file: PartitionedFile,
     partition_fields: Vec<FieldRef>,
@@ -521,17 +527,13 @@ pub struct FilePruner {
 }
 
 impl FilePruner {
-    pub fn new_opt(
+    pub fn new(
         predicate: Arc<dyn PhysicalExpr>,
         logical_file_schema: &SchemaRef,
         partition_fields: Vec<FieldRef>,
         file: PartitionedFile,
         predicate_creation_errors: Count,
-    ) -> Result<Option<Self>> {
-        // If there is not dynamic predicate, we don't need to prune
-        if !is_dynamic_physical_expr(Arc::clone(&predicate))? {
-            return Ok(None);
-        }
+    ) -> Result<Self> {
         // Build a pruning schema that combines the file fields and partition fields.
         // Partition fileds are always at the end.
         let pruning_schema = Arc::new(
@@ -545,13 +547,13 @@ impl FilePruner {
             )
             .with_metadata(logical_file_schema.metadata().clone()),
         );
-        Ok(Some(Self {
+        Ok(Self {
             predicate,
             pruning_schema,
             file,
             partition_fields,
             predicate_creation_errors,
-        }))
+        })
     }
 
     pub fn should_prune(&self) -> Result<bool> {
