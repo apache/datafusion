@@ -833,6 +833,10 @@ fn coerced_from<'a>(
         (UInt16, Null | UInt8 | UInt16) => Some(type_into.clone()),
         (UInt32, Null | UInt8 | UInt16 | UInt32) => Some(type_into.clone()),
         (UInt64, Null | UInt8 | UInt16 | UInt32 | UInt64) => Some(type_into.clone()),
+        // This can lose precision (because `into_type` might be less precise than `from_type`),
+        // but casting to Float64 can also lose precision- which is how most functions currently
+        // work
+        (Decimal128(_, _), Decimal128(_, _)) => Some(type_into.clone()),
         (
             Float32,
             Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
