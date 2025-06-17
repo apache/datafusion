@@ -35,6 +35,18 @@
 //! - New source operators that do not make use of Tokio resources
 //! - Exchange like operators that do not use Tokio's `Channel` implementation to pass data between
 //!   tasks
+//! 
+//! # Available utilities
+//! 
+//! This module provides two function that can be used to add cooperative scheduling to existing
+//! `Stream` implementations.
+//! 
+//! [`cooperative`] is a generic function that takes ownership of the wrapped [`RecordBatchStream`].
+//! This function has the benefit of not requiring an additional heap allocation and can avoid
+//! dynamic dispatch.
+//! 
+//! [`make_cooperative`] is a non-generic function that wraps a [`SendableRecordBatchStream`]. This
+//! can be used to wrap dynamically typed, heap allocated [`RecordBatchStream`]s.
 
 #[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
@@ -60,6 +72,8 @@ use futures::{Stream, StreamExt};
 /// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
 /// It consumes cooperative scheduling budget for each returned [`RecordBatch`],
 /// allowing other tasks to execute when the budget is exhausted.
+/// 
+/// See the [module level documentation](crate::coop) for an in-depth discussion. 
 pub struct CooperativeStream<T>
 where
     T: RecordBatchStream + Unpin,
