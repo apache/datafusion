@@ -19,27 +19,34 @@
 //!
 //! # Cooperative scheduling
 //!
-//! A single call to `poll_next` on a top-level `Stream` may potentially do a lot of work before it
-//! returns a `Poll::Pending`. Think for instance of calculating an aggregation over a large dataset.
-//! If an operator tree runs for a long period of time without yielding back to the Tokio executor,
+//! A single call to `poll_next` on a top-level `Stream` may potentially perform a lot of work
+//! before it returns a `Poll::Pending`. Think for instance of calculating an aggregation over a
+//! large dataset.
+//! If a `Stream` runs for a long period of time without yielding back to the Tokio executor,
 //! it can starve other tasks waiting on that executor to execute them.
 //! Additionally, this prevents the query execution from being cancelled.
 //!
 //! To ensure that `Stream` implementations yield regularly, operators can insert explicit yield
 //! points using the utilities in this module. For most operators this is **not** necessary. The
-//! built-in DataFusion operators that generate (rather than manipulate) `RecordBatch`es such as
-//! `DataSourceExec` and those that eagerly consume `RecordBatch`es (for instance, `RepartitionExec`)
-//! contain yield points that will make most operator trees yield as appropriate.
+//! `Stream`s of the built-in DataFusion operators that generate (rather than manipulate)
+//! `RecordBatch`es such as `DataSourceExec` and those that eagerly consume `RecordBatch`es
+//! (for instance, `RepartitionExec`) contain yield points that will make most query `Stream`s yield
+//! periodically.
 //!
-//! There are a couple of types of operators that should insert yield points:
+//! There are a couple of types of operators that _should_ insert yield points:
 //! - New source operators that do not make use of Tokio resources
 //! - Exchange like operators that do not use Tokio's `Channel` implementation to pass data between
 //!   tasks
 //!
-//! # Available utilities
+//! ## Adding yield points
 //!
-//! This module provides two function that can be used to add cooperative scheduling to existing
-//! `Stream` implementations.
+//! Yield points can be inserted manually using the facilities provided by the
+//! [Tokio coop module](https://docs.rs/tokio/latest/tokio/task/coop/index.html) such as
+//! [`tokio::task::coop::consume_budget`](https://docs.rs/tokio/latest/tokio/task/coop/fn.consume_budget.html).
+//!
+//! Another option is to use the wrapper `Stream` implementation provided by this module which will
+//! consume a unit of task budget every time a `RecordBatch` is produced.
+//! Wrapper `Stream`s can be created using the [`cooperative`] and [`make_cooperative`] functions.
 //!
 //! [`cooperative`] is a generic function that takes ownership of the wrapped [`RecordBatchStream`].
 //! This function has the benefit of not requiring an additional heap allocation and can avoid
@@ -47,6 +54,16 @@
 //!
 //! [`make_cooperative`] is a non-generic function that wraps a [`SendableRecordBatchStream`]. This
 //! can be used to wrap dynamically typed, heap allocated [`RecordBatchStream`]s.
+//!
+//! ## Automatic cooperation
+//!
+//! The `EnsureCooperative` physical optimizer rule, which is included in the default set of
+//! optimizer rules, inspects query plans for potential cooperative scheduling issues.
+//! It injects the [`CooperativeExec`] wrapper `ExecutionPlan` into the query plan where necessary.
+//! This `ExecutionPlan` uses [`make_cooperative`] to wrap the `Stream` of its input.
+//!
+//! The optimizer rule currently checks the plan for exchange-like operators and leave operators
+//! that report [`SchedulingType::NonCooperative`] in their [plan properties](ExecutionPlan::properties).
 
 #[cfg(any(
     datafusion_coop = "tokio_fallback",
@@ -147,7 +164,7 @@ where
                 // after the work has been done and just assume that that succeeded.
                 // The poll result is ignored because we don't want to discard
                 // or buffer the Ready result we got from the inner stream.
-                let consume = tokio::task::consume_budget();
+                let consume = tokio::task::coop::consume_budget();
                 let consume_ref = std::pin::pin!(consume);
                 let _ = consume_ref.poll(cx);
             }
