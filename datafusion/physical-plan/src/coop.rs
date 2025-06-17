@@ -36,9 +36,10 @@
 //! - Exchange like operators that do not use Tokio's `Channel` implementation to pass data between
 //!   tasks
 
+#[cfg(feature = "tokio_coop_fallback")]
+use futures::Future;
 use std::any::Any;
-use std::future::Future;
-use std::pin::{pin, Pin};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -54,70 +55,96 @@ use datafusion_execution::TaskContext;
 
 use crate::execution_plan::SchedulingType;
 use crate::stream::RecordBatchStreamAdapter;
-use futures::Stream;
-use pin_project_lite::pin_project;
-use tokio::task::consume_budget;
+use futures::{Stream, StreamExt};
 
-pin_project! {
-    /// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
-    /// It consumes cooperative scheduling budget for each returned [`RecordBatch`](RecordBatch),
-    /// allowing other tasks to execute when the budget is exhausted.
-    pub struct CooperativeStream<T>
-    where
-        T: RecordBatchStream,
-    {
-        #[pin]
-        inner: T,
-    }
+/// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
+/// It consumes cooperative scheduling budget for each returned [`RecordBatch`](RecordBatch),
+/// allowing other tasks to execute when the budget is exhausted.
+pub struct CooperativeStream<T>
+where
+    T: RecordBatchStream + Unpin,
+{
+    inner: T,
+    #[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
+    budget: u8,
 }
 
 impl<T> CooperativeStream<T>
 where
-    T: RecordBatchStream,
+    T: RecordBatchStream + Unpin,
 {
     /// Creates a new `CooperativeStream` that wraps the provided stream.
     /// The resulting stream will cooperate with the Tokio scheduler by consuming a unit of
     /// scheduling budget when the wrapped `Stream` returns a record batch.
     pub fn new(inner: T) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            #[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
+            budget: 128,
+        }
     }
 }
 
 impl<T> Stream for CooperativeStream<T>
 where
-    T: RecordBatchStream,
+    T: RecordBatchStream + Unpin,
 {
     type Item = Result<RecordBatch>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // TODO replace with this implementation when possible
-        // See https://github.com/tokio-rs/tokio/issues/7403
-        // let coop = ready!(tokio::task::coop::poll_proceed(cx));
-        // let value = self.project().inner.poll_next(cx);
-        // if value.is_ready() {
-        //     coop.made_progress();
-        // }
-        // value
-
-        if !tokio::task::coop::has_budget_remaining() {
-            cx.waker().wake_by_ref();
-            return Poll::Pending;
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        #[cfg(all(feature = "tokio_coop", not(feature = "tokio_coop_fallback")))]
+        {
+            let coop = std::task::ready!(tokio::task::coop::poll_proceed(cx));
+            let value = self.inner.poll_next_unpin(cx);
+            if value.is_ready() {
+                coop.made_progress();
+            }
+            value
         }
 
-        let value = self.project().inner.poll_next(cx);
-        if value.is_ready() {
-            // This is a temporary placeholder implementation
-            let consume = consume_budget();
-            let consume_ref = pin!(consume);
-            let _ = consume_ref.poll(cx);
+        #[cfg(feature = "tokio_coop_fallback")]
+        {
+            if !tokio::task::coop::has_budget_remaining() {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+
+            let value = self.inner.poll_next_unpin(cx);
+            if value.is_ready() {
+                // This is a temporary placeholder implementation
+                let consume = tokio::task::consume_budget();
+                let consume_ref = std::pin::pin!(consume);
+                let _ = consume_ref.poll(cx);
+            }
+            value
         }
-        value
+
+        #[cfg(not(any(feature = "tokio_coop", feature = "tokio_coop_fallback")))]
+        {
+            if self.budget == 0 {
+                self.budget = 128;
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+
+            let value = { self.inner.poll_next_unpin(cx) };
+
+            if value.is_ready() {
+                self.budget -= 1;
+            } else {
+                self.budget = 128;
+            }
+            value
+        }
     }
 }
 
 impl<T> RecordBatchStream for CooperativeStream<T>
 where
-    T: RecordBatchStream,
+    T: RecordBatchStream + Unpin,
 {
     fn schema(&self) -> Arc<Schema> {
         self.inner.schema()
@@ -222,7 +249,7 @@ impl ExecutionPlan for CooperativeExec {
 /// scheduling budget for each returned record batch.
 pub fn cooperative<T>(stream: T) -> CooperativeStream<T>
 where
-    T: RecordBatchStream + Send + 'static,
+    T: RecordBatchStream + Unpin + Send + 'static,
 {
     CooperativeStream::new(stream)
 }

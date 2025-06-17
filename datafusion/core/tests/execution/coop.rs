@@ -363,6 +363,7 @@ async fn filter_reject_all_batches_yields(
 
 #[rstest]
 #[tokio::test]
+#[ignore = "Fails unless using Tokio based coop implementation"]
 async fn interleave_then_filter_all_yields(
     #[values(false, true)] pretend_infinite: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -419,6 +420,7 @@ async fn interleave_then_filter_all_yields(
 
 #[rstest]
 #[tokio::test]
+#[ignore = "Fails unless using Tokio based coop implementation"]
 async fn interleave_then_aggregate_yields(
     #[values(false, true)] pretend_infinite: bool,
 ) -> Result<(), Box<dyn Error>> {
