@@ -989,9 +989,9 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>true</p></td>
 <td><p>If true, permit lengths for <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> such as <code class="docutils literal notranslate"><span class="pre">VARCHAR(20)</span></code>, but ignore the length. If false, error if a <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.map_varchar_to_utf8view</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.map_string_types_to_utf8view</p></td>
 <td><p>true</p></td>
-<td><p>If true, <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> is mapped to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> during SQL planning. If false, <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> is mapped to <code class="docutils literal notranslate"><span class="pre">Utf8</span></code> during SQL planning. Default is false.</p></td>
+<td><p>If true, string types (VARCHAR, CHAR, Text, and String) are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> during SQL planning. If false, they are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8</span></code>. Default is true.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.sql_parser.collect_spans</p></td>
 <td><p>false</p></td>
