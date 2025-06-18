@@ -440,3 +440,172 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
 
     Ok(())
 }
+
+/// Test GROUP BY with MAX aggregations on multiple data types
+/// Tests SQL like: SELECT u8_low, dictionary_utf8_low, utf8_low, max(utf8_low) as col1,
+/// max(utf8) as col2, max(binary) as col3, max(time64_ns) as col4 FROM fuzz_table GROUP BY ...
+#[tokio::test]
+async fn test_group_by_with_max_aggregations() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create test data mimicking the fuzz_table structure with the specific columns
+    let u8_low_values = UInt8Array::from(vec![1, 1, 2, 2, 3, 3]);
+    let dict_values = StringArray::from(vec!["a", "b", "c"]);
+    let dict_indices = UInt64Array::from(vec![0, 0, 1, 1, 2, 2]);
+    let dictionary_utf8_low = DictionaryArray::new(dict_indices, Arc::new(dict_values));
+    let utf8_low_values = StringArray::from(vec!["x", "y", "x", "z", "y", "x"]);
+    let utf8_values =
+        StringArray::from(vec!["hello", "world", "foo", "bar", "baz", "qux"]);
+    let binary_values = BinaryArray::from_iter_values(vec![
+        b"data1".as_slice(),
+        b"data2".as_slice(),
+        b"data3".as_slice(),
+        b"data4".as_slice(),
+        b"data5".as_slice(),
+        b"data6".as_slice(),
+    ]);
+    let time64_ns_values = Time64NanosecondArray::from(vec![
+        1000000000, // 1 second in nanoseconds
+        2000000000, // 2 seconds
+        3000000000, // 3 seconds
+        4000000000, // 4 seconds
+        5000000000, // 5 seconds
+        6000000000, // 6 seconds
+    ]);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("u8_low", DataType::UInt8, false),
+        Field::new(
+            "dictionary_utf8_low",
+            DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new("utf8_low", DataType::Utf8, false),
+        Field::new("utf8", DataType::Utf8, false),
+        Field::new("binary", DataType::Binary, false),
+        Field::new("time64_ns", DataType::Time64(TimeUnit::Nanosecond), false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(u8_low_values),
+            Arc::new(dictionary_utf8_low),
+            Arc::new(utf8_low_values),
+            Arc::new(utf8_values),
+            Arc::new(binary_values),
+            Arc::new(time64_ns_values),
+        ],
+    )?;
+
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("fuzz_table", Arc::new(provider))?;
+
+    // Execute the test query
+    let sql = "SELECT
+        u8_low,
+        dictionary_utf8_low,
+        utf8_low,
+        max(utf8_low) as col1,
+        max(utf8) as col2,
+        max(binary) as col3,
+        max(time64_ns) as col4
+    FROM
+        fuzz_table
+    GROUP BY
+        u8_low,
+        dictionary_utf8_low,
+        utf8_low
+    ORDER BY
+        u8_low,
+        dictionary_utf8_low,
+        utf8_low";
+
+    let df = ctx.sql(sql).await?;
+    let results = df.collect().await?;
+
+    // Verify the results contain the expected grouped and aggregated data
+    assert_eq!(results.len(), 1);
+    let batch = &results[0];
+
+    // Should have 6 rows (one for each unique combination of group by columns)
+    assert_eq!(batch.num_rows(), 6);
+
+    // Verify schema
+    let expected_schema = Schema::new(vec![
+        Field::new("u8_low", DataType::UInt8, false),
+        Field::new(
+            "dictionary_utf8_low",
+            DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new("utf8_low", DataType::Utf8, false),
+        Field::new("col1", DataType::Utf8, true), // max() can return null
+        Field::new("col2", DataType::Utf8, true),
+        Field::new("col3", DataType::Binary, true),
+        Field::new("col4", DataType::Time64(TimeUnit::Nanosecond), true),
+    ]);
+
+    assert_eq!(*batch.schema(), expected_schema);
+
+    // Print results for manual verification
+    println!("Results:");
+    println!("{}", batches_to_string(&results));
+
+    Ok(())
+}
+
+/// Test GROUP BY with MAX aggregations and nulls
+#[tokio::test]
+async fn test_group_by_max_with_nulls() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create test data with some null values
+    let u8_low_values = UInt8Array::from(vec![Some(1), Some(1), Some(2), None]);
+    let utf8_low_values = StringArray::from(vec![Some("x"), None, Some("y"), Some("x")]);
+    let utf8_values =
+        StringArray::from(vec![Some("hello"), Some("world"), None, Some("test")]);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("u8_low", DataType::UInt8, true),
+        Field::new("utf8_low", DataType::Utf8, true),
+        Field::new("utf8", DataType::Utf8, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(u8_low_values),
+            Arc::new(utf8_low_values),
+            Arc::new(utf8_values),
+        ],
+    )?;
+
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("fuzz_table", Arc::new(provider))?;
+
+    // Test MAX with nulls in both group by and aggregate columns
+    let sql = "SELECT
+        u8_low,
+        utf8_low,
+        max(utf8) as max_utf8
+    FROM
+        fuzz_table
+    GROUP BY
+        u8_low,
+        utf8_low
+    ORDER BY
+        u8_low,
+        utf8_low";
+
+    let df = ctx.sql(sql).await?;
+    let results = df.collect().await?;
+
+    // Verify that MAX properly handles nulls
+    assert!(!results.is_empty());
+
+    println!("Results with nulls:");
+    println!("{}", batches_to_string(&results));
+
+    Ok(())
+}
