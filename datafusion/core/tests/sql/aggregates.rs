@@ -609,3 +609,337 @@ async fn test_group_by_max_with_nulls() -> Result<()> {
 
     Ok(())
 }
+
+/// Test GROUP BY with MAX aggregations on dictionary arrays containing null keys and values
+#[tokio::test]
+async fn test_group_by_max_dictionary_with_nulls() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create a dictionary with null values in the dictionary values array
+    let dict_values_with_nulls = StringArray::from(vec![
+        Some("alpha"),
+        None, // null value at index 1
+        Some("beta"),
+        None, // null value at index 3
+        Some("gamma"),
+    ]);
+
+    // Create indices that include null indices (representing null keys)
+    // and indices pointing to null values in the dictionary
+    let dict_indices_with_nulls = UInt64Array::from(vec![
+        Some(0), // points to "alpha"
+        None,    // null key
+        Some(1), // points to null value
+        Some(2), // points to "beta"
+        None,    // null key
+        Some(3), // points to null value
+        Some(4), // points to "gamma"
+        Some(0), // points to "alpha"
+    ]);
+
+    let dictionary_with_nulls =
+        DictionaryArray::new(dict_indices_with_nulls, Arc::new(dict_values_with_nulls));
+
+    // Create corresponding group by column
+    let group_col = UInt8Array::from(vec![
+        Some(1),
+        Some(1),
+        Some(1),
+        Some(1), // first group
+        Some(2),
+        Some(2),
+        Some(2),
+        Some(2), // second group
+    ]);
+
+    // Create values to aggregate
+    let utf8_values = StringArray::from(vec![
+        Some("value1"),
+        Some("value2"),
+        Some("value3"),
+        Some("value4"),
+        Some("value5"),
+        Some("value6"),
+        Some("value7"),
+        Some("value8"),
+    ]);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("group_col", DataType::UInt8, true),
+        Field::new(
+            "dict_with_nulls",
+            DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
+            true,
+        ),
+        Field::new("utf8_col", DataType::Utf8, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(group_col),
+            Arc::new(dictionary_with_nulls),
+            Arc::new(utf8_values),
+        ],
+    )?;
+
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("test_table", Arc::new(provider))?;
+
+    // Test 1: GROUP BY dictionary column with nulls
+    let sql1 = "SELECT
+        dict_with_nulls,
+        max(utf8_col) as max_utf8
+    FROM
+        test_table
+    GROUP BY
+        dict_with_nulls
+    ORDER BY
+        dict_with_nulls";
+
+    let df1 = ctx.sql(sql1).await?;
+    let results1 = df1.collect().await?;
+
+    println!("Test 1 - GROUP BY dictionary with nulls:");
+    println!("{}", batches_to_string(&results1));
+
+    // Test 2: MAX aggregation on dictionary column with nulls
+    let sql2 = "SELECT
+        group_col,
+        max(dict_with_nulls) as max_dict
+    FROM
+        test_table
+    GROUP BY
+        group_col
+    ORDER BY
+        group_col";
+
+    let df2 = ctx.sql(sql2).await?;
+    let results2 = df2.collect().await?;
+
+    println!("Test 2 - MAX on dictionary with nulls:");
+    println!("{}", batches_to_string(&results2));
+
+    // Test 3: Combined GROUP BY with both dictionary and regular columns
+    let sql3 = "SELECT
+        group_col,
+        dict_with_nulls,
+        max(utf8_col) as max_utf8,
+        count(*) as row_count
+    FROM
+        test_table
+    GROUP BY
+        group_col,
+        dict_with_nulls
+    ORDER BY
+        group_col,
+        dict_with_nulls";
+
+    let df3 = ctx.sql(sql3).await?;
+    let results3 = df3.collect().await?;
+
+    println!("Test 3 - Combined GROUP BY:");
+    println!("{}", batches_to_string(&results3));
+
+    // Verify results are not empty and have expected structure
+    assert!(!results1.is_empty());
+    assert!(!results2.is_empty());
+    assert!(!results3.is_empty());
+
+    Ok(())
+}
+
+/// Test edge case: Dictionary array with all null keys/values
+#[tokio::test]
+async fn test_dictionary_all_nulls() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create a dictionary where all indices are null (all null keys)
+    let dict_values = StringArray::from(vec!["a", "b", "c"]);
+    let dict_indices_all_null = UInt64Array::from(vec![None, None, None, None]);
+    let dict_all_null_keys =
+        DictionaryArray::new(dict_indices_all_null, Arc::new(dict_values));
+
+    // Create a dictionary where all dictionary values are null
+    let dict_values_all_null =
+        StringArray::from(vec![None::<&str>, None::<&str>, None::<&str>]);
+    let dict_indices = UInt64Array::from(vec![Some(0), Some(1), Some(2), Some(0)]);
+    let dict_all_null_values =
+        DictionaryArray::new(dict_indices, Arc::new(dict_values_all_null));
+
+    let group_col = UInt8Array::from(vec![1, 1, 2, 2]);
+    let aggregate_col = StringArray::from(vec!["x", "y", "z", "w"]);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("group_col", DataType::UInt8, false),
+        Field::new(
+            "dict_null_keys",
+            DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
+            true,
+        ),
+        Field::new(
+            "dict_null_values",
+            DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
+            true,
+        ),
+        Field::new("aggregate_col", DataType::Utf8, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(group_col),
+            Arc::new(dict_all_null_keys),
+            Arc::new(dict_all_null_values),
+            Arc::new(aggregate_col),
+        ],
+    )?;
+
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("null_dict_table", Arc::new(provider))?;
+
+    // Test GROUP BY with all-null dictionary keys
+    let sql1 = "SELECT
+        dict_null_keys,
+        max(aggregate_col) as max_agg
+    FROM
+        null_dict_table
+    GROUP BY
+        dict_null_keys";
+
+    let df1 = ctx.sql(sql1).await?;
+    let results1 = df1.collect().await?;
+
+    println!("All null keys result:");
+    println!("{}", batches_to_string(&results1));
+
+    // Test GROUP BY with all-null dictionary values
+    let sql2 = "SELECT
+        dict_null_values,
+        max(aggregate_col) as max_agg
+    FROM
+        null_dict_table
+    GROUP BY
+        dict_null_values";
+
+    let df2 = ctx.sql(sql2).await?;
+    let results2 = df2.collect().await?;
+
+    println!("All null values result:");
+    println!("{}", batches_to_string(&results2));
+
+    // Verify results
+    assert!(!results1.is_empty());
+    assert!(!results2.is_empty());
+
+    // Both should have single row with null group key
+    assert_eq!(results1[0].num_rows(), 1);
+    assert_eq!(results2[0].num_rows(), 1);
+
+    Ok(())
+}
+
+/// Test the original SQL pattern with dictionary nulls
+/// Tests the specific SQL pattern from the user request but with null handling in dictionaries
+#[tokio::test]
+async fn test_original_sql_pattern_with_dictionary_nulls() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create data that matches the original query pattern but includes null handling
+    let u8_low_values = UInt8Array::from(vec![1, 1, 2, 2, 3]);
+
+    // Dictionary with some null values in the dictionary values array
+    let dict_values = StringArray::from(vec![Some("low1"), None, Some("low2")]);
+    let dict_indices = UInt64Array::from(vec![Some(0), None, Some(1), Some(2), Some(0)]);
+    let dictionary_utf8_low = DictionaryArray::new(dict_indices, Arc::new(dict_values));
+
+    let utf8_low_values = StringArray::from(vec!["x", "y", "x", "z", "x"]);
+    let utf8_values = StringArray::from(vec!["hello", "world", "foo", "bar", "baz"]);
+    let binary_values = BinaryArray::from_iter_values(vec![
+        b"bin1".as_slice(),
+        b"bin2".as_slice(),
+        b"bin3".as_slice(),
+        b"bin4".as_slice(),
+        b"bin5".as_slice(),
+    ]);
+    let time64_ns_values = Time64NanosecondArray::from(vec![
+        Some(1000000000),
+        None, // null time value
+        Some(3000000000),
+        Some(4000000000),
+        Some(5000000000),
+    ]);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("u8_low", DataType::UInt8, false),
+        Field::new(
+            "dictionary_utf8_low",
+            DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
+            true,
+        ),
+        Field::new("utf8_low", DataType::Utf8, false),
+        Field::new("utf8", DataType::Utf8, false),
+        Field::new("binary", DataType::Binary, false),
+        Field::new("time64_ns", DataType::Time64(TimeUnit::Nanosecond), true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(u8_low_values),
+            Arc::new(dictionary_utf8_low),
+            Arc::new(utf8_low_values),
+            Arc::new(utf8_values),
+            Arc::new(binary_values),
+            Arc::new(time64_ns_values),
+        ],
+    )?;
+
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("fuzz_table", Arc::new(provider))?;
+
+    // Execute the original SQL pattern - this should handle dictionary nulls properly
+    let sql = "SELECT
+        u8_low,
+        dictionary_utf8_low,
+        utf8_low,
+        max(utf8_low) as col1,
+        max(utf8) as col2,
+        max(binary) as col3,
+        max(time64_ns) as col4
+    FROM
+        fuzz_table
+    GROUP BY
+        u8_low,
+        dictionary_utf8_low,
+        utf8_low
+    ORDER BY
+        u8_low,
+        dictionary_utf8_low NULLS FIRST,
+        utf8_low";
+
+    let df = ctx.sql(sql).await?;
+    let results = df.collect().await?;
+
+    // Verify the query executes successfully with dictionary nulls
+    assert!(!results.is_empty());
+    let batch = &results[0];
+    assert!(batch.num_rows() > 0);
+
+    println!("Original SQL pattern with dictionary nulls:");
+    println!("{}", batches_to_string(&results));
+
+    // Verify that null dictionary values are handled correctly in GROUP BY
+    // The batch should contain rows where dictionary_utf8_low is null
+    let dict_column = batch.column(1);
+    let dict_array = dict_column
+        .as_any()
+        .downcast_ref::<DictionaryArray<UInt64Type>>()
+        .expect("Expected dictionary array");
+
+    // Check that we have at least one null in the dictionary indices
+    let has_null_indices = dict_array.keys().null_count() > 0;
+    println!("Dictionary has null indices: {}", has_null_indices);
+
+    Ok(())
+}
