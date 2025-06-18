@@ -433,6 +433,86 @@ async fn test_topk_dynamic_filter_pushdown() {
     );
 }
 
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown() {
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+    use datafusion_common::JoinType;
+    
+    // Create build side with limited values
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+    ];
+    let build_scan = TestScanBuilder::new(schema())
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+    
+    // Create probe side with more values
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let probe_scan = TestScanBuilder::new(schema())
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+    
+    // Create HashJoinExec with dynamic filter
+    let on = vec![(col("a", &schema()).unwrap(), col("a", &schema()).unwrap())];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap()
+        .with_dynamic_filter()
+    ) as Arc<dyn ExecutionPlan>;
+
+    // expect the predicate to be pushed down into the probe side DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true)
+    );
+
+    // Actually apply the optimization to the plan and execute to see the filter in action
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let config = SessionConfig::new().with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    // Execute to completion
+    while let Some(_) = stream.next().await {}
+    
+    // Now check what our filter looks like
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan))
+    );
+}
+
 /// Integration test for dynamic filter pushdown with TopK.
 /// We use an integration test because there are complex interactions in the optimizer rules
 /// that the unit tests applying a single optimizer rule do not cover.
