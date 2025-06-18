@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::regexpcount::compile_and_cache_regex;
-
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
@@ -34,16 +32,18 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::regex::compile_and_cache_regex;
+
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
     description = "Returns the position in a string where the specified occurrence of a POSIX regular expression is located.",
     syntax_example = "regexp_instr(str, regexp[, start[, N[, flags]]])",
     sql_example = r#"```sql
-> SELECT regexp_instr('ABCDEF', 'c(.)(..)');
+> SELECT regexp_instr('ABCDEF', 'C(.)(..)');
 +---------------------------------------------------------------+
-| regexp_instr(Utf8("ABCDEF"),Utf8("c(.)(..)"))                 |
+| regexp_instr(Utf8("ABCDEF"),Utf8("C(.)(..)"))                 |
 +---------------------------------------------------------------+
-| 2                                                             |
+| 3                                                             |
 +---------------------------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
