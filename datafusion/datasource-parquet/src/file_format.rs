@@ -350,8 +350,7 @@ impl FileFormat for ParquetFormat {
             Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
             None => None,
         };
-        let config_file_decryption_properties =
-            &self.options.global.file_decryption_properties;
+        let config_file_decryption_properties = &self.options.crypto.file_decryption;
         let file_decryption_properties: Option<FileDecryptionProperties> =
             match config_file_decryption_properties {
                 Some(cfd) => {
@@ -416,8 +415,7 @@ impl FileFormat for ParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
-        let config_file_decryption_properties =
-            &self.options.global.file_decryption_properties;
+        let config_file_decryption_properties = &self.options.crypto.file_decryption;
         let file_decryption_properties: Option<FileDecryptionProperties> =
             match config_file_decryption_properties {
                 Some(cfd) => {
@@ -1307,7 +1305,7 @@ impl FileSink for ParquetSink {
         let mut allow_single_file_parallelism =
             parquet_opts.global.allow_single_file_parallelism;
 
-        if parquet_opts.global.file_encryption_properties.is_some() {
+        if parquet_opts.crypto.file_encryption.is_some() {
             // For now, arrow-rs does not support parallel writes with encryption
             // See https://github.com/apache/arrow-rs/issues/7359
             allow_single_file_parallelism = false;

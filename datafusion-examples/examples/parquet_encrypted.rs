@@ -16,13 +16,12 @@
 // under the License.
 
 use datafusion::common::DataFusionError;
-use datafusion::config::{ConfigFileDecryptionProperties, TableParquetOptions};
+use datafusion::config::TableParquetOptions;
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
-use datafusion::execution::SessionStateBuilder;
 use datafusion::logical_expr::{col, lit};
 use datafusion::parquet::encryption::decrypt::FileDecryptionProperties;
 use datafusion::parquet::encryption::encrypt::FileEncryptionProperties;
-use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use tempfile::TempDir;
 
 #[tokio::main]
@@ -56,7 +55,7 @@ async fn main() -> datafusion::common::Result<()> {
 
     // Write encrypted parquet
     let mut options = TableParquetOptions::default();
-    options.global.file_encryption_properties = Some((&encrypt).into());
+    options.crypto.file_encryption = Some((&encrypt).into());
     parquet_df
         .write_parquet(
             tempfile_str.as_str(),
@@ -66,19 +65,10 @@ async fn main() -> datafusion::common::Result<()> {
         .await?;
 
     // Read encrypted parquet
-    let mut sc = SessionConfig::new();
-    let fd: ConfigFileDecryptionProperties = (&decrypt).into();
-    sc.options_mut()
-        .execution
-        .parquet
-        .file_decryption_properties = Some(fd);
+    let ctx: SessionContext = SessionContext::new();
+    let read_options = ParquetReadOptions::default().file_decryption_properties(decrypt);
 
-    let state = SessionStateBuilder::new().with_config(sc).build();
-    let ctx: SessionContext = SessionContext::new_with_state(state);
-
-    let encrypted_parquet_df = ctx
-        .read_parquet(tempfile_str, ParquetReadOptions::default())
-        .await?;
+    let encrypted_parquet_df = ctx.read_parquet(tempfile_str, read_options).await?;
 
     // Show information from the dataframe
     println!("\n\n===============================================================================");

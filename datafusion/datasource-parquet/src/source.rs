@@ -477,8 +477,8 @@ impl FileSource for ParquetSource {
 
         let file_decryption_properties = self
             .table_parquet_options()
-            .global
-            .file_decryption_properties
+            .crypto
+            .file_decryption
             .as_ref()
             .map(|props| Arc::new(props.clone().into()));
 
