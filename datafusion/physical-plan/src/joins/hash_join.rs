@@ -3503,7 +3503,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::RightMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -3547,7 +3547,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::RightMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
