@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr::{JoinKind, LogicalPlan};
@@ -22,6 +24,7 @@ use indexmap::IndexMap;
 
 type ID = usize;
 
+#[derive(Clone)]
 pub struct Node {
     pub plan: LogicalPlan,
     pub id: ID,
@@ -39,10 +42,14 @@ impl Node {
     }
 }
 
+#[derive(Clone)]
 pub struct JoinWithDelimScan {
     // Join node under DelimCandidate.
     pub node: Node,
     pub depth: usize,
+    pub can_be_eliminated: bool,
+    pub is_filter_generated: bool,
+    pub replacement_plan: Option<Arc<LogicalPlan>>,
 }
 
 impl JoinWithDelimScan {
@@ -50,6 +57,9 @@ impl JoinWithDelimScan {
         Self {
             node: Node::new(plan, id, sub_plan_size),
             depth,
+            can_be_eliminated: false,
+            is_filter_generated: false,
+            replacement_plan: None,
         }
     }
 }

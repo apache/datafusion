@@ -17,7 +17,9 @@
 
 use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::delim_candidate_rewriter::DelimCandidateRewriter;
-use crate::delim_candidates_collector::{DelimCandidateVisitor, NodeVisitor};
+use crate::delim_candidates_collector::{
+    DelimCandidateVisitor, JoinWithDelimScan, NodeVisitor,
+};
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -27,6 +29,7 @@ use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
     Expr, Filter, Join, JoinKind, JoinType, LogicalPlan, Operator, Projection,
 };
+use indexmap::IndexMap;
 
 /// The Deliminator optimizer traverses the logical operator tree and removes any
 /// redundant DelimScan/DelimJoins.
@@ -121,11 +124,11 @@ impl OptimizerRule for Deliminator {
 
                 let mut all_equality_conditions = true;
                 let mut is_transformed = false;
-                for join in &candidate.joins {
+                for join in &mut candidate.joins {
                     all_removed = remove_join_with_delim_scan(
                         delim_join,
                         candidate.delim_scan_count,
-                        &join.node.plan,
+                        join,
                         &mut all_equality_conditions,
                         &mut is_transformed,
                         &mut replacement_cols,
@@ -148,7 +151,14 @@ impl OptimizerRule for Deliminator {
         }
 
         // Replace all with candidate.
-        let mut rewriter = DelimCandidateRewriter::new(candidate_visitor.candidates);
+        let mut joins = IndexMap::new();
+        for candidate in candidate_visitor.candidates.values() {
+            for join in &candidate.joins {
+                joins.insert(join.node.id, join.clone());
+            }
+        }
+        let mut rewriter =
+            DelimCandidateRewriter::new(candidate_visitor.candidates, joins);
         let rewrite_result = rewrite_result.data.rewrite(&mut rewriter)?;
 
         // Replace all columns.
@@ -170,11 +180,12 @@ impl OptimizerRule for Deliminator {
 fn remove_join_with_delim_scan(
     delim_join: &mut Join,
     delim_scan_count: usize,
-    join_plan: &LogicalPlan,
+    join_with_delim_scan: &mut JoinWithDelimScan,
     all_equality_conditions: &mut bool,
     is_transformed: &mut bool,
     replacement_cols: &mut Vec<(Column, Column)>,
 ) -> Result<bool> {
+    let join_plan = &join_with_delim_scan.node.plan;
     if let LogicalPlan::Join(join) = join_plan {
         if !child_join_type_can_be_deliminated(join.join_type) {
             return Ok(false);
@@ -265,6 +276,24 @@ fn remove_join_with_delim_scan(
             }
 
             // All conditions passed, we can eliminate this join + DelimScan
+            join_with_delim_scan.can_be_eliminated = true;
+            let mut replacement_plan = if is_delim_side_left {
+                join.right.clone()
+            } else {
+                join.left.clone()
+            };
+            if !filter_expressions.is_empty() {
+                replacement_plan = LogicalPlan::Filter(Filter::try_new(
+                    conjunction(filter_expressions).ok_or_else(|| {
+                        DataFusionError::Plan("filter expressions must exist".to_string())
+                    })?,
+                    replacement_plan,
+                )?)
+                .into();
+                join_with_delim_scan.is_filter_generated = true;
+            }
+            join_with_delim_scan.replacement_plan = Some(replacement_plan);
+
             return Ok(true);
         }
 
