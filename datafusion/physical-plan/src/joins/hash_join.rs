@@ -71,7 +71,7 @@ use arrow::util::bit_util;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
-    JoinSide, JoinType, Result,
+    JoinSide, JoinType, NullEquality, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -354,11 +354,8 @@ pub struct HashJoinExec {
     pub projection: Option<Vec<usize>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    /// Null matching behavior: If `null_equals_null` is true, rows that have
-    /// `null`s in both left and right equijoin columns will be matched.
-    /// Otherwise, rows that have `null`s in the join columns will not be
-    /// matched and thus will not appear in the output.
-    pub null_equals_null: bool,
+    /// The equality null-handling behavior of the join algorithm.
+    pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
 }
@@ -377,7 +374,7 @@ impl HashJoinExec {
         join_type: &JoinType,
         projection: Option<Vec<usize>>,
         partition_mode: PartitionMode,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -420,7 +417,7 @@ impl HashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             projection,
             column_indices,
-            null_equals_null,
+            null_equality,
             cache,
         })
     }
@@ -461,9 +458,9 @@ impl HashJoinExec {
         &self.mode
     }
 
-    /// Get null_equals_null
-    pub fn null_equals_null(&self) -> bool {
-        self.null_equals_null
+    /// Get null_equality
+    pub fn null_equality(&self) -> NullEquality {
+        self.null_equality
     }
 
     /// Calculate order preservation flags for this hash join.
@@ -511,7 +508,7 @@ impl HashJoinExec {
             &self.join_type,
             projection,
             self.mode,
-            self.null_equals_null,
+            self.null_equality,
         )
     }
 
@@ -620,7 +617,7 @@ impl HashJoinExec {
                 self.join_type(),
             ),
             partition_mode,
-            self.null_equals_null(),
+            self.null_equality(),
         )?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
@@ -768,7 +765,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.join_type,
             self.projection.clone(),
             self.mode,
-            self.null_equals_null,
+            self.null_equality,
         )?))
     }
 
@@ -872,7 +869,7 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: column_indices_after_projection,
             random_state: self.random_state.clone(),
             join_metrics,
-            null_equals_null: self.null_equals_null,
+            null_equality: self.null_equality,
             state: HashJoinStreamState::WaitBuildSide,
             build_side: BuildSide::Initial(BuildSideInitialState { left_fut }),
             batch_size,
@@ -941,7 +938,7 @@ impl ExecutionPlan for HashJoinExec {
                 // Returned early if projection is not None
                 None,
                 *self.partition_mode(),
-                self.null_equals_null,
+                self.null_equality,
             )?)))
         } else {
             try_embed_projection(projection, self)
@@ -1240,8 +1237,8 @@ struct HashJoinStream {
     join_metrics: BuildProbeJoinMetrics,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    /// If null_equals_null is true, null == null else null != null
-    null_equals_null: bool,
+    /// Defines the null equality for the join.
+    null_equality: NullEquality,
     /// State of the stream
     state: HashJoinStreamState,
     /// Build side
@@ -1313,7 +1310,7 @@ fn lookup_join_hashmap(
     build_hashmap: &dyn JoinHashMapType,
     build_side_values: &[ArrayRef],
     probe_side_values: &[ArrayRef],
-    null_equals_null: bool,
+    null_equality: NullEquality,
     hashes_buffer: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
@@ -1329,7 +1326,7 @@ fn lookup_join_hashmap(
         &probe_indices,
         build_side_values,
         probe_side_values,
-        null_equals_null,
+        null_equality,
     )?;
 
     Ok((build_indices, probe_indices, next_offset))
@@ -1339,22 +1336,21 @@ fn lookup_join_hashmap(
 fn eq_dyn_null(
     left: &dyn Array,
     right: &dyn Array,
-    null_equals_null: bool,
+    null_equality: NullEquality,
 ) -> Result<BooleanArray, ArrowError> {
     // Nested datatypes cannot use the underlying not_distinct/eq function and must use a special
     // implementation
     // <https://github.com/apache/datafusion/issues/10749>
     if left.data_type().is_nested() {
-        let op = if null_equals_null {
-            Operator::IsNotDistinctFrom
-        } else {
-            Operator::Eq
+        let op = match null_equality {
+            NullEquality::NullEqualsNothing => Operator::Eq,
+            NullEquality::NullEqualsNull => Operator::IsNotDistinctFrom,
         };
         return Ok(compare_op_for_nested(op, &left, &right)?);
     }
-    match (left.data_type(), right.data_type()) {
-        _ if null_equals_null => not_distinct(&left, &right),
-        _ => eq(&left, &right),
+    match null_equality {
+        NullEquality::NullEqualsNothing => eq(&left, &right),
+        NullEquality::NullEqualsNull => not_distinct(&left, &right),
     }
 }
 
@@ -1363,7 +1359,7 @@ pub fn equal_rows_arr(
     indices_right: &UInt32Array,
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
-    null_equals_null: bool,
+    null_equality: NullEquality,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let mut iter = left_arrays.iter().zip(right_arrays.iter());
 
@@ -1376,7 +1372,7 @@ pub fn equal_rows_arr(
     let arr_left = take(first_left.as_ref(), indices_left, None)?;
     let arr_right = take(first_right.as_ref(), indices_right, None)?;
 
-    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
+    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
 
     // Use map and try_fold to iterate over the remaining pairs of arrays.
     // In each iteration, take is used on the pair of arrays and their equality is determined.
@@ -1385,7 +1381,7 @@ pub fn equal_rows_arr(
         .map(|(left, right)| {
             let arr_left = take(left.as_ref(), indices_left, None)?;
             let arr_right = take(right.as_ref(), indices_right, None)?;
-            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)
+            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equality)
         })
         .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
 
@@ -1505,7 +1501,7 @@ impl HashJoinStream {
             build_side.left_data.hash_map(),
             build_side.left_data.values(),
             &state.values,
-            self.null_equals_null,
+            self.null_equality,
             &self.hashes_buffer,
             self.batch_size,
             state.offset,
@@ -1735,7 +1731,7 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<HashJoinExec> {
         HashJoinExec::try_new(
             left,
@@ -1745,7 +1741,7 @@ mod tests {
             join_type,
             None,
             PartitionMode::CollectLeft,
-            null_equals_null,
+            null_equality,
         )
     }
 
@@ -1755,7 +1751,7 @@ mod tests {
         on: JoinOn,
         filter: JoinFilter,
         join_type: &JoinType,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<HashJoinExec> {
         HashJoinExec::try_new(
             left,
@@ -1765,7 +1761,7 @@ mod tests {
             join_type,
             None,
             PartitionMode::CollectLeft,
-            null_equals_null,
+            null_equality,
         )
     }
 
@@ -1774,10 +1770,10 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        null_equals_null: bool,
+        null_equality: NullEquality,
         context: Arc<TaskContext>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
-        let join = join(left, right, on, join_type, null_equals_null)?;
+        let join = join(left, right, on, join_type, null_equality)?;
         let columns_header = columns(&join.schema());
 
         let stream = join.execute(0, context)?;
@@ -1791,7 +1787,7 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: &JoinType,
-        null_equals_null: bool,
+        null_equality: NullEquality,
         context: Arc<TaskContext>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         join_collect_with_partition_mode(
@@ -1800,7 +1796,7 @@ mod tests {
             on,
             join_type,
             PartitionMode::Partitioned,
-            null_equals_null,
+            null_equality,
             context,
         )
         .await
@@ -1812,7 +1808,7 @@ mod tests {
         on: JoinOn,
         join_type: &JoinType,
         partition_mode: PartitionMode,
-        null_equals_null: bool,
+        null_equality: NullEquality,
         context: Arc<TaskContext>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let partition_count = 4;
@@ -1862,7 +1858,7 @@ mod tests {
             join_type,
             None,
             partition_mode,
-            null_equals_null,
+            null_equality,
         )?;
 
         let columns = columns(&join.schema());
@@ -1907,7 +1903,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::Inner,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -1954,7 +1950,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::Inner,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -1994,8 +1990,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -2033,8 +2036,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -2080,8 +2090,15 @@ mod tests {
             ),
         ];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
@@ -2151,8 +2168,15 @@ mod tests {
             ),
         ];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
@@ -2217,8 +2241,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -2267,7 +2298,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Inner, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
@@ -2360,7 +2397,14 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Left, false).unwrap();
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Left,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
@@ -2403,7 +2447,14 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Full, false).unwrap();
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Full,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
@@ -2444,7 +2495,14 @@ mod tests {
         )];
         let schema = right.schema();
         let right = TestMemoryExec::try_new_exec(&[vec![right]], schema, None).unwrap();
-        let join = join(left, right, on, &JoinType::Left, false).unwrap();
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Left,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
@@ -2481,7 +2539,14 @@ mod tests {
         )];
         let schema = right.schema();
         let right = TestMemoryExec::try_new_exec(&[vec![right]], schema, None).unwrap();
-        let join = join(left, right, on, &JoinType::Full, false).unwrap();
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Full,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
@@ -2526,7 +2591,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::Left,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -2571,7 +2636,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::Left,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -2624,7 +2689,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::LeftSemi, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::LeftSemi,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
@@ -2686,7 +2757,7 @@ mod tests {
             on.clone(),
             filter,
             &JoinType::LeftSemi,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let columns_header = columns(&join.schema());
@@ -2719,7 +2790,14 @@ mod tests {
             Arc::new(intermediate_schema),
         );
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::LeftSemi, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::LeftSemi,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
@@ -2753,7 +2831,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::RightSemi, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
@@ -2815,7 +2899,7 @@ mod tests {
             on.clone(),
             filter,
             &JoinType::RightSemi,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let columns = columns(&join.schema());
@@ -2850,8 +2934,14 @@ mod tests {
             Arc::new(intermediate_schema.clone()),
         );
 
-        let join =
-            join_with_filter(left, right, on, filter, &JoinType::RightSemi, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNothing,
+        )?;
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
@@ -2882,7 +2972,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::LeftAnti, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::LeftAnti,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
@@ -2941,7 +3037,7 @@ mod tests {
             on.clone(),
             filter,
             &JoinType::LeftAnti,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let columns_header = columns(&join.schema());
@@ -2978,7 +3074,14 @@ mod tests {
             Arc::new(intermediate_schema),
         );
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::LeftAnti, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::LeftAnti,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
@@ -3015,7 +3118,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::RightAnti, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
@@ -3075,7 +3184,7 @@ mod tests {
             on.clone(),
             filter,
             &JoinType::RightAnti,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         let columns_header = columns(&join.schema());
@@ -3116,8 +3225,14 @@ mod tests {
             Arc::new(intermediate_schema),
         );
 
-        let join =
-            join_with_filter(left, right, on, filter, &JoinType::RightAnti, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a2", "b2", "c2"]);
@@ -3161,8 +3276,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Right, false, task_ctx).await?;
+        let (columns, batches) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Right,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -3200,9 +3322,15 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            partitioned_join_collect(left, right, on, &JoinType::Right, false, task_ctx)
-                .await?;
+        let (columns, batches) = partitioned_join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Right,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -3240,7 +3368,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Full, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Full,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
@@ -3288,7 +3422,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::LeftMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -3333,7 +3467,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::LeftMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -3497,7 +3631,7 @@ mod tests {
             &join_hash_map,
             &[left_keys_values],
             &[right_keys_values],
-            false,
+            NullEquality::NullEqualsNothing,
             &hashes_buffer,
             8192,
             (0, None),
@@ -3597,7 +3731,13 @@ mod tests {
             Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Inner, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3667,7 +3807,14 @@ mod tests {
         )];
         let filter = prepare_join_filter();
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::Inner, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3709,7 +3856,14 @@ mod tests {
         )];
         let filter = prepare_join_filter();
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::Left, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::Left,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3754,7 +3908,14 @@ mod tests {
         )];
         let filter = prepare_join_filter();
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::Right, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::Right,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3798,7 +3959,14 @@ mod tests {
         )];
         let filter = prepare_join_filter();
 
-        let join = join_with_filter(left, right, on, filter, &JoinType::Full, false)?;
+        let join = join_with_filter(
+            left,
+            right,
+            on,
+            filter,
+            &JoinType::Full,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
@@ -3965,7 +4133,7 @@ mod tests {
                 on.clone(),
                 &join_type,
                 PartitionMode::CollectLeft,
-                false,
+                NullEquality::NullEqualsNothing,
                 Arc::clone(&task_ctx),
             )
             .await?;
@@ -3997,7 +4165,13 @@ mod tests {
             Arc::new(Column::new_with_schema("date", &right.schema()).unwrap()) as _,
         )];
 
-        let join = join(left, right, on, &JoinType::Inner, false)?;
+        let join = join(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let task_ctx = Arc::new(TaskContext::default());
         let stream = join.execute(0, task_ctx)?;
@@ -4056,7 +4230,7 @@ mod tests {
                 Arc::clone(&right_input) as Arc<dyn ExecutionPlan>,
                 on.clone(),
                 &join_type,
-                false,
+                NullEquality::NullEqualsNothing,
             )
             .unwrap();
             let task_ctx = Arc::new(TaskContext::default());
@@ -4170,7 +4344,7 @@ mod tests {
                     Arc::clone(&right),
                     on.clone(),
                     &join_type,
-                    false,
+                    NullEquality::NullEqualsNothing,
                 )
                 .unwrap();
 
@@ -4250,7 +4424,7 @@ mod tests {
                 Arc::clone(&right),
                 on.clone(),
                 &join_type,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let stream = join.execute(0, task_ctx)?;
@@ -4331,7 +4505,7 @@ mod tests {
                 &join_type,
                 None,
                 PartitionMode::Partitioned,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let stream = join.execute(1, task_ctx)?;
@@ -4391,8 +4565,15 @@ mod tests {
             Arc::new(Column::new_with_schema("n2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (columns, batches) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         assert_eq!(columns, vec!["n1", "n2"]);
 
@@ -4428,7 +4609,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::Inner,
-            true,
+            NullEquality::NullEqualsNull,
             Arc::clone(&task_ctx),
         )
         .await?;
@@ -4443,8 +4624,15 @@ mod tests {
                 "#);
         }
 
-        let (_, batches_null_neq) =
-            join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
+        let (_, batches_null_neq) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         let expected_null_neq =
             ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
