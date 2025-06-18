@@ -1507,6 +1507,7 @@ impl HashJoinStream {
                 right_indices,
                 filter,
                 JoinSide::Left,
+                None,
             )?
         } else {
             (left_indices, right_indices)
