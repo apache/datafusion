@@ -40,6 +40,7 @@ use crate::projection::{
 };
 use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
+use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::{
     common::can_project,
     handle_state,
@@ -70,7 +71,7 @@ use arrow::util::bit_util;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
-    JoinSide, JoinType, NullEquality, Result,
+    JoinSide, JoinType, NullEquality, Result, ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -78,7 +79,8 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
@@ -357,6 +359,8 @@ pub struct HashJoinExec {
     pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Dynamic filter for pushing down to the probe side
+    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
 }
 
 impl HashJoinExec {
@@ -418,6 +422,7 @@ impl HashJoinExec {
             column_indices,
             null_equality,
             cache,
+            dynamic_filter: None,
         })
     }
 
@@ -509,6 +514,20 @@ impl HashJoinExec {
             self.mode,
             self.null_equality,
         )
+    }
+
+    /// Enable dynamic filter pushdown for this HashJoinExec
+    pub fn with_dynamic_filter(mut self) -> Self {
+        // Create a dynamic filter with the right-side join keys as children
+        let right_keys: Vec<_> = self.on.iter().map(|(_, r)| Arc::clone(r)).collect();
+        
+        // Initialize with a placeholder expression (true) that will be updated
+        // when the hash table is built
+        self.dynamic_filter = Some(Arc::new(DynamicFilterPhysicalExpr::new(
+            right_keys,
+            lit(true),
+        )));
+        self
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -666,10 +685,23 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
+                let dynamic_filter_display = if let Some(filter) = &self.dynamic_filter {
+                    if let Ok(current) = filter.current() {
+                        if !current.eq(&lit(true)) {
+                            format!(", filter=[{}]", current)
+                        } else {
+                            "".to_string()
+                        }
+                    } else {
+                        "".to_string()
+                    }
+                } else {
+                    "".to_string()
+                };
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
-                    self.mode, self.join_type, on, display_filter, display_projections
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
+                    self.mode, self.join_type, on, display_filter, display_projections, dynamic_filter_display
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -756,7 +788,7 @@ impl ExecutionPlan for HashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(HashJoinExec::try_new(
+        let mut new_join = HashJoinExec::try_new(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
             self.on.clone(),
@@ -765,7 +797,10 @@ impl ExecutionPlan for HashJoinExec {
             self.projection.clone(),
             self.mode,
             self.null_equality,
-        )?))
+        )?;
+        // Preserve the dynamic filter if it exists
+        new_join.dynamic_filter = self.dynamic_filter.clone();
+        Ok(Arc::new(new_join))
     }
 
     fn execute(
@@ -817,6 +852,8 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
+                    self.dynamic_filter.clone(),
+                    on_right.clone(),
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -834,6 +871,8 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
+                    self.dynamic_filter.clone(),
+                    on_right.clone(),
                 ))
             }
             PartitionMode::Auto => {
@@ -943,6 +982,65 @@ impl ExecutionPlan for HashJoinExec {
             try_embed_projection(projection, self)
         }
     }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &datafusion_common::config::ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // Don't allow parent filters to be pushed down for now
+        // Only add our dynamic filter during the Post phase
+        if !matches!(phase, FilterPushdownPhase::Post) {
+            return Ok(FilterDescription::new_with_child_count(2)
+                .all_parent_filters_unsupported(parent_filters));
+        }
+
+        // Only push down dynamic filters if enabled and we have one
+        if let Some(filter) = &self.dynamic_filter {
+            if config.optimizer.enable_dynamic_filter_pushdown {
+                let filter = Arc::clone(filter) as Arc<dyn PhysicalExpr>;
+                // Push the dynamic filter to the right side (probe side) only
+                // Left side (build side) gets empty vec, right side gets the filter
+                let filters_for_children = vec![vec![], vec![filter]];
+                return Ok(FilterDescription::new_with_child_count(2)
+                    .all_parent_filters_unsupported(parent_filters)
+                    .with_self_filters_for_children(filters_for_children));
+            }
+        }
+
+        Ok(FilterDescription::new_with_child_count(2)
+            .all_parent_filters_unsupported(parent_filters))
+    }
+}
+
+/// Compute min/max bounds for each column in the given arrays
+fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<(ScalarValue, ScalarValue)>> {
+    arrays.iter()
+        .map(|array| {
+            if array.is_empty() {
+                // Return NULL values for empty arrays
+                return Ok((ScalarValue::try_from(array.data_type())?, 
+                         ScalarValue::try_from(array.data_type())?));
+            }
+            
+            // Compute min/max using ScalarValue's utilities
+            let mut min_val = ScalarValue::try_from_array(array, 0)?;
+            let mut max_val = min_val.clone();
+            
+            for i in 1..array.len() {
+                let val = ScalarValue::try_from_array(array, i)?;
+                if val < min_val {
+                    min_val = val.clone();
+                }
+                if val > max_val {
+                    max_val = val;
+                }
+            }
+            
+            Ok((min_val, max_val))
+        })
+        .collect()
 }
 
 /// Reads the left (build) side of the input, buffering it in memory, to build a
@@ -955,6 +1053,8 @@ async fn collect_left_input(
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
+    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    on_right: Vec<PhysicalExprRef>,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1036,11 +1136,52 @@ async fn collect_left_input(
     let data = JoinLeftData::new(
         hashmap,
         single_batch,
-        left_values,
+        left_values.clone(),
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
         reservation,
     );
+    
+    // Update dynamic filter with min/max bounds if provided
+    if let Some(filter) = dynamic_filter {
+        if num_rows > 0 {
+            let bounds = compute_bounds(&left_values)?;
+            
+            // Create range predicates for each join key
+            let mut predicates = Vec::with_capacity(bounds.len());
+            for ((min_val, max_val), right_expr) in bounds.iter().zip(on_right.iter()) {
+                // Create predicate: col >= min AND col <= max
+                let min_expr = Arc::new(BinaryExpr::new(
+                    Arc::clone(right_expr),
+                    Operator::GtEq,
+                    lit(min_val.clone()),
+                )) as Arc<dyn PhysicalExpr>;
+                
+                let max_expr = Arc::new(BinaryExpr::new(
+                    Arc::clone(right_expr),
+                    Operator::LtEq,
+                    lit(max_val.clone()),
+                )) as Arc<dyn PhysicalExpr>;
+                
+                let range_expr = Arc::new(BinaryExpr::new(
+                    min_expr,
+                    Operator::And,
+                    max_expr,
+                )) as Arc<dyn PhysicalExpr>;
+                
+                predicates.push(range_expr);
+            }
+            
+            // Combine all predicates with AND
+            let combined_predicate = predicates.into_iter()
+                .reduce(|acc, pred| {
+                    Arc::new(BinaryExpr::new(acc, Operator::And, pred)) as Arc<dyn PhysicalExpr>
+                })
+                .unwrap_or_else(|| lit(true));
+            
+            filter.update(combined_predicate)?;
+        }
+    }
 
     Ok(data)
 }
