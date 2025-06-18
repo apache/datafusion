@@ -539,17 +539,18 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     ),
                 )))
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                params:
-                    expr::WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    },
-            }) => {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params:
+                        expr::WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                        },
+                } = *window_fun;
                 let window_frame =
                     coerce_window_frame(window_frame, self.schema, &order_by)?;
 
@@ -565,7 +566,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 };
 
                 Ok(Transformed::yes(
-                    Expr::WindowFunction(WindowFunction::new(fun, args))
+                    Expr::from(WindowFunction::new(fun, args))
                         .partition_by(partition_by)
                         .order_by(order_by)
                         .window_frame(window_frame)
@@ -578,7 +579,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::Alias(_)
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::SimilarTo(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
@@ -719,6 +720,8 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
         || is_utf8_or_utf8view_or_large_utf8(col_type)
         || matches!(col_type, DataType::List(_))
+        || matches!(col_type, DataType::LargeList(_))
+        || matches!(col_type, DataType::FixedSizeList(_, _))
         || matches!(col_type, DataType::Null)
         || matches!(col_type, DataType::Boolean)
     {
@@ -811,7 +814,7 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
 
     let current_fields = expressions
         .iter()
-        .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
+        .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
     let new_types = fields_with_aggregate_udf(&current_fields, func)?
@@ -1620,8 +1623,8 @@ mod test {
             return_type,
             accumulator,
             vec![
-                Field::new("count", DataType::UInt64, true),
-                Field::new("avg", DataType::Float64, true),
+                Field::new("count", DataType::UInt64, true).into(),
+                Field::new("avg", DataType::Float64, true).into(),
             ],
         ));
         let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(

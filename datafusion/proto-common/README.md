@@ -24,5 +24,10 @@ bytes, which can be useful for sending data over the network.
 
 See [API Docs] for details and examples.
 
+Most projects should use the [`datafusion-proto`] crate directly, which re-exports
+this module. If you are already using the [`datafusion-protp`] crate, there is no
+reason to use this crate directly in your project as well.
+
+[`datafusion-proto`]: https://crates.io/crates/datafusion-proto
 [datafusion]: https://datafusion.apache.org
 [api docs]: http://docs.rs/datafusion-proto/latest

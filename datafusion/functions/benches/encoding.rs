@@ -35,17 +35,17 @@ fn criterion_benchmark(c: &mut Criterion) {
                 .invoke_with_args(ScalarFunctionArgs {
                     args: vec![ColumnarValue::Array(str_array.clone()), method.clone()],
                     arg_fields: vec![
-                        &Field::new("a", str_array.data_type().to_owned(), true),
-                        &Field::new("b", method.data_type().to_owned(), true),
+                        Field::new("a", str_array.data_type().to_owned(), true).into(),
+                        Field::new("b", method.data_type().to_owned(), true).into(),
                     ],
                     number_rows: size,
-                    return_field: &Field::new("f", DataType::Utf8, true),
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 })
                 .unwrap();
 
             let arg_fields = vec![
-                Field::new("a", encoded.data_type().to_owned(), true),
-                Field::new("b", method.data_type().to_owned(), true),
+                Field::new("a", encoded.data_type().to_owned(), true).into(),
+                Field::new("b", method.data_type().to_owned(), true).into(),
             ];
             let args = vec![encoded, method];
 
@@ -54,9 +54,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                     decode
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args.clone(),
-                            arg_fields: arg_fields.iter().collect(),
+                            arg_fields: arg_fields.clone(),
                             number_rows: size,
-                            return_field: &Field::new("f", DataType::Utf8, true),
+                            return_field: Field::new("f", DataType::Utf8, true).into(),
                         })
                         .unwrap(),
                 )
@@ -66,22 +66,23 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("hex_decode/{size}"), |b| {
             let method = ColumnarValue::Scalar("hex".into());
             let arg_fields = vec![
-                Field::new("a", str_array.data_type().to_owned(), true),
-                Field::new("b", method.data_type().to_owned(), true),
+                Field::new("a", str_array.data_type().to_owned(), true).into(),
+                Field::new("b", method.data_type().to_owned(), true).into(),
             ];
             let encoded = encoding::encode()
                 .invoke_with_args(ScalarFunctionArgs {
                     args: vec![ColumnarValue::Array(str_array.clone()), method.clone()],
-                    arg_fields: arg_fields.iter().collect(),
+                    arg_fields,
                     number_rows: size,
-                    return_field: &Field::new("f", DataType::Utf8, true),
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 })
                 .unwrap();
 
             let arg_fields = vec![
-                Field::new("a", encoded.data_type().to_owned(), true),
-                Field::new("b", method.data_type().to_owned(), true),
+                Field::new("a", encoded.data_type().to_owned(), true).into(),
+                Field::new("b", method.data_type().to_owned(), true).into(),
             ];
+            let return_field = Field::new("f", DataType::Utf8, true).into();
             let args = vec![encoded, method];
 
             b.iter(|| {
@@ -89,9 +90,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                     decode
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args.clone(),
-                            arg_fields: arg_fields.iter().collect(),
+                            arg_fields: arg_fields.clone(),
                             number_rows: size,
-                            return_field: &Field::new("f", DataType::Utf8, true),
+                            return_field: Arc::clone(&return_field),
                         })
                         .unwrap(),
                 )

@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::Result;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use std::sync::Arc;
 
 /// [`AccumulatorArgs`] contains information about how an aggregate
@@ -28,7 +28,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct AccumulatorArgs<'a> {
     /// The return field of the aggregate function.
-    pub return_field: &'a Field,
+    pub return_field: FieldRef,
 
     /// The schema of the input arguments
     pub schema: &'a Schema,
@@ -50,9 +50,7 @@ pub struct AccumulatorArgs<'a> {
     /// ```sql
     /// SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
     /// ```
-    ///
-    /// If no `ORDER BY` is specified, `ordering_req` will be empty.
-    pub ordering_req: &'a LexOrdering,
+    pub order_bys: &'a [PhysicalSortExpr],
 
     /// Whether the aggregation is running in reverse order
     pub is_reversed: bool,
@@ -71,6 +69,13 @@ pub struct AccumulatorArgs<'a> {
     pub exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 
+impl AccumulatorArgs<'_> {
+    /// Returns the return type of the aggregate function.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
+}
+
 /// Factory that returns an accumulator for the given aggregate function.
 pub type AccumulatorFactoryFunction =
     Arc<dyn Fn(AccumulatorArgs) -> Result<Box<dyn Accumulator>> + Send + Sync>;
@@ -82,14 +87,21 @@ pub struct StateFieldsArgs<'a> {
     pub name: &'a str,
 
     /// The input fields of the aggregate function.
-    pub input_fields: &'a [Field],
+    pub input_fields: &'a [FieldRef],
 
     /// The return fields of the aggregate function.
-    pub return_field: &'a Field,
+    pub return_field: FieldRef,
 
     /// The ordering fields of the aggregate function.
-    pub ordering_fields: &'a [Field],
+    pub ordering_fields: &'a [FieldRef],
 
     /// Whether the aggregate function is distinct.
     pub is_distinct: bool,
+}
+
+impl StateFieldsArgs<'_> {
+    /// The return type of the aggregate function.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
 }

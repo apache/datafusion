@@ -1,0 +1,63 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# This file was originally created by a porting script from:
+#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
+# This file is part of the implementation of the datafusion-spark function library.
+# For more information, please see:
+#   https://github.com/apache/datafusion/issues/15914
+
+## Original Query: SELECT width_bucket(-0.9, 5.2, 0.5, 2);
+## PySpark 3.5.5 Result: {'width_bucket(-0.9, 5.2, 0.5, 2)': 3, 'typeof(width_bucket(-0.9, 5.2, 0.5, 2))': 'bigint', 'typeof(-0.9)': 'decimal(1,1)', 'typeof(5.2)': 'decimal(2,1)', 'typeof(0.5)': 'decimal(1,1)', 'typeof(2)': 'int'}
+#query
+#SELECT width_bucket(-0.9::decimal(1,1), 5.2::decimal(2,1), 0.5::decimal(1,1), 2::int);
+
+## Original Query: SELECT width_bucket(-2.1, 1.3, 3.4, 3);
+## PySpark 3.5.5 Result: {'width_bucket(-2.1, 1.3, 3.4, 3)': 0, 'typeof(width_bucket(-2.1, 1.3, 3.4, 3))': 'bigint', 'typeof(-2.1)': 'decimal(2,1)', 'typeof(1.3)': 'decimal(2,1)', 'typeof(3.4)': 'decimal(2,1)', 'typeof(3)': 'int'}
+#query
+#SELECT width_bucket(-2.1::decimal(2,1), 1.3::decimal(2,1), 3.4::decimal(2,1), 3::int);
+
+## Original Query: SELECT width_bucket(5.3, 0.2, 10.6, 5);
+## PySpark 3.5.5 Result: {'width_bucket(5.3, 0.2, 10.6, 5)': 3, 'typeof(width_bucket(5.3, 0.2, 10.6, 5))': 'bigint', 'typeof(5.3)': 'decimal(2,1)', 'typeof(0.2)': 'decimal(1,1)', 'typeof(10.6)': 'decimal(3,1)', 'typeof(5)': 'int'}
+#query
+#SELECT width_bucket(5.3::decimal(2,1), 0.2::decimal(1,1), 10.6::decimal(3,1), 5::int);
+
+## Original Query: SELECT width_bucket(8.1, 0.0, 5.7, 4);
+## PySpark 3.5.5 Result: {'width_bucket(8.1, 0.0, 5.7, 4)': 5, 'typeof(width_bucket(8.1, 0.0, 5.7, 4))': 'bigint', 'typeof(8.1)': 'decimal(2,1)', 'typeof(0.0)': 'decimal(1,1)', 'typeof(5.7)': 'decimal(2,1)', 'typeof(4)': 'int'}
+#query
+#SELECT width_bucket(8.1::decimal(2,1), 0.0::decimal(1,1), 5.7::decimal(2,1), 4::int);
+
+## Original Query: SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
+## PySpark 3.5.5 Result: {"width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)": 1, "typeof(width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10))": 'bigint', "typeof(INTERVAL '0' DAY)": 'interval day', "typeof(INTERVAL '10' DAY)": 'interval day', 'typeof(10)': 'int'}
+#query
+#SELECT width_bucket(INTERVAL '0' DAY::interval day, INTERVAL '10' DAY::interval day, 10::int);
+
+## Original Query: SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
+## PySpark 3.5.5 Result: {"width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10)": 1, "typeof(width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10))": 'bigint', "typeof(INTERVAL '0' YEAR)": 'interval year', "typeof(INTERVAL '10' YEAR)": 'interval year', 'typeof(10)': 'int'}
+#query
+#SELECT width_bucket(INTERVAL '0' YEAR::interval year, INTERVAL '10' YEAR::interval year, 10::int);
+
+## Original Query: SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
+## PySpark 3.5.5 Result: {"width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)": 2, "typeof(width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10))": 'bigint', "typeof(INTERVAL '1' DAY)": 'interval day', "typeof(INTERVAL '0' DAY)": 'interval day', "typeof(INTERVAL '10' DAY)": 'interval day', 'typeof(10)': 'int'}
+#query
+#SELECT width_bucket(INTERVAL '1' DAY::interval day, INTERVAL '0' DAY::interval day, INTERVAL '10' DAY::interval day, 10::int);
+
+## Original Query: SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
+## PySpark 3.5.5 Result: {"width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10)": 2, "typeof(width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10))": 'bigint', "typeof(INTERVAL '1' YEAR)": 'interval year', "typeof(INTERVAL '0' YEAR)": 'interval year', "typeof(INTERVAL '10' YEAR)": 'interval year', 'typeof(10)': 'int'}
+#query
+#SELECT width_bucket(INTERVAL '1' YEAR::interval year, INTERVAL '0' YEAR::interval year, INTERVAL '10' YEAR::interval year, 10::int);
+

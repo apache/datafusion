@@ -154,9 +154,16 @@ impl ExecutionPlan for EmptyExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
+        if let Some(partition) = partition {
+            if partition >= self.partitions {
+                return internal_err!(
+                    "EmptyExec invalid partition {} (expected less than {})",
+                    partition,
+                    self.partitions
+                );
+            }
         }
+
         let batch = self
             .data()
             .expect("Create empty RecordBatch should not fail");
@@ -165,6 +172,10 @@ impl ExecutionPlan for EmptyExec {
             &self.schema,
             None,
         ))
+    }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(self)
     }
 }
 

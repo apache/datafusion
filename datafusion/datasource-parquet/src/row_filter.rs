@@ -426,7 +426,7 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     physical_file_schema: &SchemaRef,
-    table_schema: &SchemaRef,
+    logical_file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
@@ -447,7 +447,7 @@ pub fn build_row_filter(
             FilterCandidateBuilder::new(
                 Arc::clone(expr),
                 Arc::clone(physical_file_schema),
-                Arc::clone(table_schema),
+                Arc::clone(logical_file_schema),
                 Arc::clone(schema_adapter_factory),
             )
             .build(metadata)
@@ -557,6 +557,7 @@ mod test {
         // Test all should fail
         let expr = col("timestamp_col").lt(Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
+            None,
         ));
         let expr = logical2physical(&expr, &table_schema);
         let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
@@ -597,6 +598,7 @@ mod test {
         // Test all should pass
         let expr = col("timestamp_col").gt(Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
+            None,
         ));
         let expr = logical2physical(&expr, &table_schema);
         let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
@@ -660,7 +662,7 @@ mod test {
 
         let expr = col("string_col")
             .is_not_null()
-            .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)))));
+            .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)), None)));
         let expr = logical2physical(&expr, &table_schema);
 
         assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
