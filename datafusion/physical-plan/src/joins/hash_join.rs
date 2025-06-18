@@ -34,13 +34,13 @@ use super::{
 };
 use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
 };
 use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
-use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::{
     common::can_project,
     handle_state,
@@ -360,7 +360,7 @@ pub struct HashJoinExec {
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
-    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
 }
 
 impl HashJoinExec {
@@ -409,13 +409,11 @@ impl HashJoinExec {
 
         // Create a dynamic filter with the right-side join keys as children
         let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
-        
+
         // Initialize with a placeholder expression (true) that will be updated
         // when the hash table is built
-        let dynamic_filter = Some(Arc::new(DynamicFilterPhysicalExpr::new(
-            right_keys,
-            lit(true),
-        )));
+        let dynamic_filter =
+            Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)));
 
         Ok(HashJoinExec {
             left,
@@ -681,23 +679,25 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                let dynamic_filter_display = if let Some(filter) = &self.dynamic_filter {
-                    if let Ok(current) = filter.current() {
+                let dynamic_filter_display =
+                    if let Ok(current) = self.dynamic_filter.current() {
                         if !current.eq(&lit(true)) {
-                            format!(", filter=[{}]", current)
+                            format!(", filter=[{current}]")
                         } else {
                             "".to_string()
                         }
                     } else {
                         "".to_string()
-                    }
-                } else {
-                    "".to_string()
-                };
+                    };
                 write!(
                     f,
                     "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
-                    self.mode, self.join_type, on, display_filter, display_projections, dynamic_filter_display
+                    self.mode,
+                    self.join_type,
+                    on,
+                    display_filter,
+                    display_projections,
+                    dynamic_filter_display
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -992,17 +992,15 @@ impl ExecutionPlan for HashJoinExec {
                 .all_parent_filters_unsupported(parent_filters));
         }
 
-        // Only push down dynamic filters if enabled and we have one
-        if let Some(filter) = &self.dynamic_filter {
-            if config.optimizer.enable_dynamic_filter_pushdown {
-                let filter = Arc::clone(filter) as Arc<dyn PhysicalExpr>;
-                // Push the dynamic filter to the right side (probe side) only
-                // Left side (build side) gets empty vec, right side gets the filter
-                let filters_for_children = vec![vec![], vec![filter]];
-                return Ok(FilterDescription::new_with_child_count(2)
-                    .all_parent_filters_unsupported(parent_filters)
-                    .with_self_filters_for_children(filters_for_children));
-            }
+        // Only push down dynamic filters if enabled
+        if config.optimizer.enable_dynamic_filter_pushdown {
+            let filter = Arc::clone(&self.dynamic_filter) as Arc<dyn PhysicalExpr>;
+            // Push the dynamic filter to the right side (probe side) only
+            // Left side (build side) gets empty vec, right side gets the filter
+            let filters_for_children = vec![vec![], vec![filter]];
+            return Ok(FilterDescription::new_with_child_count(2)
+                .all_parent_filters_unsupported(parent_filters)
+                .with_self_filters_for_children(filters_for_children));
         }
 
         Ok(FilterDescription::new_with_child_count(2)
@@ -1012,18 +1010,21 @@ impl ExecutionPlan for HashJoinExec {
 
 /// Compute min/max bounds for each column in the given arrays
 fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<(ScalarValue, ScalarValue)>> {
-    arrays.iter()
+    arrays
+        .iter()
         .map(|array| {
             if array.is_empty() {
                 // Return NULL values for empty arrays
-                return Ok((ScalarValue::try_from(array.data_type())?, 
-                         ScalarValue::try_from(array.data_type())?));
+                return Ok((
+                    ScalarValue::try_from(array.data_type())?,
+                    ScalarValue::try_from(array.data_type())?,
+                ));
             }
-            
+
             // Compute min/max using ScalarValue's utilities
             let mut min_val = ScalarValue::try_from_array(array, 0)?;
             let mut max_val = min_val.clone();
-            
+
             for i in 1..array.len() {
                 let val = ScalarValue::try_from_array(array, i)?;
                 if val < min_val {
@@ -1033,7 +1034,7 @@ fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<(ScalarValue, ScalarValue)>
                     max_val = val;
                 }
             }
-            
+
             Ok((min_val, max_val))
         })
         .collect()
@@ -1041,6 +1042,7 @@ fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<(ScalarValue, ScalarValue)>
 
 /// Reads the left (build) side of the input, buffering it in memory, to build a
 /// hash table (`LeftJoinData`)
+#[expect(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
     left_stream: SendableRecordBatchStream,
@@ -1049,7 +1051,7 @@ async fn collect_left_input(
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
-    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     on_right: Vec<PhysicalExprRef>,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
@@ -1137,46 +1139,43 @@ async fn collect_left_input(
         AtomicUsize::new(probe_threads_count),
         reservation,
     );
-    
+
     // Update dynamic filter with min/max bounds if provided
-    if let Some(filter) = dynamic_filter {
-        if num_rows > 0 {
-            let bounds = compute_bounds(&left_values)?;
-            
-            // Create range predicates for each join key
-            let mut predicates = Vec::with_capacity(bounds.len());
-            for ((min_val, max_val), right_expr) in bounds.iter().zip(on_right.iter()) {
-                // Create predicate: col >= min AND col <= max
-                let min_expr = Arc::new(BinaryExpr::new(
-                    Arc::clone(right_expr),
-                    Operator::GtEq,
-                    lit(min_val.clone()),
-                )) as Arc<dyn PhysicalExpr>;
-                
-                let max_expr = Arc::new(BinaryExpr::new(
-                    Arc::clone(right_expr),
-                    Operator::LtEq,
-                    lit(max_val.clone()),
-                )) as Arc<dyn PhysicalExpr>;
-                
-                let range_expr = Arc::new(BinaryExpr::new(
-                    min_expr,
-                    Operator::And,
-                    max_expr,
-                )) as Arc<dyn PhysicalExpr>;
-                
-                predicates.push(range_expr);
-            }
-            
-            // Combine all predicates with AND
-            let combined_predicate = predicates.into_iter()
-                .reduce(|acc, pred| {
-                    Arc::new(BinaryExpr::new(acc, Operator::And, pred)) as Arc<dyn PhysicalExpr>
-                })
-                .unwrap_or_else(|| lit(true));
-            
-            filter.update(combined_predicate)?;
+    if num_rows > 0 {
+        let bounds = compute_bounds(&left_values)?;
+
+        // Create range predicates for each join key
+        let mut predicates = Vec::with_capacity(bounds.len());
+        for ((min_val, max_val), right_expr) in bounds.iter().zip(on_right.iter()) {
+            // Create predicate: col >= min AND col <= max
+            let min_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(right_expr),
+                Operator::GtEq,
+                lit(min_val.clone()),
+            )) as Arc<dyn PhysicalExpr>;
+
+            let max_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(right_expr),
+                Operator::LtEq,
+                lit(max_val.clone()),
+            )) as Arc<dyn PhysicalExpr>;
+
+            let range_expr = Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
+                as Arc<dyn PhysicalExpr>;
+
+            predicates.push(range_expr);
         }
+
+        // Combine all predicates with AND
+        let combined_predicate = predicates
+            .into_iter()
+            .reduce(|acc, pred| {
+                Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                    as Arc<dyn PhysicalExpr>
+            })
+            .unwrap_or_else(|| lit(true));
+
+        dynamic_filter.update(combined_predicate)?;
     }
 
     Ok(data)
