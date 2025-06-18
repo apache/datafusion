@@ -679,7 +679,7 @@ async fn test_spill_file_compressed_with_zstd() -> Result<()> {
 async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
     let disk_spill_limit = 1024 * 1024; // 1MB
     let spill_compression = SpillCompression::Lz4Frame;
-    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, zstd
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, lz4_frame
 
     let df = ctx
         .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")

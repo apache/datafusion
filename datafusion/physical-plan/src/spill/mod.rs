@@ -30,9 +30,11 @@ use std::task::{Context, Poll};
 
 use arrow::array::ArrayData;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::ipc::writer::IpcWriteOptions;
-use arrow::ipc::MetadataVersion;
-use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
+use arrow::ipc::{
+    reader::StreamReader,
+    writer::{IpcWriteOptions, StreamWriter},
+    MetadataVersion,
+};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::config::SpillCompression;
