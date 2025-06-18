@@ -823,7 +823,7 @@ where
         // probe_indices = [None, Some(0), None, Some(0), None]
         //
         // Example: for each build row i in [0..5):
-        //   – We always output its own index i in `build_indices`  
+        //   – We always output its own index i in `build_indices`
         //   – We output `Some(0)` in `probe_indices[i]` if row i was ever visited, else `None`
         (JoinSide::Left, JoinType::LeftMark) => {
             let build_indices = (0..prune_length)
