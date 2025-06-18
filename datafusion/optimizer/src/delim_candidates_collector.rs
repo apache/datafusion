@@ -21,21 +21,20 @@ use datafusion_expr::{JoinKind, LogicalPlan};
 use indexmap::IndexMap;
 
 type ID = usize;
-type SubPlanSize = usize;
 
 pub struct Node {
     pub plan: LogicalPlan,
     pub id: ID,
     // subplan size of current node.
-    pub sub_plan_size: SubPlanSize,
+    pub sub_plan_size: usize,
 }
 
 impl Node {
-    fn new(plan: LogicalPlan, id: ID) -> Self {
+    fn new(plan: LogicalPlan, id: ID, sub_plan_size: usize) -> Self {
         Self {
             plan,
             id,
-            sub_plan_size: 0,
+            sub_plan_size,
         }
     }
 }
@@ -47,9 +46,9 @@ pub struct JoinWithDelimScan {
 }
 
 impl JoinWithDelimScan {
-    fn new(plan: LogicalPlan, id: ID, depth: usize) -> Self {
+    fn new(plan: LogicalPlan, id: ID, depth: usize, sub_plan_size: usize) -> Self {
         Self {
-            node: Node::new(plan, id),
+            node: Node::new(plan, id, sub_plan_size),
             depth,
         }
     }
@@ -63,9 +62,9 @@ pub struct DelimCandidate {
 }
 
 impl DelimCandidate {
-    fn new(plan: LogicalPlan, id: ID) -> Self {
+    fn new(plan: LogicalPlan, id: ID, sub_plan_size: usize) -> Self {
         Self {
-            node: Node::new(plan, id),
+            node: Node::new(plan, id, sub_plan_size),
             joins: vec![],
             delim_scan_count: 0,
             is_transformed: false,
@@ -73,7 +72,7 @@ impl DelimCandidate {
     }
 }
 
-struct NodeVisitor {
+pub struct NodeVisitor {
     nodes: IndexMap<ID, Node>,
     cur_id: ID,
     // all the node ids from root to the current node
@@ -81,7 +80,7 @@ struct NodeVisitor {
 }
 
 impl NodeVisitor {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             nodes: IndexMap::new(),
             cur_id: 0,
@@ -89,10 +88,10 @@ impl NodeVisitor {
         }
     }
 
-    fn collect_nodes(&mut self, plan: &LogicalPlan) -> Result<()> {
+    pub fn collect_nodes(&mut self, plan: &LogicalPlan) -> Result<()> {
         plan.apply(|plan| {
             self.nodes
-                .insert(self.cur_id, Node::new(plan.clone(), self.cur_id));
+                .insert(self.cur_id, Node::new(plan.clone(), self.cur_id, 0));
             self.cur_id += 1;
 
             Ok(TreeNodeRecursion::Continue)
@@ -168,10 +167,10 @@ pub struct DelimCandidateVisitor {
 }
 
 impl DelimCandidateVisitor {
-    pub fn new() -> Self {
+    pub fn new(node_visitor: NodeVisitor) -> Self {
         Self {
             candidates: IndexMap::new(),
-            node_visitor: NodeVisitor::new(),
+            node_visitor,
             cur_id: 0,
             stack: vec![],
         }
@@ -195,8 +194,19 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
                     "stack cannot be empty during upward traversal"
                 ))?;
 
-                self.candidates
-                    .insert(cur_id, DelimCandidate::new(plan.clone(), cur_id));
+                let sub_plan_size = self
+                    .node_visitor
+                    .nodes
+                    .get(&cur_id)
+                    .ok_or_else(|| {
+                        DataFusionError::Plan("current node should exist".to_string())
+                    })?
+                    .sub_plan_size;
+
+                self.candidates.insert(
+                    cur_id,
+                    DelimCandidate::new(plan.clone(), cur_id, sub_plan_size),
+                );
 
                 let left_id = cur_id + 1;
                 // We calculate the right child id from left child's subplan size.
@@ -205,7 +215,7 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
                     .nodes
                     .get(&left_id)
                     .ok_or_else(|| {
-                        DataFusionError::Plan("right id should exist in join".to_string())
+                        DataFusionError::Plan("left id should exist in join".to_string())
                     })?
                     .sub_plan_size
                     + left_id;
@@ -316,14 +326,24 @@ impl<'n> TreeNodeVisitor<'n> for DelimCandidatesCollector<'_> {
         }
 
         if let LogicalPlan::Join(join) = plan {
-            if join.join_kind == JoinKind::DelimJoin
+            if join.join_kind == JoinKind::ComparisonJoin
                 && (plan_is_delim_scan(join.left.as_ref())
                     || plan_is_delim_scan(join.right.as_ref()))
             {
+                let sub_plan_size = self
+                    .node_visitor
+                    .nodes
+                    .get(&cur_id)
+                    .ok_or_else(|| {
+                        DataFusionError::Plan("current node should exist".to_string())
+                    })?
+                    .sub_plan_size;
+
                 self.candidate.joins.push(JoinWithDelimScan::new(
                     plan.clone(),
                     cur_id,
                     self.depth,
+                    sub_plan_size,
                 ));
             }
         }

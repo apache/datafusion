@@ -43,6 +43,7 @@ pub mod decorrelate;
 pub mod decorrelate_dependent_join;
 pub mod decorrelate_lateral_join;
 pub mod decorrelate_predicate_subquery;
+pub mod delim_candidate_rewriter;
 pub mod delim_candidates_collector;
 pub mod deliminator;
 pub mod eliminate_cross_join;
@@ -66,7 +67,6 @@ pub mod rewrite_dependent_join;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
-pub mod delim_candidate_rewriter;
 pub mod utils;
 
 #[cfg(test)]

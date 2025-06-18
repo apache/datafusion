@@ -17,7 +17,7 @@
 
 use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::delim_candidate_rewriter::DelimCandidateRewriter;
-use crate::delim_candidates_collector::DelimCandidateVisitor;
+use crate::delim_candidates_collector::{DelimCandidateVisitor, NodeVisitor};
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -52,9 +52,11 @@ impl OptimizerRule for Deliminator {
         let transformer = DecorrelateDependentJoin::new();
         let rewrite_result = transformer.rewrite(plan, config)?;
 
-        let mut visitor = DelimCandidateVisitor::new();
-        let _ = rewrite_result.data.visit(&mut visitor)?;
-        for (_, candidate) in visitor.candidates.iter() {
+        let mut node_visitor = NodeVisitor::new();
+        let _ = node_visitor.collect_nodes(&rewrite_result.data)?;
+        let mut candidate_visitor = DelimCandidateVisitor::new(node_visitor);
+        let _ = rewrite_result.data.visit(&mut candidate_visitor)?;
+        for (_, candidate) in candidate_visitor.candidates.iter() {
             println!("=== DelimCandidate ===");
             println!("  plan: {}", candidate.node.plan.display());
             println!("  delim_get_count: {}", candidate.delim_scan_count);
@@ -69,12 +71,12 @@ impl OptimizerRule for Deliminator {
             println!("==================\n");
         }
 
-        if visitor.candidates.is_empty() {
+        if candidate_visitor.candidates.is_empty() {
             return Ok(rewrite_result);
         }
 
         let mut replacement_cols: Vec<(Column, Column)> = vec![];
-        for (_, candidate) in visitor.candidates.iter_mut() {
+        for (_, candidate) in candidate_visitor.candidates.iter_mut() {
             let delim_join = &mut candidate.node.plan;
 
             // Sort these so the deepest are first.
@@ -87,7 +89,7 @@ impl OptimizerRule for Deliminator {
                     match plan {
                         LogicalPlan::TableScan(table_scan) => {
                             for expr in &table_scan.filters {
-                                if matches!(expr, Expr::IsNotNull(_)) {
+                                if !matches!(expr, Expr::IsNotNull(_)) {
                                     has_selection = true;
                                     return Ok(TreeNodeRecursion::Stop);
                                 }
@@ -146,7 +148,7 @@ impl OptimizerRule for Deliminator {
         }
 
         // Replace all with candidate.
-        let mut rewriter = DelimCandidateRewriter::new(visitor.candidates);
+        let mut rewriter = DelimCandidateRewriter::new(candidate_visitor.candidates);
         let rewrite_result = rewrite_result.data.rewrite(&mut rewriter)?;
 
         // Replace all columns.
