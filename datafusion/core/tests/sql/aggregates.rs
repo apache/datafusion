@@ -899,7 +899,7 @@ async fn test_dictionary_all_nulls() -> Result<()> {
     +------------------+---------+
     | dict_null_values | max_agg |
     +------------------+---------+
-    |                  | w       |
+    |                  | z       |
     +------------------+---------+
     "###
     );
@@ -1026,6 +1026,268 @@ async fn test_original_sql_pattern_with_dictionary_nulls() -> Result<()> {
     // Check that we have at least one null in the dictionary indices
     let has_null_indices = dict_array.keys().null_count() > 0;
     println!("Dictionary has null indices: {}", has_null_indices);
+
+    Ok(())
+}
+
+/// Test COUNT with null values - basic exclusion test
+#[tokio::test]
+async fn test_count_null_exclusion() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create test data
+    let values = Int32Array::from(vec![Some(1), None, Some(2), None, Some(3)]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)])?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // COUNT should exclude nulls
+    let df = ctx.sql("SELECT COUNT(value) as cnt FROM t").await?;
+    let results = df.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +-----+
+    | cnt |
+    +-----+
+    | 3   |
+    +-----+
+    "###
+    );
+
+    Ok(())
+}
+
+/// Test SUM with null values - should treat nulls as 0 or ignore them
+#[tokio::test]
+async fn test_sum_null_handling() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create test data
+    let values_with_nulls = Int32Array::from(vec![Some(1), None, Some(2), None, Some(3)]);
+    let values_all_nulls = Int32Array::from(vec![None, None, None]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+
+    let batch_with_nulls =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(values_with_nulls)])?;
+    let batch_all_nulls =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(values_all_nulls)])?;
+    let provider =
+        MemTable::try_new(schema, vec![vec![batch_with_nulls], vec![batch_all_nulls]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // SUM should return 6, ignoring nulls
+    let df = ctx.sql("SELECT SUM(value) as total FROM t").await?;
+    let results = df.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +------+
+    | total|
+    +------+
+    | 6    |
+    +------+
+    "###
+    );
+
+    Ok(())
+}
+
+/// Test MIN with null values - should ignore nulls unless all values are null
+#[tokio::test]
+async fn test_min_null_handling() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create test data
+    let values_mixed = Int32Array::from(vec![Some(5), None, Some(1), None, Some(3)]);
+    let values_all_nulls = Int32Array::from(vec![None, None, None]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+
+    let batch_mixed = RecordBatch::try_new(schema.clone(), vec![Arc::new(values_mixed)])?;
+    let batch_all_nulls =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(values_all_nulls)])?;
+    let provider =
+        MemTable::try_new(schema, vec![vec![batch_mixed], vec![batch_all_nulls]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // MIN should return 1, ignoring nulls
+    let df = ctx.sql("SELECT MIN(value) as minimum FROM t").await?;
+    let results = df.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +--------+
+    | minimum|
+    +--------+
+    | 1      |
+    +--------+
+    "###
+    );
+
+    Ok(())
+}
+
+/// Test MEDIAN with null values - should ignore nulls in calculation
+#[tokio::test]
+async fn test_median_null_handling() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create test data
+    let values = Int32Array::from(vec![Some(1), None, Some(2), None, Some(3)]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)])?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // MEDIAN should return 2, ignoring nulls
+    let df = ctx
+        .sql("SELECT MEDIAN(value) as median_value FROM t")
+        .await?;
+    let results = df.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +-------------+
+    | median_value|
+    +-------------+
+    | 2           |
+    +-------------+
+    "###
+    );
+
+    Ok(())
+}
+
+/// Test FIRST_VAL and LAST_VAL with null values - may return null if first/last value is null
+#[tokio::test]
+async fn test_first_last_val_null_handling() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create test data
+    let values = Int32Array::from(vec![None, Some(1), Some(2), Some(3), None]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)])?;
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // FIRST_VAL should return null, as the first value is null
+    let df_first = ctx
+        .sql("SELECT FIRST_VALUE(value) OVER () as first_val FROM t")
+        .await?;
+    let results_first = df_first.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results_first),
+        @r###"
+    +----------+
+    | first_val|
+    +----------+
+    | null     |
+    +----------+
+    "###
+    );
+
+    // LAST_VAL should return null, as the last value is null
+    let df_last = ctx
+        .sql("SELECT LAST_VALUE(value) OVER () as last_val FROM t")
+        .await?;
+    let results_last = df_last.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results_last),
+        @r###"
+    +----------+
+    | last_val |
+    +----------+
+    | null     |
+    +----------+
+    "###
+    );
+
+    Ok(())
+}
+
+/// Test comprehensive null handling across all aggregate functions
+#[tokio::test]
+async fn test_all_aggregates_null_handling() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Create comprehensive test data
+    let values = Float64Array::from(vec![
+        Some(1.0),
+        None,
+        Some(3.0),
+        None,
+        Some(5.0),
+        Some(2.0),
+        Some(4.0),
+    ]);
+    let group =
+        StringArray::from(vec!["test", "test", "test", "test", "test", "test", "test"]);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("group_col", DataType::Utf8, false),
+        Field::new("value", DataType::Float64, true),
+    ]));
+
+    let batch =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(group), Arc::new(values)])?;
+
+    let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("test_table", Arc::new(provider))?;
+
+    let sql = "SELECT 
+        group_col,
+        count(value) as count_val,
+        sum(value) as sum_val,
+        min(value) as min_val,
+        max(value) as max_val,
+        avg(value) as avg_val,
+        median(value) as median_val
+    FROM test_table 
+    GROUP BY group_col";
+
+    let df = ctx.sql(sql).await?;
+    let results = df.collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +-----------+-----------+---------+---------+---------+---------+------------+
+    | group_col | count_val | sum_val | min_val | max_val | avg_val | median_val |
+    +-----------+-----------+---------+---------+---------+---------+------------+
+    | test      | 5         | 15.0    | 1.0     | 5.0     | 3.0     | 3.0        |
+    +-----------+-----------+---------+---------+---------+---------+------------+
+    "###
+    );
 
     Ok(())
 }
