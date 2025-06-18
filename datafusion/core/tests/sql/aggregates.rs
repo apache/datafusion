@@ -701,7 +701,7 @@ async fn test_group_by_max_dictionary_with_nulls() -> Result<()> {
     let results1 = df1.collect().await?;
 
     println!("Test 1 - GROUP BY dictionary with nulls:");
-    println!("{}", batches_to_string(&results1));
+    println!("{1}", batches_to_string(&results1));
 
     // Test 2: MAX aggregation on dictionary column with nulls
     let sql2 = "SELECT
@@ -741,10 +741,52 @@ async fn test_group_by_max_dictionary_with_nulls() -> Result<()> {
     println!("Test 3 - Combined GROUP BY:");
     println!("{}", batches_to_string(&results3));
 
-    // Verify results are not empty and have expected structure
-    assert!(!results1.is_empty());
-    assert!(!results2.is_empty());
-    assert!(!results3.is_empty());
+    // Verify Test 1: GROUP BY dictionary column with nulls
+    assert_snapshot!(
+        batches_to_string(&results1),
+        @r###"
+    +------------------+----------+
+    | dict_with_nulls  | max_utf8 |
+    +------------------+----------+
+    |                  | value6   |
+    |                  | value2   |
+    | alpha            | value8   |
+    | beta             | value4   |
+    | gamma            | value7   |
+    +------------------+----------+
+    "###
+    );
+
+    // Verify Test 2: MAX aggregation on dictionary column with nulls
+    assert_snapshot!(
+        batches_to_string(&results2),
+        @r###"
+    +-----------+----------+
+    | group_col | max_dict |
+    +-----------+----------+
+    | 1         | beta     |
+    | 2         | gamma    |
+    +-----------+----------+
+    "###
+    );
+
+    // Verify Test 3: Combined GROUP BY with both dictionary and regular columns
+    assert_snapshot!(
+        batches_to_string(&results3),
+        @r###"
+    +-----------+------------------+----------+-----------+
+    | group_col | dict_with_nulls  | max_utf8 | row_count |
+    +-----------+------------------+----------+-----------+
+    | 1         |                  | value3   | 1         |
+    | 1         |                  | value2   | 1         |
+    | 1         | alpha            | value1   | 1         |
+    | 1         | beta             | value4   | 1         |
+    | 2         |                  | value6   | 1         |
+    | 2         | alpha            | value8   | 1         |
+    | 2         | gamma            | value7   | 1         |
+    +-----------+------------------+----------+-----------+
+    "###
+    );
 
     Ok(())
 }
