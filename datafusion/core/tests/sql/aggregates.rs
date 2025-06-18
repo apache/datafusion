@@ -19,6 +19,383 @@ use super::*;
 use datafusion::common::test_util::batches_to_string;
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
+/// Helper functions for aggregate tests with dictionary columns and nulls
+
+/// Creates a dictionary array with null keys
+fn create_dict_with_null_keys(
+    values: Vec<&str>,
+    indices: Vec<Option<u32>>,
+) -> DictionaryArray<UInt32Type> {
+    let dict_values = StringArray::from(values);
+    let dict_indices = UInt32Array::from(indices);
+    DictionaryArray::new(dict_indices, Arc::new(dict_values))
+}
+
+/// Creates a dictionary array with null values in the dictionary
+fn create_dict_with_null_values(
+    values: Vec<Option<&str>>,
+    indices: Vec<Option<u32>>,
+) -> DictionaryArray<UInt32Type> {
+    let dict_values = StringArray::from(values);
+    let dict_indices = UInt32Array::from(indices);
+    DictionaryArray::new(dict_indices, Arc::new(dict_values))
+}
+
+/// Creates test data with both dictionary columns and value column
+struct TestData {
+    dict_null_keys: DictionaryArray<UInt32Type>,
+    dict_null_vals: DictionaryArray<UInt32Type>,
+    values: Int32Array,
+    schema: Arc<Schema>,
+}
+
+impl TestData {
+    fn new() -> Self {
+        // Create dictionary with null keys
+        let dict_null_keys = create_dict_with_null_keys(
+            vec!["group_a", "group_b"],
+            vec![
+                Some(0), // group_a
+                None,    // null key
+                Some(1), // group_b
+                None,    // null key
+                Some(0), // group_a
+            ],
+        );
+
+        // Create dictionary with null values
+        let dict_null_vals = create_dict_with_null_values(
+            vec![Some("group_x"), None, Some("group_y")],
+            vec![
+                Some(0), // group_x
+                Some(1), // null value
+                Some(2), // group_y
+                Some(1), // null value
+                Some(0), // group_x
+            ],
+        );
+
+        // Create test data with nulls
+        let values = Int32Array::from(vec![Some(1), None, Some(2), None, Some(3)]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "dict_null_keys",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new(
+                "dict_null_vals",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        Self {
+            dict_null_keys,
+            dict_null_vals,
+            values,
+            schema,
+        }
+    }
+
+    /// Creates extended test data for more comprehensive testing
+    fn new_extended() -> Self {
+        // Create dictionary with null values in the dictionary array
+        let dict_null_vals = create_dict_with_null_values(
+            vec![Some("group_a"), None, Some("group_b")],
+            vec![
+                Some(0), // group_a
+                Some(1), // null value
+                Some(2), // group_b
+                Some(1), // null value
+                Some(0), // group_a
+                Some(1), // null value
+                Some(2), // group_b
+                Some(1), // null value
+            ],
+        );
+
+        // Create dictionary with null keys
+        let dict_null_keys = create_dict_with_null_keys(
+            vec!["group_x", "group_y", "group_z"],
+            vec![
+                Some(0), // group_x
+                None,    // null key
+                Some(1), // group_y
+                None,    // null key
+                Some(0), // group_x
+                None,    // null key
+                Some(2), // group_z
+                None,    // null key
+            ],
+        );
+
+        // Create test data with nulls
+        let values = Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            None,
+            Some(3),
+            Some(4),
+            Some(5),
+            None,
+        ]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "dict_null_vals",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new(
+                "dict_null_keys",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        Self {
+            dict_null_keys,
+            dict_null_vals,
+            values,
+            schema,
+        }
+    }
+
+    /// Creates test data for MIN/MAX testing with varied values
+    fn new_for_min_max() -> Self {
+        let dict_null_keys = create_dict_with_null_keys(
+            vec!["group_a", "group_b", "group_c"],
+            vec![
+                Some(0),
+                Some(1),
+                Some(0),
+                Some(2),
+                None,
+                None, // group_a, group_b, group_a, group_c, null, null
+            ],
+        );
+
+        let dict_null_vals = create_dict_with_null_values(
+            vec![Some("group_x"), None, Some("group_y")],
+            vec![
+                Some(0),
+                Some(1),
+                Some(0),
+                Some(2),
+                Some(1),
+                Some(1), // group_x, null, group_x, group_y, null, null
+            ],
+        );
+
+        let values =
+            Int32Array::from(vec![Some(5), Some(1), Some(3), Some(7), Some(2), None]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "dict_null_keys",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new(
+                "dict_null_vals",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        Self {
+            dict_null_keys,
+            dict_null_vals,
+            values,
+            schema,
+        }
+    }
+
+    /// Creates test data for MEDIAN testing with varied values
+    fn new_for_median() -> Self {
+        let dict_null_vals = create_dict_with_null_values(
+            vec![Some("group_a"), None, Some("group_b")],
+            vec![Some(0), Some(1), Some(2), Some(1), Some(0)],
+        );
+
+        let dict_null_keys = create_dict_with_null_keys(
+            vec!["group_x", "group_y", "group_z"],
+            vec![Some(0), None, Some(1), None, Some(2)],
+        );
+
+        let values = Int32Array::from(vec![Some(1), None, Some(5), Some(3), Some(7)]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "dict_null_vals",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new(
+                "dict_null_keys",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        Self {
+            dict_null_keys,
+            dict_null_vals,
+            values,
+            schema,
+        }
+    }
+
+    /// Creates test data for FIRST_VALUE/LAST_VALUE testing
+    fn new_for_first_last() -> Self {
+        let dict_null_keys = create_dict_with_null_keys(
+            vec!["group_a", "group_b"],
+            vec![Some(0), None, Some(1), None, Some(0)],
+        );
+
+        let dict_null_vals = create_dict_with_null_values(
+            vec![Some("group_x"), None, Some("group_y")],
+            vec![Some(0), Some(1), Some(2), Some(1), Some(0)],
+        );
+
+        let values = Int32Array::from(vec![None, Some(1), Some(2), Some(3), None]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "dict_null_keys",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new(
+                "dict_null_vals",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt32),
+                    Box::new(DataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        Self {
+            dict_null_keys,
+            dict_null_vals,
+            values,
+            schema,
+        }
+    }
+}
+
+/// Sets up test context and tables for both single and multiple partition scenarios
+async fn setup_test_contexts(
+    test_data: &TestData,
+) -> Result<(SessionContext, SessionContext)> {
+    // Single partition context
+    let ctx_single =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+
+    let batch_single = RecordBatch::try_new(
+        test_data.schema.clone(),
+        vec![
+            Arc::new(test_data.dict_null_keys.clone()),
+            Arc::new(test_data.dict_null_vals.clone()),
+            Arc::new(test_data.values.clone()),
+        ],
+    )?;
+    let provider_single =
+        MemTable::try_new(test_data.schema.clone(), vec![vec![batch_single]])?;
+    ctx_single.register_table("t", Arc::new(provider_single))?;
+
+    // Multiple partition context
+    let ctx_multi =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(3));
+
+    // Split data into multiple batches for partitioning
+    let total_len = test_data.values.len();
+    let chunk_size = (total_len + 2) / 3; // Ensure we cover all data
+
+    let mut batches = Vec::new();
+    let mut start = 0;
+
+    while start < total_len {
+        let end = std::cmp::min(start + chunk_size, total_len);
+        let len = end - start;
+
+        if len > 0 {
+            let batch = RecordBatch::try_new(
+                test_data.schema.clone(),
+                vec![
+                    Arc::new(test_data.dict_null_keys.slice(start, len)),
+                    Arc::new(test_data.dict_null_vals.slice(start, len)),
+                    Arc::new(test_data.values.slice(start, len)),
+                ],
+            )?;
+            batches.push(vec![batch]);
+        }
+        start = end;
+    }
+
+    let provider_multi = MemTable::try_new(test_data.schema.clone(), batches)?;
+    ctx_multi.register_table("t", Arc::new(provider_multi))?;
+
+    Ok((ctx_single, ctx_multi))
+}
+
+/// Executes a query on both single and multi-partition contexts and verifies consistency
+async fn test_query_consistency(
+    ctx_single: &SessionContext,
+    ctx_multi: &SessionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    let df_single = ctx_single.sql(sql).await?;
+    let results_single = df_single.collect().await?;
+
+    let df_multi = ctx_multi.sql(sql).await?;
+    let results_multi = df_multi.collect().await?;
+
+    // Verify results are consistent between single and multiple partitions
+    assert_eq!(
+        batches_to_string(&results_single),
+        batches_to_string(&results_multi),
+        "Results should be identical between single and multiple partitions"
+    );
+
+    Ok(results_single)
+}
 
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
@@ -444,71 +821,12 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
 /// Test COUNT with null values and GROUP BY dict with null keys and null values - exclusion test (single and multiple partitions)
 #[tokio::test]
 async fn test_count_null_exclusion() -> Result<()> {
-    // Test with single partition
-    let ctx_single =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    let test_data = TestData::new();
+    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
 
-    // Create dictionary with null keys
-    let dict_values_null_keys = StringArray::from(vec!["group_a", "group_b"]);
-    let dict_indices_null_keys = UInt32Array::from(vec![
-        Some(0), // group_a
-        None,    // null key
-        Some(1), // group_b
-        None,    // null key
-        Some(0), // group_a
-    ]);
-    let dict_group_null_keys =
-        DictionaryArray::new(dict_indices_null_keys, Arc::new(dict_values_null_keys));
-
-    // Create dictionary with null values
-    let dict_values_null_vals = StringArray::from(vec![
-        Some("group_x"),
-        None, // null value at index 1
-        Some("group_y"),
-    ]);
-    let dict_indices_null_vals = UInt32Array::from(vec![
-        Some(0), // group_x
-        Some(1), // null value
-        Some(2), // group_y
-        Some(1), // null value
-        Some(0), // group_x
-    ]);
-    let dict_group_null_vals =
-        DictionaryArray::new(dict_indices_null_vals, Arc::new(dict_values_null_vals));
-
-    // Create test data with nulls
-    let values = Int32Array::from(vec![Some(1), None, Some(2), None, Some(3)]);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "dict_null_keys",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new(
-            "dict_null_vals",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new("value", DataType::Int32, true),
-    ]));
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.clone()),
-            Arc::new(dict_group_null_vals.clone()),
-            Arc::new(values.clone()),
-        ],
-    )?;
-    let provider_single = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
-    ctx_single.register_table("t", Arc::new(provider_single))?;
-
-    // Test single partition - COUNT should exclude nulls, GROUP BY dict with null keys
-    let df1_single = ctx_single
-        .sql("SELECT dict_null_keys, COUNT(value) as cnt FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST")
-        .await?;
-    let results1_single = df1_single.collect().await?;
+    // Test COUNT should exclude nulls, GROUP BY dict with null keys
+    let sql1 = "SELECT dict_null_keys, COUNT(value) as cnt FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
+    let results1_single = test_query_consistency(&ctx_single, &ctx_multi, sql1).await?;
 
     assert_snapshot!(
         batches_to_string(&results1_single),
@@ -523,11 +841,9 @@ async fn test_count_null_exclusion() -> Result<()> {
     "###
     );
 
-    // Test single partition - COUNT should exclude nulls, GROUP BY dict with null values
-    let df2_single = ctx_single
-        .sql("SELECT dict_null_vals, COUNT(value) as cnt FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST")
-        .await?;
-    let results2_single = df2_single.collect().await?;
+    // Test COUNT should exclude nulls, GROUP BY dict with null values
+    let sql2 = "SELECT dict_null_vals, COUNT(value) as cnt FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
+    let results2_single = test_query_consistency(&ctx_single, &ctx_multi, sql2).await?;
 
     assert_snapshot!(
         batches_to_string(&results2_single),
@@ -542,151 +858,18 @@ async fn test_count_null_exclusion() -> Result<()> {
     "###
     );
 
-    // Test with multiple partitions
-    let ctx_multi =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(3));
-
-    // Create multiple batches for partitioning
-    let batch1 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.slice(0, 2)),
-            Arc::new(dict_group_null_vals.slice(0, 2)),
-            Arc::new(values.slice(0, 2)),
-        ],
-    )?;
-    let batch2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.slice(2, 2)),
-            Arc::new(dict_group_null_vals.slice(2, 2)),
-            Arc::new(values.slice(2, 2)),
-        ],
-    )?;
-    let batch3 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.slice(4, 1)),
-            Arc::new(dict_group_null_vals.slice(4, 1)),
-            Arc::new(values.slice(4, 1)),
-        ],
-    )?;
-
-    let provider_multi =
-        MemTable::try_new(schema, vec![vec![batch1], vec![batch2], vec![batch3]])?;
-    ctx_multi.register_table("t", Arc::new(provider_multi))?;
-
-    // Test multiple partitions - COUNT should exclude nulls, GROUP BY dict with null keys
-    let df1_multi = ctx_multi
-        .sql("SELECT dict_null_keys, COUNT(value) as cnt FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST")
-        .await?;
-    let results1_multi = df1_multi.collect().await?;
-
-    // Results should be identical to single partition
-    assert_eq!(
-        batches_to_string(&results1_single),
-        batches_to_string(&results1_multi)
-    );
-
-    // Test multiple partitions - COUNT should exclude nulls, GROUP BY dict with null values
-    let df2_multi = ctx_multi
-        .sql("SELECT dict_null_vals, COUNT(value) as cnt FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST")
-        .await?;
-    let results2_multi = df2_multi.collect().await?;
-
-    // Results should be identical to single partition
-    assert_eq!(
-        batches_to_string(&results2_single),
-        batches_to_string(&results2_multi)
-    );
-
     Ok(())
 }
 
 /// Test SUM with null values and GROUP BY dict with null values and null keys - should treat nulls as 0 or ignore them (single and multiple partitions)
 #[tokio::test]
 async fn test_sum_null_handling() -> Result<()> {
-    // Test with single partition
-    let ctx_single =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    let test_data = TestData::new_extended();
+    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
 
-    // Create dictionary with null values in the dictionary array
-    let dict_values_null_vals = StringArray::from(vec![
-        Some("group_a"),
-        None, // null value at index 1
-        Some("group_b"),
-    ]);
-    let dict_indices_null_vals = UInt32Array::from(vec![
-        Some(0), // group_a
-        Some(1), // null value
-        Some(2), // group_b
-        Some(1), // null value
-        Some(0), // group_a
-        Some(1), // null value
-        Some(2), // group_b
-        Some(1), // null value
-    ]);
-    let dict_group_null_vals =
-        DictionaryArray::new(dict_indices_null_vals, Arc::new(dict_values_null_vals));
-
-    // Create dictionary with null keys
-    let dict_values_null_keys = StringArray::from(vec!["group_x", "group_y", "group_z"]);
-    let dict_indices_null_keys = UInt32Array::from(vec![
-        Some(0), // group_x
-        None,    // null key
-        Some(1), // group_y
-        None,    // null key
-        Some(0), // group_x
-        None,    // null key
-        Some(2), // group_z
-        None,    // null key
-    ]);
-    let dict_group_null_keys =
-        DictionaryArray::new(dict_indices_null_keys, Arc::new(dict_values_null_keys));
-
-    // Create test data with nulls
-    let values_with_nulls = Int32Array::from(vec![
-        Some(1),
-        None,
-        Some(2),
-        None,
-        Some(3),
-        Some(4),
-        Some(5),
-        None,
-    ]);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "dict_null_vals",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new(
-            "dict_null_keys",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new("value", DataType::Int32, true),
-    ]));
-
-    let batch_with_nulls = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_vals.clone()),
-            Arc::new(dict_group_null_keys.clone()),
-            Arc::new(values_with_nulls.clone()),
-        ],
-    )?;
-    let provider_single =
-        MemTable::try_new(schema.clone(), vec![vec![batch_with_nulls]])?;
-    ctx_single.register_table("t", Arc::new(provider_single))?;
-
-    // Test single partition - SUM should ignore nulls, GROUP BY dict with null values
-    let df1_single = ctx_single
-        .sql("SELECT dict_null_vals, SUM(value) as total FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST")
-        .await?;
-    let results1_single = df1_single.collect().await?;
+    // Test SUM should ignore nulls, GROUP BY dict with null values
+    let sql1 = "SELECT dict_null_vals, SUM(value) as total FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
+    let results1_single = test_query_consistency(&ctx_single, &ctx_multi, sql1).await?;
 
     assert_snapshot!(
         batches_to_string(&results1_single),
@@ -701,11 +884,9 @@ async fn test_sum_null_handling() -> Result<()> {
     "###
     );
 
-    // Test single partition - SUM should ignore nulls, GROUP BY dict with null keys
-    let df2_single = ctx_single
-        .sql("SELECT dict_null_keys, SUM(value) as total FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST")
-        .await?;
-    let results2_single = df2_single.collect().await?;
+    // Test SUM should ignore nulls, GROUP BY dict with null keys
+    let sql2 = "SELECT dict_null_keys, SUM(value) as total FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
+    let results2_single = test_query_consistency(&ctx_single, &ctx_multi, sql2).await?;
 
     assert_snapshot!(
         batches_to_string(&results2_single),
@@ -721,141 +902,18 @@ async fn test_sum_null_handling() -> Result<()> {
     "###
     );
 
-    // Test with multiple partitions
-    let ctx_multi =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
-
-    // Create multiple batches for partitioning
-    let batch1 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_vals.slice(0, 2)),
-            Arc::new(dict_group_null_keys.slice(0, 2)),
-            Arc::new(values_with_nulls.slice(0, 2)),
-        ],
-    )?;
-    let batch2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_vals.slice(2, 2)),
-            Arc::new(dict_group_null_keys.slice(2, 2)),
-            Arc::new(values_with_nulls.slice(2, 2)),
-        ],
-    )?;
-    let batch3 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_vals.slice(4, 2)),
-            Arc::new(dict_group_null_keys.slice(4, 2)),
-            Arc::new(values_with_nulls.slice(4, 2)),
-        ],
-    )?;
-    let batch4 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_vals.slice(6, 2)),
-            Arc::new(dict_group_null_keys.slice(6, 2)),
-            Arc::new(values_with_nulls.slice(6, 2)),
-        ],
-    )?;
-
-    let provider_multi = MemTable::try_new(
-        schema,
-        vec![vec![batch1], vec![batch2], vec![batch3], vec![batch4]],
-    )?;
-    ctx_multi.register_table("t", Arc::new(provider_multi))?;
-
-    // Test multiple partitions - SUM should ignore nulls, GROUP BY dict with null values
-    let df1_multi = ctx_multi
-        .sql("SELECT dict_null_vals, SUM(value) as total FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST")
-        .await?;
-    let results1_multi = df1_multi.collect().await?;
-
-    // Results should be identical to single partition
-    assert_eq!(
-        batches_to_string(&results1_single),
-        batches_to_string(&results1_multi)
-    );
-
-    // Test multiple partitions - SUM should ignore nulls, GROUP BY dict with null keys
-    let df2_multi = ctx_multi
-        .sql("SELECT dict_null_keys, SUM(value) as total FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST")
-        .await?;
-    let results2_multi = df2_multi.collect().await?;
-
-    // Results should be identical to single partition
-    assert_eq!(
-        batches_to_string(&results2_single),
-        batches_to_string(&results2_multi)
-    );
-
     Ok(())
 }
 
 /// Test MIN with null values and GROUP BY dict with null keys and null values - should ignore nulls unless all values are null (single and multiple partitions)
 #[tokio::test]
 async fn test_min_null_handling() -> Result<()> {
-    // Create test data
-    let dict_values_null_keys = StringArray::from(vec!["group_a", "group_b", "group_c"]);
-    let dict_indices_null_keys = UInt32Array::from(vec![
-        Some(0),
-        Some(1),
-        Some(0),
-        Some(2),
-        None,
-        None, // group_a, group_b, group_a, group_c, null, null
-    ]);
-    let dict_group_null_keys =
-        DictionaryArray::new(dict_indices_null_keys, Arc::new(dict_values_null_keys));
+    let test_data = TestData::new_for_min_max();
+    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
 
-    let dict_values_null_vals =
-        StringArray::from(vec![Some("group_x"), None, Some("group_y")]);
-    let dict_indices_null_vals = UInt32Array::from(vec![
-        Some(0),
-        Some(1),
-        Some(0),
-        Some(2),
-        Some(1),
-        Some(1), // group_x, null, group_x, group_y, null, null
-    ]);
-    let dict_group_null_vals =
-        DictionaryArray::new(dict_indices_null_vals, Arc::new(dict_values_null_vals));
-
-    let values_mixed =
-        Int32Array::from(vec![Some(5), Some(1), Some(3), Some(7), Some(2), None]);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "dict_null_keys",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new(
-            "dict_null_vals",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new("value", DataType::Int32, true),
-    ]));
-
-    // Test single partition
-    let ctx_single =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.clone()),
-            Arc::new(dict_group_null_vals.clone()),
-            Arc::new(values_mixed.clone()),
-        ],
-    )?;
-    ctx_single.register_table(
-        "t",
-        Arc::new(MemTable::try_new(schema.clone(), vec![vec![batch]])?),
-    )?;
-
-    let results1_single = ctx_single.sql("SELECT dict_null_keys, MIN(value) as minimum FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST").await?.collect().await?;
-    let results2_single = ctx_single.sql("SELECT dict_null_vals, MIN(value) as minimum FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST").await?.collect().await?;
+    // Test MIN should ignore nulls, GROUP BY dict with null keys
+    let sql1 = "SELECT dict_null_keys, MIN(value) as minimum FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
+    let results1_single = test_query_consistency(&ctx_single, &ctx_multi, sql1).await?;
 
     assert_snapshot!(batches_to_string(&results1_single), @r###"
     +----------------+---------+
@@ -868,6 +926,10 @@ async fn test_min_null_handling() -> Result<()> {
     +----------------+---------+
     "###);
 
+    // Test MIN should ignore nulls, GROUP BY dict with null values
+    let sql2 = "SELECT dict_null_vals, MIN(value) as minimum FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
+    let results2_single = test_query_consistency(&ctx_single, &ctx_multi, sql2).await?;
+
     assert_snapshot!(batches_to_string(&results2_single), @r###"
     +----------------+---------+
     | dict_null_vals | minimum |
@@ -878,108 +940,18 @@ async fn test_min_null_handling() -> Result<()> {
     +----------------+---------+
     "###);
 
-    // Test multiple partitions
-    let ctx_multi =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(3));
-    let batch1 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.slice(0, 2)),
-            Arc::new(dict_group_null_vals.slice(0, 2)),
-            Arc::new(values_mixed.slice(0, 2)),
-        ],
-    )?;
-    let batch2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.slice(2, 2)),
-            Arc::new(dict_group_null_vals.slice(2, 2)),
-            Arc::new(values_mixed.slice(2, 2)),
-        ],
-    )?;
-    let batch3 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.slice(4, 2)),
-            Arc::new(dict_group_null_vals.slice(4, 2)),
-            Arc::new(values_mixed.slice(4, 2)),
-        ],
-    )?;
-    ctx_multi.register_table(
-        "t",
-        Arc::new(MemTable::try_new(
-            schema,
-            vec![vec![batch1], vec![batch2], vec![batch3]],
-        )?),
-    )?;
-
-    let results1_multi = ctx_multi.sql("SELECT dict_null_keys, MIN(value) as minimum FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST").await?.collect().await?;
-    let results2_multi = ctx_multi.sql("SELECT dict_null_vals, MIN(value) as minimum FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST").await?.collect().await?;
-
-    // Results should be identical to single partition
-    assert_eq!(
-        batches_to_string(&results1_single),
-        batches_to_string(&results1_multi)
-    );
-    assert_eq!(
-        batches_to_string(&results2_single),
-        batches_to_string(&results2_multi)
-    );
-
     Ok(())
 }
 
 /// Test MEDIAN with null values and GROUP BY dict with null values and null keys - should ignore nulls in calculation (single and multiple partitions)
 #[tokio::test]
 async fn test_median_null_handling() -> Result<()> {
-    // Create test data
-    let dict_values_null_vals =
-        StringArray::from(vec![Some("group_a"), None, Some("group_b")]);
-    let dict_indices_null_vals =
-        UInt32Array::from(vec![Some(0), Some(1), Some(2), Some(1), Some(0)]);
-    let dict_group_null_vals =
-        DictionaryArray::new(dict_indices_null_vals, Arc::new(dict_values_null_vals));
+    let test_data = TestData::new_for_median();
+    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
 
-    let dict_values_null_keys = StringArray::from(vec!["group_x", "group_y", "group_z"]);
-    let dict_indices_null_keys =
-        UInt32Array::from(vec![Some(0), None, Some(1), None, Some(2)]);
-    let dict_group_null_keys =
-        DictionaryArray::new(dict_indices_null_keys, Arc::new(dict_values_null_keys));
-
-    let values = Int32Array::from(vec![Some(1), None, Some(5), Some(3), Some(7)]);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "dict_null_vals",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new(
-            "dict_null_keys",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new("value", DataType::Int32, true),
-    ]));
-
-    // Test single partition
-    let ctx_single =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_vals.clone()),
-            Arc::new(dict_group_null_keys.clone()),
-            Arc::new(values.clone()),
-        ],
-    )?;
-    ctx_single.register_table(
-        "t",
-        Arc::new(MemTable::try_new(schema.clone(), vec![vec![batch]])?),
-    )?;
-
-    let results1_single = ctx_single.sql("SELECT dict_null_vals, MEDIAN(value) as median_value FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST").await?.collect().await?;
-    let results2_single = ctx_single.sql("SELECT dict_null_keys, MEDIAN(value) as median_value FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST").await?.collect().await?;
+    // Test MEDIAN should ignore nulls, GROUP BY dict with null values
+    let sql1 = "SELECT dict_null_vals, MEDIAN(value) as median_value FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
+    let results1_single = test_query_consistency(&ctx_single, &ctx_multi, sql1).await?;
 
     assert_snapshot!(batches_to_string(&results1_single), @r###"
     +----------------+-------------+
@@ -990,6 +962,10 @@ async fn test_median_null_handling() -> Result<()> {
     | group_b        | 5.0         |
     +----------------+-------------+
     "###);
+
+    // Test MEDIAN should ignore nulls, GROUP BY dict with null keys
+    let sql2 = "SELECT dict_null_keys, MEDIAN(value) as median_value FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
+    let results2_single = test_query_consistency(&ctx_single, &ctx_multi, sql2).await?;
 
     assert_snapshot!(batches_to_string(&results2_single), @r###"
     +----------------+-------------+
@@ -1002,98 +978,21 @@ async fn test_median_null_handling() -> Result<()> {
     +----------------+-------------+
     "###);
 
-    // Test multiple partitions
-    let ctx_multi =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
-    let batch1 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_vals.slice(0, 3)),
-            Arc::new(dict_group_null_keys.slice(0, 3)),
-            Arc::new(values.slice(0, 3)),
-        ],
-    )?;
-    let batch2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_vals.slice(3, 2)),
-            Arc::new(dict_group_null_keys.slice(3, 2)),
-            Arc::new(values.slice(3, 2)),
-        ],
-    )?;
-    ctx_multi.register_table(
-        "t",
-        Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?),
-    )?;
-
-    let results1_multi = ctx_multi.sql("SELECT dict_null_vals, MEDIAN(value) as median_value FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST").await?.collect().await?;
-    let results2_multi = ctx_multi.sql("SELECT dict_null_keys, MEDIAN(value) as median_value FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST").await?.collect().await?;
-
-    // Results should be identical to single partition
-    assert_eq!(
-        batches_to_string(&results1_single),
-        batches_to_string(&results1_multi)
-    );
-    assert_eq!(
-        batches_to_string(&results2_single),
-        batches_to_string(&results2_multi)
-    );
-
     Ok(())
 }
 
 /// Test FIRST_VAL and LAST_VAL with null values and GROUP BY dict with null keys and null values - may return null if first/last value is null (single and multiple partitions)
 #[tokio::test]
 async fn test_first_last_val_null_handling() -> Result<()> {
-    // Create test data
-    let dict_values_null_keys = StringArray::from(vec!["group_a", "group_b"]);
-    let dict_indices_null_keys =
-        UInt32Array::from(vec![Some(0), None, Some(1), None, Some(0)]);
-    let dict_group_null_keys =
-        DictionaryArray::new(dict_indices_null_keys, Arc::new(dict_values_null_keys));
+    let test_data = TestData::new_for_first_last();
+    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
 
-    let dict_values_null_vals =
-        StringArray::from(vec![Some("group_x"), None, Some("group_y")]);
-    let dict_indices_null_vals =
-        UInt32Array::from(vec![Some(0), Some(1), Some(2), Some(1), Some(0)]);
-    let dict_group_null_vals =
-        DictionaryArray::new(dict_indices_null_vals, Arc::new(dict_values_null_vals));
+    // Test FIRST_VALUE and LAST_VALUE with window functions over groups
+    let sql = "SELECT dict_null_keys, value, FIRST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST) as first_val, LAST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_val FROM t ORDER BY dict_null_keys NULLS FIRST, value NULLS FIRST";
 
-    let values = Int32Array::from(vec![None, Some(1), Some(2), Some(3), None]);
+    let results_single = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
 
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "dict_null_keys",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new(
-            "dict_null_vals",
-            DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            true,
-        ),
-        Field::new("value", DataType::Int32, true),
-    ]));
-
-    // Test single partition
-    let ctx_single =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.clone()),
-            Arc::new(dict_group_null_vals.clone()),
-            Arc::new(values.clone()),
-        ],
-    )?;
-    ctx_single.register_table(
-        "t",
-        Arc::new(MemTable::try_new(schema.clone(), vec![vec![batch]])?),
-    )?;
-
-    let results1_single = ctx_single.sql("SELECT dict_null_keys, value, FIRST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST) as first_val, LAST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_val FROM t ORDER BY dict_null_keys NULLS FIRST, value NULLS FIRST").await?.collect().await?;
-
-    assert_snapshot!(batches_to_string(&results1_single), @r###"
+    assert_snapshot!(batches_to_string(&results_single), @r###"
     +----------------+-------+-----------+----------+
     | dict_null_keys | value | first_val | last_val |
     +----------------+-------+-----------+----------+
@@ -1105,38 +1004,6 @@ async fn test_first_last_val_null_handling() -> Result<()> {
     | group_b        | 2     | 2         | 2        |
     +----------------+-------+-----------+----------+
     "###);
-
-    // Test multiple partitions
-    let ctx_multi =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
-    let batch1 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.slice(0, 3)),
-            Arc::new(dict_group_null_vals.slice(0, 3)),
-            Arc::new(values.slice(0, 3)),
-        ],
-    )?;
-    let batch2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(dict_group_null_keys.slice(3, 2)),
-            Arc::new(dict_group_null_vals.slice(3, 2)),
-            Arc::new(values.slice(3, 2)),
-        ],
-    )?;
-    ctx_multi.register_table(
-        "t",
-        Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?),
-    )?;
-
-    let results1_multi = ctx_multi.sql("SELECT dict_null_keys, value, FIRST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST) as first_val, LAST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_val FROM t ORDER BY dict_null_keys NULLS FIRST, value NULLS FIRST").await?.collect().await?;
-
-    // Results should be identical to single partition
-    assert_eq!(
-        batches_to_string(&results1_single),
-        batches_to_string(&results1_multi)
-    );
 
     Ok(())
 }
