@@ -18,6 +18,7 @@
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow_schema::SortOptions;
+use datafusion::common::NullEquality;
 use datafusion::functions_aggregate::sum;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan;
@@ -307,7 +308,7 @@ async fn sort_merge_join_yields(
         None,
         JoinType::Inner,
         vec![inf1.properties().eq_properties.output_ordering().unwrap()[0].options],
-        true,
+        NullEquality::NullEqualsNull,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -537,7 +538,7 @@ async fn join_yields(
         &JoinType::Inner,
         None,
         PartitionMode::CollectLeft,
-        true,
+        NullEquality::NullEqualsNull,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -585,7 +586,7 @@ async fn join_agg_yields(
         &JoinType::Inner,
         None,
         PartitionMode::CollectLeft,
-        true,
+        NullEquality::NullEqualsNull,
     )?);
 
     // Project only one column (“value” from the left side) because we just want to sum that
@@ -650,7 +651,7 @@ async fn hash_join_yields(
         &JoinType::Left,
         None,
         PartitionMode::CollectLeft,
-        true,
+        NullEquality::NullEqualsNull,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -684,7 +685,7 @@ async fn hash_join_without_repartition_and_no_agg(
         /* output64 */ None,
         // Using CollectLeft is fine—just avoid RepartitionExec’s partitioned channels.
         PartitionMode::CollectLeft,
-        /* build_left */ true,
+        NullEquality::NullEqualsNull,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
