@@ -179,14 +179,14 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
 
     let offset = writer.writer.inner().stream_position()?;
     let index_len = index_bytes.len() as u64;
-    
+
     // Write the index magic and length to the file
     writer.writer.inner().write_all(b"IDX1")?;
     writer.writer.inner().write_all(&index_len.to_le_bytes())?;
 
     // Write the index bytes
     writer.writer.inner().write_all(&index_bytes)?;
-    
+
     // Append metadata about the index to the Parquet file footer
     writer.writer.append_key_value_metadata(KeyValue::new(
         "distinct_index_offset".to_string(),
@@ -311,7 +311,7 @@ impl TableProvider for DistinctIndexTable {
 
         // Build ParquetSource for kept files
         let url = ObjectStoreUrl::parse("file://")?;
-        
+
         // Note: we disable page index support here since we are using a custom index, it has conflicts when testing.
         // TODO: Remove this when we have a better solution for custom indexes with page index support.
         let source = Arc::new(ParquetSource::default().with_enable_page_index(false));

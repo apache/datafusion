@@ -88,19 +88,19 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.17", default-features = false }
-arrow = { path = "/Users/zhuqi/arrow-rs/arrow", features = [
+arrow = { version = "55.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { path = "/Users/zhuqi/arrow-rs/arrow-buffer", default-features = false }
-arrow-flight = { path = "/Users/zhuqi/arrow-rs/arrow-flight", features = [
+arrow-buffer = { version = "55.0.0", default-features = false }
+arrow-flight = { version = "55.1.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { path = "/Users/zhuqi/arrow-rs/arrow-ipc", default-features = false, features = [
+arrow-ipc = { version = "55.0.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { path = "/Users/zhuqi/arrow-rs/arrow-ord", default-features = false }
-arrow-schema = { path = "/Users/zhuqi/arrow-rs/arrow-schema", default-features = false }
+arrow-ord = { version = "55.0.0", default-features = false }
+arrow-schema = { version = "55.0.0", default-features = false }
 async-trait = "0.1.88"
 bigdecimal = "0.4.8"
 bytes = "1.10"
@@ -152,7 +152,7 @@ itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.12.0", default-features = false }
 parking_lot = "0.12"
-parquet = { path = "/Users/zhuqi/arrow-rs/parquet", default-features = false, features = [
+parquet = { version = "55.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
