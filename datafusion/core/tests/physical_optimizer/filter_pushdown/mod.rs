@@ -530,8 +530,8 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     let state = session_ctx.state();
     let task_ctx = state.task_ctx();
     let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
-    // Execute to completion
-    while let Some(_) = stream.next().await {}
+    // Iterate one batch
+    stream.next().await.unwrap().unwrap();
 
     // Now check what our filter looks like
     insta::assert_snapshot!(
