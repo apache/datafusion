@@ -2159,7 +2159,6 @@ dependencies = [
  "arrow-flight",
  "arrow-schema",
  "async-trait",
- "base64 0.22.1",
  "bytes",
  "dashmap",
  "datafusion",

@@ -81,5 +81,3 @@ uuid = "1.17"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.30.1", features = ["fs"] }
-[dependencies]
-base64 = "0.22.1"
