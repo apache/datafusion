@@ -55,42 +55,49 @@ $0 compare <branch1> <branch2>
 $0 compare_detail <branch1> <branch2>
 $0 venv
 
-**********
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Examples:
-**********
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Create the datasets for all benchmarks in $DATA_DIR
 ./bench.sh data
 
 # Run the 'tpch' benchmark on the datafusion checkout in /source/datafusion
 DATAFUSION_DIR=/source/datafusion ./bench.sh run tpch
 
-**********
-* Commands
-**********
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Commands
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 data:            Generates or downloads data needed for benchmarking
 run:             Runs the named benchmark
 compare:         Compares fastest results from benchmark runs
 compare_detail:  Compares minimum, average (±stddev), and maximum results from benchmark runs
 venv:            Creates new venv (unless already exists) and installs compare's requirements into it
 
-**********
-* Benchmarks
-**********
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Benchmarks
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Run all of the following benchmarks
 all(default): Data/Run/Compare for all benchmarks
+
+# TPC-H Benchmarks
 tpch:                   TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, hash join
 tpch_csv:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single csv file per table, hash join
 tpch_mem:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
 tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table, hash join
 tpch_csv10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single csv file per table, hash join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
-cancellation:           How long cancelling a query takes
-parquet:                Benchmark of parquet reader's filtering speed
-sort:                   Benchmark of sorting speed
-sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPCH dataset
+
+# Extended TPC-H Benchmarks
+sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
+topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
+external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
+
+# ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
-external_aggr:          External aggregation benchmark
+
+# H2O.ai Benchmarks (Group By, Join, Window)
 h2o_small:              h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
 h2o_medium:             h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
 h2o_big:                h2oai benchmark with large dataset (1e9 rows) for groupby,  default file format is csv
@@ -100,11 +107,18 @@ h2o_big_join:           h2oai benchmark with large dataset (1e9 rows) for join, 
 h2o_small_window:       Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
 h2o_medium_window:      Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
 h2o_big_window:         Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+
+# Join Order Benchmark (IMDB)
 imdb:                   Join Order Benchmark (JOB) using the IMDB dataset converted to parquet
 
-**********
-* Supported Configuration (Environment Variables)
-**********
+# Micro-Benchmarks (specific operators and features)
+cancellation:           How long cancelling a query takes
+parquet:                Benchmark of parquet reader's filtering speed
+sort:                   Benchmark of sorting speed
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Supported Configuration (Environment Variables)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DATA_DIR            directory to store datasets
 CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
@@ -236,6 +250,10 @@ main() {
                     # same data as for tpch
                     data_tpch "1"
                     ;;
+                topk_tpch)
+                    # same data as for tpch
+                    data_tpch "1"
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -360,6 +378,9 @@ main() {
                     ;;
                 sort_tpch)
                     run_sort_tpch
+                    ;;
+                topk_tpch)
+                    run_topk_tpch
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -979,6 +1000,16 @@ run_sort_tpch() {
     echo "Running sort tpch benchmark..."
 
     debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+}
+
+# Runs the sort tpch integration benchmark with limit 100 (topk)
+run_topk_tpch() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf1"
+    RESULTS_FILE="${RESULTS_DIR}/run_topk_tpch.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running topk tpch benchmark..."
+
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100
 }
 
 

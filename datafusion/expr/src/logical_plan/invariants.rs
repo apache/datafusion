@@ -310,7 +310,10 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
                 check_inner_plan(left)?;
                 check_no_outer_references(right)
             }
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
                 check_no_outer_references(left)?;
                 check_inner_plan(right)
             }
