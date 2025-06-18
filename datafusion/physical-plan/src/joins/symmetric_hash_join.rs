@@ -1091,8 +1091,10 @@ fn lookup_join_hashmap(
     //     (5,1)
     //
     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
-    let (mut matched_probe, mut matched_build) = build_hashmap
-        .get_matched_indices(hash_values.iter().enumerate().rev(), deleted_offset);
+    let (mut matched_probe, mut matched_build) = build_hashmap.get_matched_indices(
+        Box::new(hash_values.iter().enumerate().rev()),
+        deleted_offset,
+    );
 
     matched_probe.reverse();
     matched_build.reverse();
