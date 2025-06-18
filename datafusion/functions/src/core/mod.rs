@@ -27,6 +27,7 @@ pub mod expr_ext;
 pub mod getfield;
 pub mod greatest;
 mod greatest_least_utils;
+pub mod grouping;
 pub mod least;
 pub mod named_struct;
 pub mod nullif;
@@ -55,6 +56,7 @@ make_udf_function!(least::LeastFunc, least);
 make_udf_function!(union_extract::UnionExtractFun, union_extract);
 make_udf_function!(union_tag::UnionTagFunc, union_tag);
 make_udf_function!(version::VersionFunc, version);
+make_udf_function!(grouping::GroupingFunc, grouping);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
