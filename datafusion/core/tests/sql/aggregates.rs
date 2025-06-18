@@ -601,8 +601,20 @@ async fn test_group_by_max_with_nulls() -> Result<()> {
     let df = ctx.sql(sql).await?;
     let results = df.collect().await?;
 
-    // Verify that MAX properly handles nulls
-    assert!(!results.is_empty());
+    // Verify that MAX properly handles nulls with comprehensive result verification
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +--------+----------+----------+
+    | u8_low | utf8_low | max_utf8 |
+    +--------+----------+----------+
+    | 1      | x        | test     |
+    | 1      |          | world    |
+    | 2      | y        |          |
+    |        | x        |          |
+    +--------+----------+----------+
+    "###
+    );
 
     println!("Results with nulls:");
     println!("{}", batches_to_string(&results));
@@ -701,7 +713,7 @@ async fn test_group_by_max_dictionary_with_nulls() -> Result<()> {
     let results1 = df1.collect().await?;
 
     println!("Test 1 - GROUP BY dictionary with nulls:");
-    println!("{1}", batches_to_string(&results1));
+    println!("{}", batches_to_string(&results1));
 
     // Test 2: MAX aggregation on dictionary column with nulls
     let sql2 = "SELECT
@@ -745,15 +757,14 @@ async fn test_group_by_max_dictionary_with_nulls() -> Result<()> {
     assert_snapshot!(
         batches_to_string(&results1),
         @r###"
-    +------------------+----------+
-    | dict_with_nulls  | max_utf8 |
-    +------------------+----------+
-    |                  | value6   |
-    |                  | value2   |
-    | alpha            | value8   |
-    | beta             | value4   |
-    | gamma            | value7   |
-    +------------------+----------+
+    +-----------------+----------+
+    | dict_with_nulls | max_utf8 |
+    +-----------------+----------+
+    | alpha           | value8   |
+    | beta            | value4   |
+    | gamma           | value7   |
+    |                 | value6   |
+    +-----------------+----------+
     "###
     );
 
@@ -774,17 +785,16 @@ async fn test_group_by_max_dictionary_with_nulls() -> Result<()> {
     assert_snapshot!(
         batches_to_string(&results3),
         @r###"
-    +-----------+------------------+----------+-----------+
-    | group_col | dict_with_nulls  | max_utf8 | row_count |
-    +-----------+------------------+----------+-----------+
-    | 1         |                  | value3   | 1         |
-    | 1         |                  | value2   | 1         |
-    | 1         | alpha            | value1   | 1         |
-    | 1         | beta             | value4   | 1         |
-    | 2         |                  | value6   | 1         |
-    | 2         | alpha            | value8   | 1         |
-    | 2         | gamma            | value7   | 1         |
-    +-----------+------------------+----------+-----------+
+    +-----------+-----------------+----------+-----------+
+    | group_col | dict_with_nulls | max_utf8 | row_count |
+    +-----------+-----------------+----------+-----------+
+    | 1         | alpha           | value1   | 1         |
+    | 1         | beta            | value4   | 1         |
+    | 1         |                 | value3   | 2         |
+    | 2         | alpha           | value8   | 1         |
+    | 2         | gamma           | value7   | 1         |
+    | 2         |                 | value6   | 2         |
+    +-----------+-----------------+----------+-----------+
     "###
     );
 
@@ -870,9 +880,29 @@ async fn test_dictionary_all_nulls() -> Result<()> {
     println!("All null values result:");
     println!("{}", batches_to_string(&results2));
 
-    // Verify results
-    assert!(!results1.is_empty());
-    assert!(!results2.is_empty());
+    // Verify Test 1: GROUP BY with all-null dictionary keys
+    assert_snapshot!(
+        batches_to_string(&results1),
+        @r###"
+    +----------------+---------+
+    | dict_null_keys | max_agg |
+    +----------------+---------+
+    |                | y       |
+    +----------------+---------+
+    "###
+    );
+
+    // Verify Test 2: GROUP BY with all-null dictionary values
+    assert_snapshot!(
+        batches_to_string(&results2),
+        @r###"
+    +------------------+---------+
+    | dict_null_values | max_agg |
+    +------------------+---------+
+    |                  | w       |
+    +------------------+---------+
+    "###
+    );
 
     // Both should have single row with null group key
     assert_eq!(results1[0].num_rows(), 1);
@@ -964,7 +994,21 @@ async fn test_original_sql_pattern_with_dictionary_nulls() -> Result<()> {
     let results = df.collect().await?;
 
     // Verify the query executes successfully with dictionary nulls
-    assert!(!results.is_empty());
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +--------+---------------------+----------+------+-------+--------+-------------+
+    | u8_low | dictionary_utf8_low | utf8_low | col1 | col2  | col3   | col4        |
+    +--------+---------------------+----------+------+-------+--------+-------------+
+    | 1      |                     | y        | y    | world | bin2   |             |
+    | 1      | low1                | x        | x    | hello | bin1   | 1000000000  |
+    | 2      |                     | x        | x    | foo   | bin3   |             |
+    | 2      | low2                | z        | z    | bar   | bin4   | 4000000000  |
+    | 3      | low1                | x        | x    | baz   | bin5   | 5000000000  |
+    +--------+---------------------+----------+------+-------+--------+-------------+
+    "###
+    );
+
     let batch = &results[0];
     assert!(batch.num_rows() > 0);
 
