@@ -28,7 +28,8 @@ use super::{
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
@@ -449,9 +450,14 @@ impl ExecutionPlan for FilterExec {
 
     fn gather_filters_for_pushdown(
         &self,
+        phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
+        if !matches!(phase, FilterPushdownPhase::Pre) {
+            return Ok(FilterDescription::new_with_child_count(1)
+                .all_parent_filters_supported(parent_filters));
+        }
         let self_filter = split_conjunction(&self.predicate)
             .into_iter()
             .cloned()
@@ -503,9 +509,15 @@ impl ExecutionPlan for FilterExec {
 
     fn handle_child_pushdown_result(
         &self,
+        phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        if !matches!(phase, FilterPushdownPhase::Pre) {
+            return Ok(FilterPushdownPropagation::transparent(
+                child_pushdown_result,
+            ));
+        }
         // We absorb any parent filters that were not handled by our children
         let mut unhandled_filters =
             child_pushdown_result.parent_filters.collect_unsupported();

@@ -230,7 +230,7 @@ logical_plan
 02)--Union
 03)----TableScan: t1 projection=[name]
 04)----TableScan: t2 projection=[name]
-05)----Projection: t2.name || Utf8("_new") AS name
+05)----Projection: t2.name || Utf8View("_new") AS name
 06)------TableScan: t2 projection=[name]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
@@ -266,7 +266,7 @@ logical_plan
 01)Union
 02)--TableScan: t1 projection=[name]
 03)--TableScan: t2 projection=[name]
-04)--Projection: t2.name || Utf8("_new") AS name
+04)--Projection: t2.name || Utf8View("_new") AS name
 05)----TableScan: t2 projection=[name]
 physical_plan
 01)UnionExec
