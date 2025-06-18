@@ -3512,7 +3512,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::RightMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -3556,7 +3556,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::RightMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -3696,7 +3696,7 @@ mod tests {
             &join_hash_map,
             &[left_keys_values],
             &[right_keys_values],
-            false,
+            NullEquality::NullEqualsNothing,
             &hashes_buffer,
             8192,
             (0, None),
