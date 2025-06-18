@@ -46,7 +46,6 @@ use datafusion::parquet::file::writer::SerializedFileWriter;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
-use futures::AsyncWriteExt;
 use std::fs::{create_dir_all, read_dir, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -54,9 +53,9 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 /// We should disable page index support in the Parquet reader
-/// when we ennable this feature, since we are using a custom index.
+/// when we enable this feature, since we are using a custom index.
 ///
-/// Example creating parquet file that
+/// Example creating the parquet file that
 /// contains specialized indexes that
 /// are ignored by other readers
 ///
@@ -111,7 +110,7 @@ impl DistinctIndexTable {
 
             let distinct_set = read_distinct_index(&path)?;
 
-            println!("Read distinct index for {}: {:?}", file_name, distinct_set);
+            println!("Read distinct index for {file_name}: {file_name:?}");
             index.insert(file_name, distinct_set);
         }
 
@@ -137,6 +136,7 @@ impl<W: Write + Seek + Send> IndexedParquetWriter<W> {
     }
 }
 
+/// Magic bytes to identify our custom index format
 const INDEX_MAGIC: &[u8] = b"IDX1";
 
 fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
@@ -154,6 +154,7 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
 
     let mut writer = IndexedParquetWriter::try_new(file, schema.clone(), props)?;
 
+    // Write data to the Parquet file, we only write one column since our schema has one field
     {
         let mut rg_writer = writer.writer.next_row_group()?;
         let mut ser_col_writer = rg_writer
@@ -170,20 +171,23 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
             .map(|opt| ByteArray::from(opt.unwrap()))
             .collect();
 
-        println!("Writing values: {:?}", values_bytes);
+        println!("Writing values: {values_bytes:?}");
         col_writer.write_batch(&values_bytes, None, None)?;
         ser_col_writer.close()?;
         rg_writer.close()?;
     }
 
-    let offset = writer.writer.inner().seek(SeekFrom::Current(0))?;
-
+    let offset = writer.writer.inner().stream_position()?;
     let index_len = index_bytes.len() as u64;
+    
+    // Write the index magic and length to the file
     writer.writer.inner().write_all(b"IDX1")?;
     writer.writer.inner().write_all(&index_len.to_le_bytes())?;
 
+    // Write the index bytes
     writer.writer.inner().write_all(&index_bytes)?;
-
+    
+    // Append metadata about the index to the Parquet file footer
     writer.writer.append_key_value_metadata(KeyValue::new(
         "distinct_index_offset".to_string(),
         offset.to_string(),
@@ -228,13 +232,13 @@ fn read_distinct_index(path: &Path) -> Result<HashSet<String>, ParquetError> {
         .parse::<usize>()
         .map_err(|e| ParquetError::General(e.to_string()))?;
 
-    println!("Reading index at offset: {}, length: {}", offset, length);
+    println!("Reading index at offset: {offset}, length: {length}");
 
     file.seek(SeekFrom::Start(offset))?;
 
     let mut magic_buf = [0u8; 4];
     file.read_exact(&mut magic_buf)?;
-    if &magic_buf != INDEX_MAGIC {
+    if magic_buf != INDEX_MAGIC {
         return Err(ParquetError::General("Invalid index magic".into()));
     }
 
@@ -307,7 +311,10 @@ impl TableProvider for DistinctIndexTable {
 
         // Build ParquetSource for kept files
         let url = ObjectStoreUrl::parse("file://")?;
-        let source = Arc::new(ParquetSource::default());
+        
+        // Note: we disable page index support here since we are using a custom index, it has conflicts when testing.
+        // TODO: Remove this when we have a better solution for custom indexes with page index support.
+        let source = Arc::new(ParquetSource::default().with_enable_page_index(false));
         let mut builder = FileScanConfigBuilder::new(url, self.schema.clone(), source);
         for file in keep {
             let path = self.dir.join(&file);
@@ -343,13 +350,10 @@ async fn main() -> Result<()> {
     let field = Field::new("category", DataType::Utf8, false);
     let schema_ref = Arc::new(Schema::new(vec![field]));
     let provider = Arc::new(DistinctIndexTable::try_new(dir, schema_ref.clone())?);
+
     let ctx = SessionContext::new();
 
     ctx.register_table("t", provider)?;
-
-    // 3. Run a query: only files containing 'foo' get scanned
-    let df = ctx.sql("SELECT * FROM t").await?;
-    df.show().await?;
 
     // 3. Run a query: only files containing 'foo' get scanned
     let df = ctx.sql("SELECT * FROM t WHERE category = 'foo'").await?;
