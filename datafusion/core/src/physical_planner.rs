@@ -1013,9 +1013,12 @@ impl DefaultPhysicalPlanner {
                 let right_df_schema = right.schema();
                 let execution_props = session_state.execution_props();
 
-                // We declare a threshold here of 5 rows as NestedLoopJoins tend to better when one 
-                // of the tables are small. 
-                let threshold = session_state.config_options().optimizer.nested_loop_equijoin_threshold;
+                // We declare a threshold here of 5 rows as NestedLoopJoins tend to better when one
+                // of the tables are small.
+                let threshold = session_state
+                    .config_options()
+                    .optimizer
+                    .nested_loop_equijoin_threshold;
                 let left_rows = *physical_left
                     // We set the partition to None here to draw the num_rows from the plan
                     .partition_statistics(None)?

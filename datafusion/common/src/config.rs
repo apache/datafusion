@@ -705,7 +705,7 @@ config_namespace! {
         /// process to reorder the join keys
         pub top_down_join_key_reordering: bool, default = true
 
-        /// This is the maximum number of rows that either side of a table must have for Datafusion to 
+        /// This is the maximum number of rows that either side of a table must have for Datafusion to
         /// choose to use a `NestedLoopJoin` over a `SortMergeJoin` or `HashJoin` for equijoin conditions.
         pub nested_loop_equijoin_threshold: usize, default = 5
 
