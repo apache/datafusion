@@ -795,7 +795,7 @@ impl ExecutionPlan for HashJoinExec {
             self.null_equality,
         )?;
         // Preserve the dynamic filter if it exists
-        new_join.dynamic_filter = self.dynamic_filter.clone();
+        new_join.dynamic_filter = Arc::clone(&self.dynamic_filter);
         Ok(Arc::new(new_join))
     }
 
@@ -848,7 +848,7 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
-                    self.dynamic_filter.clone(),
+                    Arc::clone(&self.dynamic_filter),
                     on_right.clone(),
                 ))
             })?,
@@ -867,7 +867,7 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
-                    self.dynamic_filter.clone(),
+                    Arc::clone(&self.dynamic_filter),
                     on_right.clone(),
                 ))
             }
