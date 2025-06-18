@@ -33,7 +33,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use datafusion_common::{ColumnStatistics, JoinType, Result, Statistics};
+use datafusion_common::{ColumnStatistics, JoinType, NullEquality, Result, Statistics};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -190,7 +190,7 @@ pub fn sort_merge_join_exec(
             None,
             *join_type,
             vec![SortOptions::default(); join_on.len()],
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     )
@@ -236,7 +236,7 @@ pub fn hash_join_exec(
         join_type,
         None,
         PartitionMode::Partitioned,
-        true,
+        NullEquality::NullEqualsNull,
     )?))
 }
 
