@@ -494,8 +494,7 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
         )
-        .unwrap()
-        .with_dynamic_filter(),
+        .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
 
     // expect the predicate to be pushed down into the probe side DataSource

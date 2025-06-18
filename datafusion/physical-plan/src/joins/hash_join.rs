@@ -407,6 +407,16 @@ impl HashJoinExec {
             projection.as_ref(),
         )?;
 
+        // Create a dynamic filter with the right-side join keys as children
+        let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
+        
+        // Initialize with a placeholder expression (true) that will be updated
+        // when the hash table is built
+        let dynamic_filter = Some(Arc::new(DynamicFilterPhysicalExpr::new(
+            right_keys,
+            lit(true),
+        )));
+
         Ok(HashJoinExec {
             left,
             right,
@@ -422,7 +432,7 @@ impl HashJoinExec {
             column_indices,
             null_equality,
             cache,
-            dynamic_filter: None,
+            dynamic_filter,
         })
     }
 
@@ -514,20 +524,6 @@ impl HashJoinExec {
             self.mode,
             self.null_equality,
         )
-    }
-
-    /// Enable dynamic filter pushdown for this HashJoinExec
-    pub fn with_dynamic_filter(mut self) -> Self {
-        // Create a dynamic filter with the right-side join keys as children
-        let right_keys: Vec<_> = self.on.iter().map(|(_, r)| Arc::clone(r)).collect();
-        
-        // Initialize with a placeholder expression (true) that will be updated
-        // when the hash table is built
-        self.dynamic_filter = Some(Arc::new(DynamicFilterPhysicalExpr::new(
-            right_keys,
-            lit(true),
-        )));
-        self
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
