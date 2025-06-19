@@ -147,7 +147,7 @@ impl FileOpener for ParquetOpener {
             let mut file_pruner = predicate
                 .as_ref()
                 .map(|p| {
-                    Ok::<_, DataFusionError>(is_dynamic_physical_expr(&p).then_some(
+                    Ok::<_, DataFusionError>(is_dynamic_physical_expr(p).then_some(
                         FilePruner::new(
                             Arc::clone(p),
                             &logical_file_schema,
