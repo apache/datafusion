@@ -161,7 +161,7 @@ impl FileOpener for ParquetOpener {
                 if let Some(pruning_predicate) = pruning_predicate {
                     // The partition column schema is the schema of the table - the schema of the file
                     let mut pruning = Box::new(PartitionPruningStatistics::try_new(
-                        vec![file.partition_values],
+                        vec![file.partition_values.clone()],
                         partition_fields.clone(),
                     )?)
                         as Box<dyn PruningStatistics>;
@@ -252,7 +252,14 @@ impl FileOpener for ParquetOpener {
 
             let predicate = predicate
                 .map(|p| {
-                    cast_expr_to_schema(p, &physical_file_schema, &logical_file_schema)
+                    cast_expr_to_schema(
+                        p,
+                        &physical_file_schema,
+                        &logical_file_schema,
+                        file.partition_values,
+                        &partition_fields,
+                    )
+                    .map_err(ArrowError::from)
                 })
                 .transpose()?;
 
@@ -543,10 +550,29 @@ pub fn cast_expr_to_schema(
     expr: Arc<dyn PhysicalExpr>,
     physical_file_schema: &Schema,
     logical_file_schema: &Schema,
+    partition_values: Vec<ScalarValue>,
+    partition_fields: &[FieldRef],
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.transform(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<expressions::Column>() {
-            let logical_field = logical_file_schema.field_with_name(column.name())?;
+            let logical_field = match logical_file_schema.field_with_name(column.name()) {
+                Ok(field) => field,
+                Err(e) => {
+                    // Is this a partition field?
+                    for (partition_field, partition_value) in
+                        partition_fields.iter().zip(partition_values.iter())
+                    {
+                        if partition_field.name() == column.name() {
+                            // If the column is a partition field, we can use the partition value
+                            return Ok(Transformed::yes(expressions::lit(
+                                partition_value.clone(),
+                            )));
+                        }
+                    }
+                    // If the column is not found in the logical schema, return an error
+                    return Err(e.into());
+                }
+            };
             let Ok(physical_field) = physical_file_schema.field_with_name(column.name())
             else {
                 if !logical_field.is_nullable() {
