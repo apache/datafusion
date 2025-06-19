@@ -29,7 +29,6 @@ fn string_dict_type() -> DataType {
 
 use insta::assert_snapshot;
 /// Helper functions for aggregate tests with dictionary columns and nulls
-
 /// Creates a dictionary array with null values in the dictionary
 fn create_dict(
     values: Vec<Option<&str>>,
@@ -284,7 +283,7 @@ fn split_test_data_into_batches(
 ) -> Result<Vec<Vec<RecordBatch>>> {
     debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
     let total_len = test_data.values.len();
-    let chunk_size = (total_len + num_partitions - 1) / num_partitions; // Ensure we cover all data
+    let chunk_size = total_len.div_ceil(num_partitions); // Ensure we cover all data
 
     let mut batches = Vec::new();
     let mut start = 0;
@@ -808,15 +807,16 @@ async fn test_sum_null_handling() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results1_single),
-        @r###"
+        @r"
     +----------------+-------+
     | dict_null_vals | total |
     +----------------+-------+
     |                | 4     |
-    | group_a        | 4     |
-    | group_b        | 7     |
+    | group_x        | 4     |
+    | group_y        | 2     |
+    | group_z        | 5     |
     +----------------+-------+
-    "###
+    "
     );
 
     // Test SUM should ignore nulls, GROUP BY dict with null keys
@@ -825,16 +825,15 @@ async fn test_sum_null_handling() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results2_single),
-        @r###"
+        @r"
     +----------------+-------+
     | dict_null_keys | total |
     +----------------+-------+
     |                | 4     |
-    | group_x        | 4     |
-    | group_y        | 2     |
-    | group_z        | 5     |
+    | group_a        | 4     |
+    | group_b        | 7     |
     +----------------+-------+
-    "###
+    "
     );
 
     Ok(())
@@ -888,30 +887,30 @@ async fn test_median_null_handling() -> Result<()> {
     let sql1 = "SELECT dict_null_vals, MEDIAN(value) as median_value FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
     let results1_single = test_query_consistency(&ctx_single, &ctx_multi, sql1).await?;
 
-    assert_snapshot!(batches_to_string(&results1_single), @r###"
-    +----------------+-------------+
-    | dict_null_vals | median_value|
-    +----------------+-------------+
-    |                | 3.0         |
-    | group_a        | 4.0         |
-    | group_b        | 5.0         |
-    +----------------+-------------+
-    "###);
+    assert_snapshot!(batches_to_string(&results1_single), @r"
+    +----------------+--------------+
+    | dict_null_vals | median_value |
+    +----------------+--------------+
+    |                | 3            |
+    | group_x        | 1            |
+    | group_y        | 5            |
+    | group_z        | 7            |
+    +----------------+--------------+
+    ");
 
     // Test MEDIAN should ignore nulls, GROUP BY dict with null keys
     let sql2 = "SELECT dict_null_keys, MEDIAN(value) as median_value FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
     let results2_single = test_query_consistency(&ctx_single, &ctx_multi, sql2).await?;
 
-    assert_snapshot!(batches_to_string(&results2_single), @r###"
-    +----------------+-------------+
-    | dict_null_keys | median_value|
-    +----------------+-------------+
-    |                | 3.0         |
-    | group_x        | 1.0         |
-    | group_y        | 5.0         |
-    | group_z        | 7.0         |
-    +----------------+-------------+
-    "###);
+    assert_snapshot!(batches_to_string(&results2_single), @r"
+    +----------------+--------------+
+    | dict_null_keys | median_value |
+    +----------------+--------------+
+    |                | 3            |
+    | group_a        | 4            |
+    | group_b        | 5            |
+    +----------------+--------------+
+    ");
 
     Ok(())
 }
@@ -927,17 +926,17 @@ async fn test_first_last_val_null_handling() -> Result<()> {
 
     let results_single = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
 
-    assert_snapshot!(batches_to_string(&results_single), @r###"
+    assert_snapshot!(batches_to_string(&results_single), @r"
     +----------------+-------+-----------+----------+
     | dict_null_keys | value | first_val | last_val |
     +----------------+-------+-----------+----------+
-    |                | 1     |1          | 3        |
-    |                | 3     |1          | 3        |
+    |                | 1     | 1         | 3        |
+    |                | 3     | 1         | 3        |
     | group_a        |       |           |          |
     | group_a        |       |           |          |
     | group_b        | 2     | 2         | 2        |
     +----------------+-------+-----------+----------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -1459,7 +1458,7 @@ fn split_fuzz_data_into_batches(
 ) -> Result<Vec<Vec<RecordBatch>>> {
     debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
     let total_len = test_data.u8_low.len();
-    let chunk_size = (total_len + num_partitions - 1) / num_partitions;
+    let chunk_size = total_len.div_ceil(num_partitions);
 
     let mut batches = Vec::new();
     let mut start = 0;
@@ -1510,19 +1509,19 @@ async fn test_max_with_fuzz_table_dict_nulls() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results),
-        @r###"
-    +--------+---------------------+----------+--------+----------+
-    | u8_low | dictionary_utf8_low | utf8_low | col1   | col2     |
-    +--------+---------------------+----------+--------+----------+
-    | 1      |                     | str_b    | str_b  | value_2  |
-    | 1      | dict_a              | str_a    | str_a  | value_5  |
-    | 2      |                     | str_c    | str_c  | value_7  |
-    | 2      |                     | str_d    | str_d  | value_4  |
-    | 2      | dict_b              | str_c    | str_c  | value_3  |
-    | 3      |                     | str_e    | str_e  |          |
-    | 3      | dict_c              | str_f    | str_f  | value_6  |
-    +--------+---------------------+----------+--------+----------+
-    "###
+        @r"
+    +--------+---------------------+----------+-------+---------+
+    | u8_low | dictionary_utf8_low | utf8_low | col1  | col2    |
+    +--------+---------------------+----------+-------+---------+
+    | 1      |                     | str_b    | str_b | value_2 |
+    | 1      | dict_a              | str_a    | str_a | value_5 |
+    | 2      |                     | str_c    | str_c | value_7 |
+    | 2      |                     | str_d    | str_d | value_4 |
+    | 2      | dict_b              | str_c    | str_c | value_3 |
+    | 3      |                     | str_e    | str_e |         |
+    | 3      | dict_c              | str_f    | str_f | value_6 |
+    +--------+---------------------+----------+-------+---------+
+    "
     );
 
     Ok(())
@@ -1650,7 +1649,7 @@ fn split_fuzz_timestamp_data_into_batches(
 ) -> Result<Vec<Vec<RecordBatch>>> {
     debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
     let total_len = test_data.utf8_low.len();
-    let chunk_size = (total_len + num_partitions - 1) / num_partitions;
+    let chunk_size = total_len.div_ceil(num_partitions);
 
     let mut batches = Vec::new();
     let mut start = 0;
@@ -1700,18 +1699,18 @@ async fn test_min_timestamp_with_fuzz_table_dict_nulls() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results),
-        @r###"
-    +----------+--------+---------------------+---------------------+
-    | utf8_low | u8_low | dictionary_utf8_low | col1                |
-    +----------+--------+---------------------+---------------------+
-    | alpha    | 10     | dict_x              | 1970-01-01T00:00:01 |
-    | beta     | 20     |                     | 1970-01-01T00:00:02 |
-    | delta    | 20     |                     | 1970-01-01T00:00:03.500 |                    |
-    | epsilon  | 40     |                     | 1970-01-01T00:00:04 |
+        @r"
+    +----------+--------+---------------------+-------------------------+
+    | utf8_low | u8_low | dictionary_utf8_low | col1                    |
+    +----------+--------+---------------------+-------------------------+
+    | alpha    | 10     | dict_x              | 1970-01-01T00:00:01     |
+    | beta     | 20     |                     | 1970-01-01T00:00:02     |
+    | delta    | 20     |                     | 1970-01-01T00:00:03.500 |
+    | epsilon  | 40     |                     | 1970-01-01T00:00:04     |
     | gamma    | 30     | dict_y              | 1970-01-01T00:00:02.800 |
     | zeta     | 30     | dict_z              | 1970-01-01T00:00:02.500 |
-    +----------+--------+---------------------+---------------------+
-    "###
+    +----------+--------+---------------------+-------------------------+
+    "
     );
 
     Ok(())
@@ -1864,7 +1863,7 @@ fn split_fuzz_count_data_into_batches(
 ) -> Result<Vec<Vec<RecordBatch>>> {
     debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
     let total_len = test_data.u8_low.len();
-    let chunk_size = (total_len + num_partitions - 1) / num_partitions;
+    let chunk_size = total_len.div_ceil(num_partitions);
 
     let mut batches = Vec::new();
     let mut start = 0;
@@ -2108,7 +2107,7 @@ fn split_fuzz_median_data_into_batches(
 ) -> Result<Vec<Vec<RecordBatch>>> {
     debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
     let total_len = test_data.u8_low.len();
-    let chunk_size = (total_len + num_partitions - 1) / num_partitions;
+    let chunk_size = total_len.div_ceil(num_partitions);
 
     let mut batches = Vec::new();
     let mut start = 0;
@@ -2162,18 +2161,18 @@ async fn test_median_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results),
-        @r###"
-    +--------+---------------------+------+------+------+--------+---------+
-    | u8_low | dictionary_utf8_low | col1 | col2 | col3 | col4   | col5    |
-    +--------+---------------------+------+------+------+--------+---------+
-    | 50     |                     |      | 30   |      | 987.65 | 400000  |
-    | 50     | group_three         | 5000 | 50   | 5000 | 555.55 | 500000  |
-    | 75     |                     | 4000 |      | 4000 |        | 450000  |
-    | 100    | group_one           | 1100 | 11   | 1000 | 123.45 | 110000  |
-    | 100    | group_two           | 1500 | 15   | 1500 | 111.11 | 150000  |
-    | 200    |                     | 2500 | 22.5 | 2500 | 506.12 | 250000  |
-    +--------+---------------------+------+------+------+--------+---------+
-    "###
+        @r"
+    +--------+---------------------+------+------+------+--------+--------+
+    | u8_low | dictionary_utf8_low | col1 | col2 | col3 | col4   | col5   |
+    +--------+---------------------+------+------+------+--------+--------+
+    | 50     |                     |      | 30   |      | 987.65 | 400000 |
+    | 50     | group_three         | 5000 | 50   | 5000 | 555.55 | 500000 |
+    | 75     |                     | 4000 |      | 4000 |        | 450000 |
+    | 100    | group_one           | 1100 | 11   | 1000 | 123.45 | 110000 |
+    | 100    | group_two           | 1500 | 15   | 1500 | 111.11 | 150000 |
+    | 200    |                     | 2500 | 22   | 2500 | 506.11 | 250000 |
+    +--------+---------------------+------+------+------+--------+--------+
+    "
     );
 
     Ok(())
