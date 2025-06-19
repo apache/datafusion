@@ -23,6 +23,7 @@ use arrow::{
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
+use parking_lot::RwLock;
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -121,11 +122,37 @@ pub struct TopK {
     /// Common sort prefix between the input and the sort expressions to allow early exit optimization
     common_sort_prefix: Arc<[PhysicalSortExpr]>,
     /// Filter matching the state of the `TopK` heap used for dynamic filter pushdown
-    filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    filter: TopKDynamicFilters,
     /// If true, indicates that all rows of subsequent batches are guaranteed
     /// to be greater (by byte order, after row conversion) than the top K,
     /// which means the top K won't change and the computation can be finished early.
     pub(crate) finished: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TopKDynamicFilters {
+    /// The current *global* threshold for the dynamic filter.
+    /// This is shared across all partitions and is updated by any of them.
+    thresholds: Arc<RwLock<Option<Vec<ScalarValue>>>>,
+    /// Current global row that matches the dynamic filter.
+    row: Arc<RwLock<Option<Vec<u8>>>>,
+    /// The expression used to evaluate the dynamic filter
+    expr: Arc<DynamicFilterPhysicalExpr>,
+}
+
+impl TopKDynamicFilters {
+    /// Create a new `TopKDynamicFilters` with the given expression
+    pub fn new(expr: Arc<DynamicFilterPhysicalExpr>) -> Self {
+        Self {
+            thresholds: Arc::new(RwLock::new(None)),
+            row: Arc::new(RwLock::new(None)),
+            expr,
+        }
+    }
+
+    pub fn expr(&self) -> Arc<DynamicFilterPhysicalExpr> {
+        Arc::clone(&self.expr)
+    }
 }
 
 // Guesstimate for memory allocation: estimated number of bytes used per row in the RowConverter
@@ -160,7 +187,7 @@ impl TopK {
         batch_size: usize,
         runtime: Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
-        filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+        filter: TopKDynamicFilters,
     ) -> Result<Self> {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
@@ -214,9 +241,10 @@ impl TopK {
 
         let mut selected_rows = None;
 
-        if let Some(filter) = self.filter.as_ref() {
-            // If a filter is provided, update it with the new rows
-            let filter = filter.current()?;
+        // If a filter is provided, update it with the new rows
+        let filter = self.filter.expr.current()?;
+
+        if filter != lit(true) {
             let filtered = filter.evaluate(&batch)?;
             let num_rows = batch.num_rows();
             let array = filtered.into_array(num_rows)?;
@@ -248,7 +276,7 @@ impl TopK {
                     .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
                     .collect::<Result<Vec<_>>>()?;
             }
-        };
+        }
         // reuse existing `Rows` to avoid reallocations
         let rows = &mut self.scratch_rows;
         rows.clear();
@@ -319,12 +347,46 @@ impl TopK {
     /// (a > 2 OR (a = 2 AND b < 3))
     /// ```
     fn update_filter(&mut self) -> Result<()> {
-        let Some(filter) = &self.filter else {
+        let Some(max) = self.heap.max() else {
+            // If the heap is empty, there's nothing to update
             return Ok(());
         };
-        let Some(thresholds) = self.heap.get_threshold_values(&self.expr)? else {
-            return Ok(());
+
+        let mut thresholds: Option<Vec<ScalarValue>> = None;
+
+        // Are the new thresholds more selective than our existing ones?
+        let should_update = {
+            // TODO: single lock
+            let mut current_row = self.filter.row.write();
+            let mut current_thresholds = self.filter.thresholds.write();
+
+            let more_selective = if let Some(current) = current_row.as_mut() {
+                let more_selective = max.row() < current.as_slice();
+                // If the new thresholds are more selective, update the current ones
+                if more_selective {
+                    current.clear();
+                    current.extend_from_slice(max.row());
+                    thresholds = self.heap.get_threshold_values(&self.expr)?;
+                    *current_thresholds = thresholds.clone();
+                }
+                more_selective
+            } else {
+                // No current thresholds, so update with the new ones
+                thresholds = self.heap.get_threshold_values(&self.expr)?;
+                // TODO: avoid this clone
+                *current_thresholds = thresholds.clone();
+                *current_row = Some(max.row().to_vec());
+                true
+            };
+
+            more_selective
         };
+
+        if !should_update {
+            return Ok(());
+        }
+
+        let thresholds = thresholds.unwrap();
 
         // Create filter expressions for each threshold
         let mut filters: Vec<Arc<dyn PhysicalExpr>> =
@@ -405,7 +467,7 @@ impl TopK {
 
         if let Some(predicate) = dynamic_predicate {
             if !predicate.eq(&lit(true)) {
-                filter.update(predicate)?;
+                self.filter.expr.update(predicate)?;
             }
         }
 
@@ -1053,7 +1115,10 @@ mod tests {
             2,
             runtime,
             &metrics,
-            None,
+            TopKDynamicFilters::new(Arc::new(DynamicFilterPhysicalExpr::new(
+                vec![],
+                lit(true),
+            ))),
         )?;
 
         // Create the first batch with two columns:
