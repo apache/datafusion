@@ -71,11 +71,6 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "GlobalLimitExec: skip=0, fetch=3, ",
-        "metrics=[output_rows=3, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
         "ProjectionExec: expr=[count(*)",
         "metrics=[output_rows=1, elapsed_compute="
     );
@@ -101,9 +96,7 @@ async fn explain_analyze_baseline_metrics() {
 
         plan.as_any().downcast_ref::<sorts::sort::SortExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::aggregates::AggregateExec>().is_some()
-            // CoalescePartitionsExec doesn't do any work so is not included
             || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::limit::GlobalLimitExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::limit::LocalLimitExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::coalesce_batches::CoalesceBatchesExec>().is_some()

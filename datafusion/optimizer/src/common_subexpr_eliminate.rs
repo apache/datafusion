@@ -35,7 +35,7 @@ use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
 use datafusion_expr::tree_node::replace_sort_expressions;
-use datafusion_expr::{col, BinaryExpr, Case, Expr, GroupingSet, Operator};
+use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator};
 
 const CSE_PREFIX: &str = "__common_expr";
 

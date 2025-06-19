@@ -117,7 +117,7 @@ pub fn resolve_table_references(
                     if !with.recursive {
                         // This is a bit hackish as the CTE will be visited again as part of visiting `q`,
                         // but thankfully `insert_relation` is idempotent.
-                        cte.visit(self);
+                        let _ = cte.visit(self);
                     }
                     self.ctes_in_scope
                         .push(ObjectName(vec![cte.alias.name.clone()]));
@@ -188,7 +188,7 @@ pub fn resolve_table_references(
                     visitor.insert_relation(table_name);
                 }
                 CopyToSource::Query(query) => {
-                    query.visit(visitor);
+                    let _ = query.visit(visitor);
                 }
             },
             DFStatement::Explain(explain) => visit_statement(&explain.statement, visitor),
