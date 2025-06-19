@@ -549,6 +549,12 @@ pub fn cast_expr_to_schema(
             let logical_field = logical_file_schema.field_with_name(column.name())?;
             let Ok(physical_field) = physical_file_schema.field_with_name(column.name())
             else {
+                if !logical_field.is_nullable() {
+                    return exec_err!(
+                        "Non-nullable column '{}' is missing from the physical schema",
+                        column.name()
+                    );
+                }
                 // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` would do.
                 let value = ScalarValue::Null.cast_to(logical_field.data_type())?;
                 return Ok(Transformed::yes(expressions::lit(value)));
