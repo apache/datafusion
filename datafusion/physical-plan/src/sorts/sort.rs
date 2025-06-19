@@ -45,16 +45,12 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{
-    Array, ArrayRef, RecordBatch, RecordBatchOptions, StringViewArray,
-};
+use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{
     concat, interleave_record_batch, lexsort_to_indices, take_arrays, SortColumn,
 };
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{
-    internal_datafusion_err, internal_err, DataFusionError, Result,
-};
+use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
 
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -659,10 +655,8 @@ impl ExternalSorter {
 
         // If less than sort_in_place_threshold_bytes, we sort in memory.
         if self.reservation.size() < self.sort_in_place_threshold_bytes {
-            let interleave_indices = self.build_sorted_indices(
-                self.in_mem_batches.as_slice(),
-                &self.expr,
-            )?;
+            let interleave_indices =
+                self.build_sorted_indices(self.in_mem_batches.as_slice(), &self.expr)?;
 
             let batches: Vec<&RecordBatch> = self.in_mem_batches.iter().collect();
             let sorted_batch = interleave_record_batch(&batches, &interleave_indices)?;
