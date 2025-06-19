@@ -345,9 +345,21 @@ async fn setup_test_contexts(
     let ctx_multi =
         SessionContext::new_with_config(SessionConfig::new().with_target_partitions(3));
 
-    // Split data into multiple batches for partitioning
+    let batches = split_test_data_into_batches(test_data, 3)?;
+
+    let provider_multi = MemTable::try_new(test_data.schema.clone(), batches)?;
+    ctx_multi.register_table("t", Arc::new(provider_multi))?;
+
+    Ok((ctx_single, ctx_multi))
+}
+
+/// Splits test data into multiple batches for partitioning
+fn split_test_data_into_batches(
+    test_data: &TestData,
+    num_partitions: usize,
+) -> Result<Vec<Vec<RecordBatch>>> {
     let total_len = test_data.values.len();
-    let chunk_size = (total_len + 2) / 3; // Ensure we cover all data
+    let chunk_size = (total_len + num_partitions - 1) / num_partitions; // Ensure we cover all data
 
     let mut batches = Vec::new();
     let mut start = 0;
@@ -370,10 +382,7 @@ async fn setup_test_contexts(
         start = end;
     }
 
-    let provider_multi = MemTable::try_new(test_data.schema.clone(), batches)?;
-    ctx_multi.register_table("t", Arc::new(provider_multi))?;
-
-    Ok((ctx_single, ctx_multi))
+    Ok(batches)
 }
 
 /// Executes a query on both single and multi-partition contexts and verifies consistency
