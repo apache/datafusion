@@ -19,6 +19,7 @@ use super::*;
 use datafusion::common::test_util::batches_to_string;
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
+use insta::assert_snapshot;
 /// Helper functions for aggregate tests with dictionary columns and nulls
 
 /// Creates a dictionary array with null keys
