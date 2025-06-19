@@ -329,25 +329,20 @@ async fn setup_test_contexts(
     let ctx_single =
         SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
 
-    let batch_single = RecordBatch::try_new(
-        test_data.schema.clone(),
-        vec![
-            Arc::new(test_data.dict_null_keys.clone()),
-            Arc::new(test_data.dict_null_vals.clone()),
-            Arc::new(test_data.values.clone()),
-        ],
-    )?;
-    let provider_single =
-        MemTable::try_new(test_data.schema.clone(), vec![vec![batch_single]])?;
+    let mut num_partitions = 1;
+    let batch_single = split_test_data_into_batches(test_data, num_partitions)?;
+    let provider_single = MemTable::try_new(test_data.schema.clone(), batch_single)?;
     ctx_single.register_table("t", Arc::new(provider_single))?;
 
+    num_partitions = 3;
     // Multiple partition context
-    let ctx_multi =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(3));
+    let ctx_multi = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(num_partitions),
+    );
 
-    let batches = split_test_data_into_batches(test_data, 3)?;
+    let batches_multi = split_test_data_into_batches(test_data, num_partitions)?;
 
-    let provider_multi = MemTable::try_new(test_data.schema.clone(), batches)?;
+    let provider_multi = MemTable::try_new(test_data.schema.clone(), batches_multi)?;
     ctx_multi.register_table("t", Arc::new(provider_multi))?;
 
     Ok((ctx_single, ctx_multi))
