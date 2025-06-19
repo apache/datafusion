@@ -1352,7 +1352,7 @@ async fn test_first_last_value_complex_dict_nulls() -> Result<()> {
 struct FuzzTestData {
     schema: Arc<Schema>,
     u8_low: UInt8Array,
-    dictionary_utf8_low: DictionaryArray<Int32Type>,
+    dictionary_utf8_low: DictionaryArray<UInt32Type>,
     utf8_low: StringArray,
     utf8: StringArray,
 }
@@ -1712,6 +1712,225 @@ async fn test_min_timestamp_with_fuzz_table_dict_nulls() -> Result<()> {
     | gamma    | 30     | dict_y              | 1970-01-01T00:00:02.800 |
     | zeta     | 30     | dict_z              | 1970-01-01T00:00:02.500 |
     +----------+--------+---------------------+---------------------+
+    "###
+    );
+
+    Ok(())
+}
+
+/// Test data structure for fuzz table with duration, large_binary and dictionary columns containing nulls
+struct FuzzCountTestData {
+    schema: Arc<Schema>,
+    u8_low: UInt8Array,
+    utf8_low: StringArray,
+    dictionary_utf8_low: DictionaryArray<UInt32Type>,
+    duration_nanosecond: DurationNanosecondArray,
+    large_binary: LargeBinaryArray,
+}
+
+impl FuzzCountTestData {
+    fn new() -> Self {
+        // Create dictionary columns with null keys and values
+        let dictionary_utf8_low = create_dict(
+            vec![
+                Some("group_alpha"),
+                None,
+                Some("group_beta"),
+                Some("group_gamma"),
+            ],
+            vec![
+                Some(0), // group_alpha
+                Some(1), // null value
+                Some(2), // group_beta
+                None,    // null key
+                Some(0), // group_alpha
+                Some(1), // null value
+                Some(3), // group_gamma
+                None,    // null key
+                Some(2), // group_beta
+                Some(0), // group_alpha
+            ],
+        );
+
+        let u8_low = UInt8Array::from(vec![
+            Some(5),
+            Some(10),
+            Some(15),
+            Some(10),
+            Some(5),
+            Some(20),
+            Some(25),
+            Some(10),
+            Some(15),
+            Some(5),
+        ]);
+
+        let utf8_low = StringArray::from(vec![
+            Some("text_a"),
+            Some("text_b"),
+            Some("text_c"),
+            Some("text_d"),
+            Some("text_a"),
+            Some("text_e"),
+            Some("text_f"),
+            Some("text_d"),
+            Some("text_c"),
+            Some("text_a"),
+        ]);
+
+        // Create duration data with some nulls (nanoseconds)
+        let duration_nanosecond = DurationNanosecondArray::from(vec![
+            Some(1000000000), // 1 second
+            Some(2000000000), // 2 seconds
+            None,             // null duration
+            Some(3000000000), // 3 seconds
+            Some(1500000000), // 1.5 seconds
+            None,             // null duration
+            Some(4000000000), // 4 seconds
+            Some(2500000000), // 2.5 seconds
+            Some(3500000000), // 3.5 seconds
+            Some(1200000000), // 1.2 seconds
+        ]);
+
+        // Create large binary data with some nulls and duplicates
+        let large_binary = LargeBinaryArray::from(vec![
+            Some(b"binary_data_1".as_slice()),
+            Some(b"binary_data_2".as_slice()),
+            Some(b"binary_data_3".as_slice()),
+            None,                              // null binary
+            Some(b"binary_data_1".as_slice()), // duplicate
+            Some(b"binary_data_4".as_slice()),
+            Some(b"binary_data_5".as_slice()),
+            None,                              // null binary
+            Some(b"binary_data_3".as_slice()), // duplicate
+            Some(b"binary_data_1".as_slice()), // duplicate
+        ]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u8_low", DataType::UInt8, true),
+            Field::new("utf8_low", DataType::Utf8, true),
+            Field::new("dictionary_utf8_low", string_dict_type(), true),
+            Field::new(
+                "duration_nanosecond",
+                DataType::Duration(TimeUnit::Nanosecond),
+                true,
+            ),
+            Field::new("large_binary", DataType::LargeBinary, true),
+        ]));
+
+        Self {
+            schema,
+            u8_low,
+            utf8_low,
+            dictionary_utf8_low,
+            duration_nanosecond,
+            large_binary,
+        }
+    }
+}
+
+/// Sets up test contexts for fuzz table with duration/binary columns and both single and multiple partitions
+async fn setup_fuzz_count_test_contexts() -> Result<(SessionContext, SessionContext)> {
+    let test_data = FuzzCountTestData::new();
+
+    // Single partition context
+    let ctx_single = create_fuzz_count_context_with_partitions(&test_data, 1).await?;
+
+    // Multiple partition context
+    let ctx_multi = create_fuzz_count_context_with_partitions(&test_data, 3).await?;
+
+    Ok((ctx_single, ctx_multi))
+}
+
+/// Creates a session context with fuzz count table partitioned into specified number of partitions
+async fn create_fuzz_count_context_with_partitions(
+    test_data: &FuzzCountTestData,
+    num_partitions: usize,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(num_partitions),
+    );
+
+    let batches = split_fuzz_count_data_into_batches(test_data, num_partitions)?;
+    let provider = MemTable::try_new(test_data.schema.clone(), batches)?;
+    ctx.register_table("fuzz_table", Arc::new(provider))?;
+
+    Ok(ctx)
+}
+
+/// Splits fuzz count test data into multiple batches for partitioning
+fn split_fuzz_count_data_into_batches(
+    test_data: &FuzzCountTestData,
+    num_partitions: usize,
+) -> Result<Vec<Vec<RecordBatch>>> {
+    debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
+    let total_len = test_data.u8_low.len();
+    let chunk_size = (total_len + num_partitions - 1) / num_partitions;
+
+    let mut batches = Vec::new();
+    let mut start = 0;
+
+    while start < total_len {
+        let end = min(start + chunk_size, total_len);
+        let len = end - start;
+
+        if len > 0 {
+            let batch = RecordBatch::try_new(
+                test_data.schema.clone(),
+                vec![
+                    Arc::new(test_data.u8_low.slice(start, len)),
+                    Arc::new(test_data.utf8_low.slice(start, len)),
+                    Arc::new(test_data.dictionary_utf8_low.slice(start, len)),
+                    Arc::new(test_data.duration_nanosecond.slice(start, len)),
+                    Arc::new(test_data.large_binary.slice(start, len)),
+                ],
+            )?;
+            batches.push(vec![batch]);
+        }
+        start = end;
+    }
+
+    Ok(batches)
+}
+
+/// Test COUNT and COUNT DISTINCT with fuzz table containing dictionary columns with null keys and values (single and multiple partitions)
+#[tokio::test]
+async fn test_count_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
+    let (ctx_single, ctx_multi) = setup_fuzz_count_test_contexts().await?;
+
+    // Execute the SQL query with COUNT and COUNT DISTINCT aggregations
+    let sql = "SELECT
+        u8_low,
+        utf8_low,
+        dictionary_utf8_low,
+        count(duration_nanosecond) as col1,
+        count(DISTINCT large_binary) as col2
+    FROM
+        fuzz_table
+    GROUP BY
+        u8_low,
+        utf8_low,
+        dictionary_utf8_low
+    ORDER BY u8_low, utf8_low, dictionary_utf8_low NULLS FIRST";
+
+    let results = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +--------+----------+---------------------+------+------+
+    | u8_low | utf8_low | dictionary_utf8_low | col1 | col2 |
+    +--------+----------+---------------------+------+------+
+    | 5      | text_a   |                     | 1    | 1    |
+    | 5      | text_a   | group_alpha         | 2    | 1    |
+    | 10     | text_b   |                     | 1    | 1    |
+    | 10     | text_d   |                     | 1    | 0    |
+    | 10     | text_d   | group_alpha         | 1    | 0    |
+    | 15     | text_c   |                     | 0    | 1    |
+    | 15     | text_c   | group_beta          | 1    | 1    |
+    | 20     | text_e   |                     | 0    | 1    |
+    | 25     | text_f   | group_gamma         | 1    | 1    |
+    +--------+----------+---------------------+------+------+
     "###
     );
 
