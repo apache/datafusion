@@ -68,15 +68,17 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 ///
-/// Example creating the parquet file that
-/// contains specialized indexes that
-/// are ignored by other readers
+/// Example creating the Parquet file that
+/// contains specialized indexes and a page‑index offset
+///
+/// Note: the page index offset will after the custom index, which
+/// is originally after the data pages.
 ///
 /// ```text
 ///         ┌──────────────────────┐
 ///         │┌───────────────────┐ │
 ///         ││     DataPage      │ │      Standard Parquet
-///         │└───────────────────┘ │      Data / pages
+///         │└───────────────────┘ │      Data pages
 ///         │┌───────────────────┐ │
 ///         ││     DataPage      │ │
 ///         │└───────────────────┘ │
@@ -87,20 +89,24 @@ use tempfile::TempDir;
 ///         │└───────────────────┘ │
 ///         │┏━━━━━━━━━━━━━━━━━━━┓ │
 ///         │┃                   ┃ │        key/value metadata
-///         │┃   Special Index   ┃◀┼────    that points at the
-///         │┃                   ┃ │     │  special index
+///         │┃   Special Index   ┃◀┼────    that points to the
+///         │┃                   ┃ │     │  custom index blob
 ///         │┗━━━━━━━━━━━━━━━━━━━┛ │
+///         │┏───────────────────┓ │
+///         │┃ Page Index Offset ┃◀┼────    little‑endian u64
+///         │┗───────────────────┛ │     │  sitting after the custom index
 ///         │╔═══════════════════╗ │     │
 ///         │║                   ║ │
-///         │║  Parquet Footer   ║ │     │  Footer includes
-///         │║                   ║ ┼──────  thrift-encoded
-///         │║                   ║ │        ParquetMetadata
+///         │║  Parquet Footer   ║ │     │  thrift‑encoded
+///         │║                   ║ ┼──────  ParquetMetadata
+///         │║                   ║ │
 ///         │╚═══════════════════╝ │
 ///         └──────────────────────┘
 ///
 ///               Parquet File
 /// ```
 /// DistinctIndexTable is a custom TableProvider that reads Parquet files
+
 #[derive(Debug)]
 struct DistinctIndexTable {
     schema: SchemaRef,
