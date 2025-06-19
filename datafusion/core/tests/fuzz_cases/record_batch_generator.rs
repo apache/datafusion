@@ -730,9 +730,7 @@ impl RecordBatchGenerator {
                     num_distinct,
                     batch_gen_rng,
                     array_gen_rng.clone(),
-                    // Since https://github.com/apache/datafusion/issues/16228 is fixed
-                    // we can also generate nulls in values
-                    null_pct,
+                    null_pct, // generate some null values
                 );
 
                 match key_type.as_ref() {
