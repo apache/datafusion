@@ -981,7 +981,7 @@ async fn collect_left_input(
         .await?;
 
     // Estimation of memory size, required for hashtable, prior to allocation.
-    // Final result can be verifiedJoinHashMapTypele.allocation_info()`
+    // Final result can be verified using `RawTable.allocation_info()`
     let fixed_size_u32 = size_of::<JoinHashMapU32>();
     let fixed_size_u64 = size_of::<JoinHashMapU64>();
 
@@ -3578,7 +3578,7 @@ mod tests {
     }
 
     #[test]
-    fn join_with_hash_collisions_u64() -> Result<()> {
+    fn join_with_hash_collisions_64() -> Result<()> {
         let mut hashmap_left = HashTable::with_capacity(4);
         let left = build_table_i32(
             ("a", &vec![10, 20]),
@@ -3649,7 +3649,7 @@ mod tests {
     }
 
     #[test]
-    fn join_with_hash_collision_u32() -> Result<()> {
+    fn join_with_hash_collisions_u32() -> Result<()> {
         let mut hashmap_left = HashTable::with_capacity(4);
         let left = build_table_i32(
             ("a", &vec![10, 20]),

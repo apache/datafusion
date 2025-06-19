@@ -35,7 +35,7 @@ use hashbrown::HashTable;
 /// During this stage it might be the case that a row is contained the same hashmap value,
 /// but the values don't match. Those are checked in the `equal_rows_arr` method.
 ///
-/// The indices (values) are stored in a separate chained list stored as `Vec<u32>` `Vec<u64>`.
+/// The indices (values) are stored in a separate chained list stored as `Vec<u32>` or `Vec<u64>`.
 ///
 /// The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
 ///
@@ -90,6 +90,9 @@ use hashbrown::HashTable;
 ///
 /// Here we have an option between creating a `JoinHashMapType` using `u32` or `u64` indices
 /// based on how many rows were being used for indices.
+///
+/// At runtime we choose between using `JoinHashMapU32` and `JoinHashMapU64` which oth implement
+/// `JoinHashMapType`.
 pub trait JoinHashMapType: Send + Sync {
     fn extend_zero(&mut self, len: usize);
 
