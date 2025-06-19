@@ -97,10 +97,12 @@ macro_rules! assert_optimized {
     (
         $PLAN: expr,
         $REPARTITION_SORTS: expr,
-        @ $EXPECTED_PLAN_COMBINED: literal $(,)?
+        @ $EXPECTED_PLAN_COMBINED: literal $(, $CASE_NUMBER: expr)? $(,)?
     ) => {{
         let mut config = ConfigOptions::new();
         config.optimizer.repartition_sorts = $REPARTITION_SORTS;
+
+        $(println!("\n**Testing case {}**", $CASE_NUMBER);)?
 
         // This file has 4 rules that use tree node, apply these rules as in the
         // EnforceSorting::optimize implementation
@@ -178,94 +180,94 @@ macro_rules! assert_optimized {
 /// `$PLAN`: the plan to optimized
 /// `REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
 /// `$CASE_NUMBER` (optional): The test case number to print on failure.
-macro_rules! assert_optimized {
-    (@ $EXPECTED_PLAN_LINES: literal $(,)?, @ $EXPECTED_OPTIMIZED_PLAN_LINES: literal $(,)?, $PLAN: expr, $REPARTITION_SORTS: expr $(, $CASE_NUMBER: expr)?) => {
-        let mut config = ConfigOptions::new();
-        config.optimizer.repartition_sorts = $REPARTITION_SORTS;
+// macro_rules! assert_optimized {
+//     (@ $EXPECTED_PLAN_LINES: literal $(,)?, @ $EXPECTED_OPTIMIZED_PLAN_LINES: literal $(,)?, $PLAN: expr, $REPARTITION_SORTS: expr $(, $CASE_NUMBER: expr)?) => {
+//         let mut config = ConfigOptions::new();
+//         config.optimizer.repartition_sorts = $REPARTITION_SORTS;
 
-        // This file has 4 rules that use tree node, apply these rules as in the
-        // EnforceSorting::optimize implementation
-        // After these operations tree nodes should be in a consistent state.
-        // This code block makes sure that these rules doesn't violate tree node integrity.
-        {
-            let plan_requirements = PlanWithCorrespondingSort::new_default($PLAN.clone());
-            let adjusted = plan_requirements
-                .transform_up(ensure_sorting)
-                .data()
-                .and_then(check_integrity)?;
-            // TODO: End state payloads will be checked here.
+//         // This file has 4 rules that use tree node, apply these rules as in the
+//         // EnforceSorting::optimize implementation
+//         // After these operations tree nodes should be in a consistent state.
+//         // This code block makes sure that these rules doesn't violate tree node integrity.
+//         {
+//             let plan_requirements = PlanWithCorrespondingSort::new_default($PLAN.clone());
+//             let adjusted = plan_requirements
+//                 .transform_up(ensure_sorting)
+//                 .data()
+//                 .and_then(check_integrity)?;
+//             // TODO: End state payloads will be checked here.
 
-            let new_plan = if config.optimizer.repartition_sorts {
-                let plan_with_coalesce_partitions =
-                    PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
-                let parallel = plan_with_coalesce_partitions
-                    .transform_up(parallelize_sorts)
-                    .data()
-                    .and_then(check_integrity)?;
-                // TODO: End state payloads will be checked here.
-                parallel.plan
-            } else {
-                adjusted.plan
-            };
+//             let new_plan = if config.optimizer.repartition_sorts {
+//                 let plan_with_coalesce_partitions =
+//                     PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
+//                 let parallel = plan_with_coalesce_partitions
+//                     .transform_up(parallelize_sorts)
+//                     .data()
+//                     .and_then(check_integrity)?;
+//                 // TODO: End state payloads will be checked here.
+//                 parallel.plan
+//             } else {
+//                 adjusted.plan
+//             };
 
-            let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
-            let updated_plan = plan_with_pipeline_fixer
-                .transform_up(|plan_with_pipeline_fixer| {
-                    replace_with_order_preserving_variants(
-                        plan_with_pipeline_fixer,
-                        false,
-                        true,
-                        &config,
-                    )
-                })
-                .data()
-                .and_then(check_integrity)?;
-            // TODO: End state payloads will be checked here.
+//             let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
+//             let updated_plan = plan_with_pipeline_fixer
+//                 .transform_up(|plan_with_pipeline_fixer| {
+//                     replace_with_order_preserving_variants(
+//                         plan_with_pipeline_fixer,
+//                         false,
+//                         true,
+//                         &config,
+//                     )
+//                 })
+//                 .data()
+//                 .and_then(check_integrity)?;
+//             // TODO: End state payloads will be checked here.
 
-            let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
-            assign_initial_requirements(&mut sort_pushdown);
-            check_integrity(pushdown_sorts(sort_pushdown)?)?;
-            // TODO: End state payloads will be checked here.
-        }
+//             let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
+//             assign_initial_requirements(&mut sort_pushdown);
+//             check_integrity(pushdown_sorts(sort_pushdown)?)?;
+//             // TODO: End state payloads will be checked here.
+//         }
 
-        let physical_plan = $PLAN;
-        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
-        let actual = formatted.trim();
+//         let physical_plan = $PLAN;
+//         let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+//         let actual = formatted.trim();
 
-        // let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
-        //     .iter().map(|s| *s).collect();
+//         // let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
+//         //     .iter().map(|s| *s).collect();
 
-        // if expected_plan_lines != actual {
-        //     $(println!("\n**Original Plan Mismatch in case {}**", $CASE_NUMBER);)?
-        //     println!("\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n", expected_plan_lines, actual);
-        //     assert_eq!(expected_plan_lines, actual);
-        // }
-        $(println!("\n**Testing Original Plan for case {}**", $CASE_NUMBER);)?
-         allow_duplicates! {
-            assert_snapshot!(actual, @$EXPECTED_PLAN_LINES);
-        }
+//         // if expected_plan_lines != actual {
+//         //     $(println!("\n**Original Plan Mismatch in case {}**", $CASE_NUMBER);)?
+//         //     println!("\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n", expected_plan_lines, actual);
+//         //     assert_eq!(expected_plan_lines, actual);
+//         // }
+//         $(println!("\n**Testing Original Plan for case {}**", $CASE_NUMBER);)?
+//          allow_duplicates! {
+//             assert_snapshot!(actual, @$EXPECTED_PLAN_LINES);
+//         }
 
-        // let expected_optimized_lines: Vec<&str> = $EXPECTED_OPTIMIZED_PLAN_LINES
-        //     .iter().map(|s| *s).collect();
+//         // let expected_optimized_lines: Vec<&str> = $EXPECTED_OPTIMIZED_PLAN_LINES
+//         //     .iter().map(|s| *s).collect();
 
-        // Run the actual optimizer
-        let optimized_physical_plan =
-            EnforceSorting::new().optimize(physical_plan, &config)?;
+//         // Run the actual optimizer
+//         let optimized_physical_plan =
+//             EnforceSorting::new().optimize(physical_plan, &config)?;
 
-        // Get string representation of the plan
-        let plan_lines = get_plan_string(&optimized_physical_plan).join("\n");
-        let actual = plan_lines.trim();
-        // if expected_optimized_lines != actual {
-        //     $(println!("\n**Optimized Plan Mismatch in case {}**", $CASE_NUMBER);)?
-        //     println!("\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n", expected_optimized_lines, actual);
-        //     assert_eq!(expected_optimized_lines, actual);
-        // }
-        $(println!("\n**Testing Original Plan for case {}**", $CASE_NUMBER);)?
-        allow_duplicates! {
-            assert_snapshot!(actual, @ $EXPECTED_OPTIMIZED_PLAN_LINES);
-        }
-    }
-}
+//         // Get string representation of the plan
+//         let plan_lines = get_plan_string(&optimized_physical_plan).join("\n");
+//         let actual = plan_lines.trim();
+//         // if expected_optimized_lines != actual {
+//         //     $(println!("\n**Optimized Plan Mismatch in case {}**", $CASE_NUMBER);)?
+//         //     println!("\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n", expected_optimized_lines, actual);
+//         //     assert_eq!(expected_optimized_lines, actual);
+//         // }
+//         $(println!("\n**Testing Original Plan for case {}**", $CASE_NUMBER);)?
+//         allow_duplicates! {
+//             assert_snapshot!(actual, @ $EXPECTED_OPTIMIZED_PLAN_LINES);
+//         }
+//     }
+// }
 
 #[tokio::test]
 async fn test_remove_unnecessary_sort5() -> Result<()> {
