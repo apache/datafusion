@@ -1,0 +1,53 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# This file was originally created by a porting script from:
+#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
+# This file is part of the implementation of the datafusion-spark function library.
+# For more information, please see:
+#   https://github.com/apache/datafusion/issues/15914
+
+## Original Query: SELECT try_add(1, 2);
+## PySpark 3.5.5 Result: {'try_add(1, 2)': 3, 'typeof(try_add(1, 2))': 'int', 'typeof(1)': 'int', 'typeof(2)': 'int'}
+#query
+#SELECT try_add(1::int, 2::int);
+
+## Original Query: SELECT try_add(2147483647, 1);
+## PySpark 3.5.5 Result: {'try_add(2147483647, 1)': None, 'typeof(try_add(2147483647, 1))': 'int', 'typeof(2147483647)': 'int', 'typeof(1)': 'int'}
+#query
+#SELECT try_add(2147483647::int, 1::int);
+
+## Original Query: SELECT try_add(date'2021-01-01', 1);
+## PySpark 3.5.5 Result: {"try_add(DATE '2021-01-01', 1)": datetime.date(2021, 1, 2), "typeof(try_add(DATE '2021-01-01', 1))": 'date', "typeof(DATE '2021-01-01')": 'date', 'typeof(1)': 'int'}
+#query
+#SELECT try_add(DATE '2021-01-01'::date, 1::int);
+
+## Original Query: SELECT try_add(date'2021-01-01', interval 1 year);
+## PySpark 3.5.5 Result: {"try_add(DATE '2021-01-01', INTERVAL '1' YEAR)": datetime.date(2022, 1, 1), "typeof(try_add(DATE '2021-01-01', INTERVAL '1' YEAR))": 'date', "typeof(DATE '2021-01-01')": 'date', "typeof(INTERVAL '1' YEAR)": 'interval year'}
+#query
+#SELECT try_add(DATE '2021-01-01'::date, INTERVAL '1' YEAR::interval year);
+
+## Original Query: SELECT try_add(interval 1 year, interval 2 year);
+## PySpark 3.5.5 Result: {"try_add(INTERVAL '1' YEAR, INTERVAL '2' YEAR)": 36, "typeof(try_add(INTERVAL '1' YEAR, INTERVAL '2' YEAR))": 'interval year', "typeof(INTERVAL '1' YEAR)": 'interval year', "typeof(INTERVAL '2' YEAR)": 'interval year'}
+#query
+#SELECT try_add(INTERVAL '1' YEAR::interval year, INTERVAL '2' YEAR::interval year);
+
+## Original Query: SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day);
+## PySpark 3.5.5 Result: {"try_add(TIMESTAMP '2021-01-01 00:00:00', INTERVAL '1' DAY)": datetime.datetime(2021, 1, 2, 0, 0), "typeof(try_add(TIMESTAMP '2021-01-01 00:00:00', INTERVAL '1' DAY))": 'timestamp', "typeof(TIMESTAMP '2021-01-01 00:00:00')": 'timestamp', "typeof(INTERVAL '1' DAY)": 'interval day'}
+#query
+#SELECT try_add(TIMESTAMP '2021-01-01 00:00:00'::timestamp, INTERVAL '1' DAY::interval day);
+

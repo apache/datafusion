@@ -518,7 +518,6 @@ In addition, topk_tpch is available from the bench.sh script:
 ./bench.sh run topk_tpch
 ```
 
-
 ## IMDB
 
 Run Join Order Benchmark (JOB) on IMDB dataset.
