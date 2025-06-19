@@ -93,6 +93,7 @@ use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
+use datafusion_sql::TableReference;
 use sqlparser::ast::NullTreatment;
 
 use async_trait::async_trait;
@@ -896,8 +897,8 @@ impl DefaultPhysicalPlanner {
 
             // 2 Children
             LogicalPlan::Join(Join {
-                left,
-                right,
+                left: original_left,
+                right: original_right,
                 on: keys,
                 filter,
                 join_type,
@@ -920,23 +921,25 @@ impl DefaultPhysicalPlanner {
                     let (left, left_col_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(
                             &left_keys,
-                            left.as_ref().clone(),
+                            original_left.as_ref().clone(),
                         )?;
                     let (right, right_col_keys, right_projected) =
                         wrap_projection_for_join_if_necessary(
                             &right_keys,
-                            right.as_ref().clone(),
+                            original_right.as_ref().clone(),
                         )?;
                     let column_on = (left_col_keys, right_col_keys);
 
                     let left = Arc::new(left);
                     let right = Arc::new(right);
-                    let new_join = LogicalPlan::Join(Join::try_new_with_project_input(
+                    let (new_join, requalified) = Join::try_new_with_project_input(
                         node,
                         Arc::clone(&left),
                         Arc::clone(&right),
                         column_on,
-                    )?);
+                    )?;
+
+                    let new_join = LogicalPlan::Join(new_join);
 
                     // If inputs were projected then create ExecutionPlan for these new
                     // LogicalPlan nodes.
@@ -969,8 +972,24 @@ impl DefaultPhysicalPlanner {
 
                     // Remove temporary projected columns
                     if left_projected || right_projected {
-                        let final_join_result =
-                            join_schema.iter().map(Expr::from).collect::<Vec<_>>();
+                        // Re-qualify the join schema only if the inputs were previously requalified in
+                        // `try_new_with_project_input`. This ensures that when building the Projection
+                        // it can correctly resolve field nullability and data types
+                        // by disambiguating fields from the left and right sides of the join.
+                        let qualified_join_schema = if requalified {
+                            Arc::new(qualify_join_schema_sides(
+                                join_schema,
+                                original_left,
+                                original_right,
+                            )?)
+                        } else {
+                            Arc::clone(join_schema)
+                        };
+
+                        let final_join_result = qualified_join_schema
+                            .iter()
+                            .map(Expr::from)
+                            .collect::<Vec<_>>();
                         let projection = LogicalPlan::Projection(Projection::try_new(
                             final_join_result,
                             Arc::new(new_join),
@@ -1465,6 +1484,64 @@ fn get_null_physical_expr_pair(
 
     let null_value = Literal::new(null_value);
     Ok((Arc::new(null_value), physical_name))
+}
+
+/// Qualifies the fields in a join schema with "left" and "right" qualifiers
+/// without mutating the original schema. This function should only be used when
+/// the join inputs have already been requalified earlier in `try_new_with_project_input`.
+///
+/// The purpose is to avoid ambiguity errors later in planning (e.g., in nullability or data type resolution)
+/// when converting expressions to fields.
+fn qualify_join_schema_sides(
+    join_schema: &DFSchema,
+    left: &LogicalPlan,
+    right: &LogicalPlan,
+) -> Result<DFSchema> {
+    let left_fields = left.schema().fields();
+    let right_fields = right.schema().fields();
+    let join_fields = join_schema.fields();
+
+    // Validate lengths
+    if join_fields.len() != left_fields.len() + right_fields.len() {
+        return internal_err!(
+            "Join schema field count must match left and right field count."
+        );
+    }
+
+    // Validate field names match
+    for (i, (field, expected)) in join_fields
+        .iter()
+        .zip(left_fields.iter().chain(right_fields.iter()))
+        .enumerate()
+    {
+        if field.name() != expected.name() {
+            return internal_err!(
+                "Field name mismatch at index {}: expected '{}', found '{}'",
+                i,
+                expected.name(),
+                field.name()
+            );
+        }
+    }
+
+    // qualify sides
+    let qualifiers = join_fields
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            if i < left_fields.len() {
+                Some(TableReference::Bare {
+                    table: Arc::from("left"),
+                })
+            } else {
+                Some(TableReference::Bare {
+                    table: Arc::from("right"),
+                })
+            }
+        })
+        .collect();
+
+    join_schema.with_field_specific_qualified_schema(qualifiers)
 }
 
 fn get_physical_expr_pair(

@@ -206,6 +206,24 @@ impl DFSchema {
         Ok(dfschema)
     }
 
+    /// Return the same schema, where all fields have a given qualifier.
+    pub fn with_field_specific_qualified_schema(
+        &self,
+        qualifiers: Vec<Option<TableReference>>,
+    ) -> Result<Self> {
+        if qualifiers.len() != self.fields().len() {
+            return _plan_err!(
+                "{}",
+                "Number of qualifiers must match number of fields".to_string()
+            );
+        }
+        Ok(DFSchema {
+            inner: Arc::clone(&self.inner),
+            field_qualifiers: qualifiers,
+            functional_dependencies: self.functional_dependencies.clone(),
+        })
+    }
+
     /// Check if the schema have some fields with the same name
     pub fn check_names(&self) -> Result<()> {
         let mut qualified_names = BTreeSet::new();
