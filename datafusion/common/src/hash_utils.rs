@@ -200,17 +200,24 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     create_hashes(&[values], random_state, &mut dict_hashes)?;
 
     // combine hash for each index in values
+    let values = array.values();
     if multi_col {
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
             if let Some(key) = key {
-                *hash = combine_hashes(dict_hashes[key.as_usize()], *hash)
-            } // no update for Null, consistent with other hashes
+                let idx = key.as_usize();
+                if values.is_valid(idx) {
+                    *hash = combine_hashes(dict_hashes[idx], *hash)
+                }
+            } // no update for Null key or dictionary value
         }
     } else {
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
             if let Some(key) = key {
-                *hash = dict_hashes[key.as_usize()]
-            } // no update for Null, consistent with other hashes
+                let idx = key.as_usize();
+                if values.is_valid(idx) {
+                    *hash = dict_hashes[idx]
+                }
+            } // no update for Null key or dictionary value
         }
     }
     Ok(())
