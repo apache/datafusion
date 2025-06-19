@@ -15,14 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Example: embedding a "distinct values" index in a Parquet file's metadata
+//! Example: embedding and using a custom “distinct values” index in Parquet files
 //!
-//! 1. Read existing Parquet files
-//! 2. Compute distinct values for a target column using DataFusion
-//! 3. Serialize the distinct index to bytes and write to the new Parquet file
-//!    with these encoded bytes appended as a custom metadata entry
-//! 4. Read each new parquet file, extract and deserialize the index from footer
-//! 5. Use the distinct index to prune files when querying
+//! This example shows how to build and leverage a file‑level distinct‑values index
+//! for pruning in DataFusion’s Parquet scans.
+//!
+//! Steps:
+//! 1. Compute the distinct values for a target column and serialize them into bytes.
+//! 2. Write each Parquet file with:
+//!    - regular data pages for your column
+//!    - the magic marker `IDX1` and a little‑endian length, to identify our custom index format
+//!    - the serialized distinct‑values bytes
+//!    - footer key/value metadata entries (`distinct_index_offset` and `distinct_index_length`)
+//! 3. Read back each file’s footer metadata to locate and deserialize the index.
+//! 4. Build a `DistinctIndexTable` (a custom `TableProvider`) that scans footers
+//!    into a map of filename → `HashSet<String>` of distinct values.
+//! 5. In `scan()`, prune out any Parquet files whose distinct set doesn’t match the
+//!    `category = 'X'` filter, then only read data from the remaining files.
+//!
+//! This technique embeds a lightweight, application‑specific index directly in Parquet
+//! metadata to achieve efficient file‑level pruning without modifying the Parquet format.
+//!
+//! And it's very efficient, since we don't add any additional info to the metadata, we write the custom index
+//! after the data pages, and we only read it when needed.
 
 use arrow::array::{ArrayRef, StringArray};
 use arrow::record_batch::RecordBatch;
@@ -52,8 +67,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 
-/// We should disable page index support in the Parquet reader
-/// when we enable this feature, since we are using a custom index.
 ///
 /// Example creating the parquet file that
 /// contains specialized indexes that
