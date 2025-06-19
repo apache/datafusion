@@ -1345,3 +1345,185 @@ async fn test_first_last_value_complex_dict_nulls() -> Result<()> {
 
     Ok(())
 }
+
+/// Test MAX with dictionary columns containing null keys and values as specified in the SQL query
+/// Test data structure for fuzz table with dictionary columns containing nulls
+struct FuzzTestData {
+    schema: Arc<Schema>,
+    u8_low: UInt8Array,
+    dictionary_utf8_low: DictionaryArray<Int32Type>,
+    utf8_low: StringArray,
+    utf8: StringArray,
+}
+
+impl FuzzTestData {
+    fn new() -> Self {
+        // Create dictionary columns with null keys and values
+        let dictionary_utf8_low = create_dict(
+            vec![Some("dict_a"), None, Some("dict_b"), Some("dict_c")],
+            vec![
+                Some(0), // dict_a
+                Some(1), // null value
+                Some(2), // dict_b
+                None,    // null key
+                Some(0), // dict_a
+                Some(1), // null value
+                Some(3), // dict_c
+                None,    // null key
+            ],
+        );
+
+        let u8_low = UInt8Array::from(vec![
+            Some(1),
+            Some(1),
+            Some(2),
+            Some(2),
+            Some(1),
+            Some(3),
+            Some(3),
+            Some(2),
+        ]);
+
+        let utf8_low = StringArray::from(vec![
+            Some("str_a"),
+            Some("str_b"),
+            Some("str_c"),
+            Some("str_d"),
+            Some("str_a"),
+            Some("str_e"),
+            Some("str_f"),
+            Some("str_c"),
+        ]);
+
+        let utf8 = StringArray::from(vec![
+            Some("value_1"),
+            Some("value_2"),
+            Some("value_3"),
+            Some("value_4"),
+            Some("value_5"),
+            None,
+            Some("value_6"),
+            Some("value_7"),
+        ]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u8_low", DataType::UInt8, true),
+            Field::new("dictionary_utf8_low", string_dict_type(), true),
+            Field::new("utf8_low", DataType::Utf8, true),
+            Field::new("utf8", DataType::Utf8, true),
+        ]));
+
+        Self {
+            schema,
+            u8_low,
+            dictionary_utf8_low,
+            utf8_low,
+            utf8,
+        }
+    }
+}
+
+/// Sets up test contexts for fuzz table with both single and multiple partitions
+async fn setup_fuzz_test_contexts() -> Result<(SessionContext, SessionContext)> {
+    let test_data = FuzzTestData::new();
+
+    // Single partition context
+    let ctx_single = create_fuzz_context_with_partitions(&test_data, 1).await?;
+
+    // Multiple partition context
+    let ctx_multi = create_fuzz_context_with_partitions(&test_data, 3).await?;
+
+    Ok((ctx_single, ctx_multi))
+}
+
+/// Creates a session context with fuzz table partitioned into specified number of partitions
+async fn create_fuzz_context_with_partitions(
+    test_data: &FuzzTestData,
+    num_partitions: usize,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(num_partitions),
+    );
+
+    let batches = split_fuzz_data_into_batches(test_data, num_partitions)?;
+    let provider = MemTable::try_new(test_data.schema.clone(), batches)?;
+    ctx.register_table("fuzz_table", Arc::new(provider))?;
+
+    Ok(ctx)
+}
+
+/// Splits fuzz test data into multiple batches for partitioning
+fn split_fuzz_data_into_batches(
+    test_data: &FuzzTestData,
+    num_partitions: usize,
+) -> Result<Vec<Vec<RecordBatch>>> {
+    debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
+    let total_len = test_data.u8_low.len();
+    let chunk_size = (total_len + num_partitions - 1) / num_partitions;
+
+    let mut batches = Vec::new();
+    let mut start = 0;
+
+    while start < total_len {
+        let end = min(start + chunk_size, total_len);
+        let len = end - start;
+
+        if len > 0 {
+            let batch = RecordBatch::try_new(
+                test_data.schema.clone(),
+                vec![
+                    Arc::new(test_data.u8_low.slice(start, len)),
+                    Arc::new(test_data.dictionary_utf8_low.slice(start, len)),
+                    Arc::new(test_data.utf8_low.slice(start, len)),
+                    Arc::new(test_data.utf8.slice(start, len)),
+                ],
+            )?;
+            batches.push(vec![batch]);
+        }
+        start = end;
+    }
+
+    Ok(batches)
+}
+
+/// Test MAX with fuzz table containing dictionary columns with null keys and values (single and multiple partitions)
+#[tokio::test]
+async fn test_max_with_fuzz_table_dict_nulls() -> Result<()> {
+    let (ctx_single, ctx_multi) = setup_fuzz_test_contexts().await?;
+
+    // Execute the SQL query with MAX aggregations
+    let sql = "SELECT
+        u8_low,
+        dictionary_utf8_low,
+        utf8_low,
+        max(utf8_low) as col1,
+        max(utf8) as col2
+    FROM
+        fuzz_table
+    GROUP BY
+        u8_low,
+        dictionary_utf8_low,
+        utf8_low
+    ORDER BY u8_low, dictionary_utf8_low NULLS FIRST, utf8_low";
+
+    let results = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +--------+---------------------+----------+--------+----------+
+    | u8_low | dictionary_utf8_low | utf8_low | col1   | col2     |
+    +--------+---------------------+----------+--------+----------+
+    | 1      |                     | str_b    | str_b  | value_2  |
+    | 1      | dict_a              | str_a    | str_a  | value_5  |
+    | 2      |                     | str_c    | str_c  | value_7  |
+    | 2      |                     | str_d    | str_d  | value_4  |
+    | 2      | dict_b              | str_c    | str_c  | value_3  |
+    | 3      |                     | str_e    | str_e  |          |
+    | 3      | dict_c              | str_f    | str_f  | value_6  |
+    +--------+---------------------+----------+--------+----------+
+    "###
+    );
+
+    Ok(())
+}
