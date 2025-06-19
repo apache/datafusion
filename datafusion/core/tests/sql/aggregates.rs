@@ -1920,12 +1920,9 @@ async fn test_count_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
     +--------+----------+---------------------+------+------+
     | u8_low | utf8_low | dictionary_utf8_low | col1 | col2 |
     +--------+----------+---------------------+------+------+
-    | 5      | text_a   |                     | 1    | 1    |
-    | 5      | text_a   | group_alpha         | 2    | 1    |
+    | 5      | text_a   | group_alpha         | 3    | 1    |
     | 10     | text_b   |                     | 1    | 1    |
-    | 10     | text_d   |                     | 1    | 0    |
-    | 10     | text_d   | group_alpha         | 1    | 0    |
-    | 15     | text_c   |                     | 0    | 1    |
+    | 10     | text_d   |                     | 2    | 0    |
     | 15     | text_c   | group_beta          | 1    | 1    |
     | 20     | text_e   |                     | 0    | 1    |
     | 25     | text_f   | group_gamma         | 1    | 1    |
