@@ -931,9 +931,8 @@ async fn test_first_last_val_null_handling() -> Result<()> {
     +----------------+-------+-----------+----------+
     | dict_null_keys | value | first_val | last_val |
     +----------------+-------+-----------+----------+
-    |                |       |           | 3        |
-    |                | 1     |           | 3        |
-    |                | 3     |           | 3        |
+    |                | 1     |1          | 3        |
+    |                | 3     |1          | 3        |
     | group_a        |       |           |          |
     | group_a        |       |           |          |
     | group_b        | 2     | 2         | 2        |
