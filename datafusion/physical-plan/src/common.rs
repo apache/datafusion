@@ -25,7 +25,7 @@ use super::SendableRecordBatchStream;
 use crate::stream::RecordBatchReceiverStream;
 use crate::{ColumnStatistics, Statistics};
 
-use arrow::array::Array;
+use arrow::array::{Array, BinaryViewArray, RecordBatchOptions, StringViewArray};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
@@ -202,6 +202,28 @@ pub fn can_project(
         }
         None => Ok(()),
     }
+}
+
+/// Performs a garbage collections on all StringView- and ByteView- columns of a
+/// batch.
+pub(crate) fn gc_record_batch(batch: &RecordBatch) -> Result<RecordBatch> {
+    fn gc_array(array: &Arc<dyn Array>) -> Arc<dyn Array> {
+        if let Some(array) = array.as_any().downcast_ref::<StringViewArray>() {
+            Arc::new(array.gc())
+        } else if let Some(array) = array.as_any().downcast_ref::<BinaryViewArray>() {
+            Arc::new(array.gc())
+        } else {
+            Arc::clone(&array)
+        }
+    }
+
+    let schema = batch.schema();
+    let columns = batch.columns().iter().map(gc_array).collect();
+
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    Ok(RecordBatch::try_new_with_options(
+        schema, columns, &options,
+    )?)
 }
 
 #[cfg(test)]

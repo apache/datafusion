@@ -1011,6 +1011,9 @@ async fn collect_left_input(
     }
     // Merge all batches into a single batch, so we can directly index into the arrays
     let single_batch = concat_batches(&schema, batches_iter)?;
+    // Compact the backing buffers of the single batch, for faster take operations later on large build sides
+    // See: https://github.com/apache/datafusion/issues/16206
+    let single_batch = crate::common::gc_record_batch(&single_batch)?;
 
     // Reserve additional memory for visited indices bitmap and create shared builder
     let visited_indices_bitmap = if with_visited_indices_bitmap {
