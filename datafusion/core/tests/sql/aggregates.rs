@@ -19,6 +19,7 @@ use super::*;
 use datafusion::common::test_util::batches_to_string;
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
+use std::cmp::min;
 
 /// Helper function to create the commonly used UInt32 indexed UTF-8 dictionary data type
 fn string_dict_type() -> DataType {
@@ -260,11 +261,27 @@ async fn setup_test_contexts(
     Ok((ctx_single, ctx_multi))
 }
 
+/// Creates a session context with the specified number of partitions and registers test data
+async fn create_context_with_partitions(
+    test_data: &TestData,
+    num_partitions: usize,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(num_partitions),
+    );
+
+    let batches = split_test_data_into_batches(test_data, num_partitions)?;
+    let provider = MemTable::try_new(test_data.schema.clone(), batches)?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    Ok(ctx)
+}
 /// Splits test data into multiple batches for partitioning
 fn split_test_data_into_batches(
     test_data: &TestData,
     num_partitions: usize,
 ) -> Result<Vec<Vec<RecordBatch>>> {
+    debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
     let total_len = test_data.values.len();
     let chunk_size = (total_len + num_partitions - 1) / num_partitions; // Ensure we cover all data
 
@@ -272,7 +289,7 @@ fn split_test_data_into_batches(
     let mut start = 0;
 
     while start < total_len {
-        let end = std::cmp::min(start + chunk_size, total_len);
+        let end = min(start + chunk_size, total_len);
         let len = end - start;
 
         if len > 0 {
@@ -1357,20 +1374,4 @@ async fn test_group_by_dict_first_last_value_nulls() -> Result<()> {
     );
 
     Ok(())
-}
-
-/// Creates a session context with the specified number of partitions and registers test data
-async fn create_context_with_partitions(
-    test_data: &TestData,
-    num_partitions: usize,
-) -> Result<SessionContext> {
-    let ctx = SessionContext::new_with_config(
-        SessionConfig::new().with_target_partitions(num_partitions),
-    );
-
-    let batches = split_test_data_into_batches(test_data, num_partitions)?;
-    let provider = MemTable::try_new(test_data.schema.clone(), batches)?;
-    ctx.register_table("t", Arc::new(provider))?;
-
-    Ok(ctx)
 }
