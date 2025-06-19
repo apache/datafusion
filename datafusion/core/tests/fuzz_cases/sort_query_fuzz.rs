@@ -73,8 +73,8 @@ async fn sort_query_fuzzer_runner() {
     fuzzer.run().await.unwrap();
 }
 
-/// Reproduce the bug with specific seeds from the [
-/// failing test case](https://github.com/apache/datafusion/issues/16452).
+/// Reproduce the bug with specific seeds from the
+/// [failing test case](https://github.com/apache/datafusion/issues/16452).
 #[tokio::test(flavor = "multi_thread")]
 async fn test_reproduce_sort_query_issue_16452() {
     // Seeds from the failing test case
@@ -85,7 +85,6 @@ async fn test_reproduce_sort_query_issue_16452() {
 
     let random_seed = 1u64; // Use a fixed seed to ensure consistent behavior
 
-    println!("Creating test generator with same config as original runner...");
     let mut test_generator = SortFuzzerTestGenerator::new(
         2000,
         3,
@@ -618,7 +617,6 @@ impl SortFuzzerTestGenerator {
         let with_mem_limit = !query_str.contains("LIMIT") && self.set_memory_limit;
 
         let ctx = self.generate_random_config(config_seed, with_mem_limit)?;
-
         let df = ctx.sql(&query_str).await.unwrap();
         let results = df.collect().await.unwrap();
 
