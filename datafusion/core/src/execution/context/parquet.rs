@@ -108,7 +108,9 @@ mod tests {
 
     use arrow::util::pretty::pretty_format_batches;
     use datafusion_common::config::TableParquetOptions;
-    use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq, assert_contains};
+    use datafusion_common::{
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains,
+    };
     use datafusion_execution::config::SessionConfig;
 
     use tempfile::{tempdir, TempDir};
@@ -442,6 +444,43 @@ mod tests {
             .collect()
             .await?;
 
+        #[cfg_attr(any(), rustfmt::skip)]
+        assert_batches_sorted_eq!(&[
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 2 |",
+            "| 1 |",
+            "+---+",
+        ], &actual);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_from_parquet_folder_table() -> Result<()> {
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+        let test_path = tmp_dir.path().to_str().unwrap().to_string();
+
+        ctx.sql("SELECT 1 a")
+            .await?
+            .write_parquet(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
+        ctx.sql("SELECT 2 a")
+            .await?
+            .write_parquet(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
+        ctx.sql(format!("CREATE EXTERNAL TABLE parquet_folder_t1 STORED AS PARQUET LOCATION '{test_path}'").as_ref())
+            .await?;
+
+        let actual = ctx
+            .sql("select * from parquet_folder_t1")
+            .await?
+            .collect()
+            .await?;
         #[cfg_attr(any(), rustfmt::skip)]
         assert_batches_sorted_eq!(&[
             "+---+",
