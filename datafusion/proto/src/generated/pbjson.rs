@@ -2108,9 +2108,15 @@ impl serde::Serialize for CoalescePartitionsExecNode {
         if self.input.is_some() {
             len += 1;
         }
+        if self.fetch.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CoalescePartitionsExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
+        }
+        if let Some(v) = self.fetch.as_ref() {
+            struct_ser.serialize_field("fetch", v)?;
         }
         struct_ser.end()
     }
@@ -2123,11 +2129,13 @@ impl<'de> serde::Deserialize<'de> for CoalescePartitionsExecNode {
     {
         const FIELDS: &[&str] = &[
             "input",
+            "fetch",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
+            Fetch,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2150,6 +2158,7 @@ impl<'de> serde::Deserialize<'de> for CoalescePartitionsExecNode {
                     {
                         match value {
                             "input" => Ok(GeneratedField::Input),
+                            "fetch" => Ok(GeneratedField::Fetch),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2170,6 +2179,7 @@ impl<'de> serde::Deserialize<'de> for CoalescePartitionsExecNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut input__ = None;
+                let mut fetch__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -2178,10 +2188,19 @@ impl<'de> serde::Deserialize<'de> for CoalescePartitionsExecNode {
                             }
                             input__ = map_.next_value()?;
                         }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CoalescePartitionsExecNode {
                     input: input__,
+                    fetch: fetch__,
                 })
             }
         }

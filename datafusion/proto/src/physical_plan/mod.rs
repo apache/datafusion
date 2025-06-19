@@ -291,7 +291,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> =
                     into_physical_plan(&merge.input, registry, runtime, extension_codec)?;
-                Ok(Arc::new(CoalescePartitionsExec::new(input)))
+                Ok(Arc::new(
+                    CoalescePartitionsExec::new(input)
+                        .with_fetch(merge.fetch.map(|n| n as usize)),
+                ))
             }
             PhysicalPlanType::Repartition(repart) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
@@ -1671,6 +1674,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Merge(Box::new(
                     protobuf::CoalescePartitionsExecNode {
                         input: Some(Box::new(input)),
+                        fetch: exec.fetch().map(|n| n as u32),
                     },
                 ))),
             });
