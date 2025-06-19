@@ -259,6 +259,7 @@ impl ExternalSorter {
         batch_size: usize,
         sort_spill_reservation_bytes: usize,
         sort_in_place_threshold_bytes: usize,
+        // Configured via `datafusion.execution.spill_compression`.
         spill_compression: SpillCompression,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,

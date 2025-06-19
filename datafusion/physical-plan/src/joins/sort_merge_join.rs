@@ -1326,6 +1326,7 @@ impl Stream for SortMergeJoinStream {
 impl SortMergeJoinStream {
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
+        // Configured via `datafusion.execution.spill_compression`.
         spill_compression: SpillCompression,
         schema: SchemaRef,
         sort_options: Vec<SortOptions>,
