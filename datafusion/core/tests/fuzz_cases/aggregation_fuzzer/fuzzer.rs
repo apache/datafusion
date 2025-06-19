@@ -289,8 +289,6 @@ impl AggregationFuzzTestTask {
                 "##### AggregationFuzzer error report #####\n\
                  ### Sql:\n{}\n\
                  ### Schema:\n{}\n\
-                 ### Dataset rows:{}\n\
-                 ### Sort keys:{:?}\n\
                  ### Session context params:\n{:?}\n\
                  ### Inconsistent row:\n\
                  - row_idx:{}\n\
@@ -302,8 +300,6 @@ impl AggregationFuzzTestTask {
                  ",
                 self.sql,
                 self.dataset_ref.batches[0].schema_ref(),
-                self.dataset_ref.total_rows_num,
-                self.dataset_ref.sort_keys,
                 self.ctx_with_params.params,
                 e.row_idx,
                 e.lhs_row,
@@ -322,15 +318,11 @@ impl AggregationFuzzTestTask {
             "##### AggregationFuzzer error report #####\n\
                ### Sql:\n{}\n\
                ### Schema:\n{}\n\
-               ### Dataset rows:{}\n\
-               ### Sort keys:{:?}\n\
                ### Session context params:\n{:?}\n\
                ### Input:\n{}\n\
                     ",
             self.sql,
             self.dataset_ref.batches[0].schema_ref(),
-            self.dataset_ref.total_rows_num,
-            self.dataset_ref.sort_keys,
             self.ctx_with_params.params,
             pretty_format_batches(&self.dataset_ref.batches).unwrap(),
         )
