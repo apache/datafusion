@@ -358,24 +358,6 @@ impl FileOpener for ParquetOpener {
                 .map(move |maybe_batch| {
                     maybe_batch
                         .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
-                })
-                .take_while(move |_| {
-                    if let Some(file_pruner) = file_pruner.as_mut() {
-                        match file_pruner.should_prune() {
-                            Ok(false) => futures::future::ready(true),
-                            Ok(true) => {
-                                // Would it be more appropriate to calculate the number of row groups pruned here?
-                                file_metrics.files_pruned_statistics.add(1);
-                                futures::future::ready(false)
-                            }
-                            Err(e) => {
-                                debug!("Error evaluating file pruning predicate: {e}");
-                                futures::future::ready(true)
-                            }
-                        }
-                    } else {
-                        futures::future::ready(true)
-                    }
                 });
 
             Ok(adapted.boxed())
