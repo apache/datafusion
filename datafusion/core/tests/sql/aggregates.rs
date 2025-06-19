@@ -326,24 +326,10 @@ async fn setup_test_contexts(
     test_data: &TestData,
 ) -> Result<(SessionContext, SessionContext)> {
     // Single partition context
-    let ctx_single =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    let ctx_single = create_context_with_partitions(test_data, 1).await?;
 
-    let mut num_partitions = 1;
-    let batch_single = split_test_data_into_batches(test_data, num_partitions)?;
-    let provider_single = MemTable::try_new(test_data.schema.clone(), batch_single)?;
-    ctx_single.register_table("t", Arc::new(provider_single))?;
-
-    num_partitions = 3;
     // Multiple partition context
-    let ctx_multi = SessionContext::new_with_config(
-        SessionConfig::new().with_target_partitions(num_partitions),
-    );
-
-    let batches_multi = split_test_data_into_batches(test_data, num_partitions)?;
-
-    let provider_multi = MemTable::try_new(test_data.schema.clone(), batches_multi)?;
-    ctx_multi.register_table("t", Arc::new(provider_multi))?;
+    let ctx_multi = create_context_with_partitions(test_data, 3).await?;
 
     Ok((ctx_single, ctx_multi))
 }
@@ -1445,4 +1431,20 @@ async fn test_group_by_dict_first_last_value_nulls() -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Creates a session context with the specified number of partitions and registers test data
+async fn create_context_with_partitions(
+    test_data: &TestData,
+    num_partitions: usize,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(num_partitions),
+    );
+
+    let batches = split_test_data_into_batches(test_data, num_partitions)?;
+    let provider = MemTable::try_new(test_data.schema.clone(), batches)?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    Ok(ctx)
 }
