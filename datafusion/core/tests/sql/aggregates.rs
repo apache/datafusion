@@ -752,18 +752,24 @@ async fn count_distinct_dictionary_mixed_values() -> Result<()> {
     Ok(())
 }
 
-/// Test COUNT with null values and GROUP BY dict with null keys and null values - exclusion test (single and multiple partitions)
+/// Comprehensive test for aggregate functions with null values and dictionary columns
+/// Tests COUNT, SUM, MIN, and MEDIAN null handling in single comprehensive test
 #[tokio::test]
-async fn test_count_null_exclusion() -> Result<()> {
-    let test_data = TestData::new();
-    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
+async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
+    let test_data_basic = TestData::new();
+    let test_data_extended = TestData::new_extended();
+    let test_data_min_max = TestData::new_for_min_max();
+    let test_data_median = TestData::new_for_median();
 
-    // Test COUNT should exclude nulls, GROUP BY dict with null keys
-    let sql1 = "SELECT dict_null_keys, COUNT(value) as cnt FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
-    let results1_single = test_query_consistency(&ctx_single, &ctx_multi, sql1).await?;
+    // Test COUNT null exclusion with basic data
+    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data_basic).await?;
+
+    let sql_count = "SELECT dict_null_keys, COUNT(value) as cnt FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
+    let results_count =
+        test_query_consistency(&ctx_single, &ctx_multi, sql_count).await?;
 
     assert_snapshot!(
-        batches_to_string(&results1_single),
+        batches_to_string(&results_count),
         @r###"
     +----------------+-----+
     | dict_null_keys | cnt |
@@ -775,38 +781,16 @@ async fn test_count_null_exclusion() -> Result<()> {
     "###
     );
 
-    // Test COUNT should exclude nulls, GROUP BY dict with null values
-    let sql2 = "SELECT dict_null_vals, COUNT(value) as cnt FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
-    let results2_single = test_query_consistency(&ctx_single, &ctx_multi, sql2).await?;
+    // Test SUM null handling with extended data
+    let (ctx_single_sum, ctx_multi_sum) =
+        setup_test_contexts(&test_data_extended).await?;
+
+    let sql_sum = "SELECT dict_null_vals, SUM(value) as total FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
+    let results_sum =
+        test_query_consistency(&ctx_single_sum, &ctx_multi_sum, sql_sum).await?;
 
     assert_snapshot!(
-        batches_to_string(&results2_single),
-        @r###"
-    +----------------+-----+
-    | dict_null_vals | cnt |
-    +----------------+-----+
-    |                | 0   |
-    | group_x        | 2   |
-    | group_y        | 1   |
-    +----------------+-----+
-    "###
-    );
-
-    Ok(())
-}
-
-/// Test SUM with null values and GROUP BY dict with null values and null keys - should treat nulls as 0 or ignore them (single and multiple partitions)
-#[tokio::test]
-async fn test_sum_null_handling() -> Result<()> {
-    let test_data = TestData::new_extended();
-    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
-
-    // Test SUM should ignore nulls, GROUP BY dict with null values
-    let sql1 = "SELECT dict_null_vals, SUM(value) as total FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
-    let results1_single = test_query_consistency(&ctx_single, &ctx_multi, sql1).await?;
-
-    assert_snapshot!(
-        batches_to_string(&results1_single),
+        batches_to_string(&results_sum),
         @r"
     +----------------+-------+
     | dict_null_vals | total |
@@ -819,37 +803,16 @@ async fn test_sum_null_handling() -> Result<()> {
     "
     );
 
-    // Test SUM should ignore nulls, GROUP BY dict with null keys
-    let sql2 = "SELECT dict_null_keys, SUM(value) as total FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
-    let results2_single = test_query_consistency(&ctx_single, &ctx_multi, sql2).await?;
+    // Test MIN null handling with min/max data
+    let (ctx_single_min, ctx_multi_min) = setup_test_contexts(&test_data_min_max).await?;
+
+    let sql_min = "SELECT dict_null_keys, MIN(value) as minimum FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
+    let results_min =
+        test_query_consistency(&ctx_single_min, &ctx_multi_min, sql_min).await?;
 
     assert_snapshot!(
-        batches_to_string(&results2_single),
-        @r"
-    +----------------+-------+
-    | dict_null_keys | total |
-    +----------------+-------+
-    |                | 4     |
-    | group_a        | 4     |
-    | group_b        | 7     |
-    +----------------+-------+
-    "
-    );
-
-    Ok(())
-}
-
-/// Test MIN with null values and GROUP BY dict with null keys and null values - should ignore nulls unless all values are null (single and multiple partitions)
-#[tokio::test]
-async fn test_min_null_handling() -> Result<()> {
-    let test_data = TestData::new_for_min_max();
-    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
-
-    // Test MIN should ignore nulls, GROUP BY dict with null keys
-    let sql1 = "SELECT dict_null_keys, MIN(value) as minimum FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
-    let results1_single = test_query_consistency(&ctx_single, &ctx_multi, sql1).await?;
-
-    assert_snapshot!(batches_to_string(&results1_single), @r###"
+        batches_to_string(&results_min),
+        @r###"
     +----------------+---------+
     | dict_null_keys | minimum |
     +----------------+---------+
@@ -858,36 +821,20 @@ async fn test_min_null_handling() -> Result<()> {
     | group_b        | 1       |
     | group_c        | 7       |
     +----------------+---------+
-    "###);
+    "###
+    );
 
-    // Test MIN should ignore nulls, GROUP BY dict with null values
-    let sql2 = "SELECT dict_null_vals, MIN(value) as minimum FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
-    let results2_single = test_query_consistency(&ctx_single, &ctx_multi, sql2).await?;
+    // Test MEDIAN null handling with median data
+    let (ctx_single_median, ctx_multi_median) =
+        setup_test_contexts(&test_data_median).await?;
 
-    assert_snapshot!(batches_to_string(&results2_single), @r###"
-    +----------------+---------+
-    | dict_null_vals | minimum |
-    +----------------+---------+
-    |                | 1       |
-    | group_x        | 3       |
-    | group_y        | 7       |
-    +----------------+---------+
-    "###);
+    let sql_median = "SELECT dict_null_vals, MEDIAN(value) as median_value FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
+    let results_median =
+        test_query_consistency(&ctx_single_median, &ctx_multi_median, sql_median).await?;
 
-    Ok(())
-}
-
-/// Test MEDIAN with null values and GROUP BY dict with null values and null keys - should ignore nulls in calculation (single and multiple partitions)
-#[tokio::test]
-async fn test_median_null_handling() -> Result<()> {
-    let test_data = TestData::new_for_median();
-    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
-
-    // Test MEDIAN should ignore nulls, GROUP BY dict with null values
-    let sql1 = "SELECT dict_null_vals, MEDIAN(value) as median_value FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
-    let results1_single = test_query_consistency(&ctx_single, &ctx_multi, sql1).await?;
-
-    assert_snapshot!(batches_to_string(&results1_single), @r"
+    assert_snapshot!(
+        batches_to_string(&results_median),
+        @r"
     +----------------+--------------+
     | dict_null_vals | median_value |
     +----------------+--------------+
@@ -895,20 +842,6 @@ async fn test_median_null_handling() -> Result<()> {
     | group_x        | 1            |
     | group_y        | 5            |
     | group_z        | 7            |
-    +----------------+--------------+
-    ");
-
-    // Test MEDIAN should ignore nulls, GROUP BY dict with null keys
-    let sql2 = "SELECT dict_null_keys, MEDIAN(value) as median_value FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
-    let results2_single = test_query_consistency(&ctx_single, &ctx_multi, sql2).await?;
-
-    assert_snapshot!(batches_to_string(&results2_single), @r"
-    +----------------+--------------+
-    | dict_null_keys | median_value |
-    +----------------+--------------+
-    |                | 3            |
-    | group_a        | 4            |
-    | group_b        | 5            |
     +----------------+--------------+
     ");
 
@@ -941,9 +874,9 @@ async fn test_first_last_val_null_handling() -> Result<()> {
     Ok(())
 }
 
-/// Test FIRST_VALUE with ORDER BY (instead of PARTITION BY) - ignore nulls
+/// Test FIRST_VALUE and LAST_VALUE with ORDER BY - comprehensive null handling
 #[tokio::test]
-async fn test_first_value_order_by_ignore_nulls() -> Result<()> {
+async fn test_first_last_value_order_by_null_handling() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Create test data with nulls mixed in
@@ -967,11 +900,14 @@ async fn test_first_value_order_by_ignore_nulls() -> Result<()> {
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
     ctx.register_table("test_data", Arc::new(table))?;
 
-    // Test FIRST_VALUE with ORDER BY, ignoring nulls
+    // Test all combinations of FIRST_VALUE and LAST_VALUE with null handling
     let sql = "SELECT 
         dict_group,
         value,
-        FIRST_VALUE(value IGNORE NULLS) OVER (ORDER BY value NULLS LAST) as first_non_null
+        FIRST_VALUE(value IGNORE NULLS) OVER (ORDER BY value NULLS LAST) as first_ignore_nulls,
+        FIRST_VALUE(value RESPECT NULLS) OVER (ORDER BY value NULLS FIRST) as first_respect_nulls,
+        LAST_VALUE(value IGNORE NULLS) OVER (ORDER BY value NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_ignore_nulls,
+        LAST_VALUE(value RESPECT NULLS) OVER (ORDER BY value NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_respect_nulls
     FROM test_data 
     ORDER BY value NULLS LAST";
 
@@ -981,186 +917,15 @@ async fn test_first_value_order_by_ignore_nulls() -> Result<()> {
     assert_snapshot!(
         batches_to_string(&results),
         @r###"
-    +------------+-------+----------------+
-    | dict_group | value | first_non_null |
-    +------------+-------+----------------+
-    | group_a    | 5     | 5              |
-    | group_b    | 10    | 5              |
-    | group_c    | 20    | 5              |
-    | group_a    |       | 5              |
-    | group_b    |       | 5              |
-    +------------+-------+----------------+
-    "###
-    );
-
-    Ok(())
-}
-
-/// Test FIRST_VALUE with ORDER BY (instead of PARTITION BY) - respect nulls
-#[tokio::test]
-async fn test_first_value_order_by_respect_nulls() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    // Create test data with nulls mixed in
-    let dict_keys = create_dict(
-        vec![Some("group_a"), Some("group_b"), Some("group_c")],
-        vec![Some(0), Some(1), Some(2), Some(0), Some(1)],
-    );
-
-    let values = Int32Array::from(vec![None, Some(10), Some(20), Some(5), None]);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("dict_group", string_dict_type(), true),
-        Field::new("value", DataType::Int32, true),
-    ]));
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(dict_keys), Arc::new(values)],
-    )?;
-
-    let table = MemTable::try_new(schema, vec![vec![batch]])?;
-    ctx.register_table("test_data", Arc::new(table))?;
-
-    // Test FIRST_VALUE with ORDER BY, respecting nulls (default behavior)
-    let sql = "SELECT 
-        dict_group,
-        value,
-        FIRST_VALUE(value RESPECT NULLS) OVER (ORDER BY value NULLS FIRST) as first_with_nulls
-    FROM test_data 
-    ORDER BY value NULLS FIRST";
-
-    let df = ctx.sql(sql).await?;
-    let results = df.collect().await?;
-
-    assert_snapshot!(
-        batches_to_string(&results),
-        @r###"
-    +------------+-------+------------------+
-    | dict_group | value | first_with_nulls |
-    +------------+-------+------------------+
-    | group_a    |       |                  |
-    | group_b    |       |                  |
-    | group_a    | 5     |                  |
-    | group_b    | 10    |                  |
-    | group_c    | 20    |                  |
-    +------------+-------+------------------+
-    "###
-    );
-
-    Ok(())
-}
-
-/// Test LAST_VALUE with ORDER BY - ignore nulls
-#[tokio::test]
-async fn test_last_value_order_by_ignore_nulls() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    // Create test data with nulls mixed in
-    let dict_keys = create_dict(
-        vec![Some("group_a"), Some("group_b"), Some("group_c")],
-        vec![Some(0), Some(1), Some(2), Some(0), Some(1)],
-    );
-
-    let values = Int32Array::from(vec![None, Some(10), Some(20), Some(5), None]);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("dict_group", string_dict_type(), true),
-        Field::new("value", DataType::Int32, true),
-    ]));
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(dict_keys), Arc::new(values)],
-    )?;
-
-    let table = MemTable::try_new(schema, vec![vec![batch]])?;
-    ctx.register_table("test_data", Arc::new(table))?;
-
-    // Test LAST_VALUE with ORDER BY, ignoring nulls
-    let sql = "SELECT 
-        dict_group,
-        value,
-        LAST_VALUE(value IGNORE NULLS) OVER (
-            ORDER BY value NULLS LAST 
-            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-        ) as last_non_null
-    FROM test_data 
-    ORDER BY value NULLS LAST";
-
-    let df = ctx.sql(sql).await?;
-    let results = df.collect().await?;
-
-    assert_snapshot!(
-        batches_to_string(&results),
-        @r###"
-    +------------+-------+---------------+
-    | dict_group | value | last_non_null |
-    +------------+-------+---------------+
-    | group_a    | 5     | 20            |
-    | group_b    | 10    | 20            |
-    | group_c    | 20    | 20            |
-    | group_a    |       | 20            |
-    | group_b    |       | 20            |
-    +------------+-------+---------------+
-    "###
-    );
-
-    Ok(())
-}
-
-/// Test LAST_VALUE with ORDER BY - respect nulls
-#[tokio::test]
-async fn test_last_value_order_by_respect_nulls() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    // Create test data with nulls mixed in
-    let dict_keys = create_dict(
-        vec![Some("group_a"), Some("group_b"), Some("group_c")],
-        vec![Some(0), Some(1), Some(2), Some(0), Some(1)],
-    );
-
-    let values = Int32Array::from(vec![None, Some(10), Some(20), Some(5), None]);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("dict_group", string_dict_type(), true),
-        Field::new("value", DataType::Int32, true),
-    ]));
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(dict_keys), Arc::new(values)],
-    )?;
-
-    let table = MemTable::try_new(schema, vec![vec![batch]])?;
-    ctx.register_table("test_data", Arc::new(table))?;
-
-    // Test LAST_VALUE with ORDER BY, respecting nulls (default behavior)
-    let sql = "SELECT 
-        dict_group,
-        value,
-        LAST_VALUE(value RESPECT NULLS) OVER (
-            ORDER BY value NULLS LAST 
-            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-        ) as last_with_nulls
-    FROM test_data 
-    ORDER BY value NULLS LAST";
-
-    let df = ctx.sql(sql).await?;
-    let results = df.collect().await?;
-
-    assert_snapshot!(
-        batches_to_string(&results),
-        @r###"
-    +------------+-------+-----------------+
-    | dict_group | value | last_with_nulls |
-    +------------+-------+-----------------+
-    | group_a    | 5     |                 |
-    | group_b    | 10    |                 |
-    | group_c    | 20    |                 |
-    | group_a    |       |                 |
-    | group_b    |       |                 |
-    +------------+-------+-----------------+
+    +------------+-------+--------------------+---------------------+-------------------+--------------------+
+    | dict_group | value | first_ignore_nulls | first_respect_nulls | last_ignore_nulls | last_respect_nulls |
+    +------------+-------+--------------------+---------------------+-------------------+--------------------+
+    | group_a    | 5     | 5                  |                     | 20                |                    |
+    | group_b    | 10    | 5                  |                     | 20                |                    |
+    | group_c    | 20    | 5                  |                     | 20                |                    |
+    | group_a    |       | 5                  |                     | 20                |                    |
+    | group_b    |       | 5                  |                     | 20                |                    |
+    +------------+-------+--------------------+---------------------+-------------------+--------------------+
     "###
     );
 
@@ -1266,79 +1031,6 @@ async fn test_first_last_value_group_by_dict_nulls() -> Result<()> {
     | val_x          | 10        | 50       | 2   |
     | val_y          | 30        | 30       | 1   |
     +----------------+-----------+----------+-----+
-    "###
-    );
-
-    Ok(())
-}
-
-/// Test FIRST_VALUE/LAST_VALUE with complex GROUP BY scenarios and null handling
-#[tokio::test]
-async fn test_first_last_value_complex_dict_nulls() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    // Create more comprehensive test data
-    let dict_keys = create_dict(
-        vec![Some("A"), Some("B"), None], // Include null in dictionary values
-        vec![
-            Some(0), // A
-            None,    // null key
-            Some(1), // B
-            Some(2), // maps to null in dictionary
-            Some(0), // A
-            None,    // null key
-            Some(1), // B
-        ],
-    );
-
-    let values = Int32Array::from(vec![
-        Some(100), // A group
-        None,      // null key group
-        Some(200), // B group
-        Some(300), // null value in dict group
-        None,      // A group
-        Some(400), // null key group
-        Some(500), // B group
-    ]);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("dict_group", string_dict_type(), true),
-        Field::new("value", DataType::Int32, true),
-    ]));
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(dict_keys), Arc::new(values)],
-    )?;
-
-    let table = MemTable::try_new(schema, vec![vec![batch]])?;
-    ctx.register_table("test_data", Arc::new(table))?;
-
-    // Test FIRST_VALUE and LAST_VALUE with IGNORE NULLS in GROUP BY
-    let sql = "SELECT 
-        dict_group,
-        FIRST_VALUE(value IGNORE NULLS) as first_non_null,
-        LAST_VALUE(value IGNORE NULLS) as last_non_null,
-        FIRST_VALUE(value RESPECT NULLS) as first_with_nulls,
-        LAST_VALUE(value RESPECT NULLS) as last_with_nulls,
-        COUNT(*) as cnt
-    FROM test_data 
-    GROUP BY dict_group 
-    ORDER BY dict_group NULLS FIRST";
-
-    let df = ctx.sql(sql).await?;
-    let results = df.collect().await?;
-
-    assert_snapshot!(
-        batches_to_string(&results),
-        @r###"
-    +------------+----------------+---------------+------------------+-----------------+-----+
-    | dict_group | first_non_null | last_non_null | first_with_nulls | last_with_nulls | cnt |
-    +------------+----------------+---------------+------------------+-----------------+-----+
-    |            | 300            | 400           |                  | 400             | 3   |
-    | A          | 100            | 100           | 100              |                 | 2   |
-    | B          | 200            | 500           | 200              | 500             | 2   |
-    +------------+----------------+---------------+------------------+-----------------+-----+
     "###
     );
 
