@@ -1327,7 +1327,7 @@ impl SessionContext {
         table_paths: P,
         options: impl ReadOptions<'a>,
     ) -> Result<DataFrame> {
-        let table_paths = table_paths.to_urls()?;
+        let mut table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
         let listing_options =
             options.to_listing_options(&session_config, self.copied_table_options());
@@ -1339,9 +1339,14 @@ impl SessionContext {
         }
 
         // check if the file extension matches the expected extension
-        for path in &table_paths {
+        for path in table_paths.iter_mut() {
             let file_path = path.as_str();
-            if !file_path.ends_with(option_extension.clone().as_str())
+            // if the folder then rewrite a file path as 'path/*.parquet'
+            if path.is_folder() && path.get_glob().is_none() {
+                *path = path
+                    .clone()
+                    .with_glob(format!("*{option_extension}").as_ref())?
+            } else if !file_path.ends_with(option_extension.clone().as_str())
                 && !path.is_collection()
             {
                 return exec_err!(
