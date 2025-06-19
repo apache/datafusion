@@ -22,18 +22,8 @@ use datafusion_common::ScalarValue;
 use insta::assert_snapshot;
 /// Helper functions for aggregate tests with dictionary columns and nulls
 
-/// Creates a dictionary array with null keys
-fn create_dict_with_null_keys(
-    values: Vec<&str>,
-    indices: Vec<Option<u32>>,
-) -> DictionaryArray<UInt32Type> {
-    let dict_values = StringArray::from(values);
-    let dict_indices = UInt32Array::from(indices);
-    DictionaryArray::new(dict_indices, Arc::new(dict_values))
-}
-
 /// Creates a dictionary array with null values in the dictionary
-fn create_dict_with_null_values(
+fn create_dict(
     values: Vec<Option<&str>>,
     indices: Vec<Option<u32>>,
 ) -> DictionaryArray<UInt32Type> {
@@ -53,8 +43,8 @@ struct TestData {
 impl TestData {
     fn new() -> Self {
         // Create dictionary with null keys
-        let dict_null_keys = create_dict_with_null_keys(
-            vec!["group_a", "group_b"],
+        let dict_null_keys = create_dict(
+            vec![Some("group_a"), Some("group_b")],
             vec![
                 Some(0), // group_a
                 None,    // null key
@@ -65,7 +55,7 @@ impl TestData {
         );
 
         // Create dictionary with null values
-        let dict_null_vals = create_dict_with_null_values(
+        let dict_null_vals = create_dict(
             vec![Some("group_x"), None, Some("group_y")],
             vec![
                 Some(0), // group_x
@@ -110,7 +100,7 @@ impl TestData {
     /// Creates extended test data for more comprehensive testing
     fn new_extended() -> Self {
         // Create dictionary with null values in the dictionary array
-        let dict_null_vals = create_dict_with_null_values(
+        let dict_null_vals = create_dict(
             vec![Some("group_a"), None, Some("group_b")],
             vec![
                 Some(0), // group_a
@@ -125,8 +115,8 @@ impl TestData {
         );
 
         // Create dictionary with null keys
-        let dict_null_keys = create_dict_with_null_keys(
-            vec!["group_x", "group_y", "group_z"],
+        let dict_null_keys = create_dict(
+            vec![Some("group_x"), Some("group_y"), Some("group_z")],
             vec![
                 Some(0), // group_x
                 None,    // null key
@@ -181,8 +171,8 @@ impl TestData {
 
     /// Creates test data for MIN/MAX testing with varied values
     fn new_for_min_max() -> Self {
-        let dict_null_keys = create_dict_with_null_keys(
-            vec!["group_a", "group_b", "group_c"],
+        let dict_null_keys = create_dict(
+            vec![Some("group_a"), Some("group_b"), Some("group_c")],
             vec![
                 Some(0),
                 Some(1),
@@ -193,7 +183,7 @@ impl TestData {
             ],
         );
 
-        let dict_null_vals = create_dict_with_null_values(
+        let dict_null_vals = create_dict(
             vec![Some("group_x"), None, Some("group_y")],
             vec![
                 Some(0),
@@ -238,13 +228,13 @@ impl TestData {
 
     /// Creates test data for MEDIAN testing with varied values
     fn new_for_median() -> Self {
-        let dict_null_vals = create_dict_with_null_values(
+        let dict_null_vals = create_dict(
             vec![Some("group_a"), None, Some("group_b")],
             vec![Some(0), Some(1), Some(2), Some(1), Some(0)],
         );
 
-        let dict_null_keys = create_dict_with_null_keys(
-            vec!["group_x", "group_y", "group_z"],
+        let dict_null_keys = create_dict(
+            vec![Some("group_x"), Some("group_y"), Some("group_z")],
             vec![Some(0), None, Some(1), None, Some(2)],
         );
 
@@ -280,12 +270,12 @@ impl TestData {
 
     /// Creates test data for FIRST_VALUE/LAST_VALUE testing
     fn new_for_first_last() -> Self {
-        let dict_null_keys = create_dict_with_null_keys(
-            vec!["group_a", "group_b"],
+        let dict_null_keys = create_dict(
+            vec![Some("group_a"), Some("group_b")],
             vec![Some(0), None, Some(1), None, Some(0)],
         );
 
-        let dict_null_vals = create_dict_with_null_values(
+        let dict_null_vals = create_dict(
             vec![Some("group_x"), None, Some("group_y")],
             vec![Some(0), Some(1), Some(2), Some(1), Some(0)],
         );
