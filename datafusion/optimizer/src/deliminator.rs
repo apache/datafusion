@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
 use crate::delim_candidate_rewriter::DelimCandidateRewriter;
 use crate::delim_candidates_collector::{
     DelimCandidateVisitor, JoinWithDelimScan, NodeVisitor,
@@ -50,10 +49,13 @@ impl OptimizerRule for Deliminator {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let transformer = DecorrelateDependentJoin::new();
-        let rewrite_result = transformer.rewrite(plan, config)?;
+        // TODO: Integrated with decrrelator
+        // let transformer = DecorrelateDependentJoin::new();
+        // let rewrite_result = transformer.rewrite(plan, config)?;
+
+        let rewrite_result = Transformed::no(plan);
 
         let mut node_visitor = NodeVisitor::new();
         let _ = node_visitor.collect_nodes(&rewrite_result.data)?;
@@ -66,6 +68,7 @@ impl OptimizerRule for Deliminator {
             println!("  joins: [");
             for join in &candidate.joins {
                 println!("    JoinWithDelimGet {{");
+                println!("      id: {}", join.node.id);
                 println!("      depth: {}", join.depth);
                 println!("      join: {}", join.node.plan.display());
                 println!("    }},");
@@ -157,13 +160,36 @@ impl OptimizerRule for Deliminator {
                 joins.insert(join.node.id, join.clone());
             }
         }
+
+        println!("\n=== Processing All Joins ===");
+        let mut joins = IndexMap::new();
+        for candidate in candidate_visitor.candidates.values() {
+            for join in &candidate.joins {
+                println!("  Join {{");
+                println!("    id: {}", join.node.id);
+                println!("    depth: {}", join.depth);
+                println!("    plan: {}", join.node.plan.display());
+                if let Some(replacement) = &join.replacement_plan {
+                    println!("    replacement_plan: {}", replacement.display());
+                }
+                println!("    can_be_eliminated: {}", join.can_be_eliminated);
+                println!("    is_filter_generated: {}", join.is_filter_generated);
+                println!("  }},");
+                joins.insert(join.node.id, join.clone());
+            }
+        }
+        println!("========================\n");
+
         let mut rewriter =
             DelimCandidateRewriter::new(candidate_visitor.candidates, joins);
         let rewrite_result = rewrite_result.data.rewrite(&mut rewriter)?;
 
         // Replace all columns.
         let mut rewriter = ColumnRewriter::new(replacement_cols);
-        let rewrite_result = rewrite_result.data.rewrite(&mut rewriter)?;
+        let mut rewrite_result = rewrite_result.data.rewrite(&mut rewriter)?;
+
+        // TODO
+        rewrite_result.transformed = true;
 
         Ok(rewrite_result)
     }
@@ -263,42 +289,39 @@ fn remove_join_with_delim_scan(
                     }
                 }
             }
-
-            if !*all_equality_conditions
-                && !remove_inequality_join_with_delim_scan(
-                    delim_join,
-                    delim_scan_count,
-                    join_plan,
-                    is_transformed,
-                )?
-            {
-                return Ok(false);
-            }
-
-            // All conditions passed, we can eliminate this join + DelimScan
-            join_with_delim_scan.can_be_eliminated = true;
-            let mut replacement_plan = if is_delim_side_left {
-                join.right.clone()
-            } else {
-                join.left.clone()
-            };
-            if !filter_expressions.is_empty() {
-                replacement_plan = LogicalPlan::Filter(Filter::try_new(
-                    conjunction(filter_expressions).ok_or_else(|| {
-                        DataFusionError::Plan("filter expressions must exist".to_string())
-                    })?,
-                    replacement_plan,
-                )?)
-                .into();
-                join_with_delim_scan.is_filter_generated = true;
-            }
-            join_with_delim_scan.replacement_plan = Some(replacement_plan);
-
-            return Ok(true);
         }
 
-        // No join conditions, can't remove the join
-        return Ok(false);
+        if !*all_equality_conditions
+            && !remove_inequality_join_with_delim_scan(
+                delim_join,
+                delim_scan_count,
+                join_plan,
+                is_transformed,
+            )?
+        {
+            return Ok(false);
+        }
+
+        // All conditions passed, we can eliminate this join + DelimScan
+        join_with_delim_scan.can_be_eliminated = true;
+        let mut replacement_plan = if is_delim_side_left {
+            join.right.clone()
+        } else {
+            join.left.clone()
+        };
+        if !filter_expressions.is_empty() {
+            replacement_plan = LogicalPlan::Filter(Filter::try_new(
+                conjunction(filter_expressions).ok_or_else(|| {
+                    DataFusionError::Plan("filter expressions must exist".to_string())
+                })?,
+                replacement_plan,
+            )?)
+            .into();
+            join_with_delim_scan.is_filter_generated = true;
+        }
+        join_with_delim_scan.replacement_plan = Some(replacement_plan);
+
+        return Ok(true);
     } else {
         return internal_err!("current plan must be join in remove_join_with_delim_scan");
     }
@@ -338,6 +361,10 @@ fn fetch_delim_scan(plan: &LogicalPlan) -> (Option<&LogicalPlan>, Option<&Logica
                 return (None, Some(alias.input.as_ref()));
             }
         }
+        LogicalPlan::DelimGet(_) => {
+            return (None, Some(plan));
+        }
+
         _ => {}
     }
 
@@ -686,5 +713,182 @@ impl TreeNodeRewriter for ColumnRewriter {
             // Add other cases as needed...
             _ => Ok(Transformed::no(plan)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType as ArrowDataType, Field};
+    use datafusion_common::{Column, Result};
+    use datafusion_expr::{col, lit, Expr, JoinType, LogicalPlanBuilder};
+    use datafusion_functions_aggregate::count::count;
+    use insta::assert_snapshot;
+
+    use crate::deliminator::Deliminator;
+    use crate::test::{test_delim_scan_with_name, test_table_scan_with_name};
+    use crate::OptimizerContext;
+
+    macro_rules! assert_deliminate {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> =
+                Arc::new(Deliminator::new());
+            let transformed = rule.rewrite(
+                $plan.clone(),
+                &OptimizerContext::new().with_skip_failing_rules(true),
+            )?;
+            let display = transformed.data.display_indent_schema();
+            assert_snapshot!(
+                display,
+                @ $expected,
+            )
+        }};
+    }
+
+    #[test]
+    fn test_delim_joins() -> Result<()> {
+        //      Projection
+        //          |
+        //        Filter
+        //          |
+        //      DelimJoin1
+        //    /    ^       \
+        // Get T3  |     Projection
+        //         |           |
+        //         |        InnerJoin
+        //         |     /             \
+        //         |  DelimGet1       Aggregate
+        //         |      |              |
+        //         +------+            Filter
+        //         |                     |
+        //         |                  InnerJoin
+        //         |               /            \
+        //         |         CrossProduct        Projection
+        //         |         /      \                |
+        //         |      Get t2   DelimGet2       Get t1
+        //         |                 |
+        //         + ----------------+
+
+        // Bottom level plan (rightmost branch)
+        let get_t1 = test_table_scan_with_name("t1")?;
+        let get_t2 = test_table_scan_with_name("t2")?;
+        let get_t3 = test_table_scan_with_name("t3")?;
+
+        // Create schema for DelimGet2
+        let delim_get2 = test_delim_scan_with_name(
+            "delim_get2",
+            2,
+            vec![Field::new("d", ArrowDataType::UInt32, true)],
+        )?;
+
+        // Create right branch starting with t1
+        let t1_projection = LogicalPlanBuilder::from(get_t1)
+            .project(vec![col("t1.a")])?
+            .build()?;
+
+        // Create cross product of t2 and delim_get2
+        let bottom_cross = LogicalPlanBuilder::from(get_t2)
+            .cross_join(delim_get2)?
+            .build()?;
+
+        // Join cross product with t1 projection
+        let bottom_join = LogicalPlanBuilder::from(bottom_cross)
+            .join(
+                t1_projection,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .build()?;
+
+        // Add filter and aggregate
+        let bottom_filter = LogicalPlanBuilder::from(bottom_join)
+            .filter(col("t2.a").eq(lit(1)))?
+            .build()?;
+
+        let bottom_agg = LogicalPlanBuilder::from(bottom_filter)
+            .aggregate(Vec::<Expr>::new(), vec![count(col("t2.a"))])?
+            .build()?;
+
+        // Create DelimGet1 for middle join
+        let delim_get1 = test_delim_scan_with_name(
+            "delim_get1",
+            1,
+            vec![Field::new("a", ArrowDataType::UInt32, true)],
+        )?;
+
+        // Join DelimGet1 with aggregate
+        let middle_join = LogicalPlanBuilder::from(delim_get1)
+            .join(
+                bottom_agg,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("d")]),
+                None,
+            )?
+            .build()?;
+
+        let middle_proj = LogicalPlanBuilder::from(middle_join)
+            .project(vec![col("a").alias("p_a")])?
+            .build()?;
+
+        // Final DelimJoin at top level
+        let final_join = LogicalPlanBuilder::from(get_t3)
+            .delim_join(
+                middle_proj,
+                JoinType::Inner,
+                (vec![Column::from_name("a")], vec![Column::from_name("p_a")]),
+                None,
+            )?
+            .build()?;
+
+        let final_filter = LogicalPlanBuilder::from(final_join)
+            .filter(col("t3.a").eq(lit(1)))?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(final_filter)
+            .project(vec![col("t3.a")])?
+            .build()?;
+
+        // Projection: t3.a
+        //   Filter: t3.a = Int32(1)
+        //     Inner Join(DelimJoin): t3.a = p_a
+        //       TableScan: t3
+        //       Projection: a AS p_a
+        //         Inner Join(ComparisonJoin): a = d
+        //           DelimGet: b
+        //           Aggregate: groupBy=[[]], aggr=[[count(t2.a)]]
+        //             Filter: t2.a = Int32(1)
+        //               Inner Join(ComparisonJoin): t2.a = t1.a
+        //                 Cross Join(ComparisonJoin):                  <----- eliminate
+        //                   TableScan: t2
+        //                   DelimGet: b
+        //                 Projection: t1.a
+        //                   TableScan: t1
+
+        // let rule: Arc<dyn crate::OptimizerRule + Send + Sync> =
+        //     Arc::new(Deliminator::new());
+        // rule.rewrite(plan, &OptimizerContext::new().with_skip_failing_rules(true));
+
+        assert_deliminate!(plan, @r"
+        Projection: t3.a [a:UInt32]
+          Filter: t3.a = Int32(1) [a:UInt32, b:UInt32, c:UInt32, p_a:UInt32;N]
+            Inner Join(DelimJoin): t3.a = p_a [a:UInt32, b:UInt32, c:UInt32, p_a:UInt32;N]
+              TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
+              Projection: a AS p_a [p_a:UInt32;N]
+                Inner Join(ComparisonJoin): a = d [a:UInt32;N, count(t2.a):Int64]
+                  DelimGet: b [a:UInt32;N]
+                  Aggregate: groupBy=[[]], aggr=[[count(t2.a)]] [count(t2.a):Int64]
+                    Filter: t2.a = Int32(1) [a:UInt32, b:UInt32, c:UInt32, d:UInt32;N, a:UInt32]
+                      Inner Join(ComparisonJoin): t2.a = t1.a [a:UInt32, b:UInt32, c:UInt32, d:UInt32;N, a:UInt32]
+                        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+                        Projection: t1.a [a:UInt32]
+                          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+        ");
+
+        Ok(())
     }
 }

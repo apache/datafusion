@@ -471,8 +471,8 @@ mod tests {
             plan,
             @r"
         Projection: test.b [b:UInt32]
-          LeftSemi Join:  Filter: test.b = __correlated_sq_2.c [a:UInt32, b:UInt32, c:UInt32]
-            LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
+          LeftSemi Join(ComparisonJoin):  Filter: test.b = __correlated_sq_2.c [a:UInt32, b:UInt32, c:UInt32]
+            LeftSemi Join(ComparisonJoin):  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
               SubqueryAlias: __correlated_sq_1 [c:UInt32]
                 Projection: sq_1.c [c:UInt32]
@@ -504,7 +504,7 @@ mod tests {
             @r"
         Projection: test.b [b:UInt32]
           Filter: test.a = UInt32(1) AND test.b < UInt32(30) [a:UInt32, b:UInt32, c:UInt32]
-            LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
+            LeftSemi Join(ComparisonJoin):  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
               SubqueryAlias: __correlated_sq_1 [c:UInt32]
                 Projection: sq.c [c:UInt32]

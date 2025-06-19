@@ -198,12 +198,12 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
     }
 
     fn f_up(&mut self, plan: &LogicalPlan) -> Result<TreeNodeRecursion> {
+        let cur_id = self.stack.pop().ok_or(internal_datafusion_err!(
+            "stack cannot be empty during upward traversal"
+        ))?;
+
         if let LogicalPlan::Join(join) = plan {
             if join.join_kind == JoinKind::DelimJoin {
-                let cur_id = self.stack.pop().ok_or(internal_datafusion_err!(
-                    "stack cannot be empty during upward traversal"
-                ))?;
-
                 let sub_plan_size = self
                     .node_visitor
                     .nodes
@@ -225,7 +225,10 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
                     .nodes
                     .get(&left_id)
                     .ok_or_else(|| {
-                        DataFusionError::Plan("left id should exist in join".to_string())
+                        DataFusionError::Plan(format!(
+                            "left id {} should exist in join",
+                            left_id
+                        ))
                     })?
                     .sub_plan_size
                     + left_id;
@@ -250,7 +253,7 @@ impl TreeNodeVisitor<'_> for DelimCandidateVisitor {
                     &self.node_visitor,
                     &mut candidate,
                     0,
-                    cur_id,
+                    right_id,
                 );
                 right_plan.visit(&mut collector)?;
             }

@@ -70,14 +70,19 @@ impl TreeNodeRewriter for DelimCandidateRewriter {
             }
         } else if let Some(join_with_delim_scan) = self.joins.get(&cur_id) {
             if join_with_delim_scan.can_be_eliminated {
-                let prev_sub_plan_size = join_with_delim_scan.node.sub_plan_size;
-                let mut cur_sub_plan_size = 1;
-                if join_with_delim_scan.is_filter_generated {
-                    cur_sub_plan_size += 1;
-                }
+                // let prev_sub_plan_size = join_with_delim_scan.node.sub_plan_size;
+                // let mut cur_sub_plan_size = 1;
+                // if join_with_delim_scan.is_filter_generated {
+                //     cur_sub_plan_size += 1;
+                // }
 
-                // perv_sub_plan_size should be larger than cur_sub_plan_size.
-                diff = prev_sub_plan_size - cur_sub_plan_size;
+                // // perv_sub_plan_size should be larger than cur_sub_plan_size.
+                // diff = prev_sub_plan_size - cur_sub_plan_size;
+
+                diff = 2;
+                if join_with_delim_scan.is_filter_generated {
+                    diff = 1;
+                }
 
                 transformed = Transformed::yes(
                     join_with_delim_scan
