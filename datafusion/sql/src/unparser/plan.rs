@@ -49,7 +49,9 @@ use datafusion_expr::{
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode,
 };
-use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
+use sqlparser::ast::{
+    self, Ident, LimitClause, OrderByKind, SetExpr, TableAliasColumnDef,
+};
 use std::{sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
@@ -457,7 +459,12 @@ impl Unparser<'_> {
                             "Limit operator only valid in a statement context."
                         );
                     };
-                    query.limit(Some(self.expr_to_sql(fetch)?));
+                    let limit_clause = LimitClause::LimitOffset {
+                        limit: Some(self.expr_to_sql(fetch)?),
+                        offset: None,
+                        limit_by: vec![],
+                    };
+                    query.limit_clause(limit_clause);
                 }
 
                 if let Some(skip) = &limit.skip {
@@ -466,10 +473,14 @@ impl Unparser<'_> {
                             "Offset operator only valid in a statement context."
                         );
                     };
-                    query.offset(Some(ast::Offset {
-                        rows: ast::OffsetRows::None,
-                        value: self.expr_to_sql(skip)?,
-                    }));
+                    query.limit_clause(LimitClause::LimitOffset {
+                        limit: None,
+                        offset: Some(ast::Offset {
+                            rows: ast::OffsetRows::None,
+                            value: self.expr_to_sql(skip)?,
+                        }),
+                        limit_by: vec![],
+                    });
                 }
 
                 self.select_to_sql_recursively(
@@ -497,10 +508,15 @@ impl Unparser<'_> {
                 };
 
                 if let Some(fetch) = sort.fetch {
-                    query_ref.limit(Some(ast::Expr::value(ast::Value::Number(
-                        fetch.to_string(),
-                        false,
-                    ))));
+                    let limit_clause = LimitClause::LimitOffset {
+                        limit: Some(ast::Expr::value(ast::Value::Number(
+                            fetch.to_string(),
+                            false,
+                        ))),
+                        offset: None,
+                        limit_by: vec![],
+                    };
+                    query_ref.limit_clause(limit_clause);
                 };
 
                 let agg = find_agg_node_within_select(plan, select.already_projected());
@@ -799,7 +815,7 @@ impl Unparser<'_> {
 
                             let projection = left_projection
                                 .into_iter()
-                                .chain(right_projection.into_iter())
+                                .chain(right_projection)
                                 .collect();
                             select.projection(projection);
                         }

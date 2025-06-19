@@ -55,16 +55,16 @@ use datafusion_expr::{
     Volatility, WriteOp,
 };
 use sqlparser::ast::{
-    self, BeginTransactionKind, NullsDistinctOption, ShowStatementIn,
-    ShowStatementOptions, SqliteOnConflict, TableObject, UpdateTableFromKind,
-    ValueWithSpan,
+    self, BeginTransactionKind, IndexType, NullsDistinctOption, OrderByExpr, Set,
+    ShowStatementIn, ShowStatementOptions, SqliteOnConflict, TableObject,
+    UpdateTableFromKind, ValueWithSpan,
 };
 use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
     CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert,
-    ObjectName, ObjectType, OneOrManyWithParens, Query, SchemaName, SetExpr,
-    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
-    TableWithJoins, TransactionMode, UnaryOperator, Value,
+    ObjectName, ObjectType, Query, SchemaName, SetExpr, ShowCreateObject,
+    ShowStatementFilter, Statement, TableConstraint, TableFactor, TableWithJoins,
+    TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -233,13 +233,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
-            Statement::SetVariable {
-                local,
-                hivevar,
-                variables,
-                value,
-            } => self.set_variable_to_plan(local, hivevar, &variables, value),
-
+            Statement::Set(statement) => self.set_statement_to_plan(statement),
             Statement::CreateTable(CreateTable {
                 temporary,
                 external,
@@ -290,6 +284,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 catalog,
                 catalog_sync,
                 storage_serialization_policy,
+                inherits,
             }) if table_properties.is_empty() && with_options.is_empty() => {
                 if temporary {
                     return not_impl_err!("Temporary tables not supported")?;
@@ -428,6 +423,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if storage_serialization_policy.is_some() {
                     return not_impl_err!("Storage serialization policy not supported")?;
                 }
+                if inherits.is_some() {
+                    return not_impl_err!("Table inheritance not supported")?;
+                }
 
                 // Merge inline constraints and existing constraints
                 let mut all_constraints = constraints;
@@ -451,10 +449,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         let plan = if has_columns {
                             if schema.fields().len() != input_schema.fields().len() {
                                 return plan_err!(
-                            "Mismatch: {} columns specified, but result has {} columns",
-                            schema.fields().len(),
-                            input_schema.fields().len()
-                        );
+                                    "Mismatch: {} columns specified, but result has {} columns",
+                                    schema.fields().len(),
+                                    input_schema.fields().len()
+                                );
                             }
                             let input_fields = input_schema.fields();
                             let project_exprs = schema
@@ -534,6 +532,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 temporary,
                 to,
                 params,
+                or_alter,
             } => {
                 if materialized {
                     return not_impl_err!("Materialized views not supported")?;
@@ -570,6 +569,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     temporary,
                     to,
                     params,
+                    or_alter,
                 };
                 let sql = stmt.to_string();
                 let Statement::CreateView {
@@ -617,6 +617,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Statement::CreateSchema {
                 schema_name,
                 if_not_exists,
+                ..
             } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
                 CreateCatalogSchema {
                     schema_name: get_schema_name(&schema_name),
@@ -1182,6 +1183,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             ast::CreateFunctionBody::AsBeforeOptions(expr) => expr,
                             ast::CreateFunctionBody::AsAfterOptions(expr) => expr,
                             ast::CreateFunctionBody::Return(expr) => expr,
+                            ast::CreateFunctionBody::AsBeginEnd(_) => {
+                                return not_impl_err!(
+                                    "Qualified functions (AsBeginEnd) are not supported"
+                                )?;
+                            }
                         },
                         &DFSchema::empty(),
                         &mut planner_context,
@@ -1251,9 +1257,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .get_table_source(table.clone())?
                     .schema()
                     .to_dfschema_ref()?;
-                let using: Option<String> = using.as_ref().map(ident_to_string);
+                let using: Option<String> =
+                    using.as_ref().map(|index_type| match index_type {
+                        IndexType::Custom(ident) => ident_to_string(ident),
+                        _ => index_type.to_string().to_ascii_lowercase(),
+                    });
+                let order_by_exprs: Vec<OrderByExpr> =
+                    columns.into_iter().map(|col| col.column).collect();
                 let columns = self.order_by_to_sort_expr(
-                    columns,
+                    order_by_exprs,
                     &table_schema,
                     planner_context,
                     false,
@@ -1739,64 +1751,56 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.statement_to_plan(rewrite.pop_front().unwrap())
     }
 
-    fn set_variable_to_plan(
-        &self,
-        local: bool,
-        hivevar: bool,
-        variables: &OneOrManyWithParens<ObjectName>,
-        value: Vec<SQLExpr>,
-    ) -> Result<LogicalPlan> {
-        if local {
-            return not_impl_err!("LOCAL is not supported");
-        }
-
-        if hivevar {
-            return not_impl_err!("HIVEVAR is not supported");
-        }
-
-        let variable = match variables {
-            OneOrManyWithParens::One(v) => object_name_to_string(v),
-            OneOrManyWithParens::Many(vs) => {
-                return not_impl_err!(
-                    "SET only supports single variable assignment: {vs:?}"
-                );
-            }
-        };
-        let mut variable_lower = variable.to_lowercase();
-
-        if variable_lower == "timezone" || variable_lower == "time.zone" {
-            // We could introduce alias in OptionDefinition if this string matching thing grows
-            variable_lower = "datafusion.execution.time_zone".to_string();
-        }
-
-        // Parse value string from Expr
-        let value_string = match &value[0] {
-            SQLExpr::Identifier(i) => ident_to_string(i),
-            SQLExpr::Value(v) => match crate::utils::value_to_string(&v.value) {
-                None => {
-                    return plan_err!("Unsupported Value {}", value[0]);
+    fn set_statement_to_plan(&self, statement: Set) -> Result<LogicalPlan> {
+        match statement {
+            Set::SingleAssignment {
+                scope,
+                hivevar,
+                variable,
+                values,
+            } => {
+                if scope.is_some() {
+                    return not_impl_err!("SET with scope modifiers is not supported");
                 }
-                Some(v) => v,
-            },
-            // For capture signed number e.g. +8, -8
-            SQLExpr::UnaryOp { op, expr } => match op {
-                UnaryOperator::Plus => format!("+{expr}"),
-                UnaryOperator::Minus => format!("-{expr}"),
-                _ => {
-                    return plan_err!("Unsupported Value {}", value[0]);
+
+                if hivevar {
+                    return not_impl_err!("SET HIVEVAR is not supported");
                 }
-            },
-            _ => {
-                return plan_err!("Unsupported Value {}", value[0]);
+
+                let variable = object_name_to_string(&variable);
+                let mut variable_lower = variable.to_lowercase();
+
+                if variable_lower == "timezone" || variable_lower == "time.zone" {
+                    variable_lower = "datafusion.execution.time_zone".to_string();
+                }
+
+                if values.len() != 1 {
+                    return plan_err!("SET only supports single value assignment");
+                }
+
+                let value_string = match &values[0] {
+                    SQLExpr::Identifier(i) => ident_to_string(i),
+                    SQLExpr::Value(v) => match crate::utils::value_to_string(&v.value) {
+                        None => return plan_err!("Unsupported value {:?}", v),
+                        Some(s) => s,
+                    },
+                    SQLExpr::UnaryOp { op, expr } => match op {
+                        UnaryOperator::Plus => format!("+{expr}"),
+                        UnaryOperator::Minus => format!("-{expr}"),
+                        _ => return plan_err!("Unsupported unary op {:?}", op),
+                    },
+                    _ => return plan_err!("Unsupported expr {:?}", values[0]),
+                };
+
+                Ok(LogicalPlan::Statement(PlanStatement::SetVariable(
+                    SetVariable {
+                        variable: variable_lower,
+                        value: value_string,
+                    },
+                )))
             }
-        };
-
-        let statement = PlanStatement::SetVariable(SetVariable {
-            variable: variable_lower,
-            value: value_string,
-        });
-
-        Ok(LogicalPlan::Statement(statement))
+            other => not_impl_err!("SET variant not implemented yet: {other:?}"),
+        }
     }
 
     fn delete_to_plan(
