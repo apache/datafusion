@@ -558,18 +558,19 @@ pub fn cast_expr_to_schema(
             let logical_field = match logical_file_schema.field_with_name(column.name()) {
                 Ok(field) => field,
                 Err(e) => {
-                    // Is this a partition field?
+                    // If the column is a partition field, we can use the partition value
                     for (partition_field, partition_value) in
                         partition_fields.iter().zip(partition_values.iter())
                     {
                         if partition_field.name() == column.name() {
-                            // If the column is a partition field, we can use the partition value
                             return Ok(Transformed::yes(expressions::lit(
                                 partition_value.clone(),
                             )));
                         }
                     }
                     // If the column is not found in the logical schema, return an error
+                    // This should probably never be hit unless something upstream broke, but nontheless it's better
+                    // for us to return a handleable error than to panic / do something unexpected.
                     return Err(e.into());
                 }
             };
@@ -582,6 +583,8 @@ pub fn cast_expr_to_schema(
                     );
                 }
                 // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` would do.
+                // TODO: do we need to sync this with what the `SchemaAdapter` actually does?
+                // While the default implementation fills in nulls in theory a custom `SchemaAdapter` could do something else!
                 let value = ScalarValue::Null.cast_to(logical_field.data_type())?;
                 return Ok(Transformed::yes(expressions::lit(value)));
             };
@@ -595,7 +598,7 @@ pub fn cast_expr_to_schema(
             // We will try later to move the cast to literal values if possible, which is computationally cheaper.
             if !can_cast_types(logical_field.data_type(), physical_field.data_type()) {
                 return exec_err!(
-                    "Cannot cast column '{}' from '{}' to '{}'",
+                    "Cannot cast column '{}' from '{}' (file data type) to '{}' (table data type)",
                     column.name(),
                     logical_field.data_type(),
                     physical_field.data_type()
