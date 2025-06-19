@@ -17,28 +17,41 @@
 
 use std::sync::{Arc, LazyLock};
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::{
+    array::record_batch,
+    datatypes::{DataType, Field, Schema, SchemaRef},
+    util::pretty::pretty_format_batches,
+};
+use arrow_schema::SortOptions;
 use datafusion::{
     logical_expr::Operator,
     physical_plan::{
         expressions::{BinaryExpr, Column, Literal},
         PhysicalExpr,
     },
+    prelude::{ParquetReadOptions, SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
 use datafusion_common::config::ConfigOptions;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{aggregate::AggregateExprBuilder, Partitioning};
-use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_optimizer::{
+    filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
+};
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
     filter::FilterExec,
     repartition::RepartitionExec,
+    sorts::sort::SortExec,
+    ExecutionPlan,
 };
 
-use util::{OptimizationTest, TestNode, TestScanBuilder};
+use futures::StreamExt;
+use object_store::{memory::InMemory, ObjectStore};
+use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
 
 mod util;
 
@@ -50,7 +63,7 @@ fn test_pushdown_into_scan() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
     OptimizationTest:
       input:
@@ -74,7 +87,7 @@ fn test_pushdown_into_scan_with_config_options() {
     insta::assert_snapshot!(
         OptimizationTest::new(
             Arc::clone(&plan),
-            FilterPushdown {},
+            FilterPushdown::new(),
             false
         ),
         @r"
@@ -93,7 +106,7 @@ fn test_pushdown_into_scan_with_config_options() {
     insta::assert_snapshot!(
         OptimizationTest::new(
             plan,
-            FilterPushdown {},
+            FilterPushdown::new(),
             true
         ),
         @r"
@@ -118,7 +131,7 @@ fn test_filter_collapse() {
     let plan = Arc::new(FilterExec::try_new(predicate2, filter1).unwrap());
 
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
     OptimizationTest:
       input:
@@ -146,7 +159,7 @@ fn test_filter_with_projection() {
 
     // expect the predicate to be pushed down into the DataSource but the FilterExec to be converted to ProjectionExec
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
     OptimizationTest:
       input:
@@ -169,7 +182,7 @@ fn test_filter_with_projection() {
             .unwrap(),
     );
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{},true),
+        OptimizationTest::new(plan, FilterPushdown::new(),true),
         @r"
     OptimizationTest:
       input:
@@ -198,7 +211,7 @@ fn test_push_down_through_transparent_nodes() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{},true),
+        OptimizationTest::new(plan, FilterPushdown::new(),true),
         @r"
     OptimizationTest:
       input:
@@ -262,7 +275,7 @@ fn test_no_pushdown_through_aggregates() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
     OptimizationTest:
       input:
@@ -293,7 +306,7 @@ fn test_node_handles_child_pushdown_result() {
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(TestNode::new(true, Arc::clone(&scan), predicate));
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
     OptimizationTest:
       input:
@@ -312,7 +325,7 @@ fn test_node_handles_child_pushdown_result() {
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(TestNode::new(true, Arc::clone(&scan), predicate));
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
     OptimizationTest:
       input:
@@ -332,7 +345,7 @@ fn test_node_handles_child_pushdown_result() {
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(TestNode::new(false, Arc::clone(&scan), predicate));
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}, true),
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
     OptimizationTest:
       input:
@@ -344,6 +357,136 @@ fn test_node_handles_child_pushdown_result() {
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     ",
     );
+}
+
+#[tokio::test]
+async fn test_topk_dynamic_filter_pushdown() {
+    let batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["bd", "bc"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+        record_batch!(
+            ("a", Utf8, ["ac", "ad"]),
+            ("b", Utf8, ["bb", "ba"]),
+            ("c", Float64, [2.0, 1.0])
+        )
+        .unwrap(),
+    ];
+    let scan = TestScanBuilder::new(schema())
+        .with_support(true)
+        .with_batches(batches)
+        .build();
+    let plan = Arc::new(
+        SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr::new(
+                col("b", &schema()).unwrap(),
+                SortOptions::new(true, false), // descending, nulls_first
+            )])
+            .unwrap(),
+            Arc::clone(&scan),
+        )
+        .with_fetch(Some(1)),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // expect the predicate to be pushed down into the DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false]
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
+    "
+    );
+
+    // Actually apply the optimization to the plan and put some data through it to check that the filter is updated to reflect the TopK state
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let config = SessionConfig::new().with_batch_size(2);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    // Iterate one batch
+    stream.next().await.unwrap().unwrap();
+    // Now check what our filter looks like
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false], filter=[b@1 > bd]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ b@1 > bd ]
+    "
+    );
+}
+
+/// Integration test for dynamic filter pushdown with TopK.
+/// We use an integration test because there are complex interactions in the optimizer rules
+/// that the unit tests applying a single optimizer rule do not cover.
+#[tokio::test]
+async fn test_topk_dynamic_filter_pushdown_integration() {
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let mut cfg = SessionConfig::new();
+    cfg.options_mut().execution.parquet.pushdown_filters = true;
+    cfg.options_mut().execution.parquet.max_row_group_size = 128;
+    let ctx = SessionContext::new_with_config(cfg);
+    ctx.register_object_store(
+        ObjectStoreUrl::parse("memory://").unwrap().as_ref(),
+        Arc::clone(&store),
+    );
+    ctx.sql(
+        r"
+COPY  (
+  SELECT 1372708800 + value AS t 
+  FROM generate_series(0, 99999)
+  ORDER BY t
+ ) TO 'memory:///1.parquet'
+STORED AS PARQUET;
+  ",
+    )
+    .await
+    .unwrap()
+    .collect()
+    .await
+    .unwrap();
+
+    // Register the file with the context
+    ctx.register_parquet(
+        "topk_pushdown",
+        "memory:///1.parquet",
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    // Create a TopK query that will use dynamic filter pushdown
+    let df = ctx
+        .sql(r"EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t LIMIT 10;")
+        .await
+        .unwrap();
+    let batches = df.collect().await.unwrap();
+    let explain = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    assert!(explain.contains("output_rows=128")); // Read 1 row group
+    assert!(explain.contains("t@0 < 1372708809")); // Dynamic filter was applied
+    assert!(
+        explain.contains("pushdown_rows_matched=128, pushdown_rows_pruned=99872"),
+        "{explain}"
+    );
+    // Pushdown pruned most rows
 }
 
 /// Schema:

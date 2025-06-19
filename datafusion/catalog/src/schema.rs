@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use crate::table::TableProvider;
 use datafusion_common::Result;
+use datafusion_expr::TableType;
 
 /// Represents a schema, comprising a number of named tables.
 ///
@@ -53,6 +54,14 @@ pub trait SchemaProvider: Debug + Sync + Send {
         &self,
         name: &str,
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError>;
+
+    /// Retrieves the type of a specific table from the schema by name, if it exists, otherwise
+    /// returns `None`.  Implementations for which this operation is cheap but [Self::table] is
+    /// expensive can override this to improve operations that only need the type, e.g.
+    /// `SELECT * FROM information_schema.tables`.
+    async fn table_type(&self, name: &str) -> Result<Option<TableType>> {
+        self.table(name).await.map(|o| o.map(|t| t.table_type()))
+    }
 
     /// If supported by the implementation, adds a new table named `name` to
     /// this schema.

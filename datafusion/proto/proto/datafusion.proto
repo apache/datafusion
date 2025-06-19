@@ -243,7 +243,7 @@ message JoinNode {
   datafusion_common.JoinConstraint join_constraint = 4;
   repeated LogicalExprNode left_join_key = 5;
   repeated LogicalExprNode right_join_key = 6;
-  bool null_equals_null = 7;
+  datafusion_common.NullEquality null_equality = 7;
   LogicalExprNode filter = 8;
 }
 
@@ -1051,7 +1051,7 @@ message HashJoinExecNode {
   repeated JoinOn on = 3;
   datafusion_common.JoinType join_type = 4;
   PartitionMode partition_mode = 6;
-  bool null_equals_null = 7;
+  datafusion_common.NullEquality null_equality = 7;
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
 }
@@ -1067,7 +1067,7 @@ message SymmetricHashJoinExecNode {
   repeated JoinOn on = 3;
   datafusion_common.JoinType join_type = 4;
   StreamPartitionMode partition_mode = 6;
-  bool null_equals_null = 7;
+  datafusion_common.NullEquality null_equality = 7;
   JoinFilter filter = 8;
   repeated PhysicalSortExprNode left_sort_exprs = 9;
   repeated PhysicalSortExprNode right_sort_exprs = 10;

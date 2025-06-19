@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::logical_plan::producer::{make_binary_op_scalar_func, SubstraitProducer};
-use datafusion::common::{not_impl_err, DFSchemaRef, JoinConstraint, JoinType};
+use datafusion::common::{
+    not_impl_err, DFSchemaRef, JoinConstraint, JoinType, NullEquality,
+};
 use datafusion::logical_expr::{Expr, Join, Operator};
 use std::sync::Arc;
 use substrait::proto::rel::RelType;
@@ -44,10 +46,9 @@ pub fn from_join(
 
     // map the left and right columns to binary expressions in the form `l = r`
     // build a single expression for the ON condition, such as `l.a = r.a AND l.b = r.b`
-    let eq_op = if join.null_equals_null {
-        Operator::IsNotDistinctFrom
-    } else {
-        Operator::Eq
+    let eq_op = match join.null_equality {
+        NullEquality::NullEqualsNothing => Operator::Eq,
+        NullEquality::NullEqualsNull => Operator::IsNotDistinctFrom,
     };
     let join_on = to_substrait_join_expr(producer, &join.on, eq_op, &in_join_schema)?;
 
