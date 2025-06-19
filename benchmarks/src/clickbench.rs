@@ -86,24 +86,23 @@ impl AllQueries {
 
     /// Returns the text of query `query_id`
     fn get_query(&self, query_id: usize) -> Result<&str> {
-        self.queries
-            .get(query_id)
-            .ok_or_else(|| {
-                let min_id = self.min_query_id();
-                let max_id = self.max_query_id();
-                exec_datafusion_err!(
-                    "Invalid query id {query_id}. Must be between {min_id} and {max_id}"
-                )
-            })
-            .map(|s| s.as_str())
+        let min_id = self.min_query_id();
+        let max_id = self.max_query_id();
+        if query_id < min_id || query_id > max_id {
+            return Err(exec_datafusion_err!(
+                "Invalid query id {query_id}. Must be in the range [{min_id}, {max_id}]"
+            ));
+        }
+
+        Ok(self.queries[query_id - 1].as_str())
     }
 
     fn min_query_id(&self) -> usize {
-        0
+        1
     }
 
     fn max_query_id(&self) -> usize {
-        self.queries.len() - 1
+        self.queries.len()
     }
 }
 impl RunOpt {
