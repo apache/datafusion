@@ -654,8 +654,8 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.collect_statistics</p></td>
-<td><p>false</p></td>
-<td><p>Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Applies to the default <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> in DataFusion. Defaults to false.</p></td>
+<td><p>true</p></td>
+<td><p>Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Applies to the default <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> in DataFusion. Defaults to true.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.target_partitions</p></td>
 <td><p>0</p></td>

@@ -560,6 +560,21 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#datafusion-execution-collect-statistics-now-defaults-to-true">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       datafusion.execution.collect_statistics
+      </span>
+     </code>
+     now defaults to
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       true
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#metadata-is-now-represented-by-fieldmetadata">
      Metadata is now represented by
      <code class="docutils literal notranslate">
@@ -621,7 +636,7 @@
        Utf8View
       </span>
      </code>
-     in Arrow.
+     in Arrow
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
@@ -950,6 +965,19 @@
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">¶</a></h1>
 <section id="datafusion-49-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">49.0.0</span></code><a class="headerlink" href="#datafusion-49-0-0" title="Link to this heading">¶</a></h2>
+<section id="datafusion-execution-collect-statistics-now-defaults-to-true">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">true</span></code><a class="headerlink" href="#datafusion-execution-collect-statistics-now-defaults-to-true" title="Link to this heading">¶</a></h3>
+<p>The default value of the <code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code> configuration
+setting is now true. This change impacts users that use that value directly and relied
+on its default value being <code class="docutils literal notranslate"><span class="pre">false</span></code>.</p>
+<p>This change also restores the default behavior of <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> to its previous. If you use it directly
+you can maintain the current behavior by overriding the default value in your code.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">ListingOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">ParquetFormat</span><span class="p">::</span><span class="n">default</span><span class="p">()))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_collect_stat</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// other options</span>
+</pre></div>
+</div>
+</section>
 <section id="metadata-is-now-represented-by-fieldmetadata">
 <h3>Metadata is now represented by <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code><a class="headerlink" href="#metadata-is-now-represented-by-fieldmetadata" title="Link to this heading">¶</a></h3>
 <p>Metadata from the Arrow <code class="docutils literal notranslate"><span class="pre">Field</span></code> is now stored using the <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code>
@@ -1037,7 +1065,7 @@ on <code class="docutils literal notranslate"><span class="pre">Expr::WindowFunc
 </div>
 </section>
 <section id="the-varchar-sql-type-is-now-represented-as-utf8view-in-arrow">
-<h3>The <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> SQL type is now represented as <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> in Arrow.<a class="headerlink" href="#the-varchar-sql-type-is-now-represented-as-utf8view-in-arrow" title="Link to this heading">¶</a></h3>
+<h3>The <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> SQL type is now represented as <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> in Arrow<a class="headerlink" href="#the-varchar-sql-type-is-now-represented-as-utf8view-in-arrow" title="Link to this heading">¶</a></h3>
 <p>The mapping of the SQL <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> type has been changed from <code class="docutils literal notranslate"><span class="pre">Utf8</span></code> to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code>
 which improves performance for many string operations. You can read more about
 <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> in the <a class="reference external" href="https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/">DataFusion blog post on German-style strings</a></p>

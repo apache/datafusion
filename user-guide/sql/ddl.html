@@ -749,14 +749,14 @@ provide schema information for Parquet files.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <dl class="simple myst">
-<dt>Statistics</dt><dd><p>By default, when a table is created, DataFusion will <em>NOT</em> read the files
+<dt>Statistics</dt><dd><p>By default, when a table is created, DataFusion will read the files
 to gather statistics, which can be expensive but can accelerate subsequent
-queries substantially. If you want to gather statistics
+queries substantially. If you don’t want to gather statistics
 when creating a table, set the <code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code>
-configuration option to <code class="docutils literal notranslate"><span class="pre">true</span></code> before creating the table. For example:</p>
+configuration option to <code class="docutils literal notranslate"><span class="pre">false</span></code> before creating the table. For example:</p>
 </dd>
 </dl>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">collect_statistics</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">collect_statistics</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">false</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>See the <a class="reference internal" href="../configs.html"><span class="std std-doc">config settings docs</span></a> for more details.</p>
