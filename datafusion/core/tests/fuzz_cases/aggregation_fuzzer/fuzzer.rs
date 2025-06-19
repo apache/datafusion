@@ -320,7 +320,7 @@ impl AggregationFuzzTestTask {
                ### Schema:\n{}\n\
                ### Session context params:\n{:?}\n\
                ### Input:\n{}\n\
-                    ",
+                     ",
             self.sql,
             self.dataset_ref.batches[0].schema_ref(),
             self.ctx_with_params.params,
