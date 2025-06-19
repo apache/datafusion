@@ -1052,7 +1052,11 @@ mod test {
         let expr = col("part").eq(lit(1)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file.clone()).unwrap().await.unwrap();
+        let stream = opener
+            .open(make_meta(), file.clone())
+            .unwrap()
+            .await
+            .unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 3);
@@ -1061,7 +1065,11 @@ mod test {
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(1)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
-        let stream = opener.open(make_meta(), file.clone()).unwrap().await.unwrap();
+        let stream = opener
+            .open(make_meta(), file.clone())
+            .unwrap()
+            .await
+            .unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 1);
