@@ -1936,3 +1936,250 @@ async fn test_count_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
 
     Ok(())
 }
+
+/// Test data structure for fuzz table with numeric types for median testing and dictionary columns containing nulls
+struct FuzzMedianTestData {
+    schema: Arc<Schema>,
+    u8_low: UInt8Array,
+    dictionary_utf8_low: DictionaryArray<UInt32Type>,
+    u64: UInt64Array,
+    u16: UInt16Array,
+    u32: UInt32Array,
+    decimal128: Decimal128Array,
+}
+
+impl FuzzMedianTestData {
+    fn new() -> Self {
+        // Create dictionary columns with null keys and values
+        let dictionary_utf8_low = create_dict(
+            vec![
+                Some("group_one"),
+                None,
+                Some("group_two"),
+                Some("group_three"),
+            ],
+            vec![
+                Some(0), // group_one
+                Some(1), // null value
+                Some(2), // group_two
+                None,    // null key
+                Some(0), // group_one
+                Some(1), // null value
+                Some(3), // group_three
+                None,    // null key
+                Some(2), // group_two
+                Some(0), // group_one
+                Some(1), // null value
+                Some(3), // group_three
+            ],
+        );
+
+        let u8_low = UInt8Array::from(vec![
+            Some(100),
+            Some(200),
+            Some(100),
+            Some(200),
+            Some(100),
+            Some(50),
+            Some(50),
+            Some(200),
+            Some(100),
+            Some(100),
+            Some(75),
+            Some(50),
+        ]);
+
+        // Create u64 data with some nulls and duplicates for DISTINCT testing
+        let u64 = UInt64Array::from(vec![
+            Some(1000),
+            Some(2000),
+            Some(1500),
+            Some(3000),
+            Some(1000), // duplicate
+            None,       // null
+            Some(5000),
+            Some(2500),
+            Some(1500), // duplicate
+            Some(1200),
+            Some(4000),
+            Some(5000), // duplicate
+        ]);
+
+        // Create u16 data with some nulls and duplicates
+        let u16 = UInt16Array::from(vec![
+            Some(10),
+            Some(20),
+            Some(15),
+            None,     // null
+            Some(10), // duplicate
+            Some(30),
+            Some(50),
+            Some(25),
+            Some(15), // duplicate
+            Some(12),
+            None,     // null
+            Some(50), // duplicate
+        ]);
+
+        // Create u32 data with some nulls and duplicates
+        let u32 = UInt32Array::from(vec![
+            Some(100000),
+            Some(200000),
+            Some(150000),
+            Some(300000),
+            Some(100000), // duplicate
+            Some(400000),
+            Some(500000),
+            None,         // null
+            Some(150000), // duplicate
+            Some(120000),
+            Some(450000),
+            None, // null
+        ]);
+
+        // Create decimal128 data with precision 10, scale 2
+        let decimal128 = Decimal128Array::from(vec![
+            Some(12345), // 123.45
+            Some(67890), // 678.90
+            Some(11111), // 111.11
+            None,        // null
+            Some(12345), // 123.45 duplicate
+            Some(98765), // 987.65
+            Some(55555), // 555.55
+            Some(33333), // 333.33
+            Some(11111), // 111.11 duplicate
+            Some(12500), // 125.00
+            None,        // null
+            Some(55555), // 555.55 duplicate
+        ])
+        .with_precision_and_scale(10, 2)
+        .unwrap();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u8_low", DataType::UInt8, true),
+            Field::new("dictionary_utf8_low", string_dict_type(), true),
+            Field::new("u64", DataType::UInt64, true),
+            Field::new("u16", DataType::UInt16, true),
+            Field::new("u32", DataType::UInt32, true),
+            Field::new("decimal128", DataType::Decimal128(10, 2), true),
+        ]));
+
+        Self {
+            schema,
+            u8_low,
+            dictionary_utf8_low,
+            u64,
+            u16,
+            u32,
+            decimal128,
+        }
+    }
+}
+
+/// Sets up test contexts for fuzz table with numeric types for median testing and both single and multiple partitions
+async fn setup_fuzz_median_test_contexts() -> Result<(SessionContext, SessionContext)> {
+    let test_data = FuzzMedianTestData::new();
+
+    // Single partition context
+    let ctx_single = create_fuzz_median_context_with_partitions(&test_data, 1).await?;
+
+    // Multiple partition context
+    let ctx_multi = create_fuzz_median_context_with_partitions(&test_data, 3).await?;
+
+    Ok((ctx_single, ctx_multi))
+}
+
+/// Creates a session context with fuzz median table partitioned into specified number of partitions
+async fn create_fuzz_median_context_with_partitions(
+    test_data: &FuzzMedianTestData,
+    num_partitions: usize,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(num_partitions),
+    );
+
+    let batches = split_fuzz_median_data_into_batches(test_data, num_partitions)?;
+    let provider = MemTable::try_new(test_data.schema.clone(), batches)?;
+    ctx.register_table("fuzz_table", Arc::new(provider))?;
+
+    Ok(ctx)
+}
+
+/// Splits fuzz median test data into multiple batches for partitioning
+fn split_fuzz_median_data_into_batches(
+    test_data: &FuzzMedianTestData,
+    num_partitions: usize,
+) -> Result<Vec<Vec<RecordBatch>>> {
+    debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
+    let total_len = test_data.u8_low.len();
+    let chunk_size = (total_len + num_partitions - 1) / num_partitions;
+
+    let mut batches = Vec::new();
+    let mut start = 0;
+
+    while start < total_len {
+        let end = min(start + chunk_size, total_len);
+        let len = end - start;
+
+        if len > 0 {
+            let batch = RecordBatch::try_new(
+                test_data.schema.clone(),
+                vec![
+                    Arc::new(test_data.u8_low.slice(start, len)),
+                    Arc::new(test_data.dictionary_utf8_low.slice(start, len)),
+                    Arc::new(test_data.u64.slice(start, len)),
+                    Arc::new(test_data.u16.slice(start, len)),
+                    Arc::new(test_data.u32.slice(start, len)),
+                    Arc::new(test_data.decimal128.slice(start, len)),
+                ],
+            )?;
+            batches.push(vec![batch]);
+        }
+        start = end;
+    }
+
+    Ok(batches)
+}
+
+/// Test MEDIAN and MEDIAN DISTINCT with fuzz table containing various numeric types and dictionary columns with null keys and values (single and multiple partitions)
+#[tokio::test]
+async fn test_median_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
+    let (ctx_single, ctx_multi) = setup_fuzz_median_test_contexts().await?;
+
+    // Execute the SQL query with MEDIAN and MEDIAN DISTINCT aggregations
+    let sql = "SELECT
+        u8_low,
+        dictionary_utf8_low,
+        median(DISTINCT u64) as col1,
+        median(DISTINCT u16) as col2,
+        median(u64) as col3,
+        median(decimal128) as col4,
+        median(DISTINCT u32) as col5
+    FROM
+        fuzz_table
+    GROUP BY
+        u8_low,
+        dictionary_utf8_low
+    ORDER BY u8_low, dictionary_utf8_low NULLS FIRST";
+
+    let results = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
+
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +--------+---------------------+------+------+------+--------+---------+
+    | u8_low | dictionary_utf8_low | col1 | col2 | col3 | col4   | col5    |
+    +--------+---------------------+------+------+------+--------+---------+
+    | 100    |                     | 1350 | 13   | 1350 | 118.28 | 135000  |
+    | 100    | group_one           | 1100 | 11   | 1100 | 118.28 | 110000  |
+    | 100    | group_two           | 1500 | 15   | 1500 | 111.11 | 150000  |
+    | 200    |                     | 2750 | 22   | 2750 | 506.12 | 275000  |
+    | 300    |                     | 4750 | 32   | 5000 | 271.09 | 237500  |
+    | 300    | group_three         | 5000 | 50   | 5000 | 555.55 | 500000  |
+    | 400    |                     | 4000 |      | 4000 |        | 450000  |
+    +--------+---------------------+------+------+------+--------+---------+
+    "###
+    );
+
+    Ok(())
+}
