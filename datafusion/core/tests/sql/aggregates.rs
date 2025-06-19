@@ -19,6 +19,12 @@ use super::*;
 use datafusion::common::test_util::batches_to_string;
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
+
+/// Helper function to create the commonly used UInt32 indexed UTF-8 dictionary data type
+fn string_dict_type() -> DataType {
+    DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8))
+}
+
 use insta::assert_snapshot;
 /// Helper functions for aggregate tests with dictionary columns and nulls
 
@@ -70,22 +76,8 @@ impl TestData {
         let values = Int32Array::from(vec![Some(1), None, Some(2), None, Some(3)]);
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "dict_null_keys",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
-            Field::new(
-                "dict_null_vals",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
+            Field::new("dict_null_keys", string_dict_type(), true),
+            Field::new("dict_null_vals", string_dict_type(), true),
             Field::new("value", DataType::Int32, true),
         ]));
 
@@ -142,22 +134,8 @@ impl TestData {
         ]);
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "dict_null_vals",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
-            Field::new(
-                "dict_null_keys",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
+            Field::new("dict_null_vals", string_dict_type(), true),
+            Field::new("dict_null_keys", string_dict_type(), true),
             Field::new("value", DataType::Int32, true),
         ]));
 
@@ -199,22 +177,8 @@ impl TestData {
             Int32Array::from(vec![Some(5), Some(1), Some(3), Some(7), Some(2), None]);
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "dict_null_keys",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
-            Field::new(
-                "dict_null_vals",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
+            Field::new("dict_null_keys", string_dict_type(), true),
+            Field::new("dict_null_vals", string_dict_type(), true),
             Field::new("value", DataType::Int32, true),
         ]));
 
@@ -241,22 +205,8 @@ impl TestData {
         let values = Int32Array::from(vec![Some(1), None, Some(5), Some(3), Some(7)]);
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "dict_null_vals",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
-            Field::new(
-                "dict_null_keys",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
+            Field::new("dict_null_vals", string_dict_type(), true),
+            Field::new("dict_null_keys", string_dict_type(), true),
             Field::new("value", DataType::Int32, true),
         ]));
 
@@ -283,22 +233,8 @@ impl TestData {
         let values = Int32Array::from(vec![None, Some(1), Some(2), Some(3), None]);
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "dict_null_keys",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
-            Field::new(
-                "dict_null_vals",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt32),
-                    Box::new(DataType::Utf8),
-                ),
-                true,
-            ),
+            Field::new("dict_null_keys", string_dict_type(), true),
+            Field::new("dict_null_vals", string_dict_type(), true),
             Field::new("value", DataType::Int32, true),
         ]));
 
