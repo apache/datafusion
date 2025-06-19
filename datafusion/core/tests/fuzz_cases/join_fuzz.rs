@@ -37,7 +37,7 @@ use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::ScalarValue;
+use datafusion_common::{NullEquality, ScalarValue};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::PhysicalExprRef;
 
@@ -504,7 +504,7 @@ impl JoinFuzzTestCase {
                 self.join_filter(),
                 self.join_type,
                 vec![SortOptions::default(); self.on_columns().len()],
-                false,
+                NullEquality::NullEqualsNothing,
             )
             .unwrap(),
         )
@@ -521,7 +521,7 @@ impl JoinFuzzTestCase {
                 &self.join_type,
                 None,
                 PartitionMode::Partitioned,
-                false,
+                NullEquality::NullEqualsNothing,
             )
             .unwrap(),
         )

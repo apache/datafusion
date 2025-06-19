@@ -93,6 +93,11 @@ enum JoinConstraint {
   USING = 1;
 }
 
+enum NullEquality {
+  NULL_EQUALS_NOTHING = 0;
+  NULL_EQUALS_NULL = 1;
+}
+
 message AvroOptions {}
 message ArrowOptions {}
 

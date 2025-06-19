@@ -115,7 +115,6 @@ pub fn create_physical_expr(
     match e {
         Expr::Alias(Alias { expr, metadata, .. }) => {
             if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
-                let metadata = metadata.as_ref().map(|m| FieldMetadata::from(m.clone()));
                 let new_metadata = FieldMetadata::merge_options(
                     prior_metadata.as_ref(),
                     metadata.as_ref(),
