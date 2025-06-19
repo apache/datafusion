@@ -88,19 +88,19 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.17", default-features = false }
-arrow = { version = "55.1.0", features = [
+arrow = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", branch = "add_pub_write_all_api", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "55.0.0", default-features = false }
-arrow-flight = { version = "55.1.0", features = [
+arrow-buffer = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", branch = "add_pub_write_all_api", default-features = false }
+arrow-flight = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", branch = "add_pub_write_all_api", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "55.0.0", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", branch = "add_pub_write_all_api", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "55.0.0", default-features = false }
-arrow-schema = { version = "55.0.0", default-features = false }
+arrow-ord = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", branch = "add_pub_write_all_api", default-features = false }
+arrow-schema = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", branch = "add_pub_write_all_api", default-features = false }
 async-trait = "0.1.88"
 bigdecimal = "0.4.8"
 bytes = "1.10"
@@ -152,7 +152,7 @@ itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.12.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "55.1.0", default-features = false, features = [
+parquet = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", branch = "add_pub_write_all_api", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
