@@ -168,7 +168,7 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         // No columns from the left side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::RightSemi | JoinType::RightAnti => (false, true),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
 
@@ -191,6 +191,7 @@ pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftAnti => (false, true),
         JoinType::RightAnti => (true, false),
         JoinType::LeftMark => (false, true),
+        JoinType::RightMark => (true, false),
     }
 }
 
@@ -254,7 +255,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     let mut is_evaluate = true;
     predicate.apply(|expr| match expr {
         Expr::Column(_)
-        | Expr::Literal(_)
+        | Expr::Literal(_, _)
         | Expr::Placeholder(_)
         | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
         Expr::Exists { .. }
@@ -691,7 +692,7 @@ fn infer_join_predicates_from_on_filters(
                 inferred_predicates,
             )
         }
-        JoinType::Right | JoinType::RightSemi => {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightMark => {
             infer_join_predicates_impl::<false, true>(
                 join_col_keys,
                 on_filters,
@@ -1584,7 +1585,7 @@ mod tests {
     fn filter_move_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1615,7 +1616,7 @@ mod tests {
     fn filter_move_complex_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1645,7 +1646,7 @@ mod tests {
     fn filter_move_partial_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1677,7 +1678,7 @@ mod tests {
     fn filter_expression_keep_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1710,7 +1711,7 @@ mod tests {
     fn filter_order_keep_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1742,7 +1743,7 @@ mod tests {
     fn filter_multiple_windows_common_partitions() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window1 = Expr::WindowFunction(WindowFunction::new(
+        let window1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1753,7 +1754,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let window2 = Expr::WindowFunction(WindowFunction::new(
+        let window2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1784,7 +1785,7 @@ mod tests {
     fn filter_multiple_windows_disjoint_partitions() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window1 = Expr::WindowFunction(WindowFunction::new(
+        let window1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1795,7 +1796,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let window2 = Expr::WindowFunction(WindowFunction::new(
+        let window2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),

@@ -27,15 +27,16 @@ use crate::execution_plan::{Boundedness, EmissionType};
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    all_alias_free_columns, new_projections_for_columns, update_expr, ProjectionExec,
+    all_alias_free_columns, new_projections_for_columns, update_ordering, ProjectionExec,
 };
 use crate::stream::RecordBatchStreamAdapter;
+use crate::yield_stream::wrap_yield_stream;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -68,6 +69,8 @@ pub struct StreamingTableExec {
     limit: Option<usize>,
     cache: PlanProperties,
     metrics: ExecutionPlanMetricsSet,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl StreamingTableExec {
@@ -99,7 +102,7 @@ impl StreamingTableExec {
             projected_output_ordering.into_iter().collect::<Vec<_>>();
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
-            &projected_output_ordering,
+            projected_output_ordering.clone(),
             &partitions,
             infinite,
         );
@@ -112,6 +115,7 @@ impl StreamingTableExec {
             limit,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
+            cooperative: true,
         })
     }
 
@@ -146,7 +150,7 @@ impl StreamingTableExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        orderings: &[LexOrdering],
+        orderings: Vec<LexOrdering>,
         partitions: &[Arc<dyn PartitionStream>],
         infinite: bool,
     ) -> PlanProperties {
@@ -262,7 +266,7 @@ impl ExecutionPlan for StreamingTableExec {
         partition: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.partitions[partition].execute(ctx);
+        let stream = self.partitions[partition].execute(Arc::clone(&ctx));
         let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.projected_schema),
@@ -272,16 +276,13 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         };
+        let stream = wrap_yield_stream(projected_stream, &ctx, self.cooperative);
+
         Ok(match self.limit {
-            None => projected_stream,
+            None => stream,
             Some(fetch) => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-                Box::pin(LimitStream::new(
-                    projected_stream,
-                    0,
-                    Some(fetch),
-                    baseline_metrics,
-                ))
+                Box::pin(LimitStream::new(stream, 0, Some(fetch), baseline_metrics))
             }
         })
     }
@@ -306,20 +307,11 @@ impl ExecutionPlan for StreamingTableExec {
         );
 
         let mut lex_orderings = vec![];
-        for lex_ordering in self.projected_output_ordering().into_iter() {
-            let mut orderings = LexOrdering::default();
-            for order in lex_ordering {
-                let Some(new_ordering) =
-                    update_expr(&order.expr, projection.expr(), false)?
-                else {
-                    return Ok(None);
-                };
-                orderings.push(PhysicalSortExpr {
-                    expr: new_ordering,
-                    options: order.options,
-                });
-            }
-            lex_orderings.push(orderings);
+        for ordering in self.projected_output_ordering().into_iter() {
+            let Some(ordering) = update_ordering(ordering, projection.expr())? else {
+                return Ok(None);
+            };
+            lex_orderings.push(ordering);
         }
 
         StreamingTableExec::try_new(
@@ -347,7 +339,12 @@ impl ExecutionPlan for StreamingTableExec {
             limit,
             cache: self.cache.clone(),
             metrics: self.metrics.clone(),
+            cooperative: self.cooperative,
         }))
+    }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        self.cooperative.then_some(self)
     }
 }
 

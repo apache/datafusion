@@ -26,7 +26,7 @@ use std::{
     sync::Arc,
 };
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, FieldRef};
 
 use crate::expr::WindowFunction;
 use crate::{
@@ -133,7 +133,7 @@ impl WindowUDF {
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
-        Expr::WindowFunction(WindowFunction::new(fun, args))
+        Expr::from(WindowFunction::new(fun, args))
     }
 
     /// Returns this function's name
@@ -179,7 +179,7 @@ impl WindowUDF {
     /// Returns the field of the final result of evaluating this window function.
     ///
     /// See [`WindowUDFImpl::field`] for more details.
-    pub fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    pub fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         self.inner.field(field_args)
     }
 
@@ -236,7 +236,7 @@ where
 /// ```
 /// # use std::any::Any;
 /// # use std::sync::LazyLock;
-/// # use arrow::datatypes::{DataType, Field};
+/// # use arrow::datatypes::{DataType, Field, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
@@ -279,9 +279,9 @@ where
 ///    ) -> Result<Box<dyn PartitionEvaluator>> {
 ///        unimplemented!()
 ///    }
-///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-///      if let Some(DataType::Int32) = field_args.get_input_type(0) {
-///        Ok(Field::new(field_args.name(), DataType::Int32, false))
+///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+///      if let Some(DataType::Int32) = field_args.get_input_field(0).map(|f| f.data_type().clone()) {
+///        Ok(Field::new(field_args.name(), DataType::Int32, false).into())
 ///      } else {
 ///        plan_err!("smooth_it only accepts Int32 arguments")
 ///      }
@@ -386,12 +386,12 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         hasher.finish()
     }
 
-    /// The [`Field`] of the final result of evaluating this window function.
+    /// The [`FieldRef`] of the final result of evaluating this window function.
     ///
     /// Call `field_args.name()` to get the fully qualified name for defining
-    /// the [`Field`]. For a complete example see the implementation in the
+    /// the [`FieldRef`]. For a complete example see the implementation in the
     /// [Basic Example](WindowUDFImpl#basic-example) section.
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field>;
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef>;
 
     /// Allows the window UDF to define a custom result ordering.
     ///
@@ -537,7 +537,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         hasher.finish()
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         self.inner.field(field_args)
     }
 
@@ -588,7 +588,7 @@ pub mod window_doc_sections {
 #[cfg(test)]
 mod test {
     use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -630,7 +630,7 @@ mod test {
         ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
-        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
         }
     }
@@ -669,7 +669,7 @@ mod test {
         ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
-        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
         }
     }

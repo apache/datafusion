@@ -1,0 +1,90 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+development-process:
+- changed-files:
+  - any-glob-to-any-file: ['dev/**/*', '.github/**/*', 'ci/**/*', '.asf.yaml']
+
+documentation:
+- changed-files:
+  - any-glob-to-any-file: ['docs/**/*', 'README.md', './**/README.md', 'DEVELOPERS.md', 'datafusion/docs/**/*']
+
+sql:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/sql/**/*']
+
+logical-expr:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/expr/**/*', 'datafusion/expr-common/**/*']
+
+ffi:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/ffi/**/*']
+
+physical-expr:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/physical-expr/**/*', 'datafusion/physical-expr-common/**/*', 'datafusion/physical-expr-aggregate/**/*']
+
+physical-plan:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/physical-plan/**/*']
+
+
+catalog:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/catalog/**/*', 'datafusion/catalog-listing/**/*']
+
+common:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/common/**/*', 'datafusion/common-runtime/**/*']
+
+execution:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/execution/**/*']
+
+datasource:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/datasource/**/*', 'datafusion/datasource-avro/**/*', 'datafusion/datasource-csv/**/*', 'datafusion/datasource-json/**/*', 'datafusion/datasource-parquet/**/*']
+
+functions:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/functions/**/*', 'datafusion/functions-aggregate/**/*', 'datafusion/functions-aggregate-common', 'datafusion/functions-nested', 'datafusion/functions-table/**/*', 'datafusion/functions-window/**/*', 'datafusion/functions-window-common/**/*']
+
+
+optimizer:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/optimizer/**/*', 'datafusion/physical-optimizer/**/*']
+
+core:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/core/**/*']
+
+proto:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/proto/**/*', 'datafusion/proto-common/**/*']
+
+spark:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/spark/**/*']
+
+substrait:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/substrait/**/*']
+
+sqllogictest:
+- changed-files:
+  - any-glob-to-any-file: ['datafusion/sqllogictest/**/*']

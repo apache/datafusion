@@ -31,6 +31,22 @@ impl SessionContext {
     /// [`read_table`](Self::read_table) with a [`super::ListingTable`].
     ///
     /// For an example, see [`read_csv`](Self::read_csv)
+    ///
+    /// # Note: Statistics
+    ///
+    /// NOTE: by default, statistics are not collected when reading the Parquet
+    /// files as this can slow down the initial DataFrame creation. However,
+    /// collecting statistics can greatly accelerate queries with certain
+    /// filters.
+    ///
+    /// To enable collect statistics, set the [config option]
+    /// `datafusion.execution.collect_statistics` to `true`. See
+    /// [`ConfigOptions`] and [`ExecutionOptions::collect_statistics`] for more
+    /// details.
+    ///
+    /// [config option]: https://datafusion.apache.org/user-guide/configs.html
+    /// [`ConfigOptions`]: crate::config::ConfigOptions
+    /// [`ExecutionOptions::collect_statistics`]: crate::config::ExecutionOptions::collect_statistics
     pub async fn read_parquet<P: DataFilePaths>(
         &self,
         table_paths: P,
@@ -41,6 +57,13 @@ impl SessionContext {
 
     /// Registers a Parquet file as a table that can be referenced from SQL
     /// statements executed against this context.
+    ///
+    /// # Note: Statistics
+    ///
+    /// Statistics are not collected by default. See  [`read_parquet`] for more
+    /// details and how to enable them.
+    ///
+    /// [`read_parquet`]: Self::read_parquet
     pub async fn register_parquet(
         &self,
         table_ref: impl Into<TableReference>,
@@ -84,6 +107,8 @@ mod tests {
     use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
 
+    use arrow::util::pretty::pretty_format_batches;
+    use datafusion_common::assert_contains;
     use datafusion_common::config::TableParquetOptions;
     use datafusion_execution::config::SessionConfig;
 
@@ -126,6 +151,49 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
         assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    async fn explain_query_all_with_config(config: SessionConfig) -> Result<String> {
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.register_parquet(
+            "test",
+            &format!("{}/alltypes_plain*.parquet", parquet_test_data()),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+        let df = ctx.sql("EXPLAIN SELECT * FROM test").await?;
+        let results = df.collect().await?;
+        let content = pretty_format_batches(&results).unwrap().to_string();
+        Ok(content)
+    }
+
+    #[tokio::test]
+    async fn register_parquet_respects_collect_statistics_config() -> Result<()> {
+        // The default is false
+        let mut config = SessionConfig::new();
+        config.options_mut().explain.physical_plan_only = true;
+        config.options_mut().explain.show_statistics = true;
+        let content = explain_query_all_with_config(config).await?;
+        assert_contains!(content, "statistics=[Rows=Absent,");
+
+        // Explicitly set to false
+        let mut config = SessionConfig::new();
+        config.options_mut().explain.physical_plan_only = true;
+        config.options_mut().explain.show_statistics = true;
+        config.options_mut().execution.collect_statistics = false;
+        let content = explain_query_all_with_config(config).await?;
+        assert_contains!(content, "statistics=[Rows=Absent,");
+
+        // Explicitly set to true
+        let mut config = SessionConfig::new();
+        config.options_mut().explain.physical_plan_only = true;
+        config.options_mut().explain.show_statistics = true;
+        config.options_mut().execution.collect_statistics = true;
+        let content = explain_query_all_with_config(config).await?;
+        assert_contains!(content, "statistics=[Rows=Exact(10),");
+
         Ok(())
     }
 

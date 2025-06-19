@@ -369,7 +369,8 @@ mod tests {
         .build();
 
         // Add partition columns
-        config.table_partition_cols = vec![Field::new("date", DataType::Utf8, false)];
+        config.table_partition_cols =
+            vec![Arc::new(Field::new("date", DataType::Utf8, false))];
         config.file_groups[0][0].partition_values = vec![ScalarValue::from("2021-10-26")];
 
         // We should be able to project on the partition column

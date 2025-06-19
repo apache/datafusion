@@ -16,13 +16,16 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    convert_to_orderings, create_random_schema, create_test_params, create_test_schema_2,
+    create_random_schema, create_test_params, create_test_schema_2,
     generate_table_for_eq_properties, generate_table_for_orderings,
     is_table_same_after_sort, TestScalarUDF,
 };
 use arrow::compute::SortOptions;
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
+use datafusion_physical_expr::equivalence::{
+    convert_to_orderings, convert_to_sort_exprs,
+};
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -55,26 +58,25 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
             col("f", &test_schema)?,
         ];
 
-        for n_req in 0..=col_exprs.len() {
+        for n_req in 1..=col_exprs.len() {
             for exprs in col_exprs.iter().combinations(n_req) {
-                let requirement = exprs
+                let sort_exprs = exprs
                     .into_iter()
-                    .map(|expr| PhysicalSortExpr {
-                        expr: Arc::clone(expr),
-                        options: SORT_OPTIONS,
-                    })
-                    .collect::<LexOrdering>();
+                    .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));
+                let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                    unreachable!("Test should always produce non-degenerate orderings");
+                };
                 let expected = is_table_same_after_sort(
-                    requirement.clone(),
-                    table_data_with_properties.clone(),
+                    ordering.clone(),
+                    &table_data_with_properties,
                 )?;
                 let err_msg = format!(
-                    "Error in test case requirement:{requirement:?}, expected: {expected:?}, eq_properties {eq_properties}"
+                    "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties {eq_properties}"
                 );
                 // Check whether ordering_satisfy API result and
                 // experimental result matches.
                 assert_eq!(
-                    eq_properties.ordering_satisfy(requirement.as_ref()),
+                    eq_properties.ordering_satisfy(ordering)?,
                     expected,
                     "{err_msg}"
                 );
@@ -125,27 +127,26 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
             a_plus_b,
         ];
 
-        for n_req in 0..=exprs.len() {
+        for n_req in 1..=exprs.len() {
             for exprs in exprs.iter().combinations(n_req) {
-                let requirement = exprs
+                let sort_exprs = exprs
                     .into_iter()
-                    .map(|expr| PhysicalSortExpr {
-                        expr: Arc::clone(expr),
-                        options: SORT_OPTIONS,
-                    })
-                    .collect::<LexOrdering>();
+                    .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));
+                let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                    unreachable!("Test should always produce non-degenerate orderings");
+                };
                 let expected = is_table_same_after_sort(
-                    requirement.clone(),
-                    table_data_with_properties.clone(),
+                    ordering.clone(),
+                    &table_data_with_properties,
                 )?;
                 let err_msg = format!(
-                    "Error in test case requirement:{requirement:?}, expected: {expected:?}, eq_properties: {eq_properties}",
+                    "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}",
                 );
                 // Check whether ordering_satisfy API result and
                 // experimental result matches.
 
                 assert_eq!(
-                    eq_properties.ordering_satisfy(requirement.as_ref()),
+                    eq_properties.ordering_satisfy(ordering)?,
                     (expected | false),
                     "{err_msg}"
                 );
@@ -300,25 +301,19 @@ fn test_ordering_satisfy_with_equivalence() -> Result<()> {
     ];
 
     for (cols, expected) in requirements {
-        let err_msg = format!("Error in test case:{cols:?}");
-        let required = cols
-            .into_iter()
-            .map(|(expr, options)| PhysicalSortExpr {
-                expr: Arc::clone(expr),
-                options,
-            })
-            .collect::<LexOrdering>();
+        let err_msg = format!("Error in test case: {cols:?}");
+        let sort_exprs = convert_to_sort_exprs(&cols);
+        let Some(ordering) = LexOrdering::new(sort_exprs) else {
+            unreachable!("Test should always produce non-degenerate orderings");
+        };
 
         // Check expected result with experimental result.
         assert_eq!(
-            is_table_same_after_sort(
-                required.clone(),
-                table_data_with_properties.clone()
-            )?,
+            is_table_same_after_sort(ordering.clone(), &table_data_with_properties)?,
             expected
         );
         assert_eq!(
-            eq_properties.ordering_satisfy(required.as_ref()),
+            eq_properties.ordering_satisfy(ordering)?,
             expected,
             "{err_msg}"
         );
@@ -371,7 +366,7 @@ fn test_ordering_satisfy_on_data() -> Result<()> {
         (col_d, option_asc),
     ];
     let ordering = convert_to_orderings(&[ordering])[0].clone();
-    assert!(!is_table_same_after_sort(ordering, batch.clone())?);
+    assert!(!is_table_same_after_sort(ordering, &batch)?);
 
     // [a ASC, b ASC, d ASC] cannot be deduced
     let ordering = vec![
@@ -380,12 +375,12 @@ fn test_ordering_satisfy_on_data() -> Result<()> {
         (col_d, option_asc),
     ];
     let ordering = convert_to_orderings(&[ordering])[0].clone();
-    assert!(!is_table_same_after_sort(ordering, batch.clone())?);
+    assert!(!is_table_same_after_sort(ordering, &batch)?);
 
     // [a ASC, b ASC] can be deduced
     let ordering = vec![(col_a, option_asc), (col_b, option_asc)];
     let ordering = convert_to_orderings(&[ordering])[0].clone();
-    assert!(is_table_same_after_sort(ordering, batch.clone())?);
+    assert!(is_table_same_after_sort(ordering, &batch)?);
 
     Ok(())
 }

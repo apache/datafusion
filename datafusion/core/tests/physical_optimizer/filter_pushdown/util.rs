@@ -15,50 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    fmt::{Display, Formatter},
-};
-use std::{
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
-
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::{config::ConfigOptions, Statistics};
-use datafusion_common::{internal_err, Result};
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_datasource::file_stream::FileOpenFuture;
-use datafusion_datasource::source::DataSourceExec;
+use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
 use datafusion_datasource::{
-    file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
-};
-use datafusion_datasource::{
-    file_meta::FileMeta, schema_adapter::DefaultSchemaAdapterFactory, PartitionedFile,
+    file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
+    file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
+    file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
+    schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::filter_pushdown::FilterPushdownPhase;
 use datafusion_physical_plan::{
-    displayable, metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
-};
-use datafusion_physical_plan::{
+    displayable,
     filter::FilterExec,
     filter_pushdown::{
         ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
         PredicateSupport, PredicateSupports,
     },
-    DisplayAs, PlanProperties,
+    metrics::ExecutionPlanMetricsSet,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
-
 use futures::stream::BoxStream;
 use futures::{FutureExt, Stream};
 use object_store::ObjectStore;
-
+use std::{
+    any::Any,
+    fmt::{Display, Formatter},
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 pub struct TestOpener {
     batches: Vec<RecordBatch>,
     batch_size: Option<usize>,
@@ -67,7 +58,11 @@ pub struct TestOpener {
 }
 
 impl FileOpener for TestOpener {
-    fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(
+        &self,
+        _file_meta: FileMeta,
+        _file: PartitionedFile,
+    ) -> Result<FileOpenFuture> {
         let mut batches = self.batches.clone();
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -119,19 +114,16 @@ pub struct TestSource {
     schema: Option<SchemaRef>,
     metrics: ExecutionPlanMetricsSet,
     projection: Option<Vec<usize>>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl TestSource {
     fn new(support: bool, batches: Vec<RecordBatch>) -> Self {
         Self {
             support,
-            predicate: None,
-            statistics: None,
-            batch_size: None,
-            schema: None,
-            projection: None,
             metrics: ExecutionPlanMetricsSet::new(),
             batches,
+            ..Default::default()
         }
     }
 }
@@ -243,6 +235,20 @@ impl FileSource for TestSource {
             Ok(FilterPushdownPropagation::unsupported(filters))
         }
     }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -266,6 +272,11 @@ impl TestScanBuilder {
         self
     }
 
+    pub fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
+        self.batches = batches;
+        self
+    }
+
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
         let source = Arc::new(TestSource::new(self.support, self.batches));
         let base_config = FileScanConfigBuilder::new(
@@ -273,7 +284,7 @@ impl TestScanBuilder {
             Arc::clone(&self.schema),
             source,
         )
-        .with_file(PartitionedFile::new("test.paqruet", 123))
+        .with_file(PartitionedFile::new("test.parquet", 123))
         .build();
         DataSourceExec::from_data_source(base_config)
     }
@@ -421,6 +432,15 @@ fn format_lines(s: &str) -> Vec<String> {
     s.trim().split('\n').map(|s| s.to_string()).collect()
 }
 
+pub fn format_plan_for_test(plan: &Arc<dyn ExecutionPlan>) -> String {
+    let mut out = String::new();
+    for line in format_execution_plan(plan) {
+        out.push_str(&format!("  - {line}\n"));
+    }
+    out.push('\n');
+    out
+}
+
 #[derive(Debug)]
 pub(crate) struct TestNode {
     inject_filter: bool,
@@ -491,6 +511,7 @@ impl ExecutionPlan for TestNode {
 
     fn gather_filters_for_pushdown(
         &self,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -501,6 +522,7 @@ impl ExecutionPlan for TestNode {
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {

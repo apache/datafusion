@@ -82,6 +82,7 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
+use datafusion::physical_plan::yield_stream::YieldStreamExec;
 use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
@@ -309,7 +310,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 runtime,
                 extension_codec,
             ),
-
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetSink(sink) => self
                 .try_into_parquet_sink_physical_plan(
@@ -324,6 +324,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 runtime,
                 extension_codec,
             ),
+            PhysicalPlanType::YieldStream(yield_stream) => self
+                .try_into_yield_stream_physical_plan(
+                    yield_stream,
+                    registry,
+                    runtime,
+                    extension_codec,
+                ),
         }
     }
 
@@ -508,6 +515,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         if let Some(exec) = plan.downcast_ref::<UnnestExec>() {
             return protobuf::PhysicalPlanNode::try_from_unnest_exec(
+                exec,
+                extension_codec,
+            );
+        }
+
+        if let Some(exec) = plan.downcast_ref::<YieldStreamExec>() {
+            return protobuf::PhysicalPlanNode::try_from_yield_stream_exec(
                 exec,
                 extension_codec,
             );
@@ -1030,7 +1044,7 @@ impl protobuf::PhysicalPlanNode {
                                 )
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let ordering_req: LexOrdering = agg_node
+                        let order_bys = agg_node
                             .ordering_req
                             .iter()
                             .map(|e| {
@@ -1041,7 +1055,7 @@ impl protobuf::PhysicalPlanNode {
                                     extension_codec,
                                 )
                             })
-                            .collect::<Result<LexOrdering>>()?;
+                            .collect::<Result<_>>()?;
                         agg_node
                             .aggregate_function
                             .as_ref()
@@ -1063,7 +1077,7 @@ impl protobuf::PhysicalPlanNode {
                                         .alias(name)
                                         .with_ignore_nulls(agg_node.ignore_nulls)
                                         .with_distinct(agg_node.distinct)
-                                        .order_by(ordering_req)
+                                        .order_by(order_bys)
                                         .build()
                                         .map(Arc::new)
                                 }
@@ -1138,6 +1152,13 @@ impl protobuf::PhysicalPlanNode {
                     hashjoin.join_type
                 ))
             })?;
+        let null_equality = protobuf::NullEquality::try_from(hashjoin.null_equality)
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a HashJoinNode message with unknown NullEquality {}",
+                    hashjoin.null_equality
+                ))
+            })?;
         let filter = hashjoin
             .filter
             .as_ref()
@@ -1206,7 +1227,7 @@ impl protobuf::PhysicalPlanNode {
             &join_type.into(),
             projection,
             partition_mode,
-            hashjoin.null_equals_null,
+            null_equality.into(),
         )?))
     }
 
@@ -1247,6 +1268,13 @@ impl protobuf::PhysicalPlanNode {
                 proto_error(format!(
                     "Received a SymmetricHashJoin message with unknown JoinType {}",
                     sym_join.join_type
+                ))
+            })?;
+        let null_equality = protobuf::NullEquality::try_from(sym_join.null_equality)
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a SymmetricHashJoin message with unknown NullEquality {}",
+                    sym_join.null_equality
                 ))
             })?;
         let filter = sym_join
@@ -1292,11 +1320,7 @@ impl protobuf::PhysicalPlanNode {
             &left_schema,
             extension_codec,
         )?;
-        let left_sort_exprs = if left_sort_exprs.is_empty() {
-            None
-        } else {
-            Some(left_sort_exprs)
-        };
+        let left_sort_exprs = LexOrdering::new(left_sort_exprs);
 
         let right_sort_exprs = parse_physical_sort_exprs(
             &sym_join.right_sort_exprs,
@@ -1304,11 +1328,7 @@ impl protobuf::PhysicalPlanNode {
             &right_schema,
             extension_codec,
         )?;
-        let right_sort_exprs = if right_sort_exprs.is_empty() {
-            None
-        } else {
-            Some(right_sort_exprs)
-        };
+        let right_sort_exprs = LexOrdering::new(right_sort_exprs);
 
         let partition_mode = protobuf::StreamPartitionMode::try_from(
             sym_join.partition_mode,
@@ -1333,7 +1353,7 @@ impl protobuf::PhysicalPlanNode {
             on,
             filter,
             &join_type.into(),
-            sym_join.null_equals_null,
+            null_equality.into(),
             left_sort_exprs,
             right_sort_exprs,
             partition_mode,
@@ -1420,47 +1440,45 @@ impl protobuf::PhysicalPlanNode {
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
+        let input = into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
         let exprs = sort
-                    .expr
-                    .iter()
-                    .map(|expr| {
-                        let expr = expr.expr_type.as_ref().ok_or_else(|| {
+            .expr
+            .iter()
+            .map(|expr| {
+                let expr = expr.expr_type.as_ref().ok_or_else(|| {
+                    proto_error(format!(
+                        "physical_plan::from_proto() Unexpected expr {self:?}"
+                    ))
+                })?;
+                if let ExprType::Sort(sort_expr) = expr {
+                    let expr = sort_expr
+                        .expr
+                        .as_ref()
+                        .ok_or_else(|| {
                             proto_error(format!(
-                                "physical_plan::from_proto() Unexpected expr {self:?}"
+                                "physical_plan::from_proto() Unexpected sort expr {self:?}"
                             ))
-                        })?;
-                        if let ExprType::Sort(sort_expr) = expr {
-                            let expr = sort_expr
-                                .expr
-                                .as_ref()
-                                .ok_or_else(|| {
-                                    proto_error(format!(
-                                        "physical_plan::from_proto() Unexpected sort expr {self:?}"
-                                    ))
-                                })?
-                                .as_ref();
-                            Ok(PhysicalSortExpr {
-                                expr: parse_physical_expr(expr, registry, input.schema().as_ref(), extension_codec)?,
-                                options: SortOptions {
-                                    descending: !sort_expr.asc,
-                                    nulls_first: sort_expr.nulls_first,
-                                },
-                            })
-                        } else {
-                            internal_err!(
-                                "physical_plan::from_proto() {self:?}"
-                            )
-                        }
+                        })?
+                        .as_ref();
+                    Ok(PhysicalSortExpr {
+                        expr: parse_physical_expr(expr, registry, input.schema().as_ref(), extension_codec)?,
+                        options: SortOptions {
+                            descending: !sort_expr.asc,
+                            nulls_first: sort_expr.nulls_first,
+                        },
                     })
-                    .collect::<Result<LexOrdering, _>>()?;
-        let fetch = if sort.fetch < 0 {
-            None
-        } else {
-            Some(sort.fetch as usize)
+                } else {
+                    internal_err!(
+                        "physical_plan::from_proto() {self:?}"
+                    )
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let Some(ordering) = LexOrdering::new(exprs) else {
+            return internal_err!("SortExec requires an ordering");
         };
-        let new_sort = SortExec::new(exprs, input)
+        let fetch = (sort.fetch >= 0).then_some(sort.fetch as _);
+        let new_sort = SortExec::new(ordering, input)
             .with_fetch(fetch)
             .with_preserve_partitioning(sort.preserve_partitioning);
 
@@ -1474,8 +1492,7 @@ impl protobuf::PhysicalPlanNode {
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
+        let input = into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
         let exprs = sort
             .expr
             .iter()
@@ -1511,14 +1528,13 @@ impl protobuf::PhysicalPlanNode {
                     internal_err!("physical_plan::from_proto() {self:?}")
                 }
             })
-            .collect::<Result<LexOrdering, _>>()?;
-        let fetch = if sort.fetch < 0 {
-            None
-        } else {
-            Some(sort.fetch as usize)
+            .collect::<Result<Vec<_>>>()?;
+        let Some(ordering) = LexOrdering::new(exprs) else {
+            return internal_err!("SortExec requires an ordering");
         };
+        let fetch = (sort.fetch >= 0).then_some(sort.fetch as _);
         Ok(Arc::new(
-            SortPreservingMergeExec::new(exprs, input).with_fetch(fetch),
+            SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
         ))
     }
 
@@ -1657,9 +1673,12 @@ impl protobuf::PhysicalPlanNode {
                     &sink_schema,
                     extension_codec,
                 )
-                .map(LexRequirement::from)
+                .map(|sort_exprs| {
+                    LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                })
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(data_sink),
@@ -1692,9 +1711,12 @@ impl protobuf::PhysicalPlanNode {
                     &sink_schema,
                     extension_codec,
                 )
-                .map(LexRequirement::from)
+                .map(|sort_exprs| {
+                    LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                })
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(data_sink),
@@ -1730,9 +1752,12 @@ impl protobuf::PhysicalPlanNode {
                         &sink_schema,
                         extension_codec,
                     )
-                    .map(LexRequirement::from)
+                    .map(|sort_exprs| {
+                        LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                    })
                 })
-                .transpose()?;
+                .transpose()?
+                .flatten();
             Ok(Arc::new(DataSinkExec::new(
                 input,
                 Arc::new(data_sink),
@@ -1766,6 +1791,21 @@ impl protobuf::PhysicalPlanNode {
             unnest.struct_type_columns.iter().map(|c| *c as _).collect(),
             Arc::new(convert_required!(unnest.schema)?),
             into_required!(unnest.options)?,
+        )))
+    }
+
+    fn try_into_yield_stream_physical_plan(
+        &self,
+        field_stream: &protobuf::YieldStreamExecNode,
+        registry: &dyn FunctionRegistry,
+        runtime: &RuntimeEnv,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input =
+            into_physical_plan(&field_stream.input, registry, runtime, extension_codec)?;
+        Ok(Arc::new(YieldStreamExec::new(
+            input,
+            field_stream.frequency as _,
         )))
     }
 
@@ -1924,6 +1964,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<_>>()?;
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let null_equality: protobuf::NullEquality = exec.null_equality().into();
         let filter = exec
             .filter()
             .as_ref()
@@ -1964,7 +2005,7 @@ impl protobuf::PhysicalPlanNode {
                     on,
                     join_type: join_type.into(),
                     partition_mode: partition_mode.into(),
-                    null_equals_null: exec.null_equals_null(),
+                    null_equality: null_equality.into(),
                     filter,
                     projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
@@ -1999,6 +2040,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<_>>()?;
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let null_equality: protobuf::NullEquality = exec.null_equality().into();
         let filter = exec
             .filter()
             .as_ref()
@@ -2082,7 +2124,7 @@ impl protobuf::PhysicalPlanNode {
                     on,
                     join_type: join_type.into(),
                     partition_mode: partition_mode.into(),
-                    null_equals_null: exec.null_equals_null(),
+                    null_equality: null_equality.into(),
                     left_sort_exprs,
                     right_sort_exprs,
                     filter,
@@ -2744,6 +2786,25 @@ impl protobuf::PhysicalPlanNode {
                         .map(|c| *c as _)
                         .collect(),
                     options: Some(exec.options().into()),
+                },
+            ))),
+        })
+    }
+
+    fn try_from_yield_stream_exec(
+        exec: &YieldStreamExec,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self> {
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+            exec.input().to_owned(),
+            extension_codec,
+        )?;
+
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::YieldStream(Box::new(
+                protobuf::YieldStreamExecNode {
+                    input: Some(Box::new(input)),
+                    frequency: exec.yield_period() as _,
                 },
             ))),
         })

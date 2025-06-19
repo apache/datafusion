@@ -462,7 +462,7 @@ pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
 
     // If all the data_types are null, return string
     if data_types.iter().all(|t| t == &DataType::Null) {
-        return Some(DataType::Utf8);
+        return Some(DataType::Utf8View);
     }
 
     // Ignore Nulls, if any data_type category is not the same, return None
@@ -931,6 +931,7 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
         Int32 | UInt32 => Some(Decimal128(10, 0)),
         Int64 | UInt64 => Some(Decimal128(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
+        Float16 => Some(Decimal128(6, 3)),
         Float32 => Some(Decimal128(14, 7)),
         Float64 => Some(Decimal128(30, 15)),
         _ => None,
@@ -949,6 +950,7 @@ fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType
         Int32 | UInt32 => Some(Decimal256(10, 0)),
         Int64 | UInt64 => Some(Decimal256(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
+        Float16 => Some(Decimal256(6, 3)),
         Float32 => Some(Decimal256(14, 7)),
         Float64 => Some(Decimal256(30, 15)),
         _ => None,
@@ -1044,6 +1046,7 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
     match (lhs_type, rhs_type) {
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
+        (_, Float16) | (Float16, _) => Some(Float16),
         // The following match arms encode the following logic: Given the two
         // integral types, we choose the narrowest possible integral type that
         // accommodates all values of both types. Note that to avoid information
@@ -1199,7 +1202,8 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Utf8 | LargeUtf8, other_type) | (other_type, Utf8 | LargeUtf8)
+        (Utf8 | LargeUtf8 | Utf8View, other_type)
+        | (other_type, Utf8 | LargeUtf8 | Utf8View)
             if other_type.is_numeric() =>
         {
             Some(other_type.clone())
@@ -1300,6 +1304,9 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
         // Cast FixedSizeBinary to Binary
         (FixedSizeBinary(_), Binary) | (Binary, FixedSizeBinary(_)) => Some(Binary),
+        (FixedSizeBinary(_), BinaryView) | (BinaryView, FixedSizeBinary(_)) => {
+            Some(BinaryView)
+        }
 
         _ => None,
     }
@@ -1577,6 +1584,10 @@ mod tests {
         assert_eq!(
             coerce_numeric_type_to_decimal(&DataType::Int64).unwrap(),
             DataType::Decimal128(20, 0)
+        );
+        assert_eq!(
+            coerce_numeric_type_to_decimal(&DataType::Float16).unwrap(),
+            DataType::Decimal128(6, 3)
         );
         assert_eq!(
             coerce_numeric_type_to_decimal(&DataType::Float32).unwrap(),
@@ -2056,6 +2067,13 @@ mod tests {
             Operator::Plus,
             Float32
         );
+        // (_, Float16) | (Float16, _) => Some(Float16),
+        test_coercion_binary_rule_multiple!(
+            Float16,
+            [Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
+            Operator::Plus,
+            Float16
+        );
         // (UInt64, Int64 | Int32 | Int16 | Int8) | (Int64 | Int32 | Int16 | Int8, UInt64)  => Some(Decimal128(20, 0)),
         test_coercion_binary_rule_multiple!(
             UInt64,
@@ -2194,6 +2212,18 @@ mod tests {
             DataType::Boolean
         );
         // float
+        test_coercion_binary_rule!(
+            DataType::Float16,
+            DataType::Int64,
+            Operator::Eq,
+            DataType::Float16
+        );
+        test_coercion_binary_rule!(
+            DataType::Float16,
+            DataType::Float64,
+            Operator::Eq,
+            DataType::Float64
+        );
         test_coercion_binary_rule!(
             DataType::Float32,
             DataType::Int64,

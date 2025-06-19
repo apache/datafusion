@@ -36,8 +36,9 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPropagation,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
 };
+use datafusion_physical_plan::yield_stream::wrap_yield_stream;
 
 /// A source of data, typically a list of files or memory
 ///
@@ -58,8 +59,60 @@ use datafusion_physical_plan::filter_pushdown::{
 /// Requires `Debug` to assist debugging
 ///
 /// [`FileScanConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html
-/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest//datafusion/datasource/memory/struct.MemorySourceConfig.html
+/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemorySourceConfig.html
 /// [`FileSource`]: crate::file::FileSource
+/// [`FileFormat``]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/index.html
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+///
+/// The following diagram shows how DataSource, FileSource, and DataSourceExec are related
+/// ```text
+///                       ┌─────────────────────┐                              -----► execute path
+///                       │                     │                              ┄┄┄┄┄► init path
+///                       │   DataSourceExec    │  
+///                       │                     │    
+///                       └───────▲─────────────┘
+///                               ┊  │
+///                               ┊  │
+///                       ┌──────────▼──────────┐                            ┌──────────-──────────┐
+///                       │                     │                            |                     |
+///                       │  DataSource(trait)  │                            | TableProvider(trait)|
+///                       │                     │                            |                     |
+///                       └───────▲─────────────┘                            └─────────────────────┘
+///                               ┊  │                                                  ┊
+///               ┌───────────────┿──┴────────────────┐                                 ┊
+///               |   ┌┄┄┄┄┄┄┄┄┄┄┄┘                   |                                 ┊
+///               |   ┊                               |                                 ┊
+///    ┌──────────▼──────────┐             ┌──────────▼──────────┐                      ┊
+///    │                     │             │                     │           ┌──────────▼──────────┐
+///    │   FileScanConfig    │             │ MemorySourceConfig  │           |                     |
+///    │                     │             │                     │           |  FileFormat(trait)  |
+///    └──────────────▲──────┘             └─────────────────────┘           |                     |
+///               │   ┊                                                      └─────────────────────┘
+///               │   ┊                                                                 ┊
+///               │   ┊                                                                 ┊
+///    ┌──────────▼──────────┐                                               ┌──────────▼──────────┐
+///    │                     │                                               │     ArrowSource     │
+///    │ FileSource(trait)   ◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│          ...        │
+///    │                     │                                               │    ParquetSource    │
+///    └─────────────────────┘                                               └─────────────────────┘
+///               │
+///               │
+///               │
+///               │
+///    ┌──────────▼──────────┐
+///    │     ArrowSource     │
+///    │          ...        │
+///    │    ParquetSource    │
+///    └─────────────────────┘
+///               |
+/// FileOpener (called by FileStream)
+///               │
+///    ┌──────────▼──────────┐
+///    │                     │
+///    │     RecordBatch     │
+///    │                     │
+///    └─────────────────────┘
+/// ```
 pub trait DataSource: Send + Sync + Debug {
     fn open(
         &self,
@@ -133,6 +186,8 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: PlanProperties,
+    /// Indicates whether to enable cooperative yielding mode.
+    cooperative: bool,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -204,7 +259,13 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source.open(partition, context)
+        self.data_source
+            .open(partition, Arc::clone(&context))
+            .map(|stream| wrap_yield_stream(stream, &context, self.cooperative))
+    }
+
+    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
+        self.cooperative.then_some(self)
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -237,7 +298,11 @@ impl ExecutionPlan for DataSourceExec {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = self.cache.clone();
 
-        Some(Arc::new(Self { data_source, cache }))
+        Some(Arc::new(Self {
+            data_source,
+            cache,
+            cooperative: self.cooperative,
+        }))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -253,6 +318,7 @@ impl ExecutionPlan for DataSourceExec {
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
@@ -285,9 +351,14 @@ impl DataSourceExec {
         Arc::new(Self::new(Arc::new(data_source)))
     }
 
+    // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(Arc::clone(&data_source));
-        Self { data_source, cache }
+        Self {
+            data_source,
+            cache,
+            cooperative: true,
+        }
     }
 
     /// Return the source object
@@ -310,6 +381,12 @@ impl DataSourceExec {
     /// Assign output partitioning
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.cache = self.cache.with_partitioning(partitioning);
+        self
+    }
+
+    /// Assign yielding mode
+    pub fn with_cooperative(mut self, cooperative: bool) -> Self {
+        self.cooperative = cooperative;
         self
     }
 

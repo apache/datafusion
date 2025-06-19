@@ -259,10 +259,10 @@ impl NestedLoopJoinExec {
             None,
             // No on columns in nested loop join
             &[],
-        );
+        )?;
 
         let mut output_partitioning =
-            asymmetric_join_output_partitioning(left, right, &join_type);
+            asymmetric_join_output_partitioning(left, right, &join_type)?;
 
         let emission_type = if left.boundedness().is_unbounded() {
             EmissionType::Final
@@ -274,7 +274,8 @@ impl NestedLoopJoinExec {
                 | JoinType::LeftSemi
                 | JoinType::RightSemi
                 | JoinType::Right
-                | JoinType::RightAnti => EmissionType::Incremental,
+                | JoinType::RightAnti
+                | JoinType::RightMark => EmissionType::Incremental,
                 // If we need to generate unmatched rows from the *build side*,
                 // we need to emit them at the end.
                 JoinType::Left
@@ -719,7 +720,7 @@ struct NestedLoopJoinStream<T> {
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     // TODO: support null aware equal
-    // null_equals_null: bool
+    // null_equality: NullEquality,
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Cache for join indices calculations
@@ -1009,15 +1010,30 @@ fn join_left_and_right_batch(
         right_side_ordered,
     )?;
 
-    build_batch_from_indices(
-        schema,
-        left_batch,
-        right_batch,
-        &left_side,
-        &right_side,
-        column_indices,
-        JoinSide::Left,
-    )
+    // Switch around the build side and probe side for `JoinType::RightMark`
+    // because in a RightMark join, we want to mark rows on the right table
+    // by looking for matches in the left.
+    if join_type == JoinType::RightMark {
+        build_batch_from_indices(
+            schema,
+            right_batch,
+            left_batch,
+            &left_side,
+            &right_side,
+            column_indices,
+            JoinSide::Right,
+        )
+    } else {
+        build_batch_from_indices(
+            schema,
+            left_batch,
+            right_batch,
+            &left_side,
+            &right_side,
+            column_indices,
+            JoinSide::Left,
+        )
+    }
 }
 
 impl<T: BatchTransformer + Unpin + Send> Stream for NestedLoopJoinStream<T> {
@@ -1088,22 +1104,18 @@ pub(crate) mod tests {
             vec![batch]
         };
 
-        let mut source =
-            TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
-        if !sorted_column_names.is_empty() {
-            let mut sort_info = LexOrdering::default();
-            for name in sorted_column_names {
-                let index = schema.index_of(name).unwrap();
-                let sort_expr = PhysicalSortExpr {
-                    expr: Arc::new(Column::new(name, index)),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                };
-                sort_info.push(sort_expr);
-            }
-            source = source.try_with_sort_information(vec![sort_info]).unwrap();
+        let mut sort_info = vec![];
+        for name in sorted_column_names {
+            let index = schema.index_of(name).unwrap();
+            let sort_expr = PhysicalSortExpr::new(
+                Arc::new(Column::new(name, index)),
+                SortOptions::new(false, false),
+            );
+            sort_info.push(sort_expr);
+        }
+        let mut source = TestMemoryExec::try_new(&[batches], schema, None).unwrap();
+        if let Some(ordering) = LexOrdering::new(sort_info) {
+            source = source.try_with_sort_information(vec![ordering]).unwrap();
         }
 
         Arc::new(TestMemoryExec::update_cache(Arc::new(source)))
@@ -1465,6 +1477,36 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn join_right_mark_with_filter() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_left_table();
+        let right = build_right_table();
+
+        let filter = prepare_join_filter();
+        let (columns, batches) = multi_partitioned_join_collect(
+            left,
+            right,
+            &JoinType::RightMark,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a2", "b2", "c2", "mark"]);
+
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+-------+
+            | a2 | b2 | c2  | mark  |
+            +----+----+-----+-------+
+            | 10 | 10 | 100 | false |
+            | 12 | 10 | 40  | false |
+            | 2  | 2  | 80  | true  |
+            +----+----+-----+-------+
+            "#);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_overallocation() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
@@ -1492,6 +1534,7 @@ pub(crate) mod tests {
             JoinType::LeftMark,
             JoinType::RightSemi,
             JoinType::RightAnti,
+            JoinType::RightMark,
         ];
 
         for join_type in join_types {

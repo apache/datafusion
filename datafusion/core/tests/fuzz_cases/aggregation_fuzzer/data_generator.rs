@@ -149,14 +149,14 @@ impl DatasetGenerator {
         for sort_keys in self.sort_keys_set.clone() {
             let sort_exprs = sort_keys
                 .iter()
-                .map(|key| {
-                    let col_expr = col(key, schema)?;
-                    Ok(PhysicalSortExpr::new_default(col_expr))
-                })
-                .collect::<Result<LexOrdering>>()?;
-            let sorted_batch = sort_batch(&base_batch, sort_exprs.as_ref(), None)?;
-
-            let batches = stagger_batch(sorted_batch);
+                .map(|key| col(key, schema).map(PhysicalSortExpr::new_default))
+                .collect::<Result<Vec<_>>>()?;
+            let batch = if let Some(ordering) = LexOrdering::new(sort_exprs) {
+                sort_batch(&base_batch, &ordering, None)?
+            } else {
+                base_batch.clone()
+            };
+            let batches = stagger_batch(batch);
             let dataset = Dataset::new(batches, sort_keys);
             datasets.push(dataset);
         }

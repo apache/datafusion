@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction, WindowFunctionParams};
+use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
@@ -276,7 +276,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::Unnest(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
             | Expr::SimilarTo { .. }
@@ -579,7 +579,8 @@ pub fn group_window_expr_by_sort_keys(
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
     window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction( WindowFunction{ params: WindowFunctionParams { partition_by, order_by, ..}, .. }) => {
+        Expr::WindowFunction(window_fun) => {
+            let WindowFunctionParams{ partition_by, order_by, ..} = &window_fun.as_ref().params;
             let sort_key = generate_sort_key(partition_by, order_by)?;
             if let Some((_, values)) = result.iter_mut().find(
                 |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
@@ -784,7 +785,7 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
                     indexes.push(idx);
                 }
             }
-            Expr::Literal(_) => {
+            Expr::Literal(_, _) => {
                 indexes.push(usize::MAX);
             }
             _ => {}
@@ -1263,9 +1264,11 @@ pub fn collect_subquery_cols(
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr_vec_fmt, grouping_set, lit, rollup,
-        test::function_stub::max_udaf, test::function_stub::min_udaf,
-        test::function_stub::sum_udaf, Cast, ExprFunctionExt, WindowFunctionDefinition,
+        col, cube,
+        expr::WindowFunction,
+        expr_vec_fmt, grouping_set, lit, rollup,
+        test::function_stub::{max_udaf, min_udaf, sum_udaf},
+        Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
 
@@ -1279,19 +1282,19 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_window() -> Result<()> {
-        let max1 = Expr::WindowFunction(WindowFunction::new(
+        let max1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let max2 = Expr::WindowFunction(WindowFunction::new(
+        let max2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(WindowFunction::new(
+        let min3 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ));
-        let sum4 = Expr::WindowFunction(WindowFunction::new(
+        let sum4 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ));
@@ -1309,25 +1312,25 @@ mod tests {
         let age_asc = Sort::new(col("age"), true, true);
         let name_desc = Sort::new(col("name"), false, true);
         let created_at_desc = Sort::new(col("created_at"), false, true);
-        let max1 = Expr::WindowFunction(WindowFunction::new(
+        let max1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let max2 = Expr::WindowFunction(WindowFunction::new(
+        let max2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(WindowFunction::new(
+        let min3 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let sum4 = Expr::WindowFunction(WindowFunction::new(
+        let sum4 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ))

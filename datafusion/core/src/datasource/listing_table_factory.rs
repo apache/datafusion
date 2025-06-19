@@ -111,9 +111,8 @@ impl TableProviderFactory for ListingTableFactory {
         let table_path = ListingTableUrl::parse(&cmd.location)?;
 
         let options = ListingOptions::new(file_format)
-            .with_collect_stat(state.config().collect_statistics())
             .with_file_extension(file_extension)
-            .with_target_partitions(state.config().target_partitions())
+            .with_session_config_options(session_state.config())
             .with_table_partition_cols(table_partition_cols);
 
         options
@@ -202,7 +201,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options: HashMap::from([("format.has_header".into(), "true".into())]),
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
@@ -242,7 +241,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options,
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();

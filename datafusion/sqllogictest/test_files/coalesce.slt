@@ -260,8 +260,8 @@ select
   arrow_typeof(coalesce(c, arrow_cast('b', 'Dictionary(Int32, Utf8)')))
 from t;
 ----
-a Dictionary(Int32, Utf8)
-b Dictionary(Int32, Utf8)
+a Utf8View
+b Utf8View
 
 statement ok
 drop table t;

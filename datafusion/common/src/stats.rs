@@ -352,6 +352,7 @@ impl Statistics {
             return self;
         };
 
+        #[allow(clippy::large_enum_variant)]
         enum Slot {
             /// The column is taken and put into the specified statistics location
             Taken(usize),

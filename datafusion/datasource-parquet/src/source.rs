@@ -27,6 +27,7 @@ use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
 use datafusion_common::config::ConfigOptions;
+use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
@@ -41,7 +42,6 @@ use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
-use datafusion_physical_plan::filter_pushdown::PredicateSupport;
 use datafusion_physical_plan::filter_pushdown::PredicateSupports;
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -49,7 +49,6 @@ use datafusion_physical_plan::DisplayFormatType;
 
 use itertools::Itertools;
 use object_store::ObjectStore;
-
 /// Execution plan for reading one or more Parquet files.
 ///
 /// ```text
@@ -343,25 +342,6 @@ impl ParquetSource {
         self
     }
 
-    /// return the optional schema adapter factory
-    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.as_ref()
-    }
-
-    /// Set optional schema adapter factory.
-    ///
-    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
-    /// parquet file get mapped to that of the table schema.  The default schema
-    /// adapter uses arrow's cast library to map the parquet fields to the table
-    /// schema.
-    pub fn with_schema_adapter_factory(
-        mut self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        self.schema_adapter_factory = Some(schema_adapter_factory);
-        self
-    }
-
     /// If true, the predicate will be used during the parquet scan.
     /// Defaults to false
     ///
@@ -426,6 +406,28 @@ impl ParquetSource {
     fn bloom_filter_on_read(&self) -> bool {
         self.table_parquet_options.global.bloom_filter_on_read
     }
+
+    /// Applies schema adapter factory from the FileScanConfig if present.
+    ///
+    /// # Arguments
+    /// * `conf` - FileScanConfig that may contain a schema adapter factory
+    /// # Returns
+    /// The converted FileSource with schema adapter factory applied if provided
+    pub fn apply_schema_adapter(
+        self,
+        conf: &FileScanConfig,
+    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
+        let file_source: Arc<dyn FileSource> = self.into();
+
+        // If the FileScanConfig.file_source() has a schema adapter factory, apply it
+        if let Some(factory) = conf.file_source().schema_adapter_factory() {
+            file_source.with_schema_adapter_factory(
+                Arc::<dyn SchemaAdapterFactory>::clone(&factory),
+            )
+        } else {
+            Ok(file_source)
+        }
+    }
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
@@ -443,6 +445,13 @@ pub(crate) fn parse_coerce_int96_string(
             "Unknown or unsupported parquet coerce_int96: \
         {str_setting}. Valid values are: ns, us, ms, and s."
         ))),
+    }
+}
+
+/// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
+impl From<ParquetSource> for Arc<dyn FileSource> {
+    fn from(source: ParquetSource) -> Self {
+        as_file_source(source)
     }
 }
 
@@ -481,7 +490,8 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
-            table_schema: Arc::clone(&base_config.file_schema),
+            logical_file_schema: Arc::clone(&base_config.file_schema),
+            partition_fields: base_config.table_partition_cols.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
@@ -613,22 +623,15 @@ impl FileSource for ParquetSource {
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
         let mut source = self.clone();
-        let mut allowed_filters = vec![];
-        let mut remaining_filters = vec![];
-        for filter in &filters {
-            if can_expr_be_pushed_down_with_schemas(filter, &file_schema) {
-                // This filter can be pushed down
-                allowed_filters.push(Arc::clone(filter));
-            } else {
-                // This filter cannot be pushed down
-                remaining_filters.push(Arc::clone(filter));
-            }
-        }
-        if allowed_filters.is_empty() {
+        let filters = PredicateSupports::new_with_supported_check(filters, |filter| {
+            can_expr_be_pushed_down_with_schemas(filter, &file_schema)
+        });
+        if filters.is_all_unsupported() {
             // No filters can be pushed down, so we can just return the remaining filters
             // and avoid replacing the source in the physical plan.
-            return Ok(FilterPushdownPropagation::unsupported(filters));
+            return Ok(FilterPushdownPropagation::with_filters(filters));
         }
+        let allowed_filters = filters.collect_supported();
         let predicate = match source.predicate {
             Some(predicate) => conjunction(
                 std::iter::once(predicate).chain(allowed_filters.iter().cloned()),
@@ -637,23 +640,28 @@ impl FileSource for ParquetSource {
         };
         source.predicate = Some(predicate);
         let source = Arc::new(source);
-        let filters = PredicateSupports::new(
-            allowed_filters
-                .into_iter()
-                .map(|f| {
-                    if pushdown_filters {
-                        PredicateSupport::Supported(f)
-                    } else {
-                        PredicateSupport::Unsupported(f)
-                    }
-                })
-                .chain(
-                    remaining_filters
-                        .into_iter()
-                        .map(PredicateSupport::Unsupported),
-                )
-                .collect(),
-        );
+        // If pushdown_filters is false we tell our parents that they still have to handle the filters,
+        // even if we updated the predicate to include the filters (they will only be used for stats pruning).
+        if !pushdown_filters {
+            return Ok(FilterPushdownPropagation::with_filters(
+                filters.make_unsupported(),
+            )
+            .with_updated_node(source));
+        }
         Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
+    }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 }
