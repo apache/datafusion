@@ -23,7 +23,7 @@ use arrow::{
 };
 use std::sync::Arc;
 /// Adapt a struct column to match the target field type, handling nested structs recursively
-fn adapt_struct_column(
+fn cast_struct_column(
     source_col: &ArrayRef,
     target_fields: &[Arc<Field>],
 ) -> Result<ArrayRef> {
@@ -36,7 +36,7 @@ fn adapt_struct_column(
             match struct_array.column_by_name(target_child_field.name()) {
                 Some(source_child_col) => {
                     let adapted_child =
-                        adapt_column(source_child_col, target_child_field)?;
+                        cast_column(source_child_col, target_child_field)?;
                     children.push((field_arc, adapted_child));
                 }
                 None => {
@@ -60,9 +60,9 @@ fn adapt_struct_column(
 }
 
 /// Adapt a column to match the target field type, handling nested structs specially
-pub fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
+pub fn cast_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {
-        Struct(target_fields) => adapt_struct_column(source_col, target_fields),
+        Struct(target_fields) => cast_struct_column(source_col, target_fields),
         _ => Ok(cast(source_col, target_field.data_type())?),
     }
 }
@@ -87,10 +87,10 @@ mod tests {
     }
 
     #[test]
-    fn test_adapt_simple_column() {
+    fn test_cast_simple_column() {
         let source = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
         let target_field = Field::new("ints", DataType::Int64, true);
-        let result = adapt_column(&source, &target_field).unwrap();
+        let result = cast_column(&source, &target_field).unwrap();
         let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(result.value(0), 1);
@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn test_adapt_struct_with_missing_field() {
+    fn test_cast_struct_with_missing_field() {
         let a_array = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
         let source_struct = StructArray::from(vec![(
             Arc::new(Field::new("a", DataType::Int32, true)),
@@ -119,7 +119,7 @@ mod tests {
             true,
         );
 
-        let result = adapt_column(&source_col, &target_field).unwrap();
+        let result = cast_column(&source_col, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.fields().len(), 2);
         let a_result = get_column_as!(&struct_array, "a", Int32Array);
@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn test_adapt_struct_source_not_struct() {
+    fn test_cast_struct_source_not_struct() {
         let source = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
         let target_field = Field::new(
             "s",
@@ -141,7 +141,7 @@ mod tests {
             true,
         );
 
-        let result = adapt_column(&source, &target_field).unwrap();
+        let result = cast_column(&source, &target_field).unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.len(), 2);
         let a_result = get_column_as!(&struct_array, "a", Int32Array);

@@ -22,7 +22,7 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType::Struct, Field, Schema, SchemaRef},
 };
-use datafusion_common::nested_struct::adapt_column;
+use datafusion_common::nested_struct::cast_column;
 use datafusion_common::Result;
 use std::sync::Arc;
 
@@ -85,7 +85,7 @@ impl SchemaAdapter for NestedStructSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
-                Arc::new(|array: &ArrayRef, field: &Field| adapt_column(array, field)),
+                Arc::new(|array: &ArrayRef, field: &Field| cast_column(array, field)),
             )),
             projection,
         ))
