@@ -33,7 +33,7 @@ use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{JoinType, ScalarValue};
+use datafusion_common::{JoinType, NullEquality, ScalarValue};
 use datafusion_expr_common::operator::Operator::Gt;
 use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -467,7 +467,7 @@ async fn test_infinite_join_cancel(
         &JoinType::Inner,
         None,
         PartitionMode::CollectLeft,
-        true,
+        NullEquality::NullEqualsNull,
     )?);
 
     // 3) Wrap yields under each infinite leaf
@@ -550,7 +550,7 @@ async fn test_infinite_join_agg_cancel(
         &JoinType::Inner,
         None,
         PartitionMode::CollectLeft,
-        true,
+        NullEquality::NullEqualsNull,
     )?);
 
     // 3) Project only one column (“value” from the left side) because we just want to sum that
@@ -714,7 +714,7 @@ async fn test_infinite_hash_join_without_repartition_and_no_agg(
         /* output64 */ None,
         // Using CollectLeft is fine—just avoid RepartitionExec’s partitioned channels.
         PartitionMode::CollectLeft,
-        /* build_left */ true,
+        /* build_left */ NullEquality::NullEqualsNull,
     )?);
 
     // 3) Do not apply InsertYieldExec—since there is no aggregation, InsertYieldExec would
@@ -796,7 +796,7 @@ async fn test_infinite_sort_merge_join_without_repartition_and_no_agg(
         /* filter */ None,
         JoinType::Inner,
         vec![SortOptions::new(true, false)], // ascending, nulls last
-        /* null_equal */ true,
+        /* null_equality */ NullEquality::NullEqualsNull,
     )?);
 
     // 3) Do not apply InsertYieldExec (no aggregation, no repartition → no built-in yields).
