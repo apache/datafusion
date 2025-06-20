@@ -935,11 +935,6 @@ impl SortExec {
         }
     }
 
-    pub fn with_filter(mut self, filter: Arc<DynamicFilterPhysicalExpr>) -> Self {
-        self.filter = Some(filter);
-        self
-    }
-
     /// Input schema
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -953,11 +948,6 @@ impl SortExec {
     /// If `Some(fetch)`, limits output to only the first "fetch" items
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
-    }
-
-    /// If `Some(filter)`, returns the filter expression that matches the state of the sort.
-    pub fn filter(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
-        self.filter.clone()
     }
 
     fn output_partitioning_helper(
