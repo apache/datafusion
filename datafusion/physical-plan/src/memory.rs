@@ -492,6 +492,7 @@ mod lazy_memory_tests {
 
             // Verify metrics match actual output
             assert_eq!(metrics.output_rows().unwrap(), expected_rows);
+            assert!(metrics.output_bytes().unwrap() > 0);
             assert!(metrics.elapsed_compute().unwrap() > 0);
         }
 

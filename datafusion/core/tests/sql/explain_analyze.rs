@@ -129,6 +129,11 @@ async fn explain_analyze_baseline_metrics() {
                 "plan: {}",
                 DisplayableExecutionPlan::with_metrics(plan).one_line()
             );
+            assert!(
+                metrics.output_bytes().unwrap() > 0,
+                "plan: {}",
+                DisplayableExecutionPlan::with_metrics(plan).one_line()
+            );
 
             let mut saw_start = false;
             let mut saw_end = false;

@@ -1504,6 +1504,7 @@ mod tests {
         let metrics = sort_exec.metrics().unwrap();
 
         assert_eq!(metrics.output_rows().unwrap(), 10000);
+        assert_eq!(metrics.output_bytes().unwrap(), 40000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
 
         let spill_count = metrics.spill_count().unwrap();
@@ -1623,6 +1624,8 @@ mod tests {
         let metrics = sort_exec.metrics().unwrap();
 
         assert_eq!(metrics.output_rows().unwrap(), 20000);
+        // FIXME: This might be double-counting across batches.
+        assert_eq!(metrics.output_bytes().unwrap(), 958800);
         assert!(metrics.elapsed_compute().unwrap() > 0);
 
         let spill_count = metrics.spill_count().unwrap();

@@ -794,6 +794,20 @@ mod tests {
     }
 
     #[test]
+    fn test_display_output_bytes() {
+        let count = Count::new();
+        let output_byte = MetricValue::OutputBytes(count.clone());
+
+        assert_eq!("0.0 B", output_byte.to_string());
+
+        count.add((100 * MB) as usize);
+        assert_eq!("100.0 MB", output_byte.to_string());
+
+        count.add((0.5 * MB as f64) as usize);
+        assert_eq!("100.5 MB", output_byte.to_string());
+    }
+
+    #[test]
     fn test_display_spilled_bytes() {
         let count = Count::new();
         let spilled_byte = MetricValue::SpilledBytes(count.clone());
