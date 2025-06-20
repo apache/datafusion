@@ -280,7 +280,7 @@ physical_plan
 06)┌─────────────┴─────────────┐
 07)│       DataSourceExec      │
 08)│    --------------------   │
-09)│        bytes: 1072        │
+09)│        bytes: 1040        │
 10)│       format: memory      │
 11)│          rows: 2          │
 12)└───────────────────────────┘
@@ -360,7 +360,7 @@ physical_plan
 21)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 22)│       DataSourceExec      ││       ProjectionExec      │
 23)│    --------------------   ││    --------------------   │
-24)│         bytes: 536        ││     date_col: date_col    │
+24)│         bytes: 520        ││     date_col: date_col    │
 25)│       format: memory      ││      int_col: int_col     │
 26)│          rows: 1          ││                           │
 27)│                           ││        string_col:        │
@@ -655,7 +655,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│       DataSourceExec      │
 15)│    --------------------   │
-16)│         bytes: 536        │
+16)│         bytes: 520        │
 17)│       format: memory      │
 18)│          rows: 1          │
 19)└───────────────────────────┘
@@ -1041,7 +1041,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│       DataSourceExec      │
 15)│    --------------------   │
-16)│         bytes: 536        │
+16)│         bytes: 520        │
 17)│       format: memory      │
 18)│          rows: 1          │
 19)└───────────────────────────┘
