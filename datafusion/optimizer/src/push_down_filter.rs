@@ -785,7 +785,9 @@ impl OptimizerRule for PushDownFilter {
         let new_predicates = simplify_predicates(predicate)?;
         if old_predicate_len != new_predicates.len() {
             let Some(new_predicate) = conjunction(new_predicates) else {
-                return plan_err!("at least one expression exists");
+                // new_predicates is empty - remove the filter entirely
+                // Return the child plan without the filter
+                return Ok(Transformed::yes(Arc::unwrap_or_clone(filter.input)));
             };
             filter.predicate = new_predicate;
         }
