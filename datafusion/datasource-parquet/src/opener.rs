@@ -39,6 +39,7 @@ use datafusion_common::pruning::{
 };
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_datasource::PartitionedFile;
+use datafusion_physical_expr::utils::reassign_predicate_columns;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -119,7 +120,6 @@ impl FileOpener for ParquetOpener {
 
         let projected_schema =
             SchemaRef::from(self.logical_file_schema.project(&self.projection)?);
-        let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
         let schema_adapter = self
             .schema_adapter_factory
             .create(projected_schema, Arc::clone(&self.logical_file_schema));
@@ -260,7 +260,9 @@ impl FileOpener for ParquetOpener {
                         &partition_fields,
                     )
                     .map_err(ArrowError::from)
+                    .map(|p| reassign_predicate_columns(p, &physical_file_schema, false))
                 })
+                .transpose()?
                 .transpose()?;
 
             // Build predicates for this specific file
@@ -303,11 +305,9 @@ impl FileOpener for ParquetOpener {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
                     &physical_file_schema,
-                    &logical_file_schema,
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
-                    &schema_adapter_factory,
                 );
 
                 match row_filter {
