@@ -618,13 +618,16 @@ impl HashJoinExec {
             partition_mode,
             self.null_equality(),
         )?;
-        // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
+
+        // In case of Anti/Semi/Mark joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
             self.join_type(),
             JoinType::LeftSemi
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) || self.projection.is_some()
         {
             Ok(Arc::new(new_join))
@@ -3503,7 +3506,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::RightMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;
@@ -3547,7 +3550,7 @@ mod tests {
             Arc::clone(&right),
             on.clone(),
             &JoinType::RightMark,
-            false,
+            NullEquality::NullEqualsNothing,
             task_ctx,
         )
         .await?;

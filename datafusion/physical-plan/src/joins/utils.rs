@@ -297,7 +297,10 @@ pub fn build_join_schema(
     };
 
     let (schema1, schema2) = match join_type {
-        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
+        JoinType::Right
+        | JoinType::RightSemi
+        | JoinType::RightAnti
+        | JoinType::RightMark => (left, right),
         _ => (right, left),
     };
 
@@ -1496,6 +1499,10 @@ pub(super) fn swap_join_projection(
         | JoinType::RightAnti
         | JoinType::RightSemi => projection.cloned(),
 
+        | JoinType::RightSemi
+        | JoinType::LeftMark
+        | JoinType::RightMark => projection.cloned(),
+        // For everything else we need to shift the column indices
         _ => projection.map(|p| {
             p.iter()
                 .map(|i| {

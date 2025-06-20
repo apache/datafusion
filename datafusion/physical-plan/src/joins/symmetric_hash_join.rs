@@ -1003,6 +1003,7 @@ pub(crate) fn join_with_probe_batch(
             | JoinType::LeftSemi
             | JoinType::LeftMark
             | JoinType::RightSemi
+            | JoinType::RightMark
     ) {
         Ok(None)
     } else {
@@ -1844,6 +1845,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1932,6 +1934,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2000,6 +2003,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2053,6 +2057,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2081,6 +2086,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2465,6 +2471,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2551,6 +2558,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2629,6 +2637,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
