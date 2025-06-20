@@ -28,7 +28,9 @@ pub struct QueryBuilder {
     with: Option<ast::With>,
     body: Option<Box<ast::SetExpr>>,
     order_by_kind: Option<OrderByKind>,
-    limit_clause: Option<LimitClause>,
+    limit: Option<ast::Expr>,
+    limit_by: Vec<ast::Expr>,
+    offset: Option<ast::Offset>,
     fetch: Option<ast::Fetch>,
     locks: Vec<ast::LockClause>,
     for_clause: Option<ast::ForClause>,
@@ -53,8 +55,16 @@ impl QueryBuilder {
         self.order_by_kind = Some(value);
         self
     }
-    pub fn limit_clause(&mut self, value: LimitClause) -> &mut Self {
-        self.limit_clause = Some(value);
+    pub fn limit(&mut self, value: Option<ast::Expr>) -> &mut Self {
+        self.limit = value;
+        self
+    }
+    pub fn limit_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
+        self.limit_by = value;
+        self
+    }
+    pub fn offset(&mut self, value: Option<ast::Offset>) -> &mut Self {
+        self.offset = value;
         self
     }
     pub fn fetch(&mut self, value: Option<ast::Fetch>) -> &mut Self {
@@ -92,7 +102,11 @@ impl QueryBuilder {
                 None => return Err(Into::into(UninitializedFieldError::from("body"))),
             },
             order_by,
-            limit_clause: self.limit_clause.clone(),
+            limit_clause: Some(LimitClause::LimitOffset {
+                limit: self.limit.clone(),
+                offset: self.offset.clone(),
+                limit_by: self.limit_by.clone(),
+            }),
             fetch: self.fetch.clone(),
             locks: self.locks.clone(),
             for_clause: self.for_clause.clone(),
@@ -105,7 +119,9 @@ impl QueryBuilder {
             with: Default::default(),
             body: Default::default(),
             order_by_kind: Default::default(),
-            limit_clause: Default::default(),
+            limit: Default::default(),
+            limit_by: Default::default(),
+            offset: Default::default(),
             fetch: Default::default(),
             locks: Default::default(),
             for_clause: Default::default(),

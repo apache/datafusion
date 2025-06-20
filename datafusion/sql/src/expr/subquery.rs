@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::unparser::ast::QueryBuilder;
 use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
@@ -68,17 +69,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        let query = Query {
-            with: None,
-            body: Box::new(subquery),
-            order_by: None,
-            limit_clause: None,
-            fetch: None,
-            locks: vec![],
-            for_clause: None,
-            settings: None,
-            format_clause: None,
-        };
+        let query = QueryBuilder::default().body(Box::new(subquery)).build()?;
         let sub_plan = self.query_to_plan(query, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
