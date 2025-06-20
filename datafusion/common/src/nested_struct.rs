@@ -145,7 +145,7 @@ pub fn cast_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayR
 /// * `Err(DataFusionError)` with detailed error message if incompatible
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// // Compatible: source has extra field, target has missing field
 /// // Source: {a: i32, b: string, c: f64}  
 /// // Target: {a: i64, d: bool}
