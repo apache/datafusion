@@ -171,7 +171,7 @@ pub struct WindowPhysicalExpressions {
 }
 
 /// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
-pub trait : WindowExpr {
+pub trait AggregateWindowExpr: WindowExpr {
     /// Get the accumulator for the window expression. Note that distinct
     /// window expressions may return distinct accumulators; e.g. sliding
     /// (non-sliding) expressions will return sliding (normal) accumulators.
