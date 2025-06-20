@@ -277,6 +277,11 @@ pub trait AggregateWindowExpr: WindowExpr {
         let values = self.evaluate_args(record_batch)?;
 
         if self.is_constant_in_partition() {
+            if not_end {
+                let field = self.field()?;
+                let out_type = field.data_type();
+                return Ok(new_empty_array(out_type));
+            }
             accumulator.update_batch(&values)?;
             let value = accumulator.evaluate()?;
             return value.to_array_of_size(record_batch.num_rows());
