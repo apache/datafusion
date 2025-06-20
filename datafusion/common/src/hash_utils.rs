@@ -195,17 +195,17 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     // Hash each dictionary value once, and then use that computed
     // hash for each key value to avoid a potentially expensive
     // redundant hashing for large dictionary elements (e.g. strings)
-    let values = Arc::clone(array.values());
-    let mut dict_hashes = vec![0; values.len()];
-    create_hashes(&[values], random_state, &mut dict_hashes)?;
+    let dict_values = Arc::clone(array.values());
+    let mut dict_hashes = vec![0; dict_values.len()];
+    create_hashes(&[dict_values], random_state, &mut dict_hashes)?;
 
     // combine hash for each index in values
-    let values = array.values();
+    let dict_values = array.values();
     if multi_col {
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
             if let Some(key) = key {
                 let idx = key.as_usize();
-                if values.is_valid(idx) {
+                if dict_values.is_valid(idx) {
                     *hash = combine_hashes(dict_hashes[idx], *hash)
                 }
             } // no update for Null key or dictionary value
@@ -214,7 +214,7 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
             if let Some(key) = key {
                 let idx = key.as_usize();
-                if values.is_valid(idx) {
+                if dict_values.is_valid(idx) {
                     *hash = dict_hashes[idx]
                 }
             } // no update for Null key or dictionary value
