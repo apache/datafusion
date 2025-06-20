@@ -23,6 +23,7 @@ use crate::filter_pushdown::{
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
+pub use crate::work_table::WorkTable;
 
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
@@ -569,6 +570,24 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(FilterPushdownPropagation::transparent(
             child_pushdown_result,
         ))
+    }
+
+    /// Returns a new execution plan that uses the provided work table, if supported.
+    /// This enables recursive query execution by allowing work table injection.
+    ///
+    /// Primarily implemented by [`WorkTableExec`], but custom execution nodes that wrap
+    /// or contain `WorkTableExec` instances should also implement this to propagate
+    /// work table injection to their inner components.
+    ///
+    /// See [`WorkTableExec::with_work_table`] for the reference implementation.
+    ///
+    /// [`WorkTableExec`]: crate::work_table::WorkTableExec
+    /// [`WorkTableExec::with_work_table`]: crate::work_table::WorkTableExec::with_work_table
+    fn with_work_table(
+        &self,
+        _work_table: Arc<WorkTable>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        None
     }
 }
 

@@ -57,7 +57,7 @@ impl ReservedBatches {
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
 /// This table serves as a mirror or buffer between each iteration of a recursive query.
 #[derive(Debug)]
-pub(super) struct WorkTable {
+pub struct WorkTable {
     batches: Mutex<Option<ReservedBatches>>,
 }
 
@@ -132,16 +132,6 @@ impl WorkTableExec {
         Arc::clone(&self.schema)
     }
 
-    pub(super) fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
-        Self {
-            name: self.name.clone(),
-            schema: Arc::clone(&self.schema),
-            metrics: ExecutionPlanMetricsSet::new(),
-            work_table,
-            cache: self.cache.clone(),
-        }
-    }
-
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         PlanProperties::new(
@@ -184,16 +174,16 @@ impl ExecutionPlan for WorkTableExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![false]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
     }
 
     fn with_new_children(
@@ -233,6 +223,22 @@ impl ExecutionPlan for WorkTableExec {
 
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    /// Creates a new `WorkTableExec` with the provided work table for recursive query execution.
+    /// During query planning, `WorkTableExec` nodes are created as placeholders; this method
+    /// "wires up" the actual work table that coordinates data between recursive iterations.
+    fn with_work_table(
+        &self,
+        work_table: Arc<WorkTable>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(Self {
+            name: self.name.clone(),
+            schema: Arc::clone(&self.schema),
+            metrics: ExecutionPlanMetricsSet::new(),
+            work_table,
+            cache: self.cache.clone(),
+        }))
     }
 }
 
