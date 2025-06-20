@@ -941,7 +941,11 @@ impl OptimizerRule for PushDownFilter {
                 let group_expr_columns = agg
                     .group_expr
                     .iter()
-                    .map(|e| Ok(Column::from_qualified_name(e.schema_name().to_string())))
+                    .map(|e| {
+                        Ok(Column::from_qualified_name_ignore_case(
+                            e.schema_name().to_string(),
+                        ))
+                    })
                     .collect::<Result<HashSet<_>>>()?;
 
                 let predicates = split_conjunction_owned(filter.predicate);
@@ -4120,6 +4124,36 @@ mod tests {
             @r"
         Filter: Boolean(false)
           TestUserNode
+        "
+        )
+    }
+
+    /// Create a test table scan with uppercase column names for case sensitivity testing
+    fn test_table_scan_with_uppercase_columns() -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("A", DataType::UInt32, false),
+            Field::new("B", DataType::UInt32, false),
+            Field::new("C", DataType::UInt32, false),
+        ]);
+        table_scan(Some("test"), &schema, None)?.build()
+    }
+
+    #[test]
+    fn filter_agg_case_insensitive() -> Result<()> {
+        let table_scan = test_table_scan_with_uppercase_columns()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col(r#""A""#)],
+                vec![sum(col(r#""B""#)).alias("total_salary")],
+            )?
+            .filter(col(r#""A""#).gt(lit(10i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.A]], aggr=[[sum(test.B) AS total_salary]]
+          TableScan: test, full_filters=[test.A > Int64(10)]
         "
         )
     }
