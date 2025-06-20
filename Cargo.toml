@@ -98,6 +98,7 @@ arrow-flight = { version = "55.1.0", features = [
 ] }
 arrow-ipc = { version = "55.0.0", default-features = false, features = [
     "lz4",
+    "zstd",
 ] }
 arrow-ord = { version = "55.0.0", default-features = false }
 arrow-schema = { version = "55.0.0", default-features = false }
@@ -167,7 +168,7 @@ recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.25.0"
 serde_json = "1"
-sqlparser = { version = "0.55.0", features = ["visitor"] }
+sqlparser = { version = "0.55.0", default-features = false, features = ["std", "visitor"] }
 tempfile = "3"
 tokio = { version = "1.45", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
