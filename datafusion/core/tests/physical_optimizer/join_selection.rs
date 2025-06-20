@@ -635,7 +635,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     case::left_mark(JoinType::LeftMark),
     case::right_semi(JoinType::RightSemi),
     case::right_anti(JoinType::RightAnti),
-    case::right_mark(JoinType::RightMark),
+    case::right_mark(JoinType::RightMark)
 )]
 #[tokio::test]
 async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
