@@ -271,7 +271,7 @@ impl TestData {
 /// run_complete_snapshot_test(&test_data, "SELECT * FROM t", @"expected output").await?;
 ///
 /// // Multiple tests with different data
-/// let results = run_snapshot_test(&test_data, "SELECT * FROM t", false).await?;
+/// let results = run_snapshot_test(&test_data, "SELECT * FROM t").await?;
 /// assert_snapshot!(batches_to_string(&results), @"expected");
 /// ```
 async fn setup_test_contexts(
@@ -788,7 +788,7 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
 
     // Test COUNT null exclusion with basic data
     let sql_count = "SELECT dict_null_keys, COUNT(value) as cnt FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
-    let results_count = run_snapshot_test(&test_data_basic, sql_count, false).await?;
+    let results_count = run_snapshot_test(&test_data_basic, sql_count).await?;
 
     assert_snapshot!(
         batches_to_string(&results_count),
@@ -805,7 +805,7 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
 
     // Test SUM null handling with extended data
     let sql_sum = "SELECT dict_null_vals, SUM(value) as total FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
-    let results_sum = run_snapshot_test(&test_data_extended, sql_sum, false).await?;
+    let results_sum = run_snapshot_test(&test_data_extended, sql_sum).await?;
 
     assert_snapshot!(
         batches_to_string(&results_sum),
@@ -823,7 +823,7 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
 
     // Test MIN null handling with min/max data
     let sql_min = "SELECT dict_null_keys, MIN(value) as minimum FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
-    let results_min = run_snapshot_test(&test_data_min_max, sql_min, false).await?;
+    let results_min = run_snapshot_test(&test_data_min_max, sql_min).await?;
 
     assert_snapshot!(
         batches_to_string(&results_min),
@@ -841,7 +841,7 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
 
     // Test MEDIAN null handling with median data
     let sql_median = "SELECT dict_null_vals, MEDIAN(value) as median_value FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
-    let results_median = run_snapshot_test(&test_data_median, sql_median, false).await?;
+    let results_median = run_snapshot_test(&test_data_median, sql_median).await?;
 
     assert_snapshot!(
         batches_to_string(&results_median),
@@ -867,7 +867,7 @@ async fn test_first_last_val_null_handling() -> Result<()> {
     // Test FIRST_VALUE and LAST_VALUE with window functions over groups
     let sql = "SELECT dict_null_keys, value, FIRST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST) as first_val, LAST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_val FROM t ORDER BY dict_null_keys NULLS FIRST, value NULLS FIRST";
 
-    let results_single = run_snapshot_test(&test_data, sql, false).await?;
+    let results_single = run_snapshot_test(&test_data, sql).await?;
 
     assert_snapshot!(batches_to_string(&results_single), @r"
     +----------------+-------+-----------+----------+
@@ -1729,54 +1729,10 @@ async fn test_median_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
 
 /// Helper function to run snapshot tests with consistent setup, execution, and assertion
 /// This reduces the repetitive pattern of "setup data → SQL → assert_snapshot!"
-async fn run_snapshot_test(
-    test_data: &TestData,
-    sql: &str,
-    _use_sorted_output: bool,
-) -> Result<Vec<RecordBatch>> {
+async fn run_snapshot_test(test_data: &TestData, sql: &str) -> Result<Vec<RecordBatch>> {
     let (ctx_single, ctx_multi) = setup_test_contexts(test_data).await?;
     let results = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
     Ok(results)
-}
-
-/// Helper function for simpler snapshot tests that only need single-partition execution
-#[allow(dead_code)]
-async fn run_simple_snapshot_test(
-    ctx: &SessionContext,
-    sql: &str,
-) -> Result<Vec<RecordBatch>> {
-    let df = ctx.sql(sql).await?;
-    let results = df.collect().await?;
-    Ok(results)
-}
-
-/// Helper function to run a complete snapshot test with TestData
-/// This fully encapsulates the "setup data → SQL → assert_snapshot!" pattern
-#[allow(dead_code)]
-async fn run_complete_snapshot_test(
-    test_data: &TestData,
-    sql: &str,
-    expected_snapshot: &str,
-) -> Result<()> {
-    let results = run_snapshot_test(test_data, sql, false).await?;
-
-    assert_snapshot!(batches_to_string(&results), expected_snapshot);
-
-    Ok(())
-}
-
-/// Helper function to run a complete snapshot test with sorted output
-#[allow(dead_code)]
-async fn run_complete_sorted_snapshot_test(
-    test_data: &TestData,
-    sql: &str,
-    expected_snapshot: &str,
-) -> Result<()> {
-    let results = run_snapshot_test(test_data, sql, true).await?;
-
-    assert_snapshot!(batches_to_sort_string(&results), expected_snapshot);
-
-    Ok(())
 }
 
 /// Test data structure for fuzz table with timestamp and dictionary columns containing nulls
