@@ -184,6 +184,26 @@ fn hash_array<T>(
     }
 }
 
+/// Helper function to update hash for a dictionary key if the value is valid
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline]
+fn update_hash_for_dict_key(
+    hash: &mut u64,
+    dict_hashes: &[u64],
+    dict_values: &dyn Array,
+    idx: usize,
+    multi_col: bool,
+) {
+    if dict_values.is_valid(idx) {
+        if multi_col {
+            *hash = combine_hashes(dict_hashes[idx], *hash);
+        } else {
+            *hash = dict_hashes[idx];
+        }
+    }
+    // no update for invalid dictionary value
+}
+
 /// Hash the values in a dictionary array
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_dictionary<K: ArrowDictionaryKeyType>(
@@ -201,24 +221,17 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
 
     // combine hash for each index in values
     let dict_values = array.values();
-    if multi_col {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-            if let Some(key) = key {
-                let idx = key.as_usize();
-                if dict_values.is_valid(idx) {
-                    *hash = combine_hashes(dict_hashes[idx], *hash)
-                }
-            } // no update for Null key or dictionary value
-        }
-    } else {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-            if let Some(key) = key {
-                let idx = key.as_usize();
-                if dict_values.is_valid(idx) {
-                    *hash = dict_hashes[idx]
-                }
-            } // no update for Null key or dictionary value
-        }
+    for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
+        if let Some(key) = key {
+            let idx = key.as_usize();
+            update_hash_for_dict_key(
+                hash,
+                &dict_hashes,
+                dict_values.as_ref(),
+                idx,
+                multi_col,
+            );
+        } // no update for Null key
     }
     Ok(())
 }
