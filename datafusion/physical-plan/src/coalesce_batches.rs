@@ -37,8 +37,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use crate::coalesce::{BatchCoalescer, CoalescerState};
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
 };
 use datafusion_common::config::ConfigOptions;
 use futures::ready;
@@ -230,7 +229,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn gather_filters_for_pushdown(
         &self,
-        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -240,7 +238,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn handle_child_pushdown_result(
         &self,
-        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {

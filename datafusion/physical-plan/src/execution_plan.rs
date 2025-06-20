@@ -17,8 +17,7 @@
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -510,13 +509,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// The default implementation bars all parent filters from being pushed down and adds no new filters.
     /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
-    ///
-    /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
-    /// Depending on the phase the operator may or may not be allowed to modify the plan.
-    /// See [`FilterPushdownPhase`] for more details.
     fn gather_filters_for_pushdown(
         &self,
-        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -554,15 +548,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///   This can be used alongside [`FilterPushdownPropagation::with_filters`] and [`FilterPushdownPropagation::with_updated_node`]
     ///   to dynamically build a result with a mix of supported and unsupported filters.
     ///
-    /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
-    /// Depending on the phase the operator may or may not be allowed to modify the plan.
-    /// See [`FilterPushdownPhase`] for more details.
-    ///
     /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
     /// [`PredicateSupports::new_with_supported_check`]: crate::filter_pushdown::PredicateSupports::new_with_supported_check
     fn handle_child_pushdown_result(
         &self,
-        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
