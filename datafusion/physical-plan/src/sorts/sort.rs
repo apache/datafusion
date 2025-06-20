@@ -711,7 +711,7 @@ impl ExternalSorter {
 
             let sorted = sort_batch(&batch, &expressions, None)?;
 
-            metrics.record_output(sorted.num_rows());
+            metrics.record_output(sorted.num_rows(), get_record_batch_memory_size(&sorted));
             drop(batch);
             drop(reservation);
             Ok(sorted)

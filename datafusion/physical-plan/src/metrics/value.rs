@@ -348,6 +348,8 @@ impl Drop for ScopedTimerGuard<'_> {
 pub enum MetricValue {
     /// Number of output rows produced: "output_rows" metric
     OutputRows(Count),
+    /// Number of output bytes produced: "output_bytes" metric
+    OutputBytes(Count),
     /// Elapsed Compute Time: the wall clock time spent in "cpu
     /// intensive" work.
     ///
@@ -417,6 +419,9 @@ impl PartialEq for MetricValue {
             (MetricValue::OutputRows(count), MetricValue::OutputRows(other)) => {
                 count == other
             }
+            (MetricValue::OutputBytes(count), MetricValue::OutputBytes(other)) => {
+                count == other
+            }
             (MetricValue::ElapsedCompute(time), MetricValue::ElapsedCompute(other)) => {
                 time == other
             }
@@ -480,6 +485,7 @@ impl MetricValue {
     pub fn name(&self) -> &str {
         match self {
             Self::OutputRows(_) => "output_rows",
+            Self::OutputBytes(_) => "output_bytes",
             Self::SpillCount(_) => "spill_count",
             Self::SpilledBytes(_) => "spilled_bytes",
             Self::SpilledRows(_) => "spilled_rows",
@@ -498,6 +504,7 @@ impl MetricValue {
     pub fn as_usize(&self) -> usize {
         match self {
             Self::OutputRows(count) => count.value(),
+            Self::OutputBytes(bytes) => bytes.value(),
             Self::SpillCount(count) => count.value(),
             Self::SpilledBytes(bytes) => bytes.value(),
             Self::SpilledRows(count) => count.value(),
@@ -525,6 +532,7 @@ impl MetricValue {
     pub fn new_empty(&self) -> Self {
         match self {
             Self::OutputRows(_) => Self::OutputRows(Count::new()),
+            Self::OutputBytes(_) => Self::OutputBytes(Count::new()),
             Self::SpillCount(_) => Self::SpillCount(Count::new()),
             Self::SpilledBytes(_) => Self::SpilledBytes(Count::new()),
             Self::SpilledRows(_) => Self::SpilledRows(Count::new()),
@@ -563,6 +571,7 @@ impl MetricValue {
     pub fn aggregate(&mut self, other: &Self) {
         match (self, other) {
             (Self::OutputRows(count), Self::OutputRows(other_count))
+            | (Self::OutputBytes(count), Self::OutputBytes(other_count))
             | (Self::SpillCount(count), Self::SpillCount(other_count))
             | (Self::SpilledBytes(count), Self::SpilledBytes(other_count))
             | (Self::SpilledRows(count), Self::SpilledRows(other_count))
@@ -615,18 +624,19 @@ impl MetricValue {
     /// numbers are "more useful" (and displayed first)
     pub fn display_sort_key(&self) -> u8 {
         match self {
-            Self::OutputRows(_) => 0,     // show first
-            Self::ElapsedCompute(_) => 1, // show second
-            Self::SpillCount(_) => 2,
-            Self::SpilledBytes(_) => 3,
-            Self::SpilledRows(_) => 4,
-            Self::CurrentMemoryUsage(_) => 5,
-            Self::Count { .. } => 6,
-            Self::Gauge { .. } => 7,
-            Self::Time { .. } => 8,
-            Self::StartTimestamp(_) => 9, // show timestamps last
-            Self::EndTimestamp(_) => 10,
-            Self::Custom { .. } => 11,
+            Self::OutputRows(_) => 0,      // show first
+            Self::ElapsedCompute(_) => 1,  // show second
+            Self::OutputBytes(_) => 2,
+            Self::SpillCount(_) => 3,
+            Self::SpilledBytes(_) => 4,
+            Self::SpilledRows(_) => 5,
+            Self::CurrentMemoryUsage(_) => 6,
+            Self::Count { .. } => 7,
+            Self::Gauge { .. } => 8,
+            Self::Time { .. } => 9,
+            Self::StartTimestamp(_) => 10, // show timestamps last
+            Self::EndTimestamp(_) => 11,
+            Self::Custom { .. } => 12,
         }
     }
 
@@ -646,7 +656,7 @@ impl Display for MetricValue {
             | Self::Count { count, .. } => {
                 write!(f, "{count}")
             }
-            Self::SpilledBytes(count) => {
+            Self::OutputBytes(count) | Self::SpilledBytes(count) => {
                 let readable_count = human_readable_size(count.value());
                 write!(f, "{readable_count}")
             }

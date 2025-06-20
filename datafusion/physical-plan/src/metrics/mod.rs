@@ -257,6 +257,7 @@ impl MetricsSet {
             MetricValue::Count { name, .. } => name == metric_name,
             MetricValue::Time { name, .. } => name == metric_name,
             MetricValue::OutputRows(_) => false,
+            MetricValue::OutputBytes(_) => false,
             MetricValue::ElapsedCompute(_) => false,
             MetricValue::SpillCount(_) => false,
             MetricValue::SpilledBytes(_) => false,
