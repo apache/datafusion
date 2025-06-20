@@ -1497,8 +1497,6 @@ pub(super) fn swap_join_projection(
         JoinType::LeftAnti
         | JoinType::LeftSemi
         | JoinType::RightAnti
-        | JoinType::RightSemi => projection.cloned(),
-
         | JoinType::RightSemi
         | JoinType::LeftMark
         | JoinType::RightMark => projection.cloned(),
