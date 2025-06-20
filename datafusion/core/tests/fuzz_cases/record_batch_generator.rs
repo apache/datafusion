@@ -724,7 +724,7 @@ impl RecordBatchGenerator {
             {
                 // We generate just num_distinct values because they will be reused by different keys
                 let mut array_gen_rng = array_gen_rng;
-
+                debug_assert!(null_pct >= 0.0 && null_pct <= 1.0);
                 let values = Self::generate_array_of_type_inner(
                     &ColumnDescr::new("values", *value_type.clone()),
                     num_distinct,
