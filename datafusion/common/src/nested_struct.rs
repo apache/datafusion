@@ -15,14 +15,40 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use arrow::{
     array::{new_null_array, Array, ArrayRef, StructArray},
     compute::cast,
-    datatypes::{DataType::Struct, Field},
+    datatypes::{DataType, DataType::Struct, Field},
 };
 use std::sync::Arc;
-/// Adapt a struct column to match the target field type, handling nested structs recursively
+
+/// Cast a struct column to match target struct fields, handling nested structs recursively.
+/// 
+/// This function implements struct-to-struct casting with the assumption that **structs should
+/// always be allowed to cast to other structs**. However, the source column must already be
+/// a struct type - non-struct sources will result in an error.
+/// 
+/// ## Field Matching Strategy
+/// - **By Name**: Source struct fields are matched to target fields by name (case-sensitive)
+/// - **Type Adaptation**: When a matching field is found, it is recursively cast to the target field's type
+/// - **Missing Fields**: Target fields not present in the source are filled with null values
+/// - **Extra Fields**: Source fields not present in the target are ignored
+/// 
+/// ## Nested Struct Handling
+/// - Nested structs are handled recursively using the same casting rules
+/// - Each level of nesting follows the same field matching and null-filling strategy
+/// - This allows for complex struct transformations while maintaining data integrity
+/// 
+/// # Arguments
+/// * `source_col` - The source array to cast (must be a struct array)
+/// * `target_fields` - The target struct field definitions to cast to
+/// 
+/// # Returns
+/// A `Result<ArrayRef>` containing the cast struct array
+/// 
+/// # Errors
+/// Returns a `DataFusionError::Plan` if the source column is not a struct type
 fn cast_struct_column(
     source_col: &ArrayRef,
     target_fields: &[Arc<Field>],
@@ -51,15 +77,43 @@ fn cast_struct_column(
         let struct_array = StructArray::from(children);
         Ok(Arc::new(struct_array))
     } else {
-        // If source is not a struct, return null array with target struct type
-        Ok(new_null_array(
-            &Struct(target_fields.to_vec().into()),
-            source_col.len(),
-        ))
+        // Return error if source is not a struct type
+        Err(DataFusionError::Plan(format!(
+            "Cannot cast column of type {:?} to struct type. Source must be a struct to cast to struct.",
+            source_col.data_type()
+        )))
     }
 }
 
-/// Adapt a column to match the target field type, handling nested structs specially
+/// Cast a column to match the target field type, with special handling for nested structs.
+/// 
+/// This function serves as the main entry point for column casting operations. For struct
+/// types, it enforces that **only struct columns can be cast to struct types**.
+/// 
+/// ## Casting Behavior
+/// - **Struct Types**: Delegates to `cast_struct_column` for struct-to-struct casting only
+/// - **Non-Struct Types**: Uses Arrow's standard `cast` function for primitive type conversions
+/// 
+/// ## Struct Casting Requirements
+/// The struct casting logic requires that the source column must already be a struct type.
+/// This makes the function useful for:
+/// - Schema evolution scenarios where struct layouts change over time
+/// - Data migration between different struct schemas  
+/// - Type-safe data processing pipelines that maintain struct type integrity
+/// 
+/// # Arguments
+/// * `source_col` - The source array to cast
+/// * `target_field` - The target field definition (including type and metadata)
+/// 
+/// # Returns
+/// A `Result<ArrayRef>` containing the cast array
+/// 
+/// # Errors
+/// Returns an error if:
+/// - Attempting to cast a non-struct column to a struct type
+/// - Arrow's cast function fails for non-struct types
+/// - Memory allocation fails during struct construction
+/// - Invalid data type combinations are encountered
 pub fn cast_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
     match target_field.data_type() {
         Struct(target_fields) => cast_struct_column(source_col, target_fields),
@@ -141,10 +195,11 @@ mod tests {
             true,
         );
 
-        let result = cast_column(&source, &target_field).unwrap();
-        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
-        assert_eq!(struct_array.len(), 2);
-        let a_result = get_column_as!(&struct_array, "a", Int32Array);
-        assert_eq!(a_result.null_count(), 2);
+        let result = cast_column(&source, &target_field);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Cannot cast column of type"));
+        assert!(error_msg.contains("to struct type"));
+        assert!(error_msg.contains("Source must be a struct"));
     }
 }
