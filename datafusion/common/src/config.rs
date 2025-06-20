@@ -344,7 +344,7 @@ config_namespace! {
         /// When sorting, below what size should data be concatenated
         /// and sorted in a single RecordBatch rather than sorted in
         /// batches and merged.
-        pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
+        pub sort_in_place_threshold_bytes: usize, default = 3 * 1024 * 1024
 
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
