@@ -67,6 +67,7 @@ impl InProgressSpillFile {
                 self.writer = Some(IPCStreamWriter::new(
                     in_progress_file.path(),
                     schema.as_ref(),
+                    self.spill_writer.compression,
                 )?);
 
                 // Update metrics

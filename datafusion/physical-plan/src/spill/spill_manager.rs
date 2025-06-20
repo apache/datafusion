@@ -23,7 +23,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_execution::runtime_env::RuntimeEnv;
 
-use datafusion_common::Result;
+use datafusion_common::{config::SpillCompression, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::SendableRecordBatchStream;
 
@@ -44,7 +44,8 @@ pub struct SpillManager {
     schema: SchemaRef,
     /// Number of batches to buffer in memory during disk reads
     batch_read_buffer_capacity: usize,
-    // TODO: Add general-purpose compression options
+    /// general-purpose compression options
+    pub(crate) compression: SpillCompression,
 }
 
 impl SpillManager {
@@ -54,7 +55,13 @@ impl SpillManager {
             metrics,
             schema,
             batch_read_buffer_capacity: 2,
+            compression: SpillCompression::default(),
         }
+    }
+
+    pub fn with_compression_type(mut self, spill_compression: SpillCompression) -> Self {
+        self.compression = spill_compression;
+        self
     }
 
     /// Creates a temporary file for in-progress operations, returning an error

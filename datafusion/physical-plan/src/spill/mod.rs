@@ -30,9 +30,14 @@ use std::task::{Context, Poll};
 
 use arrow::array::ArrayData;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
+use arrow::ipc::{
+    reader::StreamReader,
+    writer::{IpcWriteOptions, StreamWriter},
+    MetadataVersion,
+};
 use arrow::record_batch::RecordBatch;
 
+use datafusion_common::config::SpillCompression;
 use datafusion_common::{exec_datafusion_err, DataFusionError, HashSet, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -194,7 +199,8 @@ pub fn spill_record_batch_by_size(
 ) -> Result<()> {
     let mut offset = 0;
     let total_rows = batch.num_rows();
-    let mut writer = IPCStreamWriter::new(&path, schema.as_ref())?;
+    let mut writer =
+        IPCStreamWriter::new(&path, schema.as_ref(), SpillCompression::Uncompressed)?;
 
     while offset < total_rows {
         let length = std::cmp::min(total_rows - offset, batch_size_rows);
@@ -292,15 +298,27 @@ struct IPCStreamWriter {
 
 impl IPCStreamWriter {
     /// Create new writer
-    pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
+    pub fn new(
+        path: &Path,
+        schema: &Schema,
+        compression_type: SpillCompression,
+    ) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
             exec_datafusion_err!("Failed to create partition file at {path:?}: {e:?}")
         })?;
+
+        let metadata_version = MetadataVersion::V5;
+        let alignment = 8;
+        let mut write_options =
+            IpcWriteOptions::try_new(alignment, false, metadata_version)?;
+        write_options = write_options.try_with_compression(compression_type.into())?;
+
+        let writer = StreamWriter::try_new_with_options(file, schema, write_options)?;
         Ok(Self {
             num_batches: 0,
             num_rows: 0,
             num_bytes: 0,
-            writer: StreamWriter::try_new(file, schema)?,
+            writer,
         })
     }
 
@@ -332,7 +350,7 @@ mod tests {
     use crate::metrics::SpillMetrics;
     use crate::spill::spill_manager::SpillManager;
     use crate::test::build_table_i32;
-    use arrow::array::{Float64Array, Int32Array, ListArray, StringArray};
+    use arrow::array::{ArrayRef, Float64Array, Int32Array, ListArray, StringArray};
     use arrow::compute::cast;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
@@ -467,6 +485,113 @@ mod tests {
         let batches = collect(stream).await?;
         assert_eq!(batches.len(), 4);
 
+        Ok(())
+    }
+
+    fn build_compressible_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, true),
+        ]));
+
+        let a: ArrayRef = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+            "repeated", 100,
+        )));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![1; 100]));
+        let c: ArrayRef = Arc::new(Int32Array::from(vec![2; 100]));
+
+        RecordBatch::try_new(schema, vec![a, b, c]).unwrap()
+    }
+
+    async fn validate(
+        spill_manager: &SpillManager,
+        spill_file: RefCountedTempFile,
+        num_rows: usize,
+        schema: SchemaRef,
+        batch_count: usize,
+    ) -> Result<()> {
+        let spilled_rows = spill_manager.metrics.spilled_rows.value();
+        assert_eq!(spilled_rows, num_rows);
+
+        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        assert_eq!(stream.schema(), schema);
+
+        let batches = collect(stream).await?;
+        assert_eq!(batches.len(), batch_count);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_compression() -> Result<()> {
+        let batch = build_compressible_batch();
+        let num_rows = batch.num_rows();
+        let schema = batch.schema();
+        let batch_count = 1;
+        let batches = [batch];
+
+        // Construct SpillManager
+        let env = Arc::new(RuntimeEnv::default());
+        let uncompressed_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let lz4_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let zstd_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let uncompressed_spill_manager = SpillManager::new(
+            Arc::clone(&env),
+            uncompressed_metrics,
+            Arc::clone(&schema),
+        );
+        let lz4_spill_manager =
+            SpillManager::new(Arc::clone(&env), lz4_metrics, Arc::clone(&schema))
+                .with_compression_type(SpillCompression::Lz4Frame);
+        let zstd_spill_manager =
+            SpillManager::new(env, zstd_metrics, Arc::clone(&schema))
+                .with_compression_type(SpillCompression::Zstd);
+        let uncompressed_spill_file = uncompressed_spill_manager
+            .spill_record_batch_and_finish(&batches, "Test")?
+            .unwrap();
+        let lz4_spill_file = lz4_spill_manager
+            .spill_record_batch_and_finish(&batches, "Lz4_Test")?
+            .unwrap();
+        let zstd_spill_file = zstd_spill_manager
+            .spill_record_batch_and_finish(&batches, "ZSTD_Test")?
+            .unwrap();
+        assert!(uncompressed_spill_file.path().exists());
+        assert!(lz4_spill_file.path().exists());
+        assert!(zstd_spill_file.path().exists());
+
+        let lz4_spill_size = std::fs::metadata(lz4_spill_file.path())?.len();
+        let zstd_spill_size = std::fs::metadata(zstd_spill_file.path())?.len();
+        let uncompressed_spill_size =
+            std::fs::metadata(uncompressed_spill_file.path())?.len();
+
+        assert!(uncompressed_spill_size > lz4_spill_size);
+        assert!(uncompressed_spill_size > zstd_spill_size);
+
+        validate(
+            &lz4_spill_manager,
+            lz4_spill_file,
+            num_rows,
+            Arc::clone(&schema),
+            batch_count,
+        )
+        .await?;
+        validate(
+            &zstd_spill_manager,
+            zstd_spill_file,
+            num_rows,
+            Arc::clone(&schema),
+            batch_count,
+        )
+        .await?;
+        validate(
+            &uncompressed_spill_manager,
+            uncompressed_spill_file,
+            num_rows,
+            schema,
+            batch_count,
+        )
+        .await?;
         Ok(())
     }
 
