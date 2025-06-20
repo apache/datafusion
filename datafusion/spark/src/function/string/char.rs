@@ -18,7 +18,7 @@
 use std::{any::Any, sync::Arc};
 
 use arrow::{
-    array::{ArrayRef, StringArray},
+    array::{ArrayRef, GenericStringBuilder},
     datatypes::{
         DataType,
         DataType::{Int64, Utf8},
@@ -106,25 +106,26 @@ fn spark_chr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = as_int64_array(&args[0])?;
 
-    // first map is the iterator, second is for the `Option<_>`
-    let result = integer_array
-        .iter()
-        .map(|integer: Option<i64>| {
-            integer
-                .map(|integer| {
-                    if integer < 0 {
-                        return Ok("".to_string()); // Return empty string for negative integers
-                    }
-                    match core::char::from_u32((integer % 256) as u32) {
-                        Some(ch) => Ok(ch.to_string()),
-                        None => {
-                            exec_err!("requested character not compatible for encoding.")
-                        }
-                    }
-                })
-                .transpose()
-        })
-        .collect::<Result<StringArray>>()?;
+    let mut builder = GenericStringBuilder::<i32>::with_capacity(
+        integer_array.len(),
+        integer_array.len(),
+    );
 
-    Ok(Arc::new(result) as ArrayRef)
+    for integer_opt in integer_array {
+        match integer_opt {
+            Some(integer) => {
+                if integer < 0 {
+                    builder.append_value(""); // empty string for negative numbers.
+                } else {
+                    match core::char::from_u32((integer % 256) as u32) {
+                        Some(ch) => builder.append_value(ch.to_string()),
+                        None => return exec_err!("requested character not compatible for encoding.")
+                    }
+                }
+            }
+            None => builder.append_null(),
+        }
+    }
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
