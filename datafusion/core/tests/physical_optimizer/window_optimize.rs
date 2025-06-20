@@ -32,6 +32,7 @@ mod test {
     use datafusion_physical_plan::{common, ExecutionPlan, InputOrderMode};
     use std::sync::Arc;
 
+    /// Test case for <https://github.com/apache/datafusion/issues/16308>
     #[tokio::test]
     async fn test_window_constant_aggregate() -> Result<()> {
         let source = mock_data()?;
