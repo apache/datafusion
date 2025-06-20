@@ -36,10 +36,9 @@ use datafusion_common::{
 };
 use datafusion_datasource::{
     compute_all_files_statistics,
-    file::FileSource,
     file_groups::FileGroup,
     file_scan_config::{FileScanConfig, FileScanConfigBuilder},
-    schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory},
+    schema_adapter::DefaultSchemaAdapterFactory,
 };
 use datafusion_execution::{
     cache::{cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache},
@@ -56,10 +55,9 @@ use object_store::ObjectStore;
 use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
 /// Indicates the source of the schema for a [`ListingTable`]
 // PartialEq required for assert_eq! in tests
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SchemaSource {
     /// Schema is not yet set (initial state)
-    #[default]
     None,
     /// Schema was inferred from first table_path
     Inferred,
@@ -70,7 +68,7 @@ pub enum SchemaSource {
 /// Configuration for creating a [`ListingTable`]
 ///
 ///
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
     /// They should share the same schema and object store.
@@ -85,16 +83,17 @@ pub struct ListingTableConfig {
     pub options: Option<ListingOptions>,
     /// Tracks the source of the schema information
     schema_source: SchemaSource,
-    /// Optional [`SchemaAdapterFactory`] for creating schema adapters
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl ListingTableConfig {
     /// Creates new [`ListingTableConfig`] for reading the specified URL
     pub fn new(table_path: ListingTableUrl) -> Self {
+        let table_paths = vec![table_path];
         Self {
-            table_paths: vec![table_path],
-            ..Default::default()
+            table_paths,
+            file_schema: None,
+            options: None,
+            schema_source: SchemaSource::None,
         }
     }
 
@@ -104,7 +103,9 @@ impl ListingTableConfig {
     pub fn new_with_multi_paths(table_paths: Vec<ListingTableUrl>) -> Self {
         Self {
             table_paths,
-            ..Default::default()
+            file_schema: None,
+            options: None,
+            schema_source: SchemaSource::None,
         }
     }
 
@@ -124,9 +125,10 @@ impl ListingTableConfig {
     /// without the table partitioning columns.
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
+            table_paths: self.table_paths,
             file_schema: Some(schema),
+            options: self.options,
             schema_source: SchemaSource::Specified,
-            ..self
         }
     }
 
@@ -136,8 +138,10 @@ impl ListingTableConfig {
     /// [`Self::infer_options`].
     pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
         Self {
+            table_paths: self.table_paths,
+            file_schema: self.file_schema,
             options: Some(listing_options),
-            ..self
+            schema_source: self.schema_source,
         }
     }
 
@@ -218,7 +222,6 @@ impl ListingTableConfig {
             file_schema: self.file_schema,
             options: Some(listing_options),
             schema_source: self.schema_source,
-            schema_adapter_factory: self.schema_adapter_factory,
         })
     }
 
@@ -237,7 +240,6 @@ impl ListingTableConfig {
                     file_schema,
                     options: _,
                     schema_source,
-                    schema_adapter_factory,
                 } = self;
 
                 let (schema, new_schema_source) = match file_schema {
@@ -259,7 +261,6 @@ impl ListingTableConfig {
                     file_schema: Some(schema),
                     options: Some(options),
                     schema_source: new_schema_source,
-                    schema_adapter_factory,
                 })
             }
             None => internal_err!("No `ListingOptions` set for inferring schema"),
@@ -301,33 +302,10 @@ impl ListingTableConfig {
                     file_schema: self.file_schema,
                     options: Some(options),
                     schema_source: self.schema_source,
-                    schema_adapter_factory: self.schema_adapter_factory,
                 })
             }
             None => config_err!("No `ListingOptions` set for inferring schema"),
         }
-    }
-
-    /// Set the [`SchemaAdapterFactory`] for the [`ListingTable`]
-    ///
-    /// The schema adapter factory is used to create schema adapters that can
-    /// handle schema evolution and type conversions when reading files with
-    /// different schemas than the table schema.
-    ///
-    /// If not provided, a default schema adapter factory will be used.
-    pub fn with_schema_adapter_factory(
-        self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self
-        }
-    }
-
-    /// Get the [`SchemaAdapterFactory`] for this configuration
-    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.as_ref()
     }
 }
 
@@ -823,8 +801,6 @@ pub struct ListingTable {
     collected_statistics: FileStatisticsCache,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
-    /// Optional [`SchemaAdapterFactory`] for creating schema adapters
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl ListingTable {
@@ -865,7 +841,6 @@ impl ListingTable {
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
-            schema_adapter_factory: config.schema_adapter_factory,
         };
 
         Ok(table)
@@ -917,50 +892,6 @@ impl ListingTable {
     /// Get the schema source
     pub fn schema_source(&self) -> SchemaSource {
         self.schema_source
-    }
-
-    /// Set the [`SchemaAdapterFactory`] for this [`ListingTable`]
-    ///
-    /// The schema adapter factory is used to create schema adapters that can
-    /// handle schema evolution and type conversions when reading files with
-    /// different schemas than the table schema.
-    pub fn with_schema_adapter_factory(
-        self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self
-        }
-    }
-
-    /// Get the [`SchemaAdapterFactory`] for this table
-    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.as_ref()
-    }
-
-    /// Creates a schema adapter for mapping between file and table schemas
-    ///
-    /// Uses the configured schema adapter factory if available, otherwise falls back
-    /// to the default implementation.
-    fn create_schema_adapter(&self) -> Box<dyn SchemaAdapter> {
-        let table_schema = self.schema();
-        match &self.schema_adapter_factory {
-            Some(factory) => {
-                factory.create(Arc::clone(&table_schema), Arc::clone(&table_schema))
-            }
-            None => DefaultSchemaAdapterFactory::from_schema(Arc::clone(&table_schema)),
-        }
-    }
-
-    /// Creates a file source and applies schema adapter factory if available
-    fn create_file_source_with_schema_adapter(&self) -> Result<Arc<dyn FileSource>> {
-        let mut source = self.options.format.file_source();
-        // Apply schema adapter to source if available
-        if let Some(factory) = &self.schema_adapter_factory {
-            source = source.with_schema_adapter_factory(Arc::clone(factory))?;
-        }
-        Ok(source)
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
@@ -1071,8 +1002,6 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
-        let file_source = self.create_file_source_with_schema_adapter()?;
-
         // create the execution plan
         self.options
             .format
@@ -1081,7 +1010,7 @@ impl TableProvider for ListingTable {
                 FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
-                    file_source,
+                    self.options.format.file_source(),
                 )
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
@@ -1240,10 +1169,8 @@ impl ListingTable {
             self.options.collect_stat,
             inexact_stats,
         )?;
-
-        let schema_adapter = self.create_schema_adapter();
-        let (schema_mapper, _) = schema_adapter.map_schema(self.file_schema.as_ref())?;
-
+        let (schema_mapper, _) = DefaultSchemaAdapterFactory::from_schema(self.schema())
+            .map_schema(self.file_schema.as_ref())?;
         stats.column_statistics =
             schema_mapper.map_column_statistics(&stats.column_statistics)?;
         file_groups.iter_mut().try_for_each(|file_group| {
@@ -1393,20 +1320,14 @@ mod tests {
         assert_contains,
         stats::Precision,
         test_util::{batches_to_string, datafusion_test_data},
-        ColumnStatistics, ScalarValue,
-    };
-    use datafusion_datasource::schema_adapter::{
-        SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+        ScalarValue,
     };
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::{collect, ExecutionPlanProperties};
-    use rstest::rstest;
     use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
-
-    const DUMMY_NULL_COUNT: Precision<usize> = Precision::Exact(42);
 
     /// Creates a test schema with standard field types used in tests
     fn create_test_schema() -> SchemaRef {
@@ -2631,222 +2552,5 @@ mod tests {
         }
 
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_statistics_mapping_with_custom_factory() -> Result<()> {
-        let ctx = SessionContext::new();
-        let table = create_test_listing_table_with_json_and_adapter(
-            &ctx,
-            false,
-            // NullStatsAdapterFactory sets column_statistics null_count to DUMMY_NULL_COUNT
-            Arc::new(NullStatsAdapterFactory {}),
-        )?;
-
-        let (groups, stats) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
-
-        assert_eq!(stats.column_statistics[0].null_count, DUMMY_NULL_COUNT);
-        for g in groups {
-            if let Some(s) = g.file_statistics(None) {
-                assert_eq!(s.column_statistics[0].null_count, DUMMY_NULL_COUNT);
-            }
-        }
-
-        Ok(())
-    }
-
-    #[rstest]
-    #[case(MapSchemaError::TypeIncompatible, "Cannot map incompatible types")]
-    #[case(MapSchemaError::GeneralFailure, "Schema adapter mapping failed")]
-    #[case(
-        MapSchemaError::InvalidProjection,
-        "Invalid projection in schema mapping"
-    )]
-    #[tokio::test]
-    async fn test_schema_adapter_map_schema_errors(
-        #[case] error_type: MapSchemaError,
-        #[case] expected_error_msg: &str,
-    ) -> Result<()> {
-        let ctx = SessionContext::new();
-        let table = create_test_listing_table_with_json_and_adapter(
-            &ctx,
-            false,
-            Arc::new(FailingMapSchemaAdapterFactory { error_type }),
-        )?;
-
-        // The error should bubble up from the scan operation when schema mapping fails
-        let scan_result = table.scan(&ctx.state(), None, &[], None).await;
-
-        assert!(scan_result.is_err());
-        let error_msg = scan_result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains(expected_error_msg),
-            "Expected error containing '{expected_error_msg}', got: {error_msg}"
-        );
-
-        Ok(())
-    }
-
-    // Test that errors during file listing also bubble up correctly
-    #[tokio::test]
-    async fn test_schema_adapter_error_during_file_listing() -> Result<()> {
-        let ctx = SessionContext::new();
-        let table = create_test_listing_table_with_json_and_adapter(
-            &ctx,
-            true,
-            Arc::new(FailingMapSchemaAdapterFactory {
-                error_type: MapSchemaError::TypeIncompatible,
-            }),
-        )?;
-
-        // The error should bubble up from list_files_for_scan when collecting statistics
-        let list_result = table.list_files_for_scan(&ctx.state(), &[], None).await;
-
-        assert!(list_result.is_err());
-        let error_msg = list_result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("Cannot map incompatible types"),
-            "Expected type incompatibility error during file listing, got: {error_msg}"
-        );
-
-        Ok(())
-    }
-
-    #[derive(Debug, Copy, Clone)]
-    enum MapSchemaError {
-        TypeIncompatible,
-        GeneralFailure,
-        InvalidProjection,
-    }
-
-    #[derive(Debug)]
-    struct FailingMapSchemaAdapterFactory {
-        error_type: MapSchemaError,
-    }
-
-    impl SchemaAdapterFactory for FailingMapSchemaAdapterFactory {
-        fn create(
-            &self,
-            projected_table_schema: SchemaRef,
-            _table_schema: SchemaRef,
-        ) -> Box<dyn SchemaAdapter> {
-            Box::new(FailingMapSchemaAdapter {
-                schema: projected_table_schema,
-                error_type: self.error_type,
-            })
-        }
-    }
-
-    #[derive(Debug)]
-    struct FailingMapSchemaAdapter {
-        schema: SchemaRef,
-        error_type: MapSchemaError,
-    }
-
-    impl SchemaAdapter for FailingMapSchemaAdapter {
-        fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
-            let field = self.schema.field(index);
-            file_schema.fields.find(field.name()).map(|(i, _)| i)
-        }
-
-        fn map_schema(
-            &self,
-            _file_schema: &Schema,
-        ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-            // Always fail with different error types based on the configured error_type
-            match self.error_type {
-                MapSchemaError::TypeIncompatible => {
-                    plan_err!(
-                        "Cannot map incompatible types: Boolean cannot be cast to Utf8"
-                    )
-                }
-                MapSchemaError::GeneralFailure => {
-                    plan_err!("Schema adapter mapping failed due to internal error")
-                }
-                MapSchemaError::InvalidProjection => {
-                    plan_err!("Invalid projection in schema mapping: column index out of bounds")
-                }
-            }
-        }
-    }
-
-    #[derive(Debug)]
-    struct NullStatsAdapterFactory;
-
-    impl SchemaAdapterFactory for NullStatsAdapterFactory {
-        fn create(
-            &self,
-            projected_table_schema: SchemaRef,
-            _table_schema: SchemaRef,
-        ) -> Box<dyn SchemaAdapter> {
-            Box::new(NullStatsAdapter {
-                schema: projected_table_schema,
-            })
-        }
-    }
-
-    #[derive(Debug)]
-    struct NullStatsAdapter {
-        schema: SchemaRef,
-    }
-
-    impl SchemaAdapter for NullStatsAdapter {
-        fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
-            let field = self.schema.field(index);
-            file_schema.fields.find(field.name()).map(|(i, _)| i)
-        }
-
-        fn map_schema(
-            &self,
-            file_schema: &Schema,
-        ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-            let projection = (0..file_schema.fields().len()).collect();
-            Ok((Arc::new(NullStatsMapper {}), projection))
-        }
-    }
-
-    #[derive(Debug)]
-    struct NullStatsMapper;
-
-    impl SchemaMapper for NullStatsMapper {
-        fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-            Ok(batch)
-        }
-
-        fn map_column_statistics(
-            &self,
-            stats: &[ColumnStatistics],
-        ) -> Result<Vec<ColumnStatistics>> {
-            Ok(stats
-                .iter()
-                .map(|s| {
-                    let mut s = s.clone();
-                    s.null_count = DUMMY_NULL_COUNT;
-                    s
-                })
-                .collect())
-        }
-    }
-
-    /// Helper function to create a test ListingTable with JSON format and custom schema adapter factory
-    fn create_test_listing_table_with_json_and_adapter(
-        ctx: &SessionContext,
-        collect_stat: bool,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<ListingTable> {
-        let path = "table/file.json";
-        register_test_store(ctx, &[(path, 10)]);
-
-        let format = JsonFormat::default();
-        let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(collect_stat);
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(opt)
-            .with_schema(Arc::new(schema))
-            .with_schema_adapter_factory(schema_adapter_factory);
-
-        ListingTable::try_new(config)
     }
 }
