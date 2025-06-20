@@ -1492,7 +1492,7 @@ pub(super) fn swap_join_projection(
     join_type: &JoinType,
 ) -> Option<Vec<usize>> {
     match join_type {
-        // For Anti/Semi join types, projection should remain unmodified,
+        // For Anti/Semi/Mark join types, projection should remain unmodified,
         // since these joins output schema remains the same after swap
         JoinType::LeftAnti
         | JoinType::LeftSemi
