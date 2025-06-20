@@ -74,7 +74,7 @@ impl ScalarUDFImpl for SparkHex {
         &self,
         _arg_types: &[DataType],
     ) -> datafusion_common::Result<DataType> {
-        Ok(DataType::Utf8)
+        Ok(DataType::Utf8View)
     }
 
     fn invoke_with_args(
