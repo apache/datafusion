@@ -58,8 +58,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         let values = values(&mut rng);
         let mut buffer = Vec::new();
         for i in 0..1000 {
-            buffer.push(Expr::Literal(ScalarValue::Utf8(Some(keys[i].clone()))));
-            buffer.push(Expr::Literal(ScalarValue::Int32(Some(values[i]))));
+            buffer.push(Expr::Literal(
+                ScalarValue::Utf8(Some(keys[i].clone())),
+                None,
+            ));
+            buffer.push(Expr::Literal(ScalarValue::Int32(Some(values[i])), None));
         }
 
         let planner = NestedFunctionPlanner {};

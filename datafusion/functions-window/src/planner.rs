@@ -97,7 +97,7 @@ impl ExprPlanner for WindowFunctionPlanner {
 
             let new_expr = Expr::from(WindowFunction::new(
                 func_def,
-                vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
             ))
             .partition_by(partition_by)
             .order_by(order_by)

@@ -97,8 +97,10 @@ impl CastExpr {
     pub fn cast_options(&self) -> &CastOptions<'static> {
         &self.cast_options
     }
-    pub fn is_bigger_cast(&self, src: DataType) -> bool {
-        if src == self.cast_type {
+
+    /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
+    pub fn is_bigger_cast(&self, src: &DataType) -> bool {
+        if self.cast_type.eq(src) {
             return true;
         }
         matches!(

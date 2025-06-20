@@ -335,7 +335,7 @@ fn build_join(
                     .join_on(
                         sub_query_alias,
                         JoinType::Left,
-                        vec![Expr::Literal(ScalarValue::Boolean(Some(true)))],
+                        vec![Expr::Literal(ScalarValue::Boolean(Some(true)), None)],
                     )?
                     .build()?
             }
@@ -365,7 +365,7 @@ fn build_join(
                         ),
                         (
                             Box::new(Expr::Not(Box::new(filter.clone()))),
-                            Box::new(Expr::Literal(ScalarValue::Null)),
+                            Box::new(Expr::Literal(ScalarValue::Null, None)),
                         ),
                     ],
                     else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(

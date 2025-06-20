@@ -19,9 +19,144 @@
 
 # Upgrade Guides
 
+## DataFusion `49.0.0`
+
+### `datafusion.execution.collect_statistics` now defaults to `true`
+
+The default value of the `datafusion.execution.collect_statistics` configuration
+setting is now true. This change impacts users that use that value directly and relied
+on its default value being `false`.
+
+This change also restores the default behavior of `ListingTable` to its previous. If you use it directly
+you can maintain the current behavior by overriding the default value in your code.
+
+```rust
+# /* comment to avoid running
+ListingOptions::new(Arc::new(ParquetFormat::default()))
+    .with_collect_stat(false)
+    // other options
+# */
+```
+
+### Metadata is now represented by `FieldMetadata`
+
+Metadata from the Arrow `Field` is now stored using the `FieldMetadata`
+structure. In prior versions it was stored as both a `HashMap<String, String>`
+and a `BTreeMap<String, String>`. `FieldMetadata` is a easier to work with and
+is more efficient.
+
+To create `FieldMetadata` from a `Field`:
+
+```rust
+# /* comment to avoid running
+ let metadata = FieldMetadata::from(&field);
+# */
+```
+
+To add metadata to a `Field`, use the `add_to_field` method:
+
+```rust
+# /* comment to avoid running
+let updated_field = metadata.add_to_field(field);
+# */
+```
+
+See [#16317] for details.
+
+[#16317]: https://github.com/apache/datafusion/pull/16317
+
 ## DataFusion `48.0.0`
 
-### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow.
+### `Expr::Literal` has optional metadata
+
+The [`Expr::Literal`] variant now includes optional metadata, which allows for
+carrying through Arrow field metadata to support extension types and other uses.
+
+This means code such as
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar) => ...
+...
+}
+#  */
+```
+
+Should be updated to:
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar, _metadata) => ...
+...
+}
+#  */
+```
+
+Likewise constructing `Expr::Literal` requires metadata as well. The [`lit`] function
+has not changed and returns an `Expr::Literal` with no metadata.
+
+[`expr::literal`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Literal
+[`lit`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.lit.html
+
+### `Expr::WindowFunction` is now `Box`ed
+
+`Expr::WindowFunction` is now a `Box<WindowFunction>` instead of a `WindowFunction` directly.
+This change was made to reduce the size of `Expr` and improve performance when
+planning queries (see [details on #16207]).
+
+This is a breaking change, so you will need to update your code if you match
+on `Expr::WindowFunction` directly. For example, if you have code like this:
+
+```rust
+# /* comment to avoid running
+match expr {
+  Expr::WindowFunction(WindowFunction {
+    params:
+      WindowFunctionParams {
+       partition_by,
+       order_by,
+      ..
+    }
+  }) => {
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+# */
+```
+
+You will need to change it to:
+
+```rust
+# /* comment to avoid running
+match expr {
+  Expr::WindowFunction(window_fun) => {
+    let WindowFunction {
+      fun,
+      params: WindowFunctionParams {
+        args,
+        partition_by,
+        ..
+        },
+    } = window_fun.as_ref();
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+#  */
+```
+
+[details on #16207]: https://github.com/apache/datafusion/pull/16207#issuecomment-2922659103
+
+### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow
 
 The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`
 which improves performance for many string operations. You can read more about
@@ -146,6 +281,14 @@ working but no one knows due to lack of test coverage).
 
 [api deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines
 
+### `PartitionedFile` added as an argument to the `FileOpener` trait
+
+This is necessary to properly fix filter pushdown for filters that combine partition
+columns and file columns (e.g. `day = username['dob']`).
+
+If you implemented a custom `FileOpener` you will need to add the `PartitionedFile` argument
+but are not required to use it in any way.
+
 ## DataFusion `47.0.0`
 
 This section calls out some of the major changes in the `47.0.0` release of DataFusion.
@@ -165,7 +308,6 @@ Additionally `ObjectStore::list` and `ObjectStore::list_with_offset` have been c
 
 [#6619]: https://github.com/apache/arrow-rs/pull/6619
 [#7371]: https://github.com/apache/arrow-rs/pull/7371
-[#7328]: https://github.com/apache/arrow-rs/pull/6961
 
 This requires converting from `usize` to `u64` occasionally as well as changes to `ObjectStore` implementations such as
 

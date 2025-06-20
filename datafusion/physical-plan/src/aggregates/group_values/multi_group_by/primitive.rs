@@ -17,6 +17,7 @@
 
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
+use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{cast::AsArray, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
@@ -121,7 +122,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 // Otherwise, we need to check their values
             }
 
-            *equal_to_result = self.group_values[lhs_row] == array.value(rhs_row);
+            *equal_to_result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
         }
     }
 

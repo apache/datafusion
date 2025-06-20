@@ -55,7 +55,8 @@ use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
 };
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
@@ -651,13 +652,13 @@ impl ExecutionPlan for RepartitionExec {
         let input = Arc::clone(&self.input);
         let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
-        let preserve_order = self.preserve_order;
+        let preserve_order = self.sort_exprs().is_some();
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
 
         // Get existing ordering to use for merging
-        let sort_exprs = self.sort_exprs().cloned().unwrap_or_default();
+        let sort_exprs = self.sort_exprs().cloned();
 
         let state = Arc::clone(&self.state);
         if let Some(mut state) = state.try_lock() {
@@ -723,7 +724,7 @@ impl ExecutionPlan for RepartitionExec {
                 StreamingMergeBuilder::new()
                     .with_streams(input_streams)
                     .with_schema(schema_captured)
-                    .with_expressions(&sort_exprs)
+                    .with_expressions(&sort_exprs.unwrap())
                     .with_metrics(BaselineMetrics::new(&metrics, partition))
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(fetch)
@@ -807,6 +808,7 @@ impl ExecutionPlan for RepartitionExec {
 
     fn gather_filters_for_pushdown(
         &self,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -816,6 +818,7 @@ impl ExecutionPlan for RepartitionExec {
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
@@ -1810,11 +1813,11 @@ mod test {
     }
 
     fn sort_exprs(schema: &Schema) -> LexOrdering {
-        let options = SortOptions::default();
-        LexOrdering::new(vec![PhysicalSortExpr {
+        [PhysicalSortExpr {
             expr: col("c0", schema).unwrap(),
-            options,
-        }])
+            options: SortOptions::default(),
+        }]
+        .into()
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
