@@ -175,21 +175,21 @@ mod tests {
 
     #[test]
     fn test_validate_struct_compatibility_incompatible_types() {
-        // Source struct: {field1: String, field2: String}
+        // Source struct: {field1: Binary, field2: String}
         let source_fields = vec![
-            Arc::new(Field::new("field1", DataType::Utf8, true)),
+            Arc::new(Field::new("field1", DataType::Binary, true)),
             Arc::new(Field::new("field2", DataType::Utf8, true)),
         ];
 
-        // Target struct: {field1: UInt32}
-        let target_fields = vec![Arc::new(Field::new("field1", DataType::UInt32, true))];
+        // Target struct: {field1: Int32}
+        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int32, true))];
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Cannot cast struct field 'field1'"));
-        assert!(error_msg.contains("Utf8"));
-        assert!(error_msg.contains("UInt32"));
+        assert!(error_msg.contains("Binary"));
+        assert!(error_msg.contains("Int32"));
     }
 
     #[test]
@@ -205,7 +205,7 @@ mod tests {
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -219,6 +219,6 @@ mod tests {
         // Should be OK - missing fields will be filled with nulls
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 }
