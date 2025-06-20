@@ -106,6 +106,17 @@ async fn explain_analyze_baseline_metrics() {
             || plan.as_any().downcast_ref::<physical_plan::union::UnionExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::windows::WindowAggExec>().is_some()
     }
+    fn expected_to_have_output_bytes(plan: &dyn ExecutionPlan) -> bool {
+      use datafusion::physical_plan;
+
+      if let Some(projection_exec) = plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>() {
+        // If the projection is empty, there are no buffers used, so we don't expect any output bytes
+        if projection_exec.schema().fields().len() == 0 {
+            return false;
+        }
+      }
+      true
+    }
 
     // Validate that the recorded elapsed compute time was more than
     // zero for all operators as well as the start/end timestamp are set
@@ -129,8 +140,11 @@ async fn explain_analyze_baseline_metrics() {
                 "plan: {}",
                 DisplayableExecutionPlan::with_metrics(plan).one_line()
             );
+
+            let output_bytes = metrics.output_bytes().unwrap();
+
             assert!(
-                metrics.output_bytes().unwrap() > 0,
+                if expected_to_have_output_bytes(plan) { output_bytes > 0 } else { output_bytes == 0 },
                 "plan: {}",
                 DisplayableExecutionPlan::with_metrics(plan).one_line()
             );
