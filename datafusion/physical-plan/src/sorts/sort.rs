@@ -50,6 +50,7 @@ use arrow::compute::{
     concat, interleave_record_batch, lexsort_to_indices, take_arrays, SortColumn,
 };
 use arrow::datatypes::SchemaRef;
+use datafusion_common::config::SpillCompression;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
 
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -261,6 +262,8 @@ impl ExternalSorter {
         batch_size: usize,
         sort_spill_reservation_bytes: usize,
         sort_in_place_threshold_bytes: usize,
+        // Configured via `datafusion.execution.spill_compression`.
+        spill_compression: SpillCompression,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
@@ -277,7 +280,8 @@ impl ExternalSorter {
             Arc::clone(&runtime),
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
-        );
+        )
+        .with_compression_type(spill_compression);
 
         Ok(Self {
             schema,
@@ -1015,11 +1019,6 @@ impl SortExec {
         }
     }
 
-    pub fn with_filter(mut self, filter: Arc<DynamicFilterPhysicalExpr>) -> Self {
-        self.filter = Some(filter);
-        self
-    }
-
     /// Input schema
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -1033,11 +1032,6 @@ impl SortExec {
     /// If `Some(fetch)`, limits output to only the first "fetch" items
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
-    }
-
-    /// If `Some(filter)`, returns the filter expression that matches the state of the sort.
-    pub fn filter(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
-        self.filter.clone()
     }
 
     fn output_partitioning_helper(
@@ -1263,6 +1257,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
+                    context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;
