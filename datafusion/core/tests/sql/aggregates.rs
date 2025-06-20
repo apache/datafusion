@@ -30,13 +30,21 @@ fn string_dict_type() -> DataType {
 use insta::assert_snapshot;
 /// Helper functions for aggregate tests with dictionary columns and nulls
 /// Creates a dictionary array with null values in the dictionary
+fn create_test_dict(
+    values: &[Option<&str>],
+    indices: &[Option<u32>],
+) -> DictionaryArray<UInt32Type> {
+    let dict_values = StringArray::from(values.to_vec());
+    let dict_indices = UInt32Array::from(indices.to_vec());
+    DictionaryArray::new(dict_indices, Arc::new(dict_values))
+}
+
+/// Legacy wrapper for backward compatibility - prefer create_test_dict
 fn create_dict(
     values: Vec<Option<&str>>,
     indices: Vec<Option<u32>>,
 ) -> DictionaryArray<UInt32Type> {
-    let dict_values = StringArray::from(values);
-    let dict_indices = UInt32Array::from(indices);
-    DictionaryArray::new(dict_indices, Arc::new(dict_values))
+    create_test_dict(&values, &indices)
 }
 
 /// Creates test data with both dictionary columns and value column
@@ -50,9 +58,9 @@ struct TestData {
 impl TestData {
     fn new() -> Self {
         // Create dictionary with null keys
-        let dict_null_keys = create_dict(
-            vec![Some("group_a"), Some("group_b")],
-            vec![
+        let dict_null_keys = create_test_dict(
+            &[Some("group_a"), Some("group_b")],
+            &[
                 Some(0), // group_a
                 None,    // null key
                 Some(1), // group_b
@@ -62,9 +70,9 @@ impl TestData {
         );
 
         // Create dictionary with null values
-        let dict_null_vals = create_dict(
-            vec![Some("group_x"), None, Some("group_y")],
-            vec![
+        let dict_null_vals = create_test_dict(
+            &[Some("group_x"), None, Some("group_y")],
+            &[
                 Some(0), // group_x
                 Some(1), // null value
                 Some(2), // group_y
@@ -93,9 +101,9 @@ impl TestData {
     /// Creates extended test data for more comprehensive testing
     fn new_extended() -> Self {
         // Create dictionary with null values in the dictionary array
-        let dict_null_vals = create_dict(
-            vec![Some("group_a"), None, Some("group_b")],
-            vec![
+        let dict_null_vals = create_test_dict(
+            &[Some("group_a"), None, Some("group_b")],
+            &[
                 Some(0), // group_a
                 Some(1), // null value
                 Some(2), // group_b
@@ -108,9 +116,9 @@ impl TestData {
         );
 
         // Create dictionary with null keys
-        let dict_null_keys = create_dict(
-            vec![Some("group_x"), Some("group_y"), Some("group_z")],
-            vec![
+        let dict_null_keys = create_test_dict(
+            &[Some("group_x"), Some("group_y"), Some("group_z")],
+            &[
                 Some(0), // group_x
                 None,    // null key
                 Some(1), // group_y
@@ -150,9 +158,9 @@ impl TestData {
 
     /// Creates test data for MIN/MAX testing with varied values
     fn new_for_min_max() -> Self {
-        let dict_null_keys = create_dict(
-            vec![Some("group_a"), Some("group_b"), Some("group_c")],
-            vec![
+        let dict_null_keys = create_test_dict(
+            &[Some("group_a"), Some("group_b"), Some("group_c")],
+            &[
                 Some(0),
                 Some(1),
                 Some(0),
@@ -162,9 +170,9 @@ impl TestData {
             ],
         );
 
-        let dict_null_vals = create_dict(
-            vec![Some("group_x"), None, Some("group_y")],
-            vec![
+        let dict_null_vals = create_test_dict(
+            &[Some("group_x"), None, Some("group_y")],
+            &[
                 Some(0),
                 Some(1),
                 Some(0),
@@ -193,14 +201,14 @@ impl TestData {
 
     /// Creates test data for MEDIAN testing with varied values
     fn new_for_median() -> Self {
-        let dict_null_vals = create_dict(
-            vec![Some("group_a"), None, Some("group_b")],
-            vec![Some(0), Some(1), Some(2), Some(1), Some(0)],
+        let dict_null_vals = create_test_dict(
+            &[Some("group_a"), None, Some("group_b")],
+            &[Some(0), Some(1), Some(2), Some(1), Some(0)],
         );
 
-        let dict_null_keys = create_dict(
-            vec![Some("group_x"), Some("group_y"), Some("group_z")],
-            vec![Some(0), None, Some(1), None, Some(2)],
+        let dict_null_keys = create_test_dict(
+            &[Some("group_x"), Some("group_y"), Some("group_z")],
+            &[Some(0), None, Some(1), None, Some(2)],
         );
 
         let values = Int32Array::from(vec![Some(1), None, Some(5), Some(3), Some(7)]);
@@ -221,14 +229,14 @@ impl TestData {
 
     /// Creates test data for FIRST_VALUE/LAST_VALUE testing
     fn new_for_first_last() -> Self {
-        let dict_null_keys = create_dict(
-            vec![Some("group_a"), Some("group_b")],
-            vec![Some(0), None, Some(1), None, Some(0)],
+        let dict_null_keys = create_test_dict(
+            &[Some("group_a"), Some("group_b")],
+            &[Some(0), None, Some(1), None, Some(0)],
         );
 
-        let dict_null_vals = create_dict(
-            vec![Some("group_x"), None, Some("group_y")],
-            vec![Some(0), Some(1), Some(2), Some(1), Some(0)],
+        let dict_null_vals = create_test_dict(
+            &[Some("group_x"), None, Some("group_y")],
+            &[Some(0), Some(1), Some(2), Some(1), Some(0)],
         );
 
         let values = Int32Array::from(vec![None, Some(1), Some(2), Some(3), None]);
@@ -880,9 +888,9 @@ async fn test_first_last_value_order_by_null_handling() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Create test data with nulls mixed in
-    let dict_keys = create_dict(
-        vec![Some("group_a"), Some("group_b"), Some("group_c")],
-        vec![Some(0), Some(1), Some(2), Some(0), Some(1)],
+    let dict_keys = create_test_dict(
+        &[Some("group_a"), Some("group_b"), Some("group_c")],
+        &[Some(0), Some(1), Some(2), Some(0), Some(1)],
     );
 
     let values = Int32Array::from(vec![None, Some(10), Some(20), Some(5), None]);
@@ -938,9 +946,9 @@ async fn test_first_last_value_group_by_dict_nulls() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Create dictionary with null keys
-    let dict_null_keys = create_dict(
-        vec![Some("group_a"), Some("group_b")],
-        vec![
+    let dict_null_keys = create_test_dict(
+        &[Some("group_a"), Some("group_b")],
+        &[
             Some(0), // group_a
             None,    // null key
             Some(1), // group_b
@@ -950,9 +958,9 @@ async fn test_first_last_value_group_by_dict_nulls() -> Result<()> {
     );
 
     // Create dictionary with null values
-    let dict_null_vals = create_dict(
-        vec![Some("val_x"), None, Some("val_y")],
-        vec![
+    let dict_null_vals = create_test_dict(
+        &[Some("val_x"), None, Some("val_y")],
+        &[
             Some(0), // val_x
             Some(1), // null value
             Some(2), // val_y
@@ -1050,9 +1058,9 @@ struct FuzzTestData {
 impl FuzzTestData {
     fn new() -> Self {
         // Create dictionary columns with null keys and values
-        let dictionary_utf8_low = create_dict(
-            vec![Some("dict_a"), None, Some("dict_b"), Some("dict_c")],
-            vec![
+        let dictionary_utf8_low = create_test_dict(
+            &[Some("dict_a"), None, Some("dict_b"), Some("dict_c")],
+            &[
                 Some(0), // dict_a
                 Some(1), // null value
                 Some(2), // dict_b
@@ -1231,9 +1239,9 @@ struct FuzzTimestampTestData {
 impl FuzzTimestampTestData {
     fn new() -> Self {
         // Create dictionary columns with null keys and values
-        let dictionary_utf8_low = create_dict(
-            vec![Some("dict_x"), None, Some("dict_y"), Some("dict_z")],
-            vec![
+        let dictionary_utf8_low = create_test_dict(
+            &[Some("dict_x"), None, Some("dict_y"), Some("dict_z")],
+            &[
                 Some(0), // dict_x
                 Some(1), // null value
                 Some(2), // dict_y
@@ -1421,14 +1429,14 @@ struct FuzzCountTestData {
 impl FuzzCountTestData {
     fn new() -> Self {
         // Create dictionary columns with null keys and values
-        let dictionary_utf8_low = create_dict(
-            vec![
+        let dictionary_utf8_low = create_test_dict(
+            &[
                 Some("group_alpha"),
                 None,
                 Some("group_beta"),
                 Some("group_gamma"),
             ],
-            vec![
+            &[
                 Some(0), // group_alpha
                 Some(1), // null value
                 Some(2), // group_beta
@@ -1638,14 +1646,14 @@ struct FuzzMedianTestData {
 impl FuzzMedianTestData {
     fn new() -> Self {
         // Create dictionary columns with null keys and values
-        let dictionary_utf8_low = create_dict(
-            vec![
+        let dictionary_utf8_low = create_test_dict(
+            &[
                 Some("group_one"),
                 None,
                 Some("group_two"),
                 Some("group_three"),
             ],
-            vec![
+            &[
                 Some(0), // group_one
                 Some(1), // null value
                 Some(2), // group_two
