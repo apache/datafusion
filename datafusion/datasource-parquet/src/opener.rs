@@ -533,6 +533,8 @@ impl FilePruner {
         );
         Ok(Self {
             // Initialize the predicate generation to 0 so that the first time we call `should_prune` we actually check the predicate
+            // This also means that no pruning will happen unless there is a dynamic filter present.
+            // See [`snapshot_generation`] for more info.
             predicate_generation: 0,
             predicate,
             pruning_schema,
