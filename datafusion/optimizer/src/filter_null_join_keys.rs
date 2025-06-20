@@ -136,7 +136,7 @@ mod tests {
         let plan = build_plan(t1, t2, "t1.optional_id", "t2.id", JoinType::Inner)?;
 
         assert_optimized_plan_equal!(plan, @r"
-        Inner Join: t1.optional_id = t2.id
+        Inner Join(ComparisonJoin): t1.optional_id = t2.id
           Filter: t1.optional_id IS NOT NULL
             TableScan: t1
           TableScan: t2
@@ -149,7 +149,7 @@ mod tests {
         let plan = build_plan(t1, t2, "t1.optional_id", "t2.id", JoinType::Left)?;
 
         assert_optimized_plan_equal!(plan, @r"
-        Left Join: t1.optional_id = t2.id
+        Left Join(ComparisonJoin): t1.optional_id = t2.id
           TableScan: t1
           TableScan: t2
         ")
@@ -163,7 +163,7 @@ mod tests {
             build_plan(t_right, t_left, "t2.id", "t1.optional_id", JoinType::Left)?;
 
         assert_optimized_plan_equal!(plan, @r"
-        Left Join: t2.id = t1.optional_id
+        Left Join(ComparisonJoin): t2.id = t1.optional_id
           TableScan: t2
           Filter: t1.optional_id IS NOT NULL
             TableScan: t1
@@ -176,7 +176,7 @@ mod tests {
         let plan = build_plan(t1, t2, "t2.id", "t1.optional_id", JoinType::Inner)?;
 
         assert_optimized_plan_equal!(plan, @r"
-        Inner Join: t1.optional_id = t2.id
+        Inner Join(ComparisonJoin): t1.optional_id = t2.id
           Filter: t1.optional_id IS NOT NULL
             TableScan: t1
           TableScan: t2
@@ -212,10 +212,10 @@ mod tests {
             .build()?;
 
         assert_optimized_plan_equal!(plan, @r"
-        Inner Join: t3.t1_id = t1.id, t3.t2_id = t2.id
+        Inner Join(ComparisonJoin): t3.t1_id = t1.id, t3.t2_id = t2.id
           Filter: t3.t1_id IS NOT NULL AND t3.t2_id IS NOT NULL
             TableScan: t3
-          Inner Join: t1.optional_id = t2.id
+          Inner Join(ComparisonJoin): t1.optional_id = t2.id
             Filter: t1.optional_id IS NOT NULL
               TableScan: t1
             TableScan: t2
@@ -238,7 +238,7 @@ mod tests {
             .build()?;
 
         assert_optimized_plan_equal!(plan, @r"
-        Inner Join: t1.optional_id + UInt32(1) = t2.id + UInt32(1)
+        Inner Join(ComparisonJoin): t1.optional_id + UInt32(1) = t2.id + UInt32(1)
           Filter: t1.optional_id + UInt32(1) IS NOT NULL
             TableScan: t1
           TableScan: t2
@@ -261,7 +261,7 @@ mod tests {
             .build()?;
 
         assert_optimized_plan_equal!(plan, @r"
-        Inner Join: t1.id + UInt32(1) = t2.optional_id + UInt32(1)
+        Inner Join(ComparisonJoin): t1.id + UInt32(1) = t2.optional_id + UInt32(1)
           TableScan: t1
           Filter: t2.optional_id + UInt32(1) IS NOT NULL
             TableScan: t2
@@ -284,7 +284,7 @@ mod tests {
             .build()?;
 
         assert_optimized_plan_equal!(plan, @r"
-        Inner Join: t1.optional_id + UInt32(1) = t2.optional_id + UInt32(1)
+        Inner Join(ComparisonJoin): t1.optional_id + UInt32(1) = t2.optional_id + UInt32(1)
           Filter: t1.optional_id + UInt32(1) IS NOT NULL
             TableScan: t1
           Filter: t2.optional_id + UInt32(1) IS NOT NULL
@@ -313,7 +313,7 @@ mod tests {
             .build()?;
 
         assert_optimized_plan_equal!(plan_from_cols, @r"
-        Inner Join: t1.optional_id = t2.optional_id
+        Inner Join(ComparisonJoin): t1.optional_id = t2.optional_id
           Filter: t1.optional_id IS NOT NULL
             TableScan: t1
           Filter: t2.optional_id IS NOT NULL

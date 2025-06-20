@@ -799,7 +799,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Inner Join: t1.a + UInt32(1) = t2.a + UInt32(2)
+        Inner Join(ComparisonJoin): t1.a + UInt32(1) = t2.a + UInt32(2)
           TableScan: t1
           TableScan: t2
         "

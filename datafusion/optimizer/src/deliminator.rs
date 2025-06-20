@@ -86,7 +86,7 @@ impl OptimizerRule for Deliminator {
             let delim_join = &mut candidate.node.plan;
 
             // Sort these so the deepest are first.
-            candidate.joins.sort_by(|a, b| b.depth.cmp(&a.depth));
+            candidate.joins.sort_by(|a, b| a.depth.cmp(&b.depth));
 
             let mut all_removed = true;
             if !candidate.joins.is_empty() {
@@ -858,12 +858,12 @@ mod tests {
         //     Inner Join(DelimJoin): t3.a = p_a
         //       TableScan: t3
         //       Projection: a AS p_a
-        //         Inner Join(ComparisonJoin): a = d
+        //         Inner Join(ComparisonJoin): a = d                    <- eliminate here
         //           DelimGet: b
         //           Aggregate: groupBy=[[]], aggr=[[count(t2.a)]]
         //             Filter: t2.a = Int32(1)
         //               Inner Join(ComparisonJoin): t2.a = t1.a
-        //                 Cross Join(ComparisonJoin):                  <----- eliminate
+        //                 Cross Join(ComparisonJoin):                  <- keep the deepest delimscan
         //                   TableScan: t2
         //                   DelimGet: b
         //                 Projection: t1.a
@@ -879,14 +879,14 @@ mod tests {
             Inner Join(DelimJoin): t3.a = p_a [a:UInt32, b:UInt32, c:UInt32, p_a:UInt32;N]
               TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
               Projection: a AS p_a [p_a:UInt32;N]
-                Inner Join(ComparisonJoin): a = d [a:UInt32;N, count(t2.a):Int64]
-                  DelimGet: b [a:UInt32;N]
-                  Aggregate: groupBy=[[]], aggr=[[count(t2.a)]] [count(t2.a):Int64]
-                    Filter: t2.a = Int32(1) [a:UInt32, b:UInt32, c:UInt32, d:UInt32;N, a:UInt32]
-                      Inner Join(ComparisonJoin): t2.a = t1.a [a:UInt32, b:UInt32, c:UInt32, d:UInt32;N, a:UInt32]
+                Aggregate: groupBy=[[]], aggr=[[count(t2.a)]] [count(t2.a):Int64]
+                  Filter: t2.a = Int32(1) [a:UInt32, b:UInt32, c:UInt32, d:UInt32;N, a:UInt32]
+                    Inner Join(ComparisonJoin): t2.a = t1.a [a:UInt32, b:UInt32, c:UInt32, d:UInt32;N, a:UInt32]
+                      Cross Join(ComparisonJoin):  [a:UInt32, b:UInt32, c:UInt32, d:UInt32;N]
                         TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
-                        Projection: t1.a [a:UInt32]
-                          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+                        DelimGet: b [d:UInt32;N]
+                      Projection: t1.a [a:UInt32]
+                        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
         ");
 
         Ok(())
