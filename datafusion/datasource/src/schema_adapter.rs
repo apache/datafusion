@@ -29,7 +29,7 @@ use datafusion_common::{plan_err, ColumnStatistics};
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
 /// the table schema.
-pub type AdaptColumnFn =
+pub type CastColumnFn =
     dyn Fn(&ArrayRef, &Field) -> datafusion_common::Result<ArrayRef> + Send + Sync;
 
 /// Factory for creating [`SchemaAdapter`]
@@ -342,7 +342,7 @@ pub struct SchemaMapping {
     field_mappings: Vec<Option<usize>>,
     /// Function used to adapt a column from the file schema to the table schema
     /// when it exists in both schemas
-    adapt_column: Arc<AdaptColumnFn>,
+    cast_column: Arc<CastColumnFn>,
 }
 
 impl Debug for SchemaMapping {
@@ -350,7 +350,7 @@ impl Debug for SchemaMapping {
         f.debug_struct("SchemaMapping")
             .field("projected_table_schema", &self.projected_table_schema)
             .field("field_mappings", &self.field_mappings)
-            .field("adapt_column", &"<fn>")
+            .field("cast_column", &"<fn>")
             .finish()
     }
 }
@@ -362,12 +362,12 @@ impl SchemaMapping {
     pub fn new(
         projected_table_schema: SchemaRef,
         field_mappings: Vec<Option<usize>>,
-        adapt_column: Arc<AdaptColumnFn>,
+        cast_column: Arc<CastColumnFn>,
     ) -> Self {
         Self {
             projected_table_schema,
             field_mappings,
-            adapt_column,
+            cast_column,
         }
     }
 }
@@ -394,9 +394,9 @@ impl SchemaMapper for SchemaMapping {
                     // If this field only exists in the table, and not in the file, then we know
                     // that it's null, so just return that.
                     || Ok(new_null_array(field.data_type(), batch_rows)),
-                    // However, if it does exist in both, use the adapt_column function
+                    // However, if it does exist in both, use the cast_column function
                     // to perform any necessary conversions
-                    |batch_idx| (self.adapt_column)(&batch_cols[batch_idx], field),
+                    |batch_idx| (self.cast_column)(&batch_cols[batch_idx], field),
                 )
             })
             .collect::<datafusion_common::Result<Vec<_>, _>>()?;
