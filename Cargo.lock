@@ -247,7 +247,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -270,7 +270,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -283,7 +283,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "ahash 0.8.12",
  "arrow-buffer",
@@ -299,7 +299,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "bytes",
  "half",
@@ -309,7 +309,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -329,7 +329,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -343,7 +343,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -354,7 +354,7 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -380,7 +380,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -393,7 +393,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -414,7 +414,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -426,7 +426,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -438,7 +438,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "bitflags 2.9.1",
  "serde",
@@ -448,7 +448,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",
@@ -461,7 +461,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4420,7 +4420,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "55.1.0"
-source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#a291e4b593c43b0050e003aecb18bd4c54f7d30b"
+source = "git+https://github.com/zhuqi-lucas/arrow-rs.git?branch=add_pub_write_all_api#5c52e40f177702e5dfcc67bd700dbd2234d51222"
 dependencies = [
  "ahash 0.8.12",
  "arrow-array",

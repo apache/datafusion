@@ -51,13 +51,10 @@ use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource
 use datafusion::datasource::TableType;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Operator, TableProviderFilterPushDown};
-use datafusion::parquet::arrow::ArrowSchemaConverter;
-use datafusion::parquet::data_type::{ByteArray, ByteArrayType};
+use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::errors::ParquetError;
 use datafusion::parquet::file::metadata::KeyValue;
-use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
-use datafusion::parquet::file::writer::SerializedFileWriter;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
@@ -138,19 +135,12 @@ impl DistinctIndexTable {
 }
 
 pub struct IndexedParquetWriter<W: Write + Seek> {
-    writer: SerializedFileWriter<W>,
+    writer: ArrowWriter<W>,
 }
 
 impl<W: Write + Seek + Send> IndexedParquetWriter<W> {
-    pub fn try_new(
-        sink: W,
-        schema: Arc<Schema>,
-        props: WriterProperties,
-    ) -> Result<Self> {
-        let schema_desc = ArrowSchemaConverter::new().convert(schema.as_ref())?;
-        let props_ptr = Arc::new(props);
-        let writer =
-            SerializedFileWriter::new(sink, schema_desc.root_schema_ptr(), props_ptr)?;
+    pub fn try_new(sink: W, schema: Arc<Schema>) -> Result<Self> {
+        let writer = ArrowWriter::try_new(sink, schema, None)?;
         Ok(Self { writer })
     }
 }
@@ -168,35 +158,17 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     let serialized = distinct.into_iter().collect::<Vec<_>>().join("\n");
     let index_bytes = serialized.into_bytes();
 
-    let props = WriterProperties::builder().build();
     let file = File::create(path)?;
 
-    let mut writer = IndexedParquetWriter::try_new(file, schema.clone(), props)?;
+    let mut writer = IndexedParquetWriter::try_new(file, schema.clone())?;
 
-    // Write data to the Parquet file, we only write one column since our schema has one field
-    {
-        let mut rg_writer = writer.writer.next_row_group()?;
-        let mut ser_col_writer = rg_writer
-            .next_column()?
-            .ok_or_else(|| ParquetError::General("No column writer".into()))?;
+    // Write the data pages
+    writer.writer.write(&batch)?;
+    // Close row group
+    writer.writer.flush()?;
 
-        let col_writer = ser_col_writer.typed::<ByteArrayType>();
-        let values_bytes: Vec<ByteArray> = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .iter()
-            .map(|opt| ByteArray::from(opt.unwrap()))
-            .collect();
-
-        println!("Writing values: {values_bytes:?}");
-        col_writer.write_batch(&values_bytes, None, None)?;
-        ser_col_writer.close()?;
-        rg_writer.close()?;
-    }
-
-    let offset = writer.writer.inner().stream_position()?;
+    // Set the offset for the index
+    let offset = writer.writer.bytes_written();
     let index_len = index_bytes.len() as u64;
 
     println!("Writing custom index at offset: {offset}, length: {index_len}");
