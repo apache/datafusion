@@ -43,9 +43,10 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Execute,
-    Expr, ExprSchemable, LogicalPlanBuilder, Operator, Prepare,
-    TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
+    build_join_schema, expr_vec_fmt, requalify_sides_if_needed, BinaryExpr,
+    CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, LogicalPlanBuilder,
+    Operator, Prepare, TableProviderFilterPushDown, TableSource,
+    WindowFunctionDefinition,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -3754,17 +3755,31 @@ impl Join {
         })
     }
 
-    /// Create Join with input which wrapped with projection, this method is used to help create physical join.
+    /// Create Join with input which wrapped with projection, this method is used in physcial planning only to help
+    /// create the physical join.
     pub fn try_new_with_project_input(
         original: &LogicalPlan,
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
         column_on: (Vec<Column>, Vec<Column>),
-    ) -> Result<Self> {
+    ) -> Result<(Self, bool)> {
         let original_join = match original {
             LogicalPlan::Join(join) => join,
             _ => return plan_err!("Could not create join with project input"),
         };
+
+        let mut left_sch = LogicalPlanBuilder::from(Arc::clone(&left));
+        let mut right_sch = LogicalPlanBuilder::from(Arc::clone(&right));
+
+        let mut requalified = false;
+
+        // By definition, the resulting schema of an inner join will have first the left side fields and then the right,
+        // potentially having duplicate field names. Note this will only qualify fields if they have not been qualified before.
+        // TODO: handle left and right joins as well.
+        if original_join.join_type == JoinType::Inner {
+            (left_sch, right_sch, requalified) =
+                requalify_sides_if_needed(left_sch.clone(), right_sch.clone())?;
+        }
 
         let on: Vec<(Expr, Expr)> = column_on
             .0
@@ -3772,19 +3787,26 @@ impl Join {
             .zip(column_on.1)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
-        let join_schema =
-            build_join_schema(left.schema(), right.schema(), &original_join.join_type)?;
 
-        Ok(Join {
-            left,
-            right,
-            on,
-            filter: original_join.filter.clone(),
-            join_type: original_join.join_type,
-            join_constraint: original_join.join_constraint,
-            schema: Arc::new(join_schema),
-            null_equality: original_join.null_equality,
-        })
+        let join_schema = build_join_schema(
+            left_sch.schema(),
+            right_sch.schema(),
+            &original_join.join_type,
+        )?;
+
+        Ok((
+            Join {
+                left,
+                right,
+                on,
+                filter: original_join.filter.clone(),
+                join_type: original_join.join_type,
+                join_constraint: original_join.join_constraint,
+                schema: Arc::new(join_schema),
+                null_equality: original_join.null_equality,
+            },
+            requalified,
+        ))
     }
 }
 

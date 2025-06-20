@@ -1667,6 +1667,34 @@ pub fn build_join_schema(
     dfschema.with_functional_dependencies(func_dependencies)
 }
 
+/// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
+/// conflict with the columns from the other.
+/// This is especially useful for queries that come as Substrait, since Substrait doesn't currently allow specifying
+/// aliases, neither for columns nor for tables.  DataFusion requires columns to be uniquely identifiable, in some
+/// places (see e.g. DFSchema::check_names).
+pub fn requalify_sides_if_needed(
+    left: LogicalPlanBuilder,
+    right: LogicalPlanBuilder,
+) -> Result<(LogicalPlanBuilder, LogicalPlanBuilder, bool)> {
+    let left_cols = left.schema().columns();
+    let right_cols = right.schema().columns();
+    if left_cols.iter().any(|l| {
+        right_cols.iter().any(|r| {
+            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
+        })
+    }) {
+        // These names have no connection to the original plan, but they'll make the columns
+        // (mostly) unique.
+        Ok((
+            left.alias(TableReference::bare("left"))?,
+            right.alias(TableReference::bare("right"))?,
+            true,
+        ))
+    } else {
+        Ok((left, right, false))
+    }
+}
+
 /// Add additional "synthetic" group by expressions based on functional
 /// dependencies.
 ///
