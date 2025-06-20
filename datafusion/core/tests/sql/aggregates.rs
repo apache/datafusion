@@ -248,7 +248,32 @@ impl TestData {
     }
 }
 
-/// Sets up test context and tables for both single and multiple partition scenarios
+/// ## Test Helper Function Guide
+///
+/// This file provides several helper functions to reduce repetitive test patterns:
+///
+/// ### For tests using TestData:
+/// - `run_complete_snapshot_test()` - Complete test: setup → SQL → assert_snapshot!
+/// - `run_complete_sorted_snapshot_test()` - Same as above but with sorted output
+/// - `run_snapshot_test()` - Setup and execute, returns results for custom assertions
+///
+/// ### For custom setups:
+/// - `run_simple_snapshot_test()` - Execute SQL on existing context, returns results
+///
+/// ### Supporting functions:
+/// - `create_test_dict()` - Create dictionary arrays with slices (preferred)
+/// - `setup_test_contexts()` - Setup single and multi-partition contexts
+/// - `test_query_consistency()` - Execute and verify consistency across partitions
+///
+/// ### Usage examples:
+/// ```rust
+/// // Simple complete test
+/// run_complete_snapshot_test(&test_data, "SELECT * FROM t", @"expected output").await?;
+///
+/// // Multiple tests with different data
+/// let results = run_snapshot_test(&test_data, "SELECT * FROM t", false).await?;
+/// assert_snapshot!(batches_to_string(&results), @"expected");
+/// ```
 async fn setup_test_contexts(
     test_data: &TestData,
 ) -> Result<(SessionContext, SessionContext)> {
@@ -762,11 +787,8 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
     let test_data_median = TestData::new_for_median();
 
     // Test COUNT null exclusion with basic data
-    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data_basic).await?;
-
     let sql_count = "SELECT dict_null_keys, COUNT(value) as cnt FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
-    let results_count =
-        test_query_consistency(&ctx_single, &ctx_multi, sql_count).await?;
+    let results_count = run_snapshot_test(&test_data_basic, sql_count, false).await?;
 
     assert_snapshot!(
         batches_to_string(&results_count),
@@ -782,12 +804,8 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
     );
 
     // Test SUM null handling with extended data
-    let (ctx_single_sum, ctx_multi_sum) =
-        setup_test_contexts(&test_data_extended).await?;
-
     let sql_sum = "SELECT dict_null_vals, SUM(value) as total FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
-    let results_sum =
-        test_query_consistency(&ctx_single_sum, &ctx_multi_sum, sql_sum).await?;
+    let results_sum = run_snapshot_test(&test_data_extended, sql_sum, false).await?;
 
     assert_snapshot!(
         batches_to_string(&results_sum),
@@ -804,11 +822,8 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
     );
 
     // Test MIN null handling with min/max data
-    let (ctx_single_min, ctx_multi_min) = setup_test_contexts(&test_data_min_max).await?;
-
     let sql_min = "SELECT dict_null_keys, MIN(value) as minimum FROM t GROUP BY dict_null_keys ORDER BY dict_null_keys NULLS FIRST";
-    let results_min =
-        test_query_consistency(&ctx_single_min, &ctx_multi_min, sql_min).await?;
+    let results_min = run_snapshot_test(&test_data_min_max, sql_min, false).await?;
 
     assert_snapshot!(
         batches_to_string(&results_min),
@@ -825,12 +840,8 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
     );
 
     // Test MEDIAN null handling with median data
-    let (ctx_single_median, ctx_multi_median) =
-        setup_test_contexts(&test_data_median).await?;
-
     let sql_median = "SELECT dict_null_vals, MEDIAN(value) as median_value FROM t GROUP BY dict_null_vals ORDER BY dict_null_vals NULLS FIRST";
-    let results_median =
-        test_query_consistency(&ctx_single_median, &ctx_multi_median, sql_median).await?;
+    let results_median = run_snapshot_test(&test_data_median, sql_median, false).await?;
 
     assert_snapshot!(
         batches_to_string(&results_median),
@@ -852,12 +863,11 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
 #[tokio::test]
 async fn test_first_last_val_null_handling() -> Result<()> {
     let test_data = TestData::new_for_first_last();
-    let (ctx_single, ctx_multi) = setup_test_contexts(&test_data).await?;
 
     // Test FIRST_VALUE and LAST_VALUE with window functions over groups
     let sql = "SELECT dict_null_keys, value, FIRST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST) as first_val, LAST_VALUE(value) OVER (PARTITION BY dict_null_keys ORDER BY value NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_val FROM t ORDER BY dict_null_keys NULLS FIRST, value NULLS FIRST";
 
-    let results_single = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
+    let results_single = run_snapshot_test(&test_data, sql, false).await?;
 
     assert_snapshot!(batches_to_string(&results_single), @r"
     +----------------+-------+-----------+----------+
@@ -1142,7 +1152,6 @@ async fn create_fuzz_context_with_partitions(
 
     Ok(ctx)
 }
-
 /// Splits fuzz test data into multiple batches for partitioning
 fn split_fuzz_data_into_batches(
     test_data: &FuzzTestData,
@@ -1213,159 +1222,9 @@ async fn test_max_with_fuzz_table_dict_nulls() -> Result<()> {
     | 3      |                     | str_e    | str_e |         |
     | 3      | dict_c              | str_f    | str_f | value_6 |
     +--------+---------------------+----------+-------+---------+
-    "
-    );
+    ");
 
     Ok(())
-}
-
-/// Test data structure for fuzz table with timestamp and dictionary columns containing nulls
-struct FuzzTimestampTestData {
-    schema: Arc<Schema>,
-    utf8_low: StringArray,
-    u8_low: UInt8Array,
-    dictionary_utf8_low: DictionaryArray<UInt32Type>,
-    timestamp_us: TimestampMicrosecondArray,
-}
-
-impl FuzzTimestampTestData {
-    fn new() -> Self {
-        // Create dictionary columns with null keys and values
-        let dictionary_utf8_low = create_test_dict(
-            &[Some("dict_x"), None, Some("dict_y"), Some("dict_z")],
-            &[
-                Some(0), // dict_x
-                Some(1), // null value
-                Some(2), // dict_y
-                None,    // null key
-                Some(0), // dict_x
-                Some(1), // null value
-                Some(3), // dict_z
-                None,    // null key
-                Some(2), // dict_y
-            ],
-        );
-
-        let utf8_low = StringArray::from(vec![
-            Some("alpha"),
-            Some("beta"),
-            Some("gamma"),
-            Some("delta"),
-            Some("alpha"),
-            Some("epsilon"),
-            Some("zeta"),
-            Some("delta"),
-            Some("gamma"),
-        ]);
-
-        let u8_low = UInt8Array::from(vec![
-            Some(10),
-            Some(20),
-            Some(30),
-            Some(20),
-            Some(10),
-            Some(40),
-            Some(30),
-            Some(20),
-            Some(30),
-        ]);
-
-        // Create timestamp data with some nulls
-        let timestamp_us = TimestampMicrosecondArray::from(vec![
-            Some(1000000), // 1970-01-01 00:00:01
-            Some(2000000), // 1970-01-01 00:00:02
-            Some(3000000), // 1970-01-01 00:00:03
-            None,          // null timestamp
-            Some(1500000), // 1970-01-01 00:00:01.5
-            Some(4000000), // 1970-01-01 00:00:04
-            Some(2500000), // 1970-01-01 00:00:02.5
-            Some(3500000), // 1970-01-01 00:00:03.5
-            Some(2800000), // 1970-01-01 00:00:02.8
-        ]);
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("utf8_low", DataType::Utf8, true),
-            Field::new("u8_low", DataType::UInt8, true),
-            Field::new("dictionary_utf8_low", string_dict_type(), true),
-            Field::new(
-                "timestamp_us",
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-                true,
-            ),
-        ]));
-
-        Self {
-            schema,
-            utf8_low,
-            u8_low,
-            dictionary_utf8_low,
-            timestamp_us,
-        }
-    }
-}
-
-/// Sets up test contexts for fuzz table with timestamps and both single and multiple partitions
-async fn setup_fuzz_timestamp_test_contexts() -> Result<(SessionContext, SessionContext)>
-{
-    let test_data = FuzzTimestampTestData::new();
-
-    // Single partition context
-    let ctx_single = create_fuzz_timestamp_context_with_partitions(&test_data, 1).await?;
-
-    // Multiple partition context
-    let ctx_multi = create_fuzz_timestamp_context_with_partitions(&test_data, 3).await?;
-
-    Ok((ctx_single, ctx_multi))
-}
-
-/// Creates a session context with fuzz timestamp table partitioned into specified number of partitions
-async fn create_fuzz_timestamp_context_with_partitions(
-    test_data: &FuzzTimestampTestData,
-    num_partitions: usize,
-) -> Result<SessionContext> {
-    let ctx = SessionContext::new_with_config(
-        SessionConfig::new().with_target_partitions(num_partitions),
-    );
-
-    let batches = split_fuzz_timestamp_data_into_batches(test_data, num_partitions)?;
-    let provider = MemTable::try_new(test_data.schema.clone(), batches)?;
-    ctx.register_table("fuzz_table", Arc::new(provider))?;
-
-    Ok(ctx)
-}
-
-/// Splits fuzz timestamp test data into multiple batches for partitioning
-fn split_fuzz_timestamp_data_into_batches(
-    test_data: &FuzzTimestampTestData,
-    num_partitions: usize,
-) -> Result<Vec<Vec<RecordBatch>>> {
-    debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
-    let total_len = test_data.utf8_low.len();
-    let chunk_size = total_len.div_ceil(num_partitions);
-
-    let mut batches = Vec::new();
-    let mut start = 0;
-
-    while start < total_len {
-        let end = min(start + chunk_size, total_len);
-        let len = end - start;
-
-        if len > 0 {
-            let batch = RecordBatch::try_new(
-                test_data.schema.clone(),
-                vec![
-                    Arc::new(test_data.utf8_low.slice(start, len)),
-                    Arc::new(test_data.u8_low.slice(start, len)),
-                    Arc::new(test_data.dictionary_utf8_low.slice(start, len)),
-                    Arc::new(test_data.timestamp_us.slice(start, len)),
-                ],
-            )?;
-            batches.push(vec![batch]);
-        }
-        start = end;
-    }
-
-    Ok(batches)
 }
 
 /// Test MIN with fuzz table containing dictionary columns with null keys and values and timestamp data (single and multiple partitions)
@@ -1547,7 +1406,6 @@ async fn create_fuzz_count_context_with_partitions(
 
     Ok(ctx)
 }
-
 /// Splits fuzz count test data into multiple batches for partitioning
 fn split_fuzz_count_data_into_batches(
     test_data: &FuzzCountTestData,
@@ -1791,7 +1649,6 @@ async fn create_fuzz_median_context_with_partitions(
 
     Ok(ctx)
 }
-
 /// Splits fuzz median test data into multiple batches for partitioning
 fn split_fuzz_median_data_into_batches(
     test_data: &FuzzMedianTestData,
@@ -1866,6 +1723,55 @@ async fn test_median_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
     +--------+---------------------+------+------+------+--------+--------+
     "
     );
+
+    Ok(())
+}
+
+/// Helper function to run snapshot tests with consistent setup, execution, and assertion
+/// This reduces the repetitive pattern of "setup data → SQL → assert_snapshot!"
+async fn run_snapshot_test(
+    test_data: &TestData,
+    sql: &str,
+    use_sorted_output: bool,
+) -> Result<Vec<RecordBatch>> {
+    let (ctx_single, ctx_multi) = setup_test_contexts(test_data).await?;
+    let results = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
+    Ok(results)
+}
+
+/// Helper function for simpler snapshot tests that only need single-partition execution
+async fn run_simple_snapshot_test(
+    ctx: &SessionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    let df = ctx.sql(sql).await?;
+    let results = df.collect().await?;
+    Ok(results)
+}
+
+/// Helper function to run a complete snapshot test with TestData
+/// This fully encapsulates the "setup data → SQL → assert_snapshot!" pattern
+async fn run_complete_snapshot_test(
+    test_data: &TestData,
+    sql: &str,
+    expected_snapshot: &str,
+) -> Result<()> {
+    let results = run_snapshot_test(test_data, sql, false).await?;
+
+    assert_snapshot!(batches_to_string(&results), expected_snapshot);
+
+    Ok(())
+}
+
+/// Helper function to run a complete snapshot test with sorted output
+async fn run_complete_sorted_snapshot_test(
+    test_data: &TestData,
+    sql: &str,
+    expected_snapshot: &str,
+) -> Result<()> {
+    let results = run_snapshot_test(test_data, sql, true).await?;
+
+    assert_snapshot!(batches_to_sort_string(&results), expected_snapshot);
 
     Ok(())
 }
