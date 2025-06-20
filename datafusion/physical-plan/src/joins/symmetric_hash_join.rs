@@ -810,6 +810,21 @@ where
 {
     // Store the result in a tuple
     let result = match (build_side, join_type) {
+        // For a mark join we “mark” each build‐side row with a dummy 0 in the probe‐side index
+        // if it ever matched. For example, if
+        //
+        // prune_length = 5
+        // deleted_offset = 0
+        // visited_rows = {1, 3}
+        //
+        // then we produce:
+        //
+        // build_indices = [0, 1, 2, 3, 4]
+        // probe_indices = [None, Some(0), None, Some(0), None]
+        //
+        // Example: for each build row i in [0..5):
+        //   – We always output its own index i in `build_indices`
+        //   – We output `Some(0)` in `probe_indices[i]` if row i was ever visited, else `None`
         (JoinSide::Left, JoinType::LeftMark) => {
             let build_indices = (0..prune_length)
                 .map(L::Native::from_usize)
