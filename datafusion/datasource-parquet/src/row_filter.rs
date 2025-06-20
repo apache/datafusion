@@ -225,14 +225,8 @@ struct FilterCandidateBuilder {
 }
 
 impl FilterCandidateBuilder {
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        file_schema: Arc<Schema>,
-    ) -> Self {
-        Self {
-            expr,
-            file_schema,
-        }
+    pub fn new(expr: Arc<dyn PhysicalExpr>, file_schema: Arc<Schema>) -> Self {
+        Self { expr, file_schema }
     }
 
     /// Attempt to build a `FilterCandidate` from the expression
@@ -254,7 +248,11 @@ impl FilterCandidateBuilder {
                 .project(&required_indices_into_table_schema)?,
         );
 
-        let projection_into_file_schema = collect_columns(&self.expr).iter().map(|c| c.index()).sorted_unstable().collect_vec();
+        let projection_into_file_schema = collect_columns(&self.expr)
+            .iter()
+            .map(|c| c.index())
+            .sorted_unstable()
+            .collect_vec();
 
         let required_bytes = size_of_columns(&projection_into_file_schema, metadata)?;
         let can_use_index = columns_sorted(&projection_into_file_schema, metadata)?;
@@ -493,12 +491,9 @@ mod test {
 
         let table_schema = Arc::new(table_schema.clone());
 
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            table_schema.clone(),
-        )
-        .build(metadata)
-        .expect("building candidate");
+        let candidate = FilterCandidateBuilder::new(expr, table_schema.clone())
+            .build(metadata)
+            .expect("building candidate");
 
         assert!(candidate.is_none());
     }
