@@ -39,14 +39,6 @@ fn create_test_dict(
     DictionaryArray::new(dict_indices, Arc::new(dict_values))
 }
 
-/// Legacy wrapper for backward compatibility - prefer create_test_dict
-fn create_dict(
-    values: Vec<Option<&str>>,
-    indices: Vec<Option<u32>>,
-) -> DictionaryArray<UInt32Type> {
-    create_test_dict(&values, &indices)
-}
-
 /// Creates test data with both dictionary columns and value column
 struct TestData {
     dict_null_keys: DictionaryArray<UInt32Type>,
