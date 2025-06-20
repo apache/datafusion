@@ -48,7 +48,6 @@ use super::record_batch_generator::{get_supported_types_columns, RecordBatchGene
 ///
 /// Now memory limiting is disabled by default. See TODOs in `SortQueryFuzzer`.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "https://github.com/apache/datafusion/issues/16452"]
 async fn sort_query_fuzzer_runner() {
     let random_seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
