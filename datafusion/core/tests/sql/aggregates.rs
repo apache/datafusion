@@ -1732,7 +1732,7 @@ async fn test_median_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
 async fn run_snapshot_test(
     test_data: &TestData,
     sql: &str,
-    use_sorted_output: bool,
+    _use_sorted_output: bool,
 ) -> Result<Vec<RecordBatch>> {
     let (ctx_single, ctx_multi) = setup_test_contexts(test_data).await?;
     let results = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
@@ -1740,6 +1740,7 @@ async fn run_snapshot_test(
 }
 
 /// Helper function for simpler snapshot tests that only need single-partition execution
+#[allow(dead_code)]
 async fn run_simple_snapshot_test(
     ctx: &SessionContext,
     sql: &str,
@@ -1751,6 +1752,7 @@ async fn run_simple_snapshot_test(
 
 /// Helper function to run a complete snapshot test with TestData
 /// This fully encapsulates the "setup data → SQL → assert_snapshot!" pattern
+#[allow(dead_code)]
 async fn run_complete_snapshot_test(
     test_data: &TestData,
     sql: &str,
@@ -1764,6 +1766,7 @@ async fn run_complete_snapshot_test(
 }
 
 /// Helper function to run a complete snapshot test with sorted output
+#[allow(dead_code)]
 async fn run_complete_sorted_snapshot_test(
     test_data: &TestData,
     sql: &str,
@@ -1774,4 +1777,153 @@ async fn run_complete_sorted_snapshot_test(
     assert_snapshot!(batches_to_sort_string(&results), expected_snapshot);
 
     Ok(())
+}
+
+/// Test data structure for fuzz table with timestamp and dictionary columns containing nulls
+struct FuzzTimestampTestData {
+    schema: Arc<Schema>,
+    utf8_low: StringArray,
+    u8_low: UInt8Array,
+    dictionary_utf8_low: DictionaryArray<UInt32Type>,
+    timestamp_us: TimestampMicrosecondArray,
+}
+
+impl FuzzTimestampTestData {
+    fn new() -> Self {
+        // Create dictionary columns with null keys and values
+        let dictionary_utf8_low = create_test_dict(
+            &[Some("dict_x"), None, Some("dict_y"), Some("dict_z")],
+            &[
+                Some(0), // dict_x
+                Some(1), // null value
+                Some(2), // dict_y
+                None,    // null key
+                Some(0), // dict_x
+                Some(1), // null value
+                Some(3), // dict_z
+                None,    // null key
+                Some(2), // dict_y
+            ],
+        );
+
+        let utf8_low = StringArray::from(vec![
+            Some("alpha"),
+            Some("beta"),
+            Some("gamma"),
+            Some("delta"),
+            Some("alpha"),
+            Some("epsilon"),
+            Some("zeta"),
+            Some("delta"),
+            Some("gamma"),
+        ]);
+
+        let u8_low = UInt8Array::from(vec![
+            Some(10),
+            Some(20),
+            Some(30),
+            Some(20),
+            Some(10),
+            Some(40),
+            Some(30),
+            Some(20),
+            Some(30),
+        ]);
+
+        // Create timestamp data with some nulls
+        let timestamp_us = TimestampMicrosecondArray::from(vec![
+            Some(1000000), // 1970-01-01 00:00:01
+            Some(2000000), // 1970-01-01 00:00:02
+            Some(3000000), // 1970-01-01 00:00:03
+            None,          // null timestamp
+            Some(1500000), // 1970-01-01 00:00:01.5
+            Some(4000000), // 1970-01-01 00:00:04
+            Some(2500000), // 1970-01-01 00:00:02.5
+            Some(3500000), // 1970-01-01 00:00:03.5
+            Some(2800000), // 1970-01-01 00:00:02.8
+        ]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("utf8_low", DataType::Utf8, true),
+            Field::new("u8_low", DataType::UInt8, true),
+            Field::new("dictionary_utf8_low", string_dict_type(), true),
+            Field::new(
+                "timestamp_us",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+        ]));
+
+        Self {
+            schema,
+            utf8_low,
+            u8_low,
+            dictionary_utf8_low,
+            timestamp_us,
+        }
+    }
+}
+
+/// Sets up test contexts for fuzz table with timestamps and both single and multiple partitions
+async fn setup_fuzz_timestamp_test_contexts() -> Result<(SessionContext, SessionContext)>
+{
+    let test_data = FuzzTimestampTestData::new();
+
+    // Single partition context
+    let ctx_single = create_fuzz_timestamp_context_with_partitions(&test_data, 1).await?;
+
+    // Multiple partition context
+    let ctx_multi = create_fuzz_timestamp_context_with_partitions(&test_data, 3).await?;
+
+    Ok((ctx_single, ctx_multi))
+}
+
+/// Creates a session context with fuzz timestamp table partitioned into specified number of partitions
+async fn create_fuzz_timestamp_context_with_partitions(
+    test_data: &FuzzTimestampTestData,
+    num_partitions: usize,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_target_partitions(num_partitions),
+    );
+
+    let batches = split_fuzz_timestamp_data_into_batches(test_data, num_partitions)?;
+    let provider = MemTable::try_new(test_data.schema.clone(), batches)?;
+    ctx.register_table("fuzz_table", Arc::new(provider))?;
+
+    Ok(ctx)
+}
+
+/// Splits fuzz timestamp test data into multiple batches for partitioning
+fn split_fuzz_timestamp_data_into_batches(
+    test_data: &FuzzTimestampTestData,
+    num_partitions: usize,
+) -> Result<Vec<Vec<RecordBatch>>> {
+    debug_assert!(num_partitions > 0, "num_partitions must be greater than 0");
+    let total_len = test_data.utf8_low.len();
+    let chunk_size = total_len.div_ceil(num_partitions);
+
+    let mut batches = Vec::new();
+    let mut start = 0;
+
+    while start < total_len {
+        let end = min(start + chunk_size, total_len);
+        let len = end - start;
+
+        if len > 0 {
+            let batch = RecordBatch::try_new(
+                test_data.schema.clone(),
+                vec![
+                    Arc::new(test_data.utf8_low.slice(start, len)),
+                    Arc::new(test_data.u8_low.slice(start, len)),
+                    Arc::new(test_data.dictionary_utf8_low.slice(start, len)),
+                    Arc::new(test_data.timestamp_us.slice(start, len)),
+                ],
+            )?;
+            batches.push(vec![batch]);
+        }
+        start = end;
+    }
+
+    Ok(batches)
 }
