@@ -21,7 +21,7 @@ use std::cmp::{self, Ordering};
 use std::task::{ready, Poll};
 use std::{any::Any, sync::Arc};
 
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, BaselineMetrics};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
@@ -43,7 +43,6 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use log::trace;
@@ -203,22 +202,18 @@ impl ExecutionPlan for UnnestExec {
 
 #[derive(Clone, Debug)]
 struct UnnestMetrics {
-    /// Total time for column unnesting
-    elapsed_compute: metrics::Time,
+    /// Execution metrics
+    baseline_metrics: BaselineMetrics,
     /// Number of batches consumed
     input_batches: metrics::Count,
     /// Number of rows consumed
     input_rows: metrics::Count,
     /// Number of batches produced
     output_batches: metrics::Count,
-    /// Number of rows produced by this operator
-    output_rows: metrics::Count,
 }
 
 impl UnnestMetrics {
     fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let elapsed_compute = MetricBuilder::new(metrics).elapsed_compute(partition);
-
         let input_batches =
             MetricBuilder::new(metrics).counter("input_batches", partition);
 
@@ -227,14 +222,11 @@ impl UnnestMetrics {
         let output_batches =
             MetricBuilder::new(metrics).counter("output_batches", partition);
 
-        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
-
         Self {
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
             input_batches,
             input_rows,
             output_batches,
-            output_rows,
-            elapsed_compute,
         }
     }
 }
@@ -270,7 +262,8 @@ impl Stream for UnnestStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.poll_next_impl(cx)
+        let poll = self.poll_next_impl(cx);
+        self.metrics.baseline_metrics.record_poll(poll)
     }
 }
 
@@ -284,7 +277,8 @@ impl UnnestStream {
         loop {
             return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    let timer = self.metrics.elapsed_compute.timer();
+                    let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
+                    let timer = elapsed_compute.timer();
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
                     let result = build_batch(
@@ -299,7 +293,6 @@ impl UnnestStream {
                         continue;
                     };
                     self.metrics.output_batches.add(1);
-                    self.metrics.output_rows.add(result_batch.num_rows());
 
                     // Empty record batches should not be emitted.
                     // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
@@ -313,8 +306,8 @@ impl UnnestStream {
                         self.metrics.input_batches,
                         self.metrics.input_rows,
                         self.metrics.output_batches,
-                        self.metrics.output_rows,
-                        self.metrics.elapsed_compute,
+                        self.metrics.baseline_metrics.output_rows(),
+                        self.metrics.baseline_metrics.elapsed_compute(),
                     );
                     other
                 }
