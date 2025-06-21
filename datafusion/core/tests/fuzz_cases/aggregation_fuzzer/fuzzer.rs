@@ -171,7 +171,7 @@ impl AggregationFuzzer {
             let datasets = self
                 .dataset_generator
                 .generate()
-                .expect("should success to generate dataset");
+                .expect("should succeed to generate dataset");
 
             // Then for each of them, we random select a test sql for it
             let query_groups = datasets
@@ -216,16 +216,16 @@ impl AggregationFuzzer {
             // Generate the baseline context, and get the baseline result firstly
             let baseline_ctx_with_params = ctx_generator
                 .generate_baseline()
-                .expect("should success to generate baseline session context");
+                .expect("should succeed to generate baseline session context");
             let baseline_result = run_sql(&sql, &baseline_ctx_with_params.ctx)
                 .await
-                .expect("should success to run baseline sql");
+                .expect("should succeed to run baseline sql");
             let baseline_result = Arc::new(baseline_result);
             // Generate test tasks
             for _ in 0..CTX_GEN_ROUNDS {
                 let ctx_with_params = ctx_generator
                     .generate()
-                    .expect("should success to generate session context");
+                    .expect("should succeed to generate session context");
                 let task = AggregationFuzzTestTask {
                     dataset_ref: dataset_ref.clone(),
                     expected_result: baseline_result.clone(),

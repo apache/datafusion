@@ -184,6 +184,26 @@ fn hash_array<T>(
     }
 }
 
+/// Helper function to update hash for a dictionary key if the value is valid
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline]
+fn update_hash_for_dict_key(
+    hash: &mut u64,
+    dict_hashes: &[u64],
+    dict_values: &dyn Array,
+    idx: usize,
+    multi_col: bool,
+) {
+    if dict_values.is_valid(idx) {
+        if multi_col {
+            *hash = combine_hashes(dict_hashes[idx], *hash);
+        } else {
+            *hash = dict_hashes[idx];
+        }
+    }
+    // no update for invalid dictionary value
+}
+
 /// Hash the values in a dictionary array
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_dictionary<K: ArrowDictionaryKeyType>(
@@ -195,23 +215,23 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     // Hash each dictionary value once, and then use that computed
     // hash for each key value to avoid a potentially expensive
     // redundant hashing for large dictionary elements (e.g. strings)
-    let values = Arc::clone(array.values());
-    let mut dict_hashes = vec![0; values.len()];
-    create_hashes(&[values], random_state, &mut dict_hashes)?;
+    let dict_values = Arc::clone(array.values());
+    let mut dict_hashes = vec![0; dict_values.len()];
+    create_hashes(&[dict_values], random_state, &mut dict_hashes)?;
 
     // combine hash for each index in values
-    if multi_col {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-            if let Some(key) = key {
-                *hash = combine_hashes(dict_hashes[key.as_usize()], *hash)
-            } // no update for Null, consistent with other hashes
-        }
-    } else {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-            if let Some(key) = key {
-                *hash = dict_hashes[key.as_usize()]
-            } // no update for Null, consistent with other hashes
-        }
+    let dict_values = array.values();
+    for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
+        if let Some(key) = key {
+            let idx = key.as_usize();
+            update_hash_for_dict_key(
+                hash,
+                &dict_hashes,
+                dict_values.as_ref(),
+                idx,
+                multi_col,
+            );
+        } // no update for Null key
     }
     Ok(())
 }
