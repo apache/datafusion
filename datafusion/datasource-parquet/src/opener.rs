@@ -250,12 +250,16 @@ impl FileOpener for ParquetOpener {
 
             let predicate = predicate
                 .map(|p| {
-                    let rewriter =
-                        PhysicalExprSchemaRewriter::new(&physical_file_schema, &logical_file_schema)
-                            .with_partition_columns(partition_fields.to_vec(), file.partition_values);
+                    let rewriter = PhysicalExprSchemaRewriter::new(
+                        &physical_file_schema,
+                        &logical_file_schema,
+                    )
+                    .with_partition_columns(
+                        partition_fields.to_vec(),
+                        file.partition_values,
+                    );
 
-                    rewriter.rewrite(p)
-                    .map_err(ArrowError::from)
+                    rewriter.rewrite(p).map_err(ArrowError::from)
                 })
                 .transpose()?;
 
