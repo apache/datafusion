@@ -104,10 +104,71 @@ use tempfile::TempDir;
 /// ```
 /// DistinctIndexTable is a custom TableProvider that reads Parquet files
 
+#[derive(Debug, Clone)]
+struct DistinctIndex {
+    inner: HashSet<String>,
+}
+
+impl DistinctIndex {
+    // Init from iterator of distinct values
+    pub fn new<I: IntoIterator<Item = String>>(iter: I) -> Self {
+        Self {
+            inner: iter.into_iter().collect(),
+        }
+    }
+
+    // serialize the distinct index to a writer
+    fn serialize<W: Write + Send>(
+        &self,
+        arrow_writer: &mut ArrowWriter<W>,
+    ) -> Result<()> {
+        let distinct: HashSet<_> = self.inner.iter().collect();
+        let serialized = distinct
+            .into_iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        let index_bytes = serialized.into_bytes();
+
+        // Set the offset for the index
+        let offset = arrow_writer.bytes_written();
+        let index_len = index_bytes.len() as u64;
+
+        println!("Writing custom index at offset: {offset}, length: {index_len}");
+        // Write the index magic and length to the file
+        arrow_writer.write_all(b"IDX1")?;
+        arrow_writer.write_all(&index_len.to_le_bytes())?;
+
+        // Write the index bytes
+        arrow_writer.write_all(&index_bytes)?;
+
+        // Append metadata about the index to the Parquet file footer
+        arrow_writer.append_key_value_metadata(KeyValue::new(
+            "distinct_index_offset".to_string(),
+            offset.to_string(),
+        ));
+        arrow_writer.append_key_value_metadata(KeyValue::new(
+            "distinct_index_length".to_string(),
+            index_bytes.len().to_string(),
+        ));
+        Ok(())
+    }
+
+    // create a new distinct index from the specified bytes
+    fn new_from_bytes(serialized: &[u8]) -> Result<Self> {
+        let s = String::from_utf8(serialized.to_vec())
+            .map_err(|e| ParquetError::General(e.to_string()))?;
+
+        Ok(Self {
+            inner: s.lines().map(|s| s.to_string()).collect(),
+        })
+    }
+}
+
 #[derive(Debug)]
 struct DistinctIndexTable {
     schema: SchemaRef,
-    index: HashMap<String, HashSet<String>>,
+    index: HashMap<String, DistinctIndex>,
     dir: PathBuf,
 }
 
@@ -154,10 +215,6 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     let arr: ArrayRef = Arc::new(StringArray::from(values.to_vec()));
     let batch = RecordBatch::try_new(schema.clone(), vec![arr])?;
 
-    let distinct: HashSet<_> = values.iter().copied().collect();
-    let serialized = distinct.into_iter().collect::<Vec<_>>().join("\n");
-    let index_bytes = serialized.into_bytes();
-
     let file = File::create(path)?;
 
     let mut writer = IndexedParquetWriter::try_new(file, schema.clone())?;
@@ -167,27 +224,10 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     // Close row group
     writer.writer.flush()?;
 
-    // Set the offset for the index
-    let offset = writer.writer.bytes_written();
-    let index_len = index_bytes.len() as u64;
+    let distinct_index: DistinctIndex =
+        DistinctIndex::new(values.iter().map(|s| s.to_string()));
 
-    println!("Writing custom index at offset: {offset}, length: {index_len}");
-    // Write the index magic and length to the file
-    writer.writer.write_all(b"IDX1")?;
-    writer.writer.write_all(&index_len.to_le_bytes())?;
-
-    // Write the index bytes
-    writer.writer.write_all(&index_bytes)?;
-
-    // Append metadata about the index to the Parquet file footer
-    writer.writer.append_key_value_metadata(KeyValue::new(
-        "distinct_index_offset".to_string(),
-        offset.to_string(),
-    ));
-    writer.writer.append_key_value_metadata(KeyValue::new(
-        "distinct_index_length".to_string(),
-        index_bytes.len().to_string(),
-    ));
+    distinct_index.serialize(&mut writer.writer)?;
 
     writer.writer.close()?;
 
@@ -195,7 +235,7 @@ fn write_file_with_index(path: &Path, values: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn read_distinct_index(path: &Path) -> Result<HashSet<String>, ParquetError> {
+fn read_distinct_index(path: &Path) -> Result<DistinctIndex, ParquetError> {
     let mut file = File::open(path)?;
 
     let file_size = file.metadata()?.len();
@@ -245,10 +285,9 @@ fn read_distinct_index(path: &Path) -> Result<HashSet<String>, ParquetError> {
     let mut index_buf = vec![0u8; length];
     file.read_exact(&mut index_buf)?;
 
-    let s =
-        String::from_utf8(index_buf).map_err(|e| ParquetError::General(e.to_string()))?;
-
-    Ok(s.lines().map(|s| s.to_string()).collect())
+    let index = DistinctIndex::new_from_bytes(&index_buf)
+        .map_err(|e| ParquetError::General(e.to_string()))?;
+    Ok(index)
 }
 
 /// Implement TableProvider for DistinctIndexTable, using the distinct index to prune files
@@ -295,7 +334,7 @@ impl TableProvider for DistinctIndexTable {
         let keep: Vec<String> = self
             .index
             .iter()
-            .filter(|(_f, set)| target.as_ref().is_none_or(|v| set.contains(v)))
+            .filter(|(_f, set)| target.as_ref().is_none_or(|v| set.inner.contains(v)))
             .map(|(f, _)| f.clone())
             .collect();
 
