@@ -992,6 +992,7 @@ pub(crate) fn join_with_probe_batch(
             probe_indices,
             filter,
             build_hash_joiner.build_side,
+            None,
         )?
     } else {
         (build_indices, probe_indices)
