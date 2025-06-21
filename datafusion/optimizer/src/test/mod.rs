@@ -45,6 +45,33 @@ pub fn test_table_scan() -> Result<LogicalPlan> {
     test_table_scan_with_name("test")
 }
 
+/// Create a table with the given name and column definitions.
+///
+/// # Arguments
+/// * `name` - The name of the table to create
+/// * `columns` - Column definitions as slice of tuples (name, data_type)
+///
+/// # Example
+/// ```
+/// let plan = test_table_with_columns("integers", &[("i", DataType::Int32)])?;
+/// ```
+pub fn test_table_with_columns(
+    name: &str,
+    columns: &[(&str, DataType)],
+) -> Result<LogicalPlan> {
+    // Create fields with specified types for each column
+    let fields: Vec<Field> = columns
+        .iter()
+        .map(|&(col_name, ref data_type)| Field::new(col_name, data_type.clone(), false))
+        .collect();
+
+    // Create schema from fields
+    let schema = Schema::new(fields);
+
+    // Create table scan
+    table_scan(Some(name), &schema, None)?.build()
+}
+
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
     name: Option<&str>,
