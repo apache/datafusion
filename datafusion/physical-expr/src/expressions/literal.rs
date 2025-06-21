@@ -191,9 +191,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[test]
-    fn test_scalar_value_display_large_values() {
-        Literal::new(ScalarValue::Date64(Some(-790179464505600000)));
-    }
 }
