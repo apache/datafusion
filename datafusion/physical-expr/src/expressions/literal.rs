@@ -66,8 +66,7 @@ impl Literal {
         value: ScalarValue,
         metadata: Option<FieldMetadata>,
     ) -> Self {
-        let mut field =
-            Field::new(format!("{value}"), value.data_type(), value.is_null());
+        let mut field = Field::new("lit".to_string(), value.data_type(), value.is_null());
 
         if let Some(metadata) = metadata {
             field = metadata.add_to_field(field);
