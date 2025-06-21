@@ -155,7 +155,7 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
             // If the indexes or data types do not match, we need to create a new column expression
             (true, _) => column.clone(),
             (false, _) => {
-                Column::new_with_schema(logical_field.name(), self.logical_file_schema)?
+                Column::new_with_schema(logical_field.name(), self.physical_file_schema)?
             }
         };
 
