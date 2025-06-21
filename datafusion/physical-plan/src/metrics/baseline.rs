@@ -45,7 +45,7 @@ use datafusion_common::Result;
 /// ```
 #[derive(Debug, Clone)]
 pub struct BaselineMetrics {
-    /// end_time is set when `ExecutionMetrics::done()` is called
+    /// end_time is set when `BaselineMetrics::done()` is called
     end_time: Timestamp,
 
     /// amount of time the operator was actively trying to use the CPU
