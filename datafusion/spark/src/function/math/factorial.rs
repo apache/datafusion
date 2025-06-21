@@ -18,15 +18,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
-};
 use arrow::array::{Array, Int64Array};
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Int64;
-use datafusion_common::{
-    cast::as_int64_array, exec_err, DataFusionError, Result, ScalarValue,
-};
+use arrow::datatypes::DataType::{Int32, Int64};
+use datafusion_common::cast::as_int32_array;
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 
@@ -46,7 +42,7 @@ impl Default for SparkFactorial {
 impl SparkFactorial {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, vec![Int64], Volatility::Immutable),
+            signature: Signature::exact(vec![Int32], Volatility::Immutable),
             aliases: vec![],
         }
     }
@@ -75,24 +71,6 @@ impl ScalarUDFImpl for SparkFactorial {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err(
-                "factorial",
-                (1, 1),
-                arg_types.len(),
-            ));
-        }
-        match &arg_types[0] {
-            Int64 => Ok(vec![arg_types[0].clone()]),
-            _ => Err(unsupported_data_type_exec_err(
-                "factorial",
-                "Integer",
-                &arg_types[0],
-            )),
-        }
     }
 }
 
@@ -128,7 +106,7 @@ pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusi
     }
 
     match &args[0] {
-        ColumnarValue::Scalar(ScalarValue::Int64(value)) => {
+        ColumnarValue::Scalar(ScalarValue::Int32(value)) => {
             let result = compute_factorial(*value);
             Ok(ColumnarValue::Scalar(ScalarValue::Int64(result)))
         }
@@ -136,8 +114,8 @@ pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusi
             exec_err!("`factorial` got an unexpected scalar type: {:?}", other)
         }
         ColumnarValue::Array(array) => match array.data_type() {
-            Int64 => {
-                let array = as_int64_array(array)?;
+            Int32 => {
+                let array = as_int32_array(array)?;
 
                 let result: Int64Array = array.iter().map(compute_factorial).collect();
 
@@ -151,7 +129,7 @@ pub fn spark_factorial(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusi
 }
 
 #[inline]
-fn compute_factorial(num: Option<i64>) -> Option<i64> {
+fn compute_factorial(num: Option<i32>) -> Option<i64> {
     num.filter(|&v| (0..=20).contains(&v))
         .map(|v| FACTORIALS[v as usize])
 }
@@ -159,14 +137,16 @@ fn compute_factorial(num: Option<i64>) -> Option<i64> {
 #[cfg(test)]
 mod test {
     use crate::function::math::factorial::spark_factorial;
-    use arrow::array::Int64Array;
+    use arrow::array::{Int32Array, Int64Array};
     use datafusion_common::cast::as_int64_array;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::ColumnarValue;
     use std::sync::Arc;
 
     #[test]
-    fn test_spark_factorial() {
-        let input = Int64Array::from(vec![
+    fn test_spark_factorial_array() {
+        let input = Int32Array::from(vec![
+            Some(-1),
             Some(0),
             Some(1),
             Some(2),
@@ -185,6 +165,7 @@ mod test {
 
         let actual = as_int64_array(&result).unwrap();
         let expected = Int64Array::from(vec![
+            None,
             Some(1),
             Some(1),
             Some(2),
@@ -195,5 +176,21 @@ mod test {
         ]);
 
         assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_spark_factorial_scalar() {
+        let input = ScalarValue::Int32(Some(5));
+
+        let args = ColumnarValue::Scalar(input);
+        let result = spark_factorial(&[args]).unwrap();
+        let result = match result {
+            ColumnarValue::Scalar(ScalarValue::Int64(val)) => val,
+            _ => panic!("Expected scalar"),
+        };
+        let actual = result.unwrap();
+        let expected = 120_i64;
+
+        assert_eq!(actual, expected);
     }
 }
