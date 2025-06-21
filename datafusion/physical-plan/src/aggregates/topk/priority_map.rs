@@ -99,10 +99,6 @@ impl PriorityMap {
         let ids = unsafe { self.map.take_all(map_idxs) };
         Ok(vec![ids, vals])
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.len() == 0
-    }
 }
 
 #[cfg(test)]

@@ -42,7 +42,7 @@ use crate::projection::{
     ProjectionExec,
 };
 use crate::{
-    handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    handle_state, stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
 };
@@ -500,13 +500,17 @@ impl ExecutionPlan for NestedLoopJoinExec {
         let inner_table = self.inner_table.try_once(|| {
             let stream = self.left.execute(0, Arc::clone(&context))?;
 
-            Ok(collect_left_input(
+            let task = collect_left_input(
                 stream,
                 join_metrics.clone(),
                 load_reservation,
                 need_produce_result_in_final(self.join_type),
                 self.right().output_partitioning().partition_count(),
-            ))
+            );
+            // Spawn a task the first time the stream is polled for the build phase.
+            // This ensures the consumer of the join does not poll unnecessarily
+            // while the build is ongoing
+            Ok(stream::spawn_deferred(task))
         })?;
 
         let batch_size = context.session_config().batch_size();

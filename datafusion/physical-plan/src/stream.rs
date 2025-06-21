@@ -28,11 +28,11 @@ use crate::displayable;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{exec_err, Result};
-use datafusion_common_runtime::JoinSet;
+use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
 
 use futures::stream::BoxStream;
-use futures::{Future, Stream, StreamExt};
+use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -520,6 +520,55 @@ impl Stream for ObservedStream {
         }
         self.baseline_metrics.record_poll(poll)
     }
+}
+
+/// Returns a stream that on first poll spawns a task that drives the `create_stream` future to
+/// completion and once the future is complete produces the values of the created stream.
+///
+/// This construct ensures any intermittent pending results returned by `create_stream` are hidden
+/// from the consumer of the returned stream. Instead, the stream consumer will get a pending result
+/// once and be woken when the stream creation future has completed. This avoids unnecessarily
+/// waking the stream consumer.
+///
+/// When `create_stream` is complete, production of `RecordBatch` instances may or may not be
+/// multithreaded depending on the `Stream` returned by the future. The stream created by this
+/// function will inherit whatever characteristics the stream created by the future has.   
+pub fn create_async_then_emit<F>(
+    schema: SchemaRef,
+    create_stream: F,
+) -> SendableRecordBatchStream
+where
+    F: Future<Output = Result<SendableRecordBatchStream>> + Send + 'static,
+{
+    // First create a future that on first poll starts and then awaits a spawned task
+    // which will drive the `create_stream` future to completion.
+    // After this statement the `create_stream_deferred` future has not been polled yet
+    // and so the task has not been spawned yet.
+    // `create_stream_deferred` awaits the join handle of the spawned task, so the final result
+    // of this future is the result of the `create_stream` future which is available once the spawned task
+    // completes.
+    let create_stream_deferred = spawn_deferred(create_stream);
+
+    // Convert the future into a stream consisting of the result of the `create_stream_deferred`
+    // future which itself is the result of `create_stream`. In other words `create_stream_stream`
+    // is a stream containing a single stream.
+    // Since the stream created by `once` is lazy wrt the future it is given the task still has not
+    // been spawned when this statement completes.
+    let create_stream_stream = futures::stream::once(create_stream_deferred);
+
+    // Flatten the stream of streams to get a stream of record batches.
+    // try_flatten is also lazy, so the task still has not been spawned.
+    let emit_stream = create_stream_stream.try_flatten();
+
+    Box::pin(RecordBatchStreamAdapter::new(schema, emit_stream))
+}
+
+pub(crate) async fn spawn_deferred<F, R>(task: F) -> Result<R>
+where
+    F: Future<Output = Result<R>> + Send + 'static,
+    R: Send + 'static,
+{
+    SpawnedTask::spawn(task).await?
 }
 
 #[cfg(test)]
