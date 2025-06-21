@@ -25,8 +25,6 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
-use arrow::compute::can_cast_types;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
@@ -539,7 +537,7 @@ fn should_enable_page_index(
             .unwrap_or(false)
 }
 
-use datafusion_physical_expr::expressions;
+use datafusion_physical_expr::PhysicalExprSchemaRewriter;
 
 /// Given a [`PhysicalExpr`] and a [`SchemaRef`], returns a new [`PhysicalExpr`] that
 /// is cast to the specified data type.
@@ -553,68 +551,11 @@ pub fn cast_expr_to_schema(
     partition_values: Vec<ScalarValue>,
     partition_fields: &[FieldRef],
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<expressions::Column>() {
-            let logical_field = match logical_file_schema.field_with_name(column.name()) {
-                Ok(field) => field,
-                Err(e) => {
-                    // If the column is a partition field, we can use the partition value
-                    for (partition_field, partition_value) in
-                        partition_fields.iter().zip(partition_values.iter())
-                    {
-                        if partition_field.name() == column.name() {
-                            return Ok(Transformed::yes(expressions::lit(
-                                partition_value.clone(),
-                            )));
-                        }
-                    }
-                    // If the column is not found in the logical schema, return an error
-                    // This should probably never be hit unless something upstream broke, but nontheless it's better
-                    // for us to return a handleable error than to panic / do something unexpected.
-                    return Err(e.into());
-                }
-            };
-            let Ok(physical_field) = physical_file_schema.field_with_name(column.name())
-            else {
-                if !logical_field.is_nullable() {
-                    return exec_err!(
-                        "Non-nullable column '{}' is missing from the physical schema",
-                        column.name()
-                    );
-                }
-                // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` would do.
-                // TODO: do we need to sync this with what the `SchemaAdapter` actually does?
-                // While the default implementation fills in nulls in theory a custom `SchemaAdapter` could do something else!
-                let value = ScalarValue::Null.cast_to(logical_field.data_type())?;
-                return Ok(Transformed::yes(expressions::lit(value)));
-            };
+    let rewriter =
+        PhysicalExprSchemaRewriter::new(physical_file_schema, logical_file_schema)
+            .with_partition_columns(partition_fields.to_vec(), partition_values);
 
-            if logical_field.data_type() == physical_field.data_type() {
-                return Ok(Transformed::no(expr));
-            }
-
-            // If the logical field and physical field are different, we need to cast
-            // the column to the logical field's data type.
-            // We will try later to move the cast to literal values if possible, which is computationally cheaper.
-            if !can_cast_types(logical_field.data_type(), physical_field.data_type()) {
-                return exec_err!(
-                    "Cannot cast column '{}' from '{}' (file data type) to '{}' (table data type)",
-                    column.name(),
-                    logical_field.data_type(),
-                    physical_field.data_type()
-                );
-            }
-            let casted_expr = Arc::new(expressions::CastExpr::new(
-                expr,
-                logical_field.data_type().clone(),
-                None,
-            ));
-            return Ok(Transformed::yes(casted_expr));
-        }
-
-        Ok(Transformed::no(expr))
-    })
-    .data()
+    rewriter.rewrite(expr)
 }
 
 #[cfg(test)]
