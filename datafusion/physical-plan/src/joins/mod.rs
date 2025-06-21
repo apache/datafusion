@@ -21,7 +21,8 @@ use arrow::array::BooleanBufferBuilder;
 pub use cross_join::CrossJoinExec;
 use datafusion_physical_expr::PhysicalExprRef;
 pub use hash_join::{
-    HashJoinExec, SharedJoinState, SharedJoinStateImpl, SharedProbeState,
+    HashJoinExec, JoinContext, JoinLeftData, SharedJoinState, SharedJoinStateImpl,
+    SharedProbeState, RANDOM_STATE,
 };
 pub use nested_loop_join::NestedLoopJoinExec;
 use parking_lot::Mutex;
@@ -38,6 +39,7 @@ pub mod utils;
 
 mod join_filter;
 mod join_hash_map;
+pub type RandomState = ahash::RandomState;
 
 #[cfg(test)]
 pub mod test_utils;

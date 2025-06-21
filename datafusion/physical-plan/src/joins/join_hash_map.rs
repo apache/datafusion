@@ -106,6 +106,10 @@ impl JoinHashMap {
             next: vec![0; capacity],
         }
     }
+
+    pub fn contains_hash(&self, hash: u64) -> bool {
+        self.map.find(hash, |(h, _)| *h == hash).is_some()
+    }
 }
 
 // Type of offsets for obtaining indices from JoinHashMap.
