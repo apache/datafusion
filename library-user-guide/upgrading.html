@@ -584,6 +584,17 @@
      </code>
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#new-datafusion-execution-spill-compression-configuration-option">
+     New
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       datafusion.execution.spill_compression
+      </span>
+     </code>
+     configuration option
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -993,6 +1004,30 @@ is more efficient.</p>
 </pre></div>
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/16317">#16317</a> for details.</p>
+</section>
+<section id="new-datafusion-execution-spill-compression-configuration-option">
+<h3>New <code class="docutils literal notranslate"><span class="pre">datafusion.execution.spill_compression</span></code> configuration option<a class="headerlink" href="#new-datafusion-execution-spill-compression-configuration-option" title="Link to this heading">¶</a></h3>
+<p>DataFusion 49.0.0 adds support for compressing spill files when data is written to disk during spilling query execution. A new configuration option <code class="docutils literal notranslate"><span class="pre">datafusion.execution.spill_compression</span></code> controls the compression codec used.</p>
+<p><strong>Configuration:</strong></p>
+<ul class="simple">
+<li><p><strong>Key</strong>: <code class="docutils literal notranslate"><span class="pre">datafusion.execution.spill_compression</span></code></p></li>
+<li><p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">uncompressed</span></code></p></li>
+<li><p><strong>Valid values</strong>: <code class="docutils literal notranslate"><span class="pre">uncompressed</span></code>, <code class="docutils literal notranslate"><span class="pre">lz4_frame</span></code>, <code class="docutils literal notranslate"><span class="pre">zstd</span></code></p></li>
+</ul>
+<p><strong>Usage:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_common</span><span class="p">::</span><span class="n">config</span><span class="p">::</span><span class="n">SpillCompression</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionConfig</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_spill_compression</span><span class="p">(</span><span class="n">SpillCompression</span><span class="p">::</span><span class="n">Zstd</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new_with_config</span><span class="p">(</span><span class="n">config</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Or via SQL:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">spill_compression</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;zstd&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>For more details about this configuration option, including performance trade-offs between different compression codecs, see the <a class="reference internal" href="../user-guide/configs.html"><span class="std std-doc">Configuration Settings</span></a> documentation.</p>
 </section>
 </section>
 <section id="datafusion-48-0-0">
