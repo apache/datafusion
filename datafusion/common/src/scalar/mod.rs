@@ -3820,7 +3820,12 @@ impl fmt::Display for ScalarValue {
                 format_option!(f, e.map(|v| Date32Type::to_naive_date(v).to_string()))?
             }
             ScalarValue::Date64(e) => {
-                format_option!(f, e.map(|v| Date64Type::to_naive_date(v).to_string()))?
+                format_option!(f, e.map(|v| {
+                    if v < i32::MIN as i64 || v > i32::MAX as i64 {
+                        return "".to_string();
+                    }
+                    Date64Type::to_naive_date(v).to_string()
+                }))?
             }
             ScalarValue::Time32Second(e) => format_option!(f, e)?,
             ScalarValue::Time32Millisecond(e) => format_option!(f, e)?,
@@ -7639,4 +7644,5 @@ mod tests {
         ];
         assert!(scalars.iter().all(|s| s.is_null()));
     }
+
 }

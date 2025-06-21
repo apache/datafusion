@@ -191,4 +191,9 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_err() {
+        Literal::new(ScalarValue::Date64(Some(-790179464505600000)));
+    }
 }
