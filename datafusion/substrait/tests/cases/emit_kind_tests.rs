@@ -99,7 +99,7 @@ mod tests {
         assert_snapshot!(
         plan2,
         @r#"
-            Projection: random() AS c1, data.a + Int64(1) AS c2
+            Projection: random() AS c1, (data.a + Int64(1)) AS c2
               Projection: data.a, data.b, data.c, data.d, data.e, data.f, random(), data.a + Int64(1)
                 TableScan: data
             "#

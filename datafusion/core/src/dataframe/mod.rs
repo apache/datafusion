@@ -358,11 +358,11 @@ impl DataFrame {
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.select(vec![col("a"), col("b") * col("c")])?;
     /// let expected = vec![
-    ///     "+---+-----------------------+",
-    ///     "| a | ?table?.b * ?table?.c |",
-    ///     "+---+-----------------------+",
-    ///     "| 1 | 6                     |",
-    ///     "+---+-----------------------+"
+    ///     "+---+-------------------------+",
+    ///     "| a | (?table?.b * ?table?.c) |",
+    ///     "+---+-------------------------+",
+    ///     "| 1 | 6                       |",
+    ///     "+---+-------------------------+"
     /// ];
     /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())

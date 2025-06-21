@@ -78,11 +78,11 @@ async fn plan_and_collect(sql: &str) -> Result<Vec<RecordBatch>> {
 async fn test_custom_operators_arrow() {
     let actual = plan_and_collect("select 'foo'->'bar';").await.unwrap();
     insta::assert_snapshot!(batches_to_string(&actual), @r###"
-    +----------------------------+
-    | Utf8("foo") || Utf8("bar") |
-    +----------------------------+
-    | foobar                     |
-    +----------------------------+
+    +------------------------------+
+    | (Utf8("foo") || Utf8("bar")) |
+    +------------------------------+
+    | foobar                       |
+    +------------------------------+
     "###);
 }
 
@@ -90,11 +90,11 @@ async fn test_custom_operators_arrow() {
 async fn test_custom_operators_long_arrow() {
     let actual = plan_and_collect("select 1->>2;").await.unwrap();
     insta::assert_snapshot!(batches_to_string(&actual), @r###"
-    +---------------------+
-    | Int64(1) + Int64(2) |
-    +---------------------+
-    | 3                   |
-    +---------------------+
+    +-----------------------+
+    | (Int64(1) + Int64(2)) |
+    +-----------------------+
+    | 3                     |
+    +-----------------------+
     "###);
 }
 
