@@ -19,7 +19,7 @@
 //!
 //! # Cooperative scheduling
 //!
-//! A single call to `poll_next` on a top-level `Stream` may potentially perform a lot of work
+//! A single call to `poll_next` on a top-level [`Stream`] may potentially perform a lot of work
 //! before it returns a `Poll::Pending`. Think for instance of calculating an aggregation over a
 //! large dataset.
 //! If a `Stream` runs for a long period of time without yielding back to the Tokio executor,

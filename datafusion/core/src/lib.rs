@@ -498,9 +498,20 @@
 //! While preparing for execution, DataFusion tries to create this many distinct
 //! `async` [`Stream`]s for each [`ExecutionPlan`].
 //! The [`Stream`]s for certain [`ExecutionPlan`]s, such as [`RepartitionExec`]
-//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that are run by
+//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that run on
 //! threads managed by the [`Runtime`].
 //! Many DataFusion [`Stream`]s perform CPU intensive processing.
+//!
+//! ### Cooperative Scheduling
+//!
+//! DataFusion uses cooperative scheduling, which means that each [`Stream`]
+//! is responsible for yielding control back to the [`Runtime`] after
+//! some amount of work is done. Please see the [`coop`] module documentation
+//! for more details.
+//!
+//! [`coop`]: datafusion_physical_plan::coop
+//!
+//! ### Network I/O and CPU intensive tasks
 //!
 //! Using `async` for CPU intensive tasks makes it easy for [`TableProvider`]s
 //! to perform network I/O using standard Rust `async` during execution.
