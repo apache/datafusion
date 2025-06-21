@@ -98,7 +98,7 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            return self.rewrite_column(Arc::clone(&expr), column)
+            return self.rewrite_column(Arc::clone(&expr), column);
         }
 
         Ok(Transformed::no(expr))
@@ -126,7 +126,8 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         };
 
         // Check if the column exists in the physical schema
-        let physical_column_index = match self.physical_file_schema.index_of(column.name()) {
+        let physical_column_index =
+            match self.physical_file_schema.index_of(column.name()) {
                 Ok(index) => index,
                 Err(_) => {
                     if !logical_field.is_nullable() {
@@ -144,13 +145,18 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
                 }
             };
         let physical_field = self.physical_file_schema.field(physical_column_index);
-        
-        let column = match (column.index() == physical_column_index, logical_field.data_type() == physical_field.data_type()) {
+
+        let column = match (
+            column.index() == physical_column_index,
+            logical_field.data_type() == physical_field.data_type(),
+        ) {
             // If the column index matches and the data types match, we can use the column as is
             (true, true) => return Ok(Transformed::no(expr)),
             // If the indexes or data types do not match, we need to create a new column expression
             (true, _) => column.clone(),
-            (false, _) => Column::new_with_schema(logical_field.name(), self.logical_file_schema)?
+            (false, _) => {
+                Column::new_with_schema(logical_field.name(), self.logical_file_schema)?
+            }
         };
 
         if logical_field.data_type() == physical_field.data_type() {
