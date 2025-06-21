@@ -19,7 +19,8 @@
 
 pub use cross_join::CrossJoinExec;
 pub use hash_join::{
-    HashJoinExec, SharedJoinState, SharedJoinStateImpl, SharedProbeState,
+    HashJoinExec, JoinContext, JoinLeftData, SharedJoinState, SharedJoinStateImpl,
+    SharedProbeState, RANDOM_STATE,
 };
 pub use nested_loop_join::NestedLoopJoinExec;
 // Note: SortMergeJoin is not used in plans yet
@@ -32,6 +33,8 @@ mod sort_merge_join;
 mod stream_join_utils;
 mod symmetric_hash_join;
 pub mod utils;
+
+pub type RandomState = ahash::RandomState;
 
 #[cfg(test)]
 pub mod test_utils;

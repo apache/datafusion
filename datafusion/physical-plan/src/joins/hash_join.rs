@@ -77,7 +77,25 @@ use arrow_buffer::BooleanBuffer;
 use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
+use log::debug;
 use parking_lot::Mutex;
+
+pub const RANDOM_STATE: RandomState = RandomState::with_seeds(0, 0, 0, 0);
+
+#[derive(Default)]
+pub struct JoinContext {
+    build_state: Mutex<Option<Arc<JoinLeftData>>>,
+}
+
+impl JoinContext {
+    pub fn set_build_state(&self, state: Arc<JoinLeftData>) {
+        self.build_state.lock().replace(state);
+    }
+
+    pub fn get_build_state(&self) -> Option<Arc<JoinLeftData>> {
+        self.build_state.lock().clone()
+    }
+}
 
 pub struct SharedJoinState {
     state_impl: Arc<dyn SharedJoinStateImpl>,
@@ -128,7 +146,7 @@ pub trait SharedJoinStateImpl: Send + Sync + 'static {
 type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
 
 /// HashTable and input data for the left (build side) of a join
-struct JoinLeftData {
+pub struct JoinLeftData {
     /// The hash table with indices into `batch`
     hash_map: JoinHashMap,
     /// The input rows for the build side
@@ -163,6 +181,10 @@ impl JoinLeftData {
             shared_state: distributed_state,
             reservation,
         }
+    }
+
+    pub fn contains_hash(&self, hash: u64) -> bool {
+        self.hash_map.contains_hash(hash)
     }
 
     /// return a reference to the hash map
@@ -768,6 +790,7 @@ impl ExecutionPlan for HashJoinExec {
 
         let distributed_state =
             context.session_config().get_extension::<SharedJoinState>();
+        let join_context = context.session_config().get_extension::<JoinContext>();
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
@@ -855,6 +878,7 @@ impl ExecutionPlan for HashJoinExec {
             batch_size,
             hashes_buffer: vec![],
             right_side_ordered: self.right.output_ordering().is_some(),
+            join_context,
         }))
     }
 
@@ -1187,6 +1211,7 @@ struct HashJoinStream {
     hashes_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
+    join_context: Option<Arc<JoinContext>>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -1398,6 +1423,11 @@ impl HashJoinStream {
             .left_fut
             .get_shared(cx))?;
         build_timer.done();
+
+        if let Some(ctx) = self.join_context.as_ref() {
+            debug!("setting join left data in join context");
+            ctx.set_build_state(Arc::clone(&left_data));
+        }
 
         self.state = HashJoinStreamState::FetchProbeBatch;
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
