@@ -857,7 +857,6 @@ pub(crate) fn apply_join_filter_to_indices(
         for i in (0..build_indices.len()).step_by(max_size) {
             let end = min(build_indices.len(), i + max_size);
             let len = end - i;
-            build_indices.slice(i, len);
             let intermediate_batch = build_batch_from_indices(
                 filter.schema(),
                 build_input_buffer,
