@@ -466,6 +466,7 @@ impl Unparser<'_> {
                             "Offset operator only valid in a statement context."
                         );
                     };
+
                     query.offset(Some(ast::Offset {
                         rows: ast::OffsetRows::None,
                         value: self.expr_to_sql(skip)?,
@@ -799,7 +800,7 @@ impl Unparser<'_> {
 
                             let projection = left_projection
                                 .into_iter()
-                                .chain(right_projection.into_iter())
+                                .chain(right_projection)
                                 .collect();
                             select.projection(projection);
                         }
