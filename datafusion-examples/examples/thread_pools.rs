@@ -44,7 +44,6 @@ use futures::stream::StreamExt;
 use object_store::client::SpawnedReqwestConnector;
 use object_store::http::HttpBuilder;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::Notify;
 use url::Url;
@@ -272,7 +271,7 @@ async fn drain_join_set(mut join_set: JoinSet<Result<()>>) {
 /// and shutdown of a separate thread.
 ///
 /// # Notes
-/// On drop, the current thread will wait for all remaining tasks to complete.
+/// On drop, the thread will wait for all remaining tasks to complete.
 ///
 /// Depending on your application, more sophisticated shutdown logic may be
 /// required, such as ensuring that no new tasks are added to the runtime.
@@ -294,11 +293,12 @@ impl Drop for CpuRuntime {
     fn drop(&mut self) {
         // Notify the thread to shutdown.
         self.notify_shutdown.notify_one();
-        // IN a production system you also need to ensure that nothing adds new
-        // tasks to the underlying runtime after this point
+        // In a production system you also need to ensure your code stops adding
+        // new tasks to the underlying runtime after this point to allow the
+        // thread to complete its work and exit cleanly.
         if let Some(thread_join_handle) = self.thread_join_handle.take() {
             // If the thread is still running, we wait for it to finish
-            println!("Shutting down CPU runtime thread...");
+            print!("Shutting down CPU runtime thread...");
             if let Err(e) = thread_join_handle.join() {
                 eprintln!("Error joining CPU runtime thread: {e:?}",);
             } else {
@@ -318,12 +318,13 @@ impl CpuRuntime {
         let notify_shutdown = Arc::new(Notify::new());
         let notify_shutdown_captured = Arc::clone(&notify_shutdown);
 
-        // The cpu_runtime must be dropped on a separate thread,
+        // The cpu_runtime runs and is dropped on a separate thread
         let thread_join_handle = std::thread::spawn(move || {
             cpu_runtime.block_on(async move {
                 notify_shutdown_captured.notified().await;
             });
-            cpu_runtime.shutdown_timeout(Duration::from_secs(1));
+            // Note: cpu_runtime is dropped here, which will wait for all tasks
+            // to complete
         });
 
         Ok(Self {
