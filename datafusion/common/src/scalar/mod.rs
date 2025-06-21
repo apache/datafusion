@@ -7243,6 +7243,19 @@ mod tests {
     }
 
     #[test]
+    fn test_display_date64_large_values() {
+        assert_eq!(
+            format!("{}", ScalarValue::Date64(Some(790179464505))),
+            "1995-01-15"
+        );
+        // This used to panic, see https://github.com/apache/arrow-rs/issues/7728
+        assert_eq!(
+            format!("{}", ScalarValue::Date64(Some(-790179464505600000))),
+            ""
+        );
+    }
+
+    #[test]
     fn test_struct_display_null() {
         let fields = vec![Field::new("a", DataType::Int32, false)];
         let s = ScalarStructBuilder::new_null(fields);
