@@ -35,9 +35,10 @@ use datafusion_common::pruning::{
     CompositePruningStatistics, PartitionPruningStatistics, PrunableStatistics,
     PruningStatistics,
 };
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, Result};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr::utils::reassign_predicate_columns;
+use datafusion_physical_expr::PhysicalExprSchemaRewriter;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -250,13 +251,11 @@ impl FileOpener for ParquetOpener {
 
             let predicate = predicate
                 .map(|p| {
-                    cast_expr_to_schema(
-                        p,
-                        &physical_file_schema,
-                        &logical_file_schema,
-                        file.partition_values,
-                        &partition_fields,
-                    )
+                    let rewriter =
+                        PhysicalExprSchemaRewriter::new(&physical_file_schema, &logical_file_schema)
+                            .with_partition_columns(partition_fields.to_vec(), file.partition_values);
+
+                    rewriter.rewrite(p)
                     .map_err(ArrowError::from)
                     .map(|p| reassign_predicate_columns(p, &physical_file_schema, false))
                 })
@@ -535,27 +534,6 @@ fn should_enable_page_index(
             .as_ref()
             .map(|p| p.filter_number() > 0)
             .unwrap_or(false)
-}
-
-use datafusion_physical_expr::PhysicalExprSchemaRewriter;
-
-/// Given a [`PhysicalExpr`] and a [`SchemaRef`], returns a new [`PhysicalExpr`] that
-/// is cast to the specified data type.
-/// Preference is always given to casting literal values to the data type of the column
-/// since casting the column to the literal value's data type can be significantly more expensive.
-/// Given two columns the cast is applied arbitrarily to the first column.
-pub fn cast_expr_to_schema(
-    expr: Arc<dyn PhysicalExpr>,
-    physical_file_schema: &Schema,
-    logical_file_schema: &Schema,
-    partition_values: Vec<ScalarValue>,
-    partition_fields: &[FieldRef],
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let rewriter =
-        PhysicalExprSchemaRewriter::new(physical_file_schema, logical_file_schema)
-            .with_partition_columns(partition_fields.to_vec(), partition_values);
-
-    rewriter.rewrite(expr)
 }
 
 #[cfg(test)]
