@@ -21,7 +21,9 @@ use std::cmp::{self, Ordering};
 use std::task::{ready, Poll};
 use std::{any::Any, sync::Arc};
 
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, BaselineMetrics};
+use super::metrics::{
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
@@ -38,12 +40,12 @@ use arrow::compute::{cast, is_not_null, kernels, sum};
 use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
+use async_trait::async_trait;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, HashMap, HashSet, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use log::trace;
 
@@ -277,7 +279,8 @@ impl UnnestStream {
         loop {
             return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
+                    let elapsed_compute =
+                        self.metrics.baseline_metrics.elapsed_compute().clone();
                     let timer = elapsed_compute.timer();
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
