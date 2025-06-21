@@ -18,9 +18,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
-};
 use arrow::array::{Array, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
@@ -75,24 +72,6 @@ impl ScalarUDFImpl for SparkFactorial {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err(
-                "factorial",
-                (1, 1),
-                arg_types.len(),
-            ));
-        }
-        match &arg_types[0] {
-            Int64 => Ok(vec![arg_types[0].clone()]),
-            _ => Err(unsupported_data_type_exec_err(
-                "factorial",
-                "Integer",
-                &arg_types[0],
-            )),
-        }
     }
 }
 
@@ -161,11 +140,12 @@ mod test {
     use crate::function::math::factorial::spark_factorial;
     use arrow::array::Int64Array;
     use datafusion_common::cast::as_int64_array;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::ColumnarValue;
     use std::sync::Arc;
 
     #[test]
-    fn test_spark_factorial() {
+    fn test_spark_factorial_array() {
         let input = Int64Array::from(vec![
             Some(0),
             Some(1),
@@ -195,5 +175,21 @@ mod test {
         ]);
 
         assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_spark_factorial_scalar() {
+        let input = ScalarValue::Int64(Some(5));
+
+        let args = ColumnarValue::Scalar(input);
+        let result = spark_factorial(&[args]).unwrap();
+        let result = match result {
+            ColumnarValue::Scalar(ScalarValue::Int64(val)) => val,
+            _ => panic!("Expected scalar"),
+        };
+        let actual = result.unwrap();
+        let expected = 120_i64;
+
+        assert_eq!(actual, expected);
     }
 }
