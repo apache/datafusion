@@ -98,7 +98,7 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            return self.rewrite_column(Arc::clone(&expr), column);
+            return self.rewrite_column(Arc::clone(&expr), column)
         }
 
         Ok(Transformed::no(expr))
@@ -126,9 +126,8 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         };
 
         // Check if the column exists in the physical schema
-        let physical_field =
-            match self.physical_file_schema.field_with_name(column.name()) {
-                Ok(field) => field,
+        let physical_column_index = match self.physical_file_schema.index_of(column.name()) {
+                Ok(index) => index,
                 Err(_) => {
                     if !logical_field.is_nullable() {
                         return exec_err!(
@@ -144,13 +143,25 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
                     return Ok(Transformed::yes(expressions::lit(null_value)));
                 }
             };
+        let physical_field = self.physical_file_schema.field(physical_column_index);
+        
+        let column = match (column.index() == physical_column_index, logical_field.data_type() == physical_field.data_type()) {
+            // If the column index matches and the data types match, we can use the column as is
+            (true, true) => return Ok(Transformed::no(expr)),
+            // If the indexes or data types do not match, we need to create a new column expression
+            (true, _) => column.clone(),
+            (false, _) => Column::new_with_schema(logical_field.name(), self.logical_file_schema)?
+        };
 
-        // If the logical field and physical field are different, we need to cast
-        // the column to the logical field's data type.
-        // We will try later to move the cast to literal values if possible, which is computationally cheaper.
         if logical_field.data_type() == physical_field.data_type() {
-            return Ok(Transformed::no(expr));
+            // If the data types match, we can use the column as is
+            return Ok(Transformed::yes(Arc::new(column)));
         }
+
+        // We need to cast the column to the logical data type
+        // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
+        // since that's much cheaper to evalaute.
+        // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
         if !can_cast_types(physical_field.data_type(), logical_field.data_type()) {
             return exec_err!(
                 "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type)",
