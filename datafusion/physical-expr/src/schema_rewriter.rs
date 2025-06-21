@@ -109,16 +109,18 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         expr: Arc<dyn PhysicalExpr>,
         column: &Column,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        // Check if this is a partition column
-        if let Some(partition_value) = self.get_partition_value(column.name()) {
-            return Ok(Transformed::yes(expressions::lit(partition_value)));
-        }
-
         // Get the logical field for this column
         let logical_field = match self.logical_file_schema.field_with_name(column.name())
         {
             Ok(field) => field,
             Err(e) => {
+                // If the column is a partition field, we can use the partition value
+                if let Some(partition_value) = self.get_partition_value(column.name()) {
+                    return Ok(Transformed::yes(expressions::lit(partition_value)));
+                }
+                // If the column is not found in the logical schema and is not a partition value, return an error
+                // This should probably never be hit unless something upstream broke, but nontheless it's better
+                // for us to return a handleable error than to panic / do something unexpected.
                 return Err(e.into());
             }
         };
@@ -128,26 +130,27 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
             match self.physical_file_schema.field_with_name(column.name()) {
                 Ok(field) => field,
                 Err(_) => {
-                    // Column is missing from physical schema
                     if !logical_field.is_nullable() {
                         return exec_err!(
                         "Non-nullable column '{}' is missing from the physical schema",
                         column.name()
                     );
                     }
-                    // Fill in with null value
+                    // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` would do.
+                    // TODO: do we need to sync this with what the `SchemaAdapter` actually does?
+                    // While the default implementation fills in nulls in theory a custom `SchemaAdapter` could do something else!
                     let null_value =
                         ScalarValue::Null.cast_to(logical_field.data_type())?;
                     return Ok(Transformed::yes(expressions::lit(null_value)));
                 }
             };
 
-        // Check if casting is needed
+        // If the logical field and physical field are different, we need to cast
+        // the column to the logical field's data type.
+        // We will try later to move the cast to literal values if possible, which is computationally cheaper.
         if logical_field.data_type() == physical_field.data_type() {
             return Ok(Transformed::no(expr));
         }
-
-        // Perform type casting
         if !can_cast_types(physical_field.data_type(), logical_field.data_type()) {
             return exec_err!(
                 "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type)",
