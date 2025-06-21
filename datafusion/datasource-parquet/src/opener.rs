@@ -37,6 +37,7 @@ use datafusion_common::pruning::{
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_datasource::PartitionedFile;
+use datafusion_physical_expr::utils::reassign_predicate_columns;
 use datafusion_physical_expr::PhysicalExprSchemaRewriter;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
@@ -259,8 +260,11 @@ impl FileOpener for ParquetOpener {
                         file.partition_values,
                     );
 
-                    rewriter.rewrite(p).map_err(ArrowError::from)
+                    rewriter.rewrite(p)
+                    .map_err(ArrowError::from)
+                    .map(|p| reassign_predicate_columns(p, &physical_file_schema, false))
                 })
+                .transpose()?
                 .transpose()?;
 
             // Build predicates for this specific file
