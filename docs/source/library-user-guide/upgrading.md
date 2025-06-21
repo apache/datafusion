@@ -65,6 +65,37 @@ See [#16317] for details.
 
 [#16317]: https://github.com/apache/datafusion/pull/16317
 
+### New `datafusion.execution.spill_compression` configuration option
+
+DataFusion 49.0.0 adds support for compressing spill files when data is written to disk during spilling query execution. A new configuration option `datafusion.execution.spill_compression` controls the compression codec used.
+
+**Configuration:**
+
+- **Key**: `datafusion.execution.spill_compression`
+- **Default**: `uncompressed`
+- **Valid values**: `uncompressed`, `lz4_frame`, `zstd`
+
+**Usage:**
+
+```rust
+# /* comment to avoid running
+use datafusion::prelude::*;
+use datafusion_common::config::SpillCompression;
+
+let config = SessionConfig::default()
+    .with_spill_compression(SpillCompression::Zstd);
+let ctx = SessionContext::new_with_config(config);
+# */
+```
+
+Or via SQL:
+
+```sql
+SET datafusion.execution.spill_compression = 'zstd';
+```
+
+For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
+
 ## DataFusion `48.0.0`
 
 ### `Expr::Literal` has optional metadata
