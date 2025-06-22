@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion\-clone/datafusion/sqllogictest/test_files/tpch/data/nation\.tbl not found: No such file or directory \(os error 2\)
+query IR
 select
     ps_partkey,
     sum(ps_supplycost * ps_availqty) as value
@@ -45,3 +45,14 @@ group by
 order by
     value desc
 limit 10;
+----
+12098 16227681.21
+5134 15709338.52
+13334 15023662.41
+17052 14351644.2
+3452 14070870.14
+12552 13332469.18
+1084 13170428.29
+5797 13038622.72
+12633 12892561.61
+403 12856217.34

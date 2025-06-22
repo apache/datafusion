@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion\-clone/datafusion/sqllogictest/test_files/tpch/data/lineitem\.tbl not found: No such file or directory \(os error 2\)
+query R
 select
         sum(l_extendedprice) / 7.0 as avg_yearly
 from
@@ -34,3 +34,5 @@ where
     where
             l_partkey = p_partkey
 );
+----
+23512.752857142856

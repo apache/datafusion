@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion\-clone/datafusion/sqllogictest/test_files/tpch/data/region\.tbl not found: No such file or directory \(os error 2\)
+query TR
 select
     n_name,
     sum(l_extendedprice * (1 - l_discount)) as revenue
@@ -41,3 +41,9 @@ group by
     n_name
 order by
     revenue desc;
+----
+CHINA 7822103
+INDIA 6376121.5085
+JAPAN 6000077.2184
+INDONESIA 5580475.4027
+VIETNAM 4497840.5466

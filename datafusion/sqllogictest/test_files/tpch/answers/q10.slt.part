@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion\-clone/datafusion/sqllogictest/test_files/tpch/data/nation\.tbl not found: No such file or directory \(os error 2\)
+query ITRRTTTT
 select
     c_custkey,
     c_name,
@@ -49,3 +49,14 @@ group by
 order by
     revenue desc
 limit 10;
+----
+8242 Customer#000008242 622786.7297 6322.09 ETHIOPIA P2n4nJhy,UqSo2s43YfSvYJDZ6lk 15-792-676-1184 slyly regular packages haggle carefully ironic ideas. courts are furiously. furiously unusual theodolites cajole. i
+7714 Customer#000007714 557400.3053 9799.98 IRAN SnnIGB,SkmnWpX3 20-922-418-6024 arhorses according to the blithely express re
+11032 Customer#000011032 512500.9641 8496.93 UNITED KINGDOM WIKHC7K3Cn7156iNOyfVG3cZ7YqkgsR,Ly 33-102-772-3533 posits-- furiously ironic accounts are again
+2455 Customer#000002455 481592.4053 2070.99 GERMANY RVn1ZSRtLqPlJLIZxvpmsbgC02 17-946-225-9977 al asymptotes. finally ironic accounts cajole furiously. permanently unusual theodolites aro
+12106 Customer#000012106 479414.2133 5342.11 UNITED STATES wth3twOmu6vy 34-905-346-4472 ly after the blithely regular foxes. accounts haggle carefully alongside of the blithely even ideas.
+8530 Customer#000008530 457855.9467 9734.95 MOROCCO GMQyte94oDM7eD7exnkj 4hH9yq3 25-736-932-5850 slyly asymptotes. quickly final deposits in
+13984 Customer#000013984 446316.5104 3482.28 IRAN qZXwuapCHvxbX 20-981-264-2952 y unusual courts could wake furiously
+1966 Customer#000001966 444059.0382 1937.72 ALGERIA jPv1 UHra5JLALR5Isci5u0636RoAu7t vH 10-973-269-8886 the blithely even accounts. final deposits cajole around the blithely final packages. 
+11026 Customer#000011026 417913.4142 7738.76 ALGERIA XorIktoJOAEJkpNNMx 10-184-163-4632 ly even dolphins eat along the blithely even instructions. express attainments cajole slyly. busy dolphins in
+8501 Customer#000008501 412797.51 6906.7 ARGENTINA 776af4rOa mZ66hczs 11-317-552-5840 y final deposits after the fluffily even accounts are slyly final, regular
