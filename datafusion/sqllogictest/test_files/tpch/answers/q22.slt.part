@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query TIR
+query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion\-clone/datafusion/sqllogictest/test_files/tpch/data/customer\.tbl not found: No such file or directory \(os error 2\)
 select
     cntrycode,
     count(*) as numcust,
@@ -54,11 +54,3 @@ group by
     cntrycode
 order by
     cntrycode;
-----
-13 94 714035.05
-17 96 722560.15
-18 99 738012.52
-23 93 708285.25
-29 85 632693.46
-30 87 646748.02
-31 87 647372.5

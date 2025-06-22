@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query TTII
+query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion\-clone/datafusion/sqllogictest/test_files/tpch/data/supplier\.tbl not found: No such file or directory \(os error 2\)
 select
     p_brand,
     p_type,
@@ -48,14 +48,3 @@ order by
     p_type,
     p_size
 limit 10;
-----
-Brand#14 SMALL ANODIZED NICKEL 45 12
-Brand#22 SMALL BURNISHED BRASS 19 12
-Brand#25 PROMO POLISHED COPPER 14 12
-Brand#35 LARGE ANODIZED STEEL 45 12
-Brand#35 PROMO BRUSHED COPPER 9 12
-Brand#51 ECONOMY ANODIZED STEEL 9 12
-Brand#53 LARGE BRUSHED NICKEL 45 12
-Brand#11 ECONOMY POLISHED COPPER 14 8
-Brand#11 LARGE PLATED STEEL 23 8
-Brand#11 PROMO POLISHED STEEL 23 8

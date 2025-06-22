@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query TII
+query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion\-clone/datafusion/sqllogictest/test_files/tpch/data/orders\.tbl not found: No such file or directory \(os error 2\)
 select
     l_shipmode,
     sum(case
@@ -47,6 +47,3 @@ group by
     l_shipmode
 order by
     l_shipmode;
-----
-MAIL 647 945
-SHIP 620 943

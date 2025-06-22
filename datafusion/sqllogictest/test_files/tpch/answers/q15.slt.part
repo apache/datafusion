@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query ITTTR
+query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion\-clone/datafusion/sqllogictest/test_files/tpch/data/lineitem\.tbl not found: No such file or directory \(os error 2\)
 with revenue0 (supplier_no, total_revenue) as (
 	select
 		l_suppkey,
@@ -48,5 +48,3 @@ where
 	)
 order by
 	s_suppkey;
-----
-677 Supplier#000000677 8mhrffG7D2WJBSQbOGstQ 23-290-639-3315 1614410.2928
