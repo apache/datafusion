@@ -264,7 +264,12 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             }
         },
-        IntegerDivide | Arrow | LongArrow | HashArrow | HashLongArrow
+        Arrow | LongArrow => Ok(Signature {
+            lhs: self.lhs.clone(),
+            rhs: self.rhs.clone(),
+            ret: get_arrow_return_type(self.lhs, self.rhs, self.op)?,
+        }),
+        IntegerDivide | HashArrow | HashLongArrow
         | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe => {
             not_impl_err!("Operator {} is not yet supported", self.op)
         }
@@ -368,6 +373,24 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         (Int8, _) | (_, Int8) => Some(Int8),
         (UInt8, _) | (_, UInt8) => Some(UInt8),
         _ => None,
+    }
+}
+
+fn get_arrow_return_type(
+    left: &DataType,
+    right: &DataType,
+    arrow_type: &Operator,
+) -> Result<DataType> {
+    if left != &json_type() {
+        plan_err!("Cannot use arrow access operator on non-json {left}!")
+    } else if !right.is_integer() && right != &DataType::Utf8 {
+        plan_err!("Right side of of access operator must integer or text (not {right})!")
+    } else {
+        match arrow_type {
+            Operator::Arrow => Ok(json_type()),
+            Operator::LongArrow => Ok(DataType::Utf8),
+            _ => unreachable!(),
+        }
     }
 }
 
