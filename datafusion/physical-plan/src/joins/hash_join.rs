@@ -1403,10 +1403,12 @@ impl HashJoinStream {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 HashJoinStreamState::ProcessProbeBatch(_) => {
-                    handle_state!(self.process_probe_batch())
+                    let poll = handle_state!(self.process_probe_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 HashJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
+                    let poll = handle_state!(self.process_unmatched_build_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 HashJoinStreamState::Completed => Poll::Ready(None),
             };
@@ -1582,7 +1584,6 @@ impl HashJoinStream {
         };
 
         self.join_metrics.output_batches.add(1);
-        self.join_metrics.output_rows.add(result.num_rows());
         timer.done();
 
         if next_offset.is_none() {
@@ -1639,7 +1640,6 @@ impl HashJoinStream {
             self.join_metrics.input_rows.add(batch.num_rows());
 
             self.join_metrics.output_batches.add(1);
-            self.join_metrics.output_rows.add(batch.num_rows());
         }
         timer.done();
 
