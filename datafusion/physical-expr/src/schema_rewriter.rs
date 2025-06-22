@@ -177,8 +177,11 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
             );
         }
 
-        let cast_expr =
-            Arc::new(CastExpr::new(expr, logical_field.data_type().clone(), None));
+        let cast_expr = Arc::new(CastExpr::new(
+            Arc::new(column),
+            logical_field.data_type().clone(),
+            None,
+        ));
 
         Ok(Transformed::yes(cast_expr))
     }
@@ -280,9 +283,9 @@ mod tests {
         let (physical_schema, logical_schema) = create_test_schema();
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-        let column_expr = Arc::new(Column::new("b", 1));
+        let column_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
 
-        let result = rewriter.rewrite(column_expr.clone())?;
+        let result = rewriter.rewrite(Arc::clone(&column_expr))?;
 
         // Should be the same expression (no transformation needed)
         // We compare the underlying pointer through the trait object
