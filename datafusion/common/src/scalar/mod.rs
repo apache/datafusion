@@ -52,13 +52,14 @@ use arrow::compute::kernels::{
 };
 use arrow::datatypes::{
     i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-    Date32Type, Date64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    Date32Type, Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
+use chrono::{Duration, NaiveDate};
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
@@ -3816,12 +3817,28 @@ impl fmt::Display for ScalarValue {
             ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::Date32(e) => {
-                format_option!(f, e.map(|v| Date32Type::to_naive_date(v).to_string()))?
-            }
-            ScalarValue::Date64(e) => {
-                format_option!(f, e.map(|v| Date64Type::to_naive_date(v).to_string()))?
-            }
+            ScalarValue::Date32(e) => format_option!(
+                f,
+                e.map(|v| {
+                    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                    match epoch.checked_add_signed(Duration::try_days(v as i64).unwrap())
+                    {
+                        Some(date) => date.to_string(),
+                        None => "".to_string(),
+                    }
+                })
+            )?,
+            ScalarValue::Date64(e) => format_option!(
+                f,
+                e.map(|v| {
+                    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                    match epoch.checked_add_signed(Duration::try_milliseconds(v).unwrap())
+                    {
+                        Some(date) => date.to_string(),
+                        None => "".to_string(),
+                    }
+                })
+            )?,
             ScalarValue::Time32Second(e) => format_option!(f, e)?,
             ScalarValue::Time32Millisecond(e) => format_option!(f, e)?,
             ScalarValue::Time64Microsecond(e) => format_option!(f, e)?,
@@ -7227,6 +7244,19 @@ mod tests {
         | {a: 1, b: 2} |
         +--------------+
         ");
+    }
+
+    #[test]
+    fn test_display_date64_large_values() {
+        assert_eq!(
+            format!("{}", ScalarValue::Date64(Some(790179464505))),
+            "1995-01-15"
+        );
+        // This used to panic, see https://github.com/apache/arrow-rs/issues/7728
+        assert_eq!(
+            format!("{}", ScalarValue::Date64(Some(-790179464505600000))),
+            ""
+        );
     }
 
     #[test]
