@@ -1,0 +1,131 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+  
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests of NaN pruning
+
+# Create table with mixed values and NaNs
+
+statement ok
+CREATE TABLE with_nans (
+  f1 DOUBLE
+) AS VALUES
+(-2.0),
+(-1.0),
+(0.0),
+(1.0),
+(2.0),
+('NaN'),
+('-NaN');
+
+query I
+COPY (SELECT * FROM with_nans)
+TO 'test_files/scratch/parquet_nan_statistics/nans.parquet'
+STORED AS PARQUET;
+----
+7
+
+statement ok
+CREATE EXTERNAL TABLE test_nans
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nan_statistics/nans.parquet';
+
+# If page pruning is performed with TypeDefinedOrder statistics,
+# this query will return 0 rows.
+# See https://github.com/apache/datafusion/issues/15812
+query R
+SELECT * from test_nans WHERE f1 > 2.0;
+----
+NaN
+
+# Test >= too
+query R
+SELECT * from test_nans WHERE f1 >= 3.0;
+----
+NaN
+
+
+# There should be no pruning predicates since Parquet float
+# statistics cannot be trusted.
+# See https://github.com/apache/datafusion/issues/15812
+query TT
+EXPLAIN SELECT * from test_nans WHERE f1 > 2.0;
+----
+logical_plan
+01)Filter: test_nans.f1 > Float64(2)
+02)--TableScan: test_nans projection=[f1], partial_filters=[test_nans.f1 > Float64(2)]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: f1@0 > 2
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_nan_statistics/nans.parquet]]}, projection=[f1], file_type=parquet, predicate=f1@0 > 2
+
+# -NaN is returned as 'NaN'
+query R
+SELECT * from test_nans WHERE f1 < -2.0;
+----
+NaN
+
+# Test <= too
+query R
+SELECT * from test_nans WHERE f1 <= -3.0;
+----
+NaN
+
+statement ok
+DROP TABLE test_nans;
+
+statement ok
+DROP TABLE with_nans;
+
+# Create table with single value and NaNs
+
+statement ok
+CREATE TABLE single_with_nans (
+  f1 DOUBLE
+) AS VALUES
+(2.0),
+(2.0),
+(2.0),
+(2.0),
+(2.0),
+('NaN'),
+('-NaN');
+
+query I
+COPY (SELECT * FROM single_with_nans)
+TO 'test_files/scratch/parquet_nan_statistics/single_nans.parquet'
+STORED AS PARQUET;
+----
+7
+
+statement ok
+CREATE EXTERNAL TABLE test_nans
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nan_statistics/single_nans.parquet';
+
+# Test !=
+query R
+SELECT * from test_nans WHERE f1 != 2.0;
+----
+NaN
+NaN
+
+statement ok
+DROP TABLE test_nans;
+
+statement ok
+DROP TABLE single_with_nans;
