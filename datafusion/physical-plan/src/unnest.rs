@@ -22,7 +22,8 @@ use std::task::{ready, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{
-    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, RecordOutput,
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+    RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
