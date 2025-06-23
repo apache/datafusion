@@ -387,13 +387,13 @@ mod tests {
         )]));
 
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )?;
 
         let input = Arc::new(crate::test::TestMemoryExec::try_new(
             &[vec![batch]],
-            schema.clone(),
+            Arc::clone(&schema),
             None,
         )?);
 
