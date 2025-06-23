@@ -467,8 +467,7 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 # use datafusion::common::{internal_err, not_impl_err};
 # use datafusion::common::types::logical_string;
 # use datafusion::config::ConfigOptions;
-use datafusion_expr::ScalarUDFImpl;
-
+# use datafusion_expr::ScalarUDFImpl;
 # use datafusion::logical_expr::async_udf::AsyncScalarUDFImpl;
 # use datafusion::logical_expr::{
 #     ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility, ScalarFunctionArgs
@@ -519,7 +518,7 @@ use datafusion_expr::ScalarUDFImpl;
 #     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
 #         Ok(DataType::Utf8)
 #     }
-#    
+#
 #     fn invoke_with_args(
 #        &self,
 #        _args: ScalarFunctionArgs,
@@ -536,7 +535,7 @@ use datafusion_expr::ScalarUDFImpl;
 #
 #     async fn invoke_async_with_args(
 #         &self,
-#         args: AsyncScalarFunctionArgs,
+#         args: ScalarFunctionArgs,
 #         _option: &ConfigOptions,
 #     ) -> Result<ArrayRef> {
 #         trace!("Invoking async_upper with args: {:?}", args);

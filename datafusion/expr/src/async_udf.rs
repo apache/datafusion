@@ -17,7 +17,7 @@
 
 use crate::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType,  FieldRef};
+use arrow::datatypes::{DataType, FieldRef};
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;

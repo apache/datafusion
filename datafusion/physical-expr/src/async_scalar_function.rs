@@ -21,14 +21,14 @@ use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_common::{internal_err, not_impl_err};
-use datafusion_expr::async_udf::{AsyncScalarUDF};
+use datafusion_expr::async_udf::AsyncScalarUDF;
+use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use datafusion_expr::ScalarFunctionArgs;
 
 /// Wrapper around a scalar function that can be evaluated asynchronously
 #[derive(Debug, Clone, Eq)]
@@ -62,7 +62,10 @@ impl Hash for AsyncFuncExpr {
 
 impl AsyncFuncExpr {
     /// create a new AsyncFuncExpr
-    pub fn try_new(name: impl Into<String>, func: Arc<dyn PhysicalExpr>,         schema: &Schema,
+    pub fn try_new(
+        name: impl Into<String>,
+        func: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
     ) -> Result<Self> {
         let Some(_) = func.as_any().downcast_ref::<ScalarFunctionExpr>() else {
             return internal_err!(
@@ -71,7 +74,7 @@ impl AsyncFuncExpr {
             );
         };
 
-        let return_field =  func.return_field(schema)?;
+        let return_field = func.return_field(schema)?;
         Ok(Self {
             name: name.into(),
             func,
@@ -134,7 +137,7 @@ impl AsyncFuncExpr {
             );
         };
 
-        let arg_fields =  scalar_function_expr
+        let arg_fields = scalar_function_expr
             .args()
             .iter()
             .map(|e| e.return_field(batch.schema_ref()))
