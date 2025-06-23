@@ -2070,9 +2070,13 @@ impl Expr {
         }
     }
 
-    /// Check if the Expr is literal
-    pub fn is_literal(&self) -> bool {
-        matches!(self, Expr::Literal(_, _))
+    /// Check if the Expr is literal and get the literal value if it is.
+    pub fn as_literal(&self) -> Option<&ScalarValue> {
+        if let Expr::Literal(lit, _) = self {
+            Some(lit)
+        } else {
+            None
+        }
     }
 }
 

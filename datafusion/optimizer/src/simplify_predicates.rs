@@ -65,11 +65,9 @@ pub(crate) fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
             }) => {
                 let left_col = extract_column_from_expr(left);
                 let right_col = extract_column_from_expr(right);
-                let left_lit = left.is_literal();
-                let right_lit = right.is_literal();
-                if let (Some(col), true) = (&left_col, right_lit) {
+                if let (Some(col), Some(_)) = (&left_col, right.as_literal()) {
                     column_predicates.entry(col.clone()).or_default().push(pred);
-                } else if let (true, Some(col)) = (left_lit, &right_col) {
+                } else if let (Some(_), Some(col)) = (left.as_literal(), &right_col) {
                     column_predicates.entry(col.clone()).or_default().push(pred);
                 } else {
                     other_predicates.push(pred);
@@ -115,8 +113,7 @@ fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     for pred in predicates {
         match &pred {
             Expr::BinaryExpr(BinaryExpr { left: _, op, right }) => {
-                let right_is_literal = right.is_literal();
-                match (op, right_is_literal) {
+                match (op, right.as_literal().is_some()) {
                     (Operator::Gt, true)
                     | (Operator::Lt, false)
                     | (Operator::GtEq, true)
@@ -196,16 +193,11 @@ fn find_most_restrictive_predicate(
     for pred in predicates {
         if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = pred {
             // Extract the literal value based on which side has it
-            let mut scalar_value = None;
-            if right.is_literal() {
-                if let Expr::Literal(scalar, None) = right.as_ref() {
-                    scalar_value = Some(scalar.clone());
-                }
-            } else if left.is_literal() {
-                if let Expr::Literal(scalar, None) = left.as_ref() {
-                    scalar_value = Some(scalar.clone());
-                }
-            }
+            let scalar_value = match (right.as_literal(), left.as_literal()) {
+                (Some(scalar), _) => Some(scalar.clone()),
+                (_, Some(scalar)) => Some(scalar.clone()),
+                _ => None,
+            };
 
             if let Some(scalar) = scalar_value {
                 if let Some(current_best) = &best_value {
