@@ -316,3 +316,76 @@ DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
 -- drop users_v view from the customer_a schema
 DROP VIEW IF EXISTS customer_a.users_v;
 ```
+
+## DESCRIBE
+
+Displays the schema of a table, showing column names, data types, and nullable status. Both `DESCRIBE` and `DESC` are supported as aliases.
+
+<pre>
+{ DESCRIBE | DESC } <b><i>table_name</i></b>
+</pre>
+
+The output contains three columns:
+- `column_name`: The name of the column
+- `data_type`: The data type of the column (e.g., Int32, Utf8, Boolean)
+- `is_nullable`: Whether the column can contain null values (YES/NO)
+
+### Example: Basic table description
+
+```sql
+-- Create a table
+CREATE TABLE users AS VALUES (1, 'Alice', true), (2, 'Bob', false);
+
+-- Describe the table structure
+DESCRIBE users;
+```
+
+Output:
+```
++--------------+-----------+-------------+
+| column_name  | data_type | is_nullable |
++--------------+-----------+-------------+
+| column1      | Int64     | YES         |
+| column2      | Utf8      | YES         |
+| column3      | Boolean   | YES         |
++--------------+-----------+-------------+
+```
+
+### Example: Using DESC alias
+
+```sql
+-- DESC is an alias for DESCRIBE
+DESC users;
+```
+
+### Example: Describing external tables
+
+```sql
+-- Create an external table
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/tripdata.parquet';
+
+-- Describe its schema
+DESCRIBE taxi;
+```
+
+Output might show:
+```
++--------------------+-----------------------------+-------------+
+| column_name        | data_type                   | is_nullable |
++--------------------+-----------------------------+-------------+
+| vendor_id          | Int32                       | YES         |
+| pickup_datetime    | Timestamp(Nanosecond, None) | NO          |
+| passenger_count    | Int32                       | YES         |
+| trip_distance      | Float64                     | YES         |
++--------------------+-----------------------------+-------------+
+```
+
+:::{note}
+The `DESCRIBE` command works with all table types in DataFusion, including:
+- Regular tables created with `CREATE TABLE`
+- External tables created with `CREATE EXTERNAL TABLE`  
+- Views created with `CREATE VIEW`
+- Tables in different schemas using qualified names (e.g., `DESCRIBE schema_name.table_name`)
+:::
