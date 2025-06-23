@@ -371,8 +371,9 @@ impl RecordBatchStream for SampleExecStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
+    use datafusion_common::assert_batches_eq;
     use datafusion_execution::TaskContext;
     use futures::TryStreamExt;
     use std::sync::Arc;
@@ -381,14 +382,12 @@ mod tests {
     async fn test_sample_exec_bernoulli() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", arrow::datatypes::DataType::Int32, false),
-            Field::new("name", arrow::datatypes::DataType::Utf8, false),
         ]));
 
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
-                Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
             ],
         )?;
 
@@ -404,11 +403,16 @@ mod tests {
         let stream = sample_exec.execute(0, context)?;
 
         let batches = stream.try_collect::<Vec<_>>().await?;
-        assert!(!batches.is_empty());
-
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        // With 60% sampling ratio and 5 input rows, we expect around 3 rows
-        assert!(total_rows >= 2 && total_rows <= 4);
+        assert_batches_eq!(
+            &[
+                "+----+", 
+                "| id |",
+                "+----+", 
+                "| 3  |", 
+                "+----+",
+            ],
+            &batches
+        );
 
         Ok(())
     }
@@ -422,13 +426,13 @@ mod tests {
         )]));
 
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )?;
 
         let input = Arc::new(crate::test::TestMemoryExec::try_new(
             &[vec![batch]],
-            schema.clone(),
+            Arc::clone(&schema),
             None,
         )?);
 
@@ -438,7 +442,16 @@ mod tests {
         let stream = sample_exec.execute(0, context)?;
 
         let batches = stream.try_collect::<Vec<_>>().await?;
-        assert!(!batches.is_empty());
+        assert_batches_eq!(
+            &[
+                "+----+",
+                "| id |",
+                "+----+",
+                "| 3  |",
+                "+----+",
+            ],
+            &batches
+        );
 
         Ok(())
     }
@@ -456,11 +469,30 @@ mod tests {
         )
         .unwrap();
 
-        let result = bernoulli_sampler.sample(&batch);
-        assert!(result.is_ok());
+        let result = bernoulli_sampler.sample(&batch).unwrap();
+        assert_batches_eq!(
+            &[
+                "+----+",
+                "| id |",
+                "+----+",
+                "| 4  |",
+                "| 5  |",
+                "+----+",
+            ],
+            &vec![result]
+        );
 
         let mut poisson_sampler = PoissonSampler::try_new(0.5, 42).unwrap();
-        let result = poisson_sampler.sample(&batch);
-        assert!(result.is_ok());
+        let result = poisson_sampler.sample(&batch).unwrap();
+        assert_batches_eq!(
+            &[
+                "+----+",
+                "| id |",
+                "+----+",
+                "| 3  |",
+                "+----+",
+            ],
+            &vec![result]
+        );
     }
 }
