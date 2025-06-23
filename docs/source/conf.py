@@ -52,6 +52,7 @@ extensions = [
     'sphinx.ext.viewcode',
     'sphinx.ext.napoleon',
     'myst_parser',
+    'sphinx_reredirects',
 ]
 
 source_suffix = {
@@ -121,3 +122,7 @@ myst_enable_extensions = ["colon_fence", "deflist", "tasklist"]
 # issue for our documentation. So, suppress these warnings to keep our build
 # log cleaner.
 suppress_warnings = ['misc.highlighting_failure']
+
+redirects = {
+    "library-user-guide/adding-udfs": "functions/index.html",
+}

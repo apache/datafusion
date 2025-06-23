@@ -35,6 +35,7 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
+use crate::execution_plan::{EvaluationType, SchedulingType};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -157,6 +158,16 @@ impl SortPreservingMergeExec {
         input: &Arc<dyn ExecutionPlan>,
         ordering: LexOrdering,
     ) -> PlanProperties {
+        let input_partitions = input.output_partitioning().partition_count();
+        let (drive, scheduling) = if input_partitions > 1 {
+            (EvaluationType::Eager, SchedulingType::Cooperative)
+        } else {
+            (
+                input.properties().evaluation_type,
+                input.properties().scheduling_type,
+            )
+        };
+
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_per_partition_constants();
         eq_properties.add_ordering(ordering);
@@ -166,6 +177,8 @@ impl SortPreservingMergeExec {
             input.pipeline_behavior(),            // Pipeline Behavior
             input.boundedness(),                  // Boundedness
         )
+        .with_evaluation_type(drive)
+        .with_scheduling_type(scheduling)
     }
 }
 

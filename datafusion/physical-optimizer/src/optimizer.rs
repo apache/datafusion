@@ -25,8 +25,8 @@ use crate::coalesce_batches::CoalesceBatches;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
+use crate::ensure_coop::EnsureCooperative;
 use crate::filter_pushdown::FilterPushdown;
-use crate::insert_yield_exec::InsertYieldExec;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
@@ -140,7 +140,7 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
-            Arc::new(InsertYieldExec::new()),
+            Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
             // Therefore it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.

@@ -64,6 +64,8 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan,
 };
 
+use datafusion_physical_plan::coop::cooperative;
+use datafusion_physical_plan::execution_plan::SchedulingType;
 use log::{debug, warn};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
@@ -487,7 +489,7 @@ impl DataSource for FileScanConfig {
         let opener = source.create_file_opener(object_store, self, partition);
 
         let stream = FileStream::new(self, partition, opener, source.metrics())?;
-        Ok(Box::pin(stream))
+        Ok(Box::pin(cooperative(stream)))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -554,6 +556,10 @@ impl DataSource for FileScanConfig {
         let (schema, constraints, _, orderings) = self.project();
         EquivalenceProperties::new_with_orderings(schema, orderings)
             .with_constraints(constraints)
+    }
+
+    fn scheduling_type(&self) -> SchedulingType {
+        SchedulingType::Cooperative
     }
 
     fn statistics(&self) -> Result<Statistics> {

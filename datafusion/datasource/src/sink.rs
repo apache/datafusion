@@ -36,6 +36,7 @@ use datafusion_physical_plan::{
 };
 
 use async_trait::async_trait;
+use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
 use futures::StreamExt;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
@@ -141,6 +142,8 @@ impl DataSinkExec {
             input.pipeline_behavior(),
             input.boundedness(),
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
+        .with_evaluation_type(EvaluationType::Eager)
     }
 }
 
@@ -245,10 +248,6 @@ impl ExecutionPlan for DataSinkExec {
     /// Returns the metrics of the underlying [DataSink]
     fn metrics(&self) -> Option<MetricsSet> {
         self.sink.metrics()
-    }
-
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(self)
     }
 }
 
