@@ -363,6 +363,14 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE array_has_table_empty
+AS VALUES
+  (make_array(), 1),
+  (NULL, 1),
+  (make_array(), NULL)
+;
+
+statement ok
 CREATE TABLE array_distinct_table_1D
 AS VALUES
   (make_array(1, 1, 2, 2, 3)),
@@ -5741,6 +5749,14 @@ true
 false
 false
 false
+
+query B
+select array_has(column1, column2)
+from array_has_table_empty;
+----
+false
+null
+null
 
 query B
 select array_has(column1, column2)
