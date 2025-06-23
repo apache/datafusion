@@ -2273,12 +2273,17 @@ impl DataFrame {
     /// # Example
     /// ```
     /// use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let df = dataframe!(
     ///    "id" => [1, 2, 3],
     ///    "name" => ["foo", "bar", "baz"]
     ///  )?;
     /// let df = df.sample(0.5, Some(true), Some(42))?;
     /// df.show().await?;
+    /// # Ok(())
+    /// # }
     /// // +----+------+
     /// // | id | name |
     /// // +----+------+

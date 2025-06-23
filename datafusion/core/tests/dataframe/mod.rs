@@ -6147,9 +6147,18 @@ async fn test_dataframe_sample() -> Result<()> {
     // Test sampling 20% of rows with replacement
     let df_sampled = df.clone().sample(0.2, Some(true), Some(42))?;
     assert_batches_eq!(
+        #[rustfmt::skip]
         &[
-            "+----+", "| a  |", "+----+", "| 8  |", "| 10 |", "| 19 |", "| 29 |",
-            "| 29 |", "| 36 |", "+----+",
+            "+----+", 
+            "| a  |", 
+            "+----+", 
+            "| 8  |", 
+            "| 10 |", 
+            "| 19 |", 
+            "| 29 |",
+            "| 29 |", 
+            "| 36 |", 
+            "+----+",
         ],
         &df_sampled.collect().await?
     );
@@ -6157,9 +6166,20 @@ async fn test_dataframe_sample() -> Result<()> {
     // Test sampling 20% of rows without replacement
     let df_sampled = df.clone().sample(0.2, Some(false), Some(42))?;
     assert_batches_eq!(
+        #[rustfmt::skip]
         &[
-            "+----+", "| a  |", "+----+", "| 5  |", "| 9  |", "| 10 |", "| 14 |",
-            "| 17 |", "| 19 |", "| 24 |", "| 39 |", "+----+",
+            "+----+", 
+            "| a  |", 
+            "+----+", 
+            "| 5  |", 
+            "| 9  |", 
+            "| 10 |", 
+            "| 14 |",
+            "| 17 |", 
+            "| 19 |", 
+            "| 24 |", 
+            "| 39 |", 
+            "+----+",
         ],
         &df_sampled.collect().await?
     );
@@ -6167,9 +6187,20 @@ async fn test_dataframe_sample() -> Result<()> {
     // Test sampling with None parameters (should use defaults)
     let df_sampled_default = df.clone().sample(0.2, None, Some(42))?;
     assert_batches_eq!(
+        #[rustfmt::skip]
         &[
-            "+----+", "| a  |", "+----+", "| 5  |", "| 9  |", "| 10 |", "| 14 |",
-            "| 17 |", "| 19 |", "| 24 |", "| 39 |", "+----+",
+            "+----+",
+            "| a  |", 
+            "+----+", 
+            "| 5  |", 
+            "| 9  |", 
+            "| 10 |", 
+            "| 14 |",
+            "| 17 |", 
+            "| 19 |", 
+            "| 24 |", 
+            "| 39 |", 
+            "+----+",
         ],
         &df_sampled_default.collect().await?
     );
