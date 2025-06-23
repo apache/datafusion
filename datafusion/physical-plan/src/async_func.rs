@@ -73,7 +73,7 @@ impl AsyncFuncExec {
             .iter()
             .map(|expr| (Arc::clone(&expr.func), expr.name().to_string()))
             .collect::<Vec<_>>();
-        let async_expr_mapping = ProjectionMapping::try_new(&tuples, &input.schema())?;
+        let async_expr_mapping = ProjectionMapping::try_new(tuples, &input.schema())?;
         let cache =
             AsyncFuncExec::compute_properties(&input, schema, &async_expr_mapping)?;
         Ok(Self {

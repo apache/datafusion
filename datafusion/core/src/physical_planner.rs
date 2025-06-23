@@ -96,7 +96,6 @@ use datafusion_physical_plan::unnest::ListUnnest;
 use sqlparser::ast::NullTreatment;
 
 use async_trait::async_trait;
-use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
