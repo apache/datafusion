@@ -134,7 +134,6 @@ fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
 
     if !eq_predicates.is_empty() {
         // If there are many equality predicates, we can only keep one if they are all the same
-        // If they are not the same, add false to the result
         if eq_predicates.len() == 1
             || eq_predicates.iter().all(|e| e == &eq_predicates[0])
         {
@@ -191,20 +190,20 @@ fn find_most_restrictive_predicate(
         return Ok(None);
     }
 
-    let mut most_restrictive = predicates[0].clone();
-    let mut best_value: Option<ScalarValue> = None;
+    let mut most_restrictive_idx = 0;
+    let mut best_value: Option<&ScalarValue> = None;
 
-    for pred in predicates {
+    for (idx, pred) in predicates.iter().enumerate() {
         if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = pred {
             // Extract the literal value based on which side has it
             let scalar_value = match (right.as_literal(), left.as_literal()) {
-                (Some(scalar), _) => Some(scalar.clone()),
-                (_, Some(scalar)) => Some(scalar.clone()),
+                (Some(scalar), _) => Some(scalar),
+                (_, Some(scalar)) => Some(scalar),
                 _ => None,
             };
 
             if let Some(scalar) = scalar_value {
-                if let Some(current_best) = &best_value {
+                if let Some(current_best) = best_value {
                     if let Some(comparison) = scalar.partial_cmp(current_best) {
                         let is_better = if find_greater {
                             comparison == std::cmp::Ordering::Greater
@@ -214,18 +213,18 @@ fn find_most_restrictive_predicate(
 
                         if is_better {
                             best_value = Some(scalar);
-                            most_restrictive = pred.clone();
+                            most_restrictive_idx = idx;
                         }
                     }
                 } else {
                     best_value = Some(scalar);
-                    most_restrictive = pred.clone();
+                    most_restrictive_idx = idx;
                 }
             }
         }
     }
 
-    Ok(Some(most_restrictive))
+    Ok(Some(predicates[most_restrictive_idx].clone()))
 }
 
 /// Extracts a column reference from an expression, if present.
