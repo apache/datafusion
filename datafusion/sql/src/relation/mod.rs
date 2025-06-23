@@ -70,7 +70,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .get_table_function_source(&tbl_func_name, args)?;
                     let mut plan = LogicalPlanBuilder::scan(
                         TableReference::Bare {
-                            table: "tmp_table".into(),
+                            table: format!("{tbl_func_name}()").into(),
                         },
                         provider,
                         None,

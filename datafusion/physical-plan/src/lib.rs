@@ -60,9 +60,11 @@ mod visitor;
 
 pub mod aggregates;
 pub mod analyze;
+pub mod coalesce;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
 pub mod common;
+pub mod coop;
 pub mod display;
 pub mod empty;
 pub mod execution_plan;
@@ -93,6 +95,4 @@ pub mod udaf {
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
-pub mod coalesce;
 pub mod test;
-pub mod yield_stream;
