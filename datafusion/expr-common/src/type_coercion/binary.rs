@@ -962,10 +962,6 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
         Int16 | UInt16 => Some(Decimal128(5, 0)),
         Int32 | UInt32 => Some(Decimal128(10, 0)),
         Int64 | UInt64 => Some(Decimal128(20, 0)),
-        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
-        Float16 => Some(Decimal128(6, 3)),
-        Float32 => Some(Decimal128(14, 7)),
-        Float64 => Some(Decimal128(30, 15)),
         _ => None,
     }
 }
@@ -981,10 +977,6 @@ fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType
         Int16 | UInt16 => Some(Decimal256(5, 0)),
         Int32 | UInt32 => Some(Decimal256(10, 0)),
         Int64 | UInt64 => Some(Decimal256(20, 0)),
-        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
-        Float16 => Some(Decimal256(6, 3)),
-        Float32 => Some(Decimal256(14, 7)),
-        Float64 => Some(Decimal256(30, 15)),
         _ => None,
     }
 }
