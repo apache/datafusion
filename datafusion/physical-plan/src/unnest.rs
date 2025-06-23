@@ -22,7 +22,7 @@ use std::task::{ready, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{
-    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::{
@@ -264,8 +264,7 @@ impl Stream for UnnestStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll = self.poll_next_impl(cx);
-        self.metrics.baseline_metrics.record_poll(poll)
+        self.poll_next_impl(cx)
     }
 }
 
@@ -296,6 +295,7 @@ impl UnnestStream {
                         continue;
                     };
                     self.metrics.output_batches.add(1);
+                    (&result_batch).record_output(&self.metrics.baseline_metrics);
 
                     // Empty record batches should not be emitted.
                     // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
