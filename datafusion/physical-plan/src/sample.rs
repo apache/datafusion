@@ -380,15 +380,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_sample_exec_bernoulli() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", arrow::datatypes::DataType::Int32, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow::datatypes::DataType::Int32,
+            false,
+        )]));
 
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
-            ],
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )?;
 
         let input = Arc::new(crate::test::TestMemoryExec::try_new(
@@ -404,13 +404,7 @@ mod tests {
 
         let batches = stream.try_collect::<Vec<_>>().await?;
         assert_batches_eq!(
-            &[
-                "+----+", 
-                "| id |",
-                "+----+", 
-                "| 3  |", 
-                "+----+",
-            ],
+            &["+----+", "| id |", "+----+", "| 3  |", "+----+",],
             &batches
         );
 
@@ -443,6 +437,7 @@ mod tests {
 
         let batches = stream.try_collect::<Vec<_>>().await?;
         assert_batches_eq!(
+            #[rustfmt::skip]
             &[
                 "+----+",
                 "| id |",
@@ -471,6 +466,7 @@ mod tests {
 
         let result = bernoulli_sampler.sample(&batch).unwrap();
         assert_batches_eq!(
+            #[rustfmt::skip]
             &[
                 "+----+",
                 "| id |",
@@ -479,12 +475,13 @@ mod tests {
                 "| 5  |",
                 "+----+",
             ],
-            &vec![result]
+            &[result]
         );
 
         let mut poisson_sampler = PoissonSampler::try_new(0.5, 42).unwrap();
         let result = poisson_sampler.sample(&batch).unwrap();
         assert_batches_eq!(
+            #[rustfmt::skip]
             &[
                 "+----+",
                 "| id |",
@@ -492,7 +489,7 @@ mod tests {
                 "| 3  |",
                 "+----+",
             ],
-            &vec![result]
+            &[result]
         );
     }
 }
